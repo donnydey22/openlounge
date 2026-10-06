@@ -88,14 +88,24 @@ export function useLiveKitAudio({
           return;
         }
         if (!body.ok || !body.url || !body.token) throw new Error(body.error || "Couldn't get an audio token");
-        await room.connect(body.url, body.token, { autoSubscribe: true });
+        // Railway has no inbound UDP — self-hosted LiveKit is force_tcp. Prefer TCP ICE
+        // candidates and give signalling/ICE more time so a slow proxy doesn't fail the room.
+        await room.connect(body.url, body.token, {
+          autoSubscribe: true,
+          peerConnectionTimeout: 20_000,
+          rtcConfig: {
+            iceTransportPolicy: "all",
+          },
+        });
         if (cancelled) return room.disconnect();
         setStatus("connected");
         setNeedsGesture(!room.canPlaybackAudio);
       } catch (err) {
+        // Soft-fail: the in-app room already exists; only audio is down.
         if (cancelled) return;
         console.warn("[audio] LiveKit connect failed", err);
-        setError((err as Error).message);
+        const msg = (err as Error)?.message || "Live audio couldn't connect";
+        setError(msg.length > 120 ? "Live audio couldn't connect" : msg);
         setStatus("error");
       }
     })();

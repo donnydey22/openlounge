@@ -638,9 +638,9 @@ export class Store {
   }
 
   createRoom(hostId: string, input: { title?: string; topic?: string; description?: string }) {
-    const title = clamp(input.title, 80);
-    if (!title) return { ok: false as const, error: "Give your room a title" };
     const topic = TOPICS.includes(input.topic as never) ? (input.topic as string) : "Other";
+    // Clubhouse-style: title is optional — always create a room on "Let's go".
+    const title = clamp(input.title, 80) || (topic !== "Other" ? `${topic} room` : "Open Lounge");
     const room: RoomRecord = {
       id: randomUUID().slice(0, 8),
       title,

@@ -8,26 +8,38 @@ import { TOPIC_EMOJI, cn } from "@/lib/utils";
 import { Sheet } from "./Sheet";
 import { useApp } from "./AppProvider";
 
+/** Clubhouse-style default when the host skips the title field. */
+function defaultTitle(topic: string) {
+  return topic && topic !== "Other" ? `${topic} room` : "Open Lounge";
+}
+
 export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { request, toast } = useApp();
+  const { request, toast, connected } = useApp();
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState<string>("Tech");
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim() || busy) return;
+  async function startRoom() {
+    if (busy) return;
     setBusy(true);
+    const payload = {
+      title: title.trim() || defaultTitle(topic),
+      topic,
+      description,
+    };
     try {
-      const res = await request<{ roomId: string }>("room:create", { title, topic, description });
+      // In-app room first — never wait on LiveKit. Audio connects after /room/[id] mounts.
+      const res = await request<{ roomId: string }>("room:create", payload);
+      const roomId = res.roomId;
+      if (!roomId) throw new Error("Couldn't create the room");
       onClose();
       setTitle("");
       setDescription("");
-      router.push(`/room/${res.roomId}`);
+      router.push(`/room/${roomId}`);
     } catch (err) {
-      toast((err as Error).message);
+      toast((err as Error).message || (connected ? "Couldn't start the room" : "Not connected — try again"));
     } finally {
       setBusy(false);
     }
@@ -35,9 +47,17 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
 
   return (
     <Sheet open={open} onClose={onClose} title="Start a room">
-      <form onSubmit={submit} className="space-y-5">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void startRoom();
+        }}
+        className="space-y-5"
+      >
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-300">Title</span>
+          <span className="mb-1.5 block text-sm font-medium text-zinc-300">
+            Title <span className="font-normal text-zinc-600">(optional)</span>
+          </span>
           <input
             autoFocus
             value={title}
@@ -80,9 +100,12 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
             className="w-full resize-none rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
           />
         </label>
+        {/* Always highlighted — Clubhouse-style. Only spinner while the create request is in flight. */}
         <button
-          disabled={!title.trim() || busy}
-          className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent transition hover:bg-emerald-400 disabled:opacity-40"
+          type="submit"
+          disabled={busy}
+          aria-busy={busy}
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent transition hover:bg-emerald-400 active:scale-[0.99] disabled:opacity-70"
         >
           {busy && <Loader2 className="h-4 w-4 animate-spin" />} 🎉 Let&apos;s go
         </button>

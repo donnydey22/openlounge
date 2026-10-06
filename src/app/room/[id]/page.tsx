@@ -699,7 +699,7 @@ function AudioStatusPill({ status, error }: { status: string; error: string | nu
       cls: "bg-amber-400/10 text-amber-400",
       text: "🔇 Live audio is off — this server has no LiveKit credentials. Stage, hands and chat still work.",
     },
-    error: { cls: "bg-red-500/10 text-red-400", text: `Audio couldn't connect${error ? `: ${error}` : ""}. Rejoin to retry.` },
+    error: { cls: "bg-amber-400/10 text-amber-300", text: `🔇 Live audio is having trouble${error ? ` (${error})` : ""}. Room is still open — stage, hands and chat work.` },
   };
   const m = map[status];
   if (!m) return null;
