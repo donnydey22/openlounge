@@ -4,7 +4,7 @@
 **Type:** debug / sideload — **not** a Play Store–signed release  
 **Package:** `com.donnydey.openlounge.debug` · Android 7.0+ (API 24)
 
-The APK is a native WebView shell. It does **not** embed the Node server. Point it at your deployed **HTTPS** Open Lounge URL (Railway etc.). Rounded-hexagon (almost circular) avatars, signup, chat, and LiveKit audio all run in that web app.
+The APK is a native WebView shell. It does **not** embed the Node server. Point it at your deployed **HTTPS** Open Lounge URL (Railway etc.). Clubhouse-style squircle avatars, signup, chat, and LiveKit audio all run in that web app.
 
 ## Install steps
 

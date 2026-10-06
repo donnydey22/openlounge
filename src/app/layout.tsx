@@ -5,7 +5,7 @@ import { AuthGate } from "@/components/AuthGate";
 import { Toasts } from "@/components/Toasts";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { THEME_COLORS, themeInitScript } from "@/lib/theme";
-import { HEX_PATH } from "@/lib/hex";
+import { AVATAR_PATH } from "@/lib/avatar-shape";
 
 export const metadata: Metadata = {
   title: "Open Lounge — live audio rooms",
@@ -26,11 +26,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-dvh font-sans antialiased">
-        {/* Heavily rounded hexagon clip (almost a circle) for avatars — one defs for the whole app */}
+        {/* Clubhouse-style squircle clip for avatars — one defs for the whole app */}
         <svg width={0} height={0} className="absolute" aria-hidden>
           <defs>
             <clipPath id="openlounge-hex" clipPathUnits="objectBoundingBox">
-              <path d={HEX_PATH} />
+              <path d={AVATAR_PATH} />
             </clipPath>
           </defs>
         </svg>

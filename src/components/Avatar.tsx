@@ -1,6 +1,6 @@
 import { MicOff } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
-import { HEX_PATH } from "@/lib/hex";
+import { AVATAR_PATH } from "@/lib/avatar-shape";
 
 const SIZES = {
   xs: "h-7 w-7 text-[10px]",
@@ -19,9 +19,8 @@ const DOT = {
 } as const;
 
 /**
- * Avatar clipped to a heavily rounded hexagon (clip-path #openlounge-hex in layout, HEX_PATH).
- * Almost a circle with a faint hint of six sides. Rings are drawn as an SVG stroke of the same
- * path so they follow the shape all the way around.
+ * Avatar clipped to a Clubhouse-style squircle (clip-path #openlounge-hex in layout, AVATAR_PATH).
+ * Rings are drawn as an SVG stroke of the same path so they follow the shape all the way around.
  * Speaking glow scales with `level` (0–1) when provided.
  */
 export function Avatar({
@@ -72,7 +71,7 @@ export function Avatar({
           }}
           aria-hidden
         >
-          <HexOutline stroke={`rgba(52, 211, 153, ${0.55 + lvl * 0.4})`} />
+          <ShapeOutline stroke={`rgba(52, 211, 153, ${0.55 + lvl * 0.4})`} />
         </span>
       )}
       {onPodium && (
@@ -80,7 +79,7 @@ export function Avatar({
           className="podium-ring openlounge-hex absolute -inset-[7px] pointer-events-none"
           aria-hidden
         >
-          <HexOutline className="stroke-amber-400/80" />
+          <ShapeOutline className="stroke-amber-400/80" />
         </span>
       )}
 
@@ -122,10 +121,10 @@ export function Avatar({
  * 2px outline that follows the avatar shape. The stroke is 4px centred on the path; the parent's
  * clip-path trims the outer half, leaving a 2px ring inside the edge (same as the old 2px border).
  */
-function HexOutline({ stroke, className }: { stroke?: string; className?: string }) {
+function ShapeOutline({ stroke, className }: { stroke?: string; className?: string }) {
   return (
     <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
-      <path d={HEX_PATH} fill="none" stroke={stroke} strokeWidth={4} vectorEffect="non-scaling-stroke" className={className} />
+      <path d={AVATAR_PATH} fill="none" stroke={stroke} strokeWidth={4} vectorEffect="non-scaling-stroke" className={className} />
     </svg>
   );
 }
