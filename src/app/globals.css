@@ -15,11 +15,14 @@
 :root {
   color-scheme: dark;
   --app-glow: rgba(16, 185, 129, 0.08);
+  /* Clubhouse-style speaking ring (used as rgb triplet in Avatar rgba()) */
+  --speaking-glow-rgb: 52, 211, 153; /* emerald-400 — soft on dark */
 }
 
 [data-theme="light"] {
   color-scheme: light;
   --app-glow: rgba(16, 185, 129, 0.1);
+  --speaking-glow-rgb: 16, 185, 129; /* emerald-500 — readable on cream */
   --color-app: #f4f3ee;
   --color-on-accent: #ffffff;
   --color-white: #0b0b0d;
@@ -73,9 +76,14 @@ body {
   mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
 }
 
-/* Level-driven speaking glow (transform/opacity set inline from audio level) */
+/* Clubhouse-style speaking glow — soft outer ring; transform/opacity set inline from audio level.
+   Do NOT put clip-path on .speaking-glow itself (that kills drop-shadow bloom). */
 .speaking-glow {
-  transition: transform 80ms linear, opacity 80ms linear, box-shadow 80ms linear, border-color 80ms linear;
+  transition: transform 90ms linear, opacity 90ms linear;
+  will-change: transform, opacity;
+}
+.speaking-glow-bloom {
+  transition: filter 90ms linear, background-color 90ms linear;
 }
 .podium-ring {
   animation: podium-pulse 2s ease-in-out infinite;

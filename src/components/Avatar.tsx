@@ -23,8 +23,8 @@ const DOT = {
 
 /**
  * Avatar clipped to a Clubhouse-style squircle (clip-path #openlounge-hex in layout, AVATAR_PATH).
- * Rings are drawn as an SVG stroke of the same path so they follow the shape all the way around.
- * Speaking glow scales with `level` (0–1) when provided.
+ * Speaking glow is a soft outer ring (no clip-path on the glow itself — clip would kill box-shadow /
+ * drop-shadow bloom). Intensity tracks LiveKit audioLevel when provided.
  */
 export function Avatar({
   name,
@@ -58,23 +58,47 @@ export function Avatar({
   const lvl = Math.max(0, Math.min(1, level));
   const showGlow = speaking || lvl > 0.02;
   // Clubhouse-like verbalize: ring scale + opacity track loudness
-  const glowScale = 1 + Math.min(0.22, lvl * 0.45);
-  const glowOpacity = 0.35 + Math.min(0.65, lvl * 1.2);
-  const glowBlur = 4 + lvl * 14;
+  const glowScale = 1 + Math.min(0.18, lvl * 0.4);
+  const glowOpacity = speaking || lvl > 0.02 ? 0.55 + Math.min(0.45, lvl * 0.9) : 0;
+  const glowBlur = 3 + lvl * 10;
+  const strokeAlpha = 0.55 + Math.min(0.4, lvl * 0.7);
+  const bloomAlpha = 0.22 + Math.min(0.38, lvl * 0.55);
+  const strokeW = 2.25 + lvl * 1.75;
 
   return (
     <div className={cn("relative shrink-0", className)}>
       {showGlow && (
         <span
-          className="speaking-glow openlounge-hex absolute -inset-[4px] pointer-events-none"
+          className="speaking-glow pointer-events-none absolute -inset-[6px]"
           style={{
             transform: `scale(${glowScale})`,
             opacity: glowOpacity,
-            boxShadow: `0 0 ${glowBlur}px ${2 + lvl * 6}px rgba(52, 211, 153, ${0.35 + lvl * 0.45})`,
           }}
           aria-hidden
         >
-          <ShapeOutline stroke={`rgba(52, 211, 153, ${0.55 + lvl * 0.4})`} />
+          {/* Soft bloom: blurred squircle fill (clip only the fill, blur blooms outside) */}
+          <span
+            className="speaking-glow-bloom absolute inset-[3px]"
+            style={{
+              background: `rgba(var(--speaking-glow-rgb), ${bloomAlpha})`,
+              filter: `blur(${glowBlur}px)`,
+              WebkitClipPath: "url(#openlounge-hex)",
+              clipPath: "url(#openlounge-hex)",
+            }}
+          />
+          {/* Soft ring stroke — no clip-path so drop-shadow can bloom */}
+          <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
+            <path
+              d={AVATAR_PATH}
+              fill="none"
+              stroke={`rgba(var(--speaking-glow-rgb), ${strokeAlpha})`}
+              strokeWidth={strokeW}
+              vectorEffect="non-scaling-stroke"
+              style={{
+                filter: `drop-shadow(0 0 ${5 + lvl * 8}px rgba(var(--speaking-glow-rgb), ${0.45 + lvl * 0.35}))`,
+              }}
+            />
+          </svg>
         </span>
       )}
       {onPodium && (
