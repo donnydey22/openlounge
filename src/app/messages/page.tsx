@@ -159,7 +159,9 @@ function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void
             </button>
           </li>
         ))}
-        {list.length === 0 && <li className="py-6 text-center text-sm text-zinc-500">No people match “{q}”.</li>}
+        {list.length === 0 && (
+          <li className="py-6 text-center text-sm text-zinc-500">{needle ? `No people match “${q}”.` : "No one else is here yet."}</li>
+        )}
       </ul>
     </Sheet>
   );

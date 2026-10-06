@@ -221,7 +221,7 @@ body {
   animation: typing-dot 1.1s ease-in-out infinite;
 }
 
-/* Clubhouse-style soft rounded hexagon (clip-path defined in Avatar.tsx SVG) */
+/* Heavily rounded hexagon (clipPath defined in layout.tsx from HEX_PATH in src/lib/hex.ts) */
 .openlounge-hex {
   -webkit-clip-path: url(#openlounge-hex);
   clip-path: url(#openlounge-hex);

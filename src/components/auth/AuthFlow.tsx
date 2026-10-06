@@ -485,7 +485,11 @@ export function AuthFlow() {
   // follow suggestions
   return (
     <Shell stepKey={step}>
-      <Title sub="Follow a few people to fill your hallway with rooms.">Here are some people we suggest you follow</Title>
+      {suggestions !== null && suggestions.length === 0 ? (
+        <Title sub="Rooms from people you follow will fill your hallway.">No one to follow yet</Title>
+      ) : (
+        <Title sub="Follow a few people to fill your hallway with rooms.">Here are some people we suggest you follow</Title>
+      )}
       <ul className="mt-6 space-y-1">
         {(suggestions ?? []).map((u) => {
           const on = picked.has(u.id);
@@ -520,6 +524,12 @@ export function AuthFlow() {
           );
         })}
       </ul>
+      {suggestions !== null && suggestions.length === 0 && (
+        <div className="mt-2 rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
+          <div className="mb-2 text-3xl">🌱</div>
+          You&apos;re one of the first here. Invite a few friends, and they&apos;ll show up for you to follow.
+        </div>
+      )}
       <Footer>
         <PrimaryButton onClick={followAndFinish} busy={busy}>
           {picked.size ? `Follow ${picked.size} & enter the hallway` : "Enter the hallway"} <ArrowRight className="h-4 w-4" />

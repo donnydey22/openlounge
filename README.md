@@ -77,7 +77,7 @@ Sessions are stored per tab (sessionStorage, with localStorage as the fallback f
   - Other providers implement the `SmsProvider` interface.
 
 **Rooms**
-- The hallway lists live rooms (seeded rooms with bot speakers and chatter, plus user rooms). Anyone can start a room.
+- The hallway lists live rooms started by real users. Anyone can start a room. Demo bots and seeded rooms are off by default; set `DEMO_SEED=1` to bring them back (bot speakers, chatter, DM auto-replies, simulated audiences).
 - Roles: host, speaker and listener. Listeners raise hands; hosts invite them to speak, move people back to the audience, mute people or end the room.
 - Leave quietly. Your seat is kept for 15 seconds through a page refresh. User rooms end automatically after 5 minutes with no humans in them.
 
@@ -172,7 +172,7 @@ browser ──HTTPS──▶ Node server (server/index.ts, one port)
 How it works: `server/store.ts` keeps everything hot in memory (all reads are served from memory, exactly as before). About 800 ms after a change, and on SIGTERM, it hands a snapshot to the backend. The Postgres backend diffs it against what it last wrote and upserts/deletes only the changed rows in one transaction; if the database is unreachable it retries with backoff (2 s → 60 s) and the app keeps working from memory.
 
 **Stored in Postgres:** `users` (profile, bio, phone, photo version), `user_interests` (ordered), `follows`, `rooms` (metadata of open user-created rooms; removed when a room ends), `dms` (newest 1000 per conversation), `sessions` (SHA-256 token hashes, 60-day sliding expiry; expired rows are dropped at boot), `dm_reads` (read cursors), `openlounge_meta`.
-**Memory only (unchanged):** who's in which room, presence, raised hands, mute, podium, speaking, in-room chat, reactions, join/leave events, and the demo bots + seeded rooms (re-created on every boot, never stored).
+**Memory only (unchanged):** who's in which room, presence, raised hands, mute, podium, speaking, in-room chat, reactions, join/leave events, and the demo bots + seeded rooms (only with `DEMO_SEED=1`; re-created on every boot, never stored).
 **Files:** avatar images stay in `$DATA_DIR/avatars` (keep the `/data` volume).
 
 **Moving from `db.json`:** point `DATABASE_URL` at an *empty* database and start the server with the old `DATA_DIR`. It imports `db.json` once automatically (`[store] importing … into Postgres`) and records it in `openlounge_meta`, so it never re-imports. Or, with the server stopped: `DATABASE_URL=… npm run db:import -- path/to/db.json` (merges; safe to re-run). `SKIP_JSON_IMPORT=1` disables the automatic import.
@@ -231,7 +231,7 @@ docker run -p 3000:3000 -v openlounge-data:/data --env-file .env openlounge
 | OTP | Demo provider shows codes; Twilio adapter included | Real SMS provider, per-phone and per-IP rate limits, fraud checks |
 | Storage | Postgres (or `db.json` locally), one process with an in-memory cache | + Redis pub/sub / shared presence for multiple instances; avatars to object storage |
 | Audio | LiveKit Cloud (needs credentials) | Same; add LiveKit webhooks for presence reconciliation |
-| Bots | Seeded rooms, bot speakers and chatter, simulated follower counts | Remove `server/seed.ts` content |
+| Bots | Off by default; `DEMO_SEED=1` adds seeded rooms, bot speakers and chatter, simulated follower counts | Leave `DEMO_SEED` unset |
 | Moderation | Host delete and mute, rate limits | Reporting, blocking, abuse tooling |
 
 ### Known limitations

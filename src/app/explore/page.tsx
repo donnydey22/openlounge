@@ -65,7 +65,9 @@ export default function ExplorePage() {
             {people.map((u) => (
               <UserRow key={u.id} user={u} />
             ))}
-            {people.length === 0 && <p className="text-sm text-zinc-600">No people match “{q}”.</p>}
+            {people.length === 0 && (
+              <p className="text-sm text-zinc-600">{needle ? `No people match “${q}”.` : "No one else is here yet. Invite a few friends!"}</p>
+            )}
           </div>
         </section>
       </main>

@@ -17,11 +17,18 @@ import type {
   RoomSummary,
   UserProfile,
 } from "../src/lib/types";
-import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
+import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId } from "./conversation";
+
+/**
+ * Demo seeding (bot users, seeded rooms, bot chat, bot DM replies, newcomer waves, bot audiences)
+ * is OFF by default so only real users show up. Set DEMO_SEED=1 to bring the demo population back.
+ * Bots are memory-only either way (never persisted).
+ */
+export const DEMO_SEED = /^(1|true|yes)$/i.test(process.env.DEMO_SEED ?? "");
 import {
   DATA_DIR,
   DATA_FILE,
@@ -108,7 +115,7 @@ export class Store {
   private retryDelay = 0;
 
   constructor() {
-    this.seed();
+    if (DEMO_SEED) this.seed();
   }
 
   /** Storage backend in use ("postgres" | "json"), null before init(). */
@@ -356,7 +363,7 @@ export class Store {
   }
 
   private cleanInterests(raw: unknown) {
-    return Array.isArray(raw) ? raw.filter((x): x is string => INTERESTS.includes(x as never)).slice(0, 12) : [];
+    return Array.isArray(raw) ? raw.filter((x): x is string => INTERESTS.includes(x as never)).slice(0, MAX_INTERESTS) : [];
   }
 
   // ----- sessions -----
@@ -451,25 +458,43 @@ export class Store {
     return { ...pub, phoneMasked: u.phone ? maskPhone(u.phone) : null };
   }
 
-  /** Follow suggestions for onboarding: notable demo users, interest matches first. */
+  /**
+   * Follow suggestions for onboarding: real (non-bot) users other than the viewer and people they
+   * already follow — shared interests first, then most followed, then newest. May be empty.
+   * With DEMO_SEED=1 the notable demo users are appended after the real people.
+   */
   suggestions(userId: string) {
-    const mine = new Set((this.users.get(userId)?.interests ?? []).map((i) => i.split(" ").slice(1).join(" ")));
+    const mine = new Set(this.users.get(userId)?.interests ?? []);
+    const already = new Set(this.followingIds(userId));
+    const real = [...this.users.values()]
+      .filter((u) => !u.isBot && u.id !== userId && !already.has(u.id))
+      .map((u) => this.publicUser(u.id)!)
+      .map((u) => ({ u, shared: u.interests.filter((i) => mine.has(i)).length }))
+      .sort((a, b) => b.shared - a.shared || b.u.followers - a.u.followers || b.u.createdAt - a.u.createdAt)
+      .map((x) => x.u);
+    if (!DEMO_SEED) return real;
     const roomTopicOf = new Map<string, string>();
     for (const r of this.rooms.values()) for (const p of r.participants.values()) if (p.role !== "listener") roomTopicOf.set(p.userId, r.topic);
-    return NOTABLE_USERS.map((n) => this.publicUser(n.id)!)
-      .map((u) => ({ u, score: mine.has(roomTopicOf.get(u.id) ?? "") ? 0 : 1 }))
+    const topics = new Set([...mine].map((i) => i.split(" ").slice(1).join(" ")));
+    const demo = NOTABLE_USERS.filter((n) => n.id !== userId && !already.has(n.id))
+      .map((n) => this.publicUser(n.id))
+      .filter((u): u is PublicUser => !!u)
+      .map((u) => ({ u, score: topics.has(roomTopicOf.get(u.id) ?? "") ? 0 : 1 }))
       .sort((a, b) => a.score - b.score || b.u.followers - a.u.followers)
       .map((x) => x.u);
+    return [...real, ...demo];
   }
 
+  /** Followers that still exist (saved follows may point at demo bots that aren't loaded). */
   followerIds(id: string) {
     const out: string[] = [];
-    for (const [follower, set] of this.follows) if (set.has(id)) out.push(follower);
+    for (const [follower, set] of this.follows) if (set.has(id) && this.users.has(follower)) out.push(follower);
     return out;
   }
 
+  /** Followees that still exist; references to missing users (e.g. unseeded "bot-*" ids) are skipped, not deleted. */
   followingIds(id: string) {
-    return [...(this.follows.get(id) ?? [])];
+    return [...(this.follows.get(id) ?? [])].filter((x) => this.users.has(x));
   }
 
   publicUser(id: string): PublicUser | null {
@@ -514,7 +539,7 @@ export class Store {
 
   listUsers(): PublicUser[] {
     const humans = [...this.users.values()].filter((u) => !u.isBot);
-    const notable = NOTABLE_USERS.map((u) => this.users.get(u.id)!);
+    const notable = DEMO_SEED ? NOTABLE_USERS.map((u) => this.users.get(u.id)).filter((u): u is UserRecord => !!u) : [];
     return [...humans, ...notable].map((u) => this.publicUser(u.id)!);
   }
 
@@ -633,7 +658,7 @@ export class Store {
     };
     this.rooms.set(room.id, room);
     this.scheduleSave();
-    this.scheduleBotAudience(room.id);
+    if (DEMO_SEED) this.scheduleBotAudience(room.id);
     this.events?.roomsListChanged();
     return { ok: true as const, roomId: room.id };
   }
@@ -1001,7 +1026,7 @@ export class Store {
     this.events?.chatMessage(msg);
 
     // demo flavour: someone in a seeded room waves at newcomers
-    if (firstMessage && ctx.room.seeded && Math.random() < 0.7) {
+    if (DEMO_SEED && firstMessage && ctx.room.seeded && Math.random() < 0.7) {
       setTimeout(() => {
         const room = this.rooms.get(roomId);
         if (!room || room.ended) return;
@@ -1078,7 +1103,7 @@ export class Store {
     const msg = this.appendDm(fromId, toId, text);
     // sending implies you've read everything before it
     this.markDmRead(fromId, toId);
-    if (this.isBot(toId)) this.scheduleBotDmReply(toId, fromId);
+    if (DEMO_SEED && this.isBot(toId)) this.scheduleBotDmReply(toId, fromId);
     return { ok: true as const, message: msg };
   }
 

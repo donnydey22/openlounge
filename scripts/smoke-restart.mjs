@@ -4,6 +4,7 @@
 //                                                                 a revoked session; saves ids to /tmp
 //   (restart the server)
 //   node scripts/smoke-restart.mjs verify [ws://host:port/ws]   → checks all of it came back
+// The bot follow/DM checks need the demo population: start the server with DEMO_SEED=1.
 import fs from "node:fs";
 import WebSocket from "ws";
 

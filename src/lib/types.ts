@@ -166,6 +166,9 @@ export const INTERESTS = [
   "💡 Side projects",
 ] as const;
 
+/** Most interests a user can pick (UI counter + server cap in store.cleanInterests). */
+export const MAX_INTERESTS = 12;
+
 export const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 
 /** The signed-in user's own account (includes private fields). */

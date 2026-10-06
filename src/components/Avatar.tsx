@@ -1,5 +1,6 @@
 import { MicOff } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
+import { HEX_PATH } from "@/lib/hex";
 
 const SIZES = {
   xs: "h-7 w-7 text-[10px]",
@@ -18,8 +19,9 @@ const DOT = {
 } as const;
 
 /**
- * Clubhouse-style soft rounded-hexagon avatar (clip-path #openlounge-hex in layout).
- * Soft curved corners — not a sharp geometric hexagon.
+ * Avatar clipped to a heavily rounded hexagon (clip-path #openlounge-hex in layout, HEX_PATH).
+ * Almost a circle with a faint hint of six sides. Rings are drawn as an SVG stroke of the same
+ * path so they follow the shape all the way around.
  * Speaking glow scales with `level` (0–1) when provided.
  */
 export function Avatar({
@@ -67,16 +69,19 @@ export function Avatar({
             transform: `scale(${glowScale})`,
             opacity: glowOpacity,
             boxShadow: `0 0 ${glowBlur}px ${2 + lvl * 6}px rgba(52, 211, 153, ${0.35 + lvl * 0.45})`,
-            border: `2px solid rgba(52, 211, 153, ${0.55 + lvl * 0.4})`,
           }}
           aria-hidden
-        />
+        >
+          <HexOutline stroke={`rgba(52, 211, 153, ${0.55 + lvl * 0.4})`} />
+        </span>
       )}
       {onPodium && (
         <span
-          className="podium-ring openlounge-hex absolute -inset-[7px] pointer-events-none border-2 border-amber-400/80"
+          className="podium-ring openlounge-hex absolute -inset-[7px] pointer-events-none"
           aria-hidden
-        />
+        >
+          <HexOutline className="stroke-amber-400/80" />
+        </span>
       )}
 
       <div
@@ -110,6 +115,18 @@ export function Avatar({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 2px outline that follows the avatar shape. The stroke is 4px centred on the path; the parent's
+ * clip-path trims the outer half, leaving a 2px ring inside the edge (same as the old 2px border).
+ */
+function HexOutline({ stroke, className }: { stroke?: string; className?: string }) {
+  return (
+    <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
+      <path d={HEX_PATH} fill="none" stroke={stroke} strokeWidth={4} vectorEffect="non-scaling-stroke" className={className} />
+    </svg>
   );
 }
 

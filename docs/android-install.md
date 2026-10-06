@@ -4,7 +4,7 @@
 **Type:** debug / sideload — **not** a Play Store–signed release  
 **Package:** `com.donnydey.openlounge.debug` · Android 7.0+ (API 24)
 
-The APK is a native WebView shell. It does **not** embed the Node server. Point it at your deployed **HTTPS** Open Lounge URL (Railway etc.). Soft rounded-hexagon avatars, signup, chat, and LiveKit audio all run in that web app.
+The APK is a native WebView shell. It does **not** embed the Node server. Point it at your deployed **HTTPS** Open Lounge URL (Railway etc.). Rounded-hexagon (almost circular) avatars, signup, chat, and LiveKit audio all run in that web app.
 
 ## Install steps
 
@@ -12,7 +12,7 @@ The APK is a native WebView shell. It does **not** embed the Node server. Point 
 2. Open it from **Files** / **Downloads**.
 3. If blocked: **Settings → Apps → Special app access → Install unknown apps** and allow the source app.
 4. Tap **Install** → **Open**.
-5. On first launch, paste your Railway HTTPS URL, e.g. `https://openlounge-production.up.railway.app`, then **Save & open**.
+5. The app opens `https://openlounge-production.up.railway.app` by default (no setup needed).
 6. Allow **microphone** when prompted (live rooms / LiveKit).
 
 Change the server later with the **gear** icon (top-right).
