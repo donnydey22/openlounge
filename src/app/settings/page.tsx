@@ -100,20 +100,10 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <section className="mb-8">
-          <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Backend (Android / deploy)</h2>
-          <p className="text-sm leading-relaxed text-zinc-400">
-            The Android APK opens your <b className="font-medium text-zinc-300">Railway HTTPS URL</b> in a WebView. Set LiveKit Cloud
-            credentials on the <em>server</em> (<code className="text-zinc-300">LIVEKIT_URL</code>,{" "}
-            <code className="text-zinc-300">LIVEKIT_API_KEY</code>, <code className="text-zinc-300">LIVEKIT_API_SECRET</code>). Mic + WSS
-            need HTTPS.
-          </p>
-        </section>
-
         <section>
           <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">About</h2>
           <p className="text-sm leading-relaxed text-zinc-400">
-            Open Lounge is a demo social-audio app: Node backend, LiveKit audio, rooms, chat and DMs over raw WebSockets (WSS on HTTPS).
+            Open Lounge is a place for live audio conversations. Drop into a room, chat, and message the people you follow.
           </p>
         </section>
       </main>
