@@ -13,6 +13,7 @@ import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 import { FollowButton, UserRow } from "@/components/UserRow";
 import { InterestChips } from "@/components/profile/InterestChips";
+import { usePresence } from "@/hooks/usePresence";
 
 /**
  * Profile page — intentionally Clubhouse-clean (precise spacing, soft hex avatar,
@@ -21,13 +22,15 @@ import { InterestChips } from "@/components/profile/InterestChips";
 export default function ProfilePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { me, request, following, signOut, updateMe, setPhoto, toast, isOnline } = useApp();
+  const { me, request, following, signOut, updateMe, setPhoto, toast } = useApp();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<"followers" | "following" | null>(null);
   const [editing, setEditing] = useState(false);
   const [editingInterests, setEditingInterests] = useState(false);
   const isMe = me?.id === id;
+  // live presence (pushed over the WebSocket) — not frozen at the time the profile was fetched
+  const presence = usePresence(id, profile?.user.lastSeenAt);
 
   useEffect(() => {
     request<{ profile: UserProfile }>("user:get", { userId: id })
@@ -64,7 +67,7 @@ export default function ProfilePage() {
   }
 
   const u = profile.user;
-  const online = u.online ?? isOnline(u.id);
+  const online = presence.online;
   const shown = list === "followers" ? profile.followers : list === "following" ? profile.following : [];
   const mockExtra =
     list === "followers" ? u.followers - profile.followers.length : list === "following" ? u.following - profile.following.length : 0;
@@ -117,6 +120,7 @@ export default function ProfilePage() {
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Online
               </span>
             )}
+            {!online && !u.isBot && presence.label && <span className="text-[12px] text-zinc-500">{presence.label}</span>}
             {u.isBot && <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">Demo</span>}
           </div>
         </div>

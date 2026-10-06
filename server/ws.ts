@@ -19,7 +19,9 @@ export type Ack = (res: unknown) => void;
 type Handler = (data: any, ack: Ack) => void | Promise<void>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const MAX_FRAME_BYTES = 2_000_000; // profile photo uploads ride on the socket
-const HEARTBEAT_MS = 25_000;
+// Ping every 10 s; a socket that misses a pong (and sends nothing) for a full interval is
+// terminated, so dead connections (app killed, network lost) are dropped within ~10–20 s.
+const HEARTBEAT_MS = 10_000;
 
 export class Conn {
   readonly id = randomUUID();

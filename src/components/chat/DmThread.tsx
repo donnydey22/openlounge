@@ -10,6 +10,7 @@ import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
 import { formatClock } from "./RoomChatPanel";
 import { FollowButton } from "../UserRow";
+import { usePresence } from "@/hooks/usePresence";
 
 const GROUP_WINDOW_MS = 5 * 60_000;
 
@@ -50,6 +51,7 @@ export function DmThread({
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSent = useRef(0);
   const isSelf = me?.id === peerId;
+  const presence = usePresence(peerId, peer?.lastSeenAt);
 
   const markRead = useCallback(() => {
     socket?.emit("dm:read", { peerId });
@@ -168,11 +170,19 @@ export function DmThread({
         </button>
         {peer ? (
           <Link href={`/profile/${peer.id}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl p-1 hover:bg-white/5">
-            <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="sm" />
+            <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="sm" online={peer.isBot ? undefined : presence.online} />
             <div className="min-w-0">
               <div className="truncate font-semibold">{peer.name}</div>
               <div className="truncate text-xs text-zinc-500">
-                {peerTyping ? <span className="text-emerald-400">typing…</span> : peer.isBot ? "Demo user · replies automatically" : "Direct message"}
+                {peerTyping ? (
+                  <span className="text-emerald-400">typing…</span>
+                ) : peer.isBot ? (
+                  "Demo user · replies automatically"
+                ) : presence.online ? (
+                  <span className="text-emerald-400">Online</span>
+                ) : (
+                  presence.label ?? "Direct message"
+                )}
               </div>
             </div>
           </Link>

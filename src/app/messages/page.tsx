@@ -12,7 +12,7 @@ import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 
 export default function MessagesPage() {
-  const { socket, request, me, setActiveDm } = useApp();
+  const { socket, request, me, setActiveDm, isOnline } = useApp();
   const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
   const [composing, setComposing] = useState(false);
 
@@ -72,7 +72,7 @@ export default function MessagesPage() {
               return (
                 <li key={c.peer.id}>
                   <Link href={`/messages/${c.peer.id}`} className="flex items-center gap-3 rounded-2xl p-3 transition hover:bg-white/5">
-                    <Avatar name={c.peer.name} color={c.peer.color} photo={c.peer.photoUrl} size="md" />
+                    <Avatar name={c.peer.name} color={c.peer.color} photo={c.peer.photoUrl} size="md" online={c.peer.isBot ? undefined : isOnline(c.peer.id)} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className={cn("truncate", c.unread ? "font-bold text-white" : "font-semibold text-zinc-100")}>{c.peer.name}</span>
@@ -103,7 +103,7 @@ export default function MessagesPage() {
 }
 
 function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { request, me, following } = useApp();
+  const { request, me, following, isOnline } = useApp();
   const router = useRouter();
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [q, setQ] = useState("");
@@ -148,7 +148,7 @@ function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void
               }}
               className="flex w-full items-center gap-3 rounded-2xl p-2.5 text-left hover:bg-white/5"
             >
-              <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="sm" />
+              <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="sm" online={u.isBot ? undefined : isOnline(u.id)} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{u.name}</div>
                 <div className="truncate text-xs text-zinc-500">

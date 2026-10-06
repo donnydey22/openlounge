@@ -5,6 +5,7 @@ import type { PublicUser } from "@/lib/types";
 import { compact } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import { useApp } from "./AppProvider";
+import { usePresence } from "@/hooks/usePresence";
 
 export function FollowButton({ userId, small }: { userId: string; small?: boolean }) {
   const { me, following, follow } = useApp();
@@ -29,8 +30,8 @@ export function FollowButton({ userId, small }: { userId: string; small?: boolea
 }
 
 export function UserRow({ user }: { user: PublicUser }) {
-  const { isOnline } = useApp();
-  const online = user.online ?? isOnline(user.id);
+  // live presence (pushed over the WebSocket), not the snapshot captured when the list was fetched
+  const { online } = usePresence(user.id, user.lastSeenAt);
   return (
     <Link href={`/profile/${user.id}`} className="flex items-center gap-3 rounded-2xl p-2.5 transition hover:bg-white/5">
       <Avatar name={user.name} color={user.color} photo={user.photoUrl} size="sm" online={online} />

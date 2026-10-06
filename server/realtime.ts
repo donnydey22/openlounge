@@ -8,6 +8,7 @@ import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { randomBytes } from "node:crypto";
+import { PRESENCE_CHANNEL, Presence } from "./presence";
 
 type AckFn = (res: Ack<Record<string, unknown>>) => void;
 const noop: AckFn = () => {};
@@ -15,20 +16,18 @@ const noop: AckFn = () => {};
 export function registerRealtime(io: WsHub) {
   const userOfSocket = new Map<string, string>();
   const tokenOfSocket = new Map<string, string>();
-  /** How many live sockets each user currently has (multi-tab aware). */
-  const onlineCounts = new Map<string, number>();
-  const isOnline = (userId: string) => (onlineCounts.get(userId) ?? 0) > 0;
-  const withOnline = <T extends { id: string }>(u: T): T & { online: boolean } => ({ ...u, online: isOnline(u.id) });
-  const setOnline = (userId: string, delta: number) => {
-    const next = Math.max(0, (onlineCounts.get(userId) ?? 0) + delta);
-    if (next === 0) onlineCounts.delete(userId);
-    else onlineCounts.set(userId, next);
-    const online = next > 0;
-    // Only broadcast when crossing the online/offline boundary
-    if ((delta > 0 && next === 1) || (delta < 0 && next === 0)) {
-      io.emit("presence:update", { userId, online });
-    }
-  };
+  /** Online presence (multi-tab/device aware, heartbeat + visibility driven). See presence.ts. */
+  const presence = new Presence(
+    io,
+    (connId) => store.roomOfSocket(connId) !== null,
+    (token, at) => store.touchSession(token, at),
+    store.lastSeenByUser(),
+  );
+  const withOnline = <T extends { id: string }>(u: T): T & { online: boolean; lastSeenAt: number | null } => ({
+    ...u,
+    online: presence.isOnline(u.id),
+    lastSeenAt: presence.lastSeenAt(u.id),
+  });
   const otp = new OtpService();
   console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
   if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
@@ -128,20 +127,17 @@ export function registerRealtime(io: WsHub) {
 
     const signIn = (userId: string, token: string) => {
       const prev = me();
-      if (prev && prev !== userId) {
-        socket.leave(`user:${prev}`);
-        setOnline(prev, -1);
-      }
-      const wasAuthed = !!prev && prev === userId;
+      if (prev && prev !== userId) socket.leave(`user:${prev}`);
       userOfSocket.set(socket.id, userId);
       tokenOfSocket.set(socket.id, token);
       socket.join(`user:${userId}`);
-      if (!wasAuthed) setOnline(userId, +1);
+      socket.join(PRESENCE_CHANNEL);
+      presence.attach(socket.id, userId, token);
       socket.emit("rooms:update", store.listRooms());
-      socket.emit("presence:snapshot", { onlineIds: [...onlineCounts.keys()] });
+      socket.emit("presence:snapshot", presence.snapshot());
       const user = store.me(userId);
       return {
-        user: user ? { ...user, online: true } : user,
+        user: user ? { ...user, online: true, lastSeenAt: null } : user,
         following: store.followingIds(userId),
         unreadDms: store.unreadDmCount(userId),
       };
@@ -208,10 +204,21 @@ export function registerRealtime(io: WsHub) {
         const where = store.roomOfSocket(socket.id);
         if (where) store.leave(where.roomId, userId);
         socket.leave(`user:${userId}`);
-        setOnline(userId, -1);
+        socket.leave(PRESENCE_CHANNEL);
+        presence.detach(socket.id, 0);
       }
       userOfSocket.delete(socket.id);
       tokenOfSocket.delete(socket.id);
+      ack({ ok: true });
+    });
+
+    // ----- presence -----
+    // client heartbeat (lets the app detect half-open sockets after network switches / WebView resume)
+    socket.on("ping", (_: unknown, ack: AckFn = noop) => ack({ ok: true, now: Date.now() }));
+
+    // foreground/background from document.visibilitychange (Android WebView backgrounding, hidden tabs)
+    socket.on("presence:visible", ({ visible }: { visible?: boolean }, ack: AckFn = noop) => {
+      presence.setVisible(socket.id, visible !== false);
       ack({ ok: true });
     });
 
@@ -235,6 +242,7 @@ export function registerRealtime(io: WsHub) {
           return ack({ ok: false, error: state?.ended ? "This room has ended" : res.error });
         }
         socket.join(`room:${roomId}`);
+        presence.refresh(userId);
         ack({ ok: true, room: store.roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled } });
       }),
     );
@@ -243,6 +251,7 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => {
         socket.leave(`room:${roomId}`);
         if (store.socketOf(roomId, userId) === socket.id) store.leave(roomId, userId);
+        presence.refresh(userId);
         ack({ ok: true });
       }),
     );
@@ -392,7 +401,7 @@ export function registerRealtime(io: WsHub) {
       tokenOfSocket.delete(socket.id);
       otpBudget.delete(socket.id);
       if (!userId) return;
-      setOnline(userId, -1);
+      presence.detach(socket.id);
       const where = store.roomOfSocket(socket.id);
       if (where) store.markAway(where.roomId, userId, socket.id);
     });

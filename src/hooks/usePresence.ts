@@ -1,0 +1,31 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useApp } from "@/components/AppProvider";
+import { timeAgo } from "@/lib/utils";
+
+/** "Active 5m ago" style label for an offline user's last-seen timestamp. */
+export function lastSeenLabel(ts: number | null | undefined): string | null {
+  if (!ts) return null;
+  const ago = timeAgo(ts);
+  return ago === "just now" ? "Active just now" : `Active ${ago} ago`;
+}
+
+/**
+ * Live presence for one user: driven by the app-wide presence map that the server
+ * pushes over the WebSocket (presence:snapshot / presence:update), so it updates
+ * without refetching. `fallbackLastSeen` is the value from a fetched PublicUser.
+ */
+export function usePresence(userId: string | null | undefined, fallbackLastSeen?: number | null) {
+  const { isOnline, lastSeenAt } = useApp();
+  const online = userId ? isOnline(userId) : false;
+  const seen = userId && !online ? lastSeenAt(userId, fallbackLastSeen) : null;
+  // re-render once a minute so "Active 5m ago" keeps counting
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!seen) return;
+    const t = setInterval(() => tick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, [seen]);
+  return { online, lastSeenAt: seen, label: online ? "Online" : lastSeenLabel(seen) };
+}

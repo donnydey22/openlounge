@@ -1,6 +1,14 @@
 // Browser side of the raw-WebSocket realtime layer (see server/ws.ts for the protocol).
-// Features: named events, request/response with timeouts, auto-reconnect with backoff.
+// Features: named events, request/response with timeouts, auto-reconnect with backoff,
+// an app-level heartbeat (detects half-open sockets the browser hasn't noticed yet) and
+// instant reconnect when the page comes back to the foreground / network returns
+// (Android WebView backgrounding, laptop sleep, Wi-Fi ↔ cellular switches).
 // Uses wss:// automatically when the page is served over https:// (production/TLS).
+
+const HEARTBEAT_MS = 15_000; // client → server "ping" while the page is visible
+const HEARTBEAT_TIMEOUT_MS = 8_000;
+const WAKE_PING_TIMEOUT_MS = 4_000; // quick health check when returning to the foreground
+const CONNECT_TIMEOUT_MS = 10_000; // a CONNECTING socket stuck this long is retried
 
 type Listener = (data: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -12,17 +20,31 @@ export class RealtimeClient {
   private retry = 0;
   private closedByUser = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private wakeBound = false;
+  private checking = false;
   connected = false;
 
   constructor(private url: string = defaultUrl()) {}
 
   connect() {
     this.closedByUser = false;
+    this.bindWake();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    if (this.connectTimer) clearTimeout(this.connectTimer);
     const ws = new WebSocket(this.url);
     this.ws = ws;
+    this.connectTimer = setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.CONNECTING) this.drop(ws);
+    }, CONNECT_TIMEOUT_MS);
     ws.onopen = () => {
+      if (this.ws !== ws) return;
+      if (this.connectTimer) clearTimeout(this.connectTimer);
       this.retry = 0;
       this.connected = true;
+      this.startHeartbeat();
       this.fire("connect", null);
     };
     ws.onmessage = (e) => {
@@ -45,27 +67,117 @@ export class RealtimeClient {
     };
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      const was = this.connected;
-      this.connected = false;
-      for (const [id, p] of this.pending) {
-        clearTimeout(p.timer);
-        p.reject(new Error("Connection lost"));
-        this.pending.delete(id);
-      }
-      if (was) this.fire("disconnect", null);
-      if (!this.closedByUser) this.scheduleReconnect();
+      this.handleLost(false);
     };
     ws.onerror = () => ws.close();
   }
 
+  /** Socket is gone (closed, or declared dead by us): clean up, notify, maybe reconnect. */
+  private handleLost(immediate: boolean) {
+    const was = this.connected;
+    this.connected = false;
+    this.ws = null;
+    this.stopHeartbeat();
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    for (const [id, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Connection lost"));
+      this.pending.delete(id);
+    }
+    if (was) this.fire("disconnect", null);
+    if (this.closedByUser) return;
+    if (immediate) this.connect();
+    else this.scheduleReconnect();
+  }
+
+  /** Abandon a socket we believe is dead (no heartbeat reply) and reconnect right away. */
+  private drop(ws: WebSocket) {
+    if (this.ws !== ws) return;
+    try {
+      ws.onclose = null;
+      ws.close();
+    } catch {
+      /* already closing */
+    }
+    this.handleLost(true);
+  }
+
   private scheduleReconnect() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     const delay = Math.min(5000, 400 * 2 ** this.retry++) + Math.random() * 300;
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeat = setInterval(() => {
+      // hidden pages get their timers throttled; the wake check covers them on return
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void this.check(HEARTBEAT_TIMEOUT_MS);
+    }, HEARTBEAT_MS);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = null;
+  }
+
+  /** Round-trip a ping; if it doesn't come back in time the socket is half-open → reconnect. */
+  private async check(timeoutMs: number) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.checking) return;
+    this.checking = true;
+    try {
+      await this.request("ping", {}, timeoutMs);
+    } catch {
+      this.drop(ws);
+    } finally {
+      this.checking = false;
+    }
+  }
+
+  /** Page back in the foreground / network back: reconnect now instead of waiting out the backoff. */
+  wake() {
+    if (this.closedByUser) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      this.retry = 0;
+      if (ws) this.drop(ws);
+      else this.connect();
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) void this.check(WAKE_PING_TIMEOUT_MS);
+  }
+
+  private onVisibility = () => {
+    if (document.visibilityState === "visible") this.wake();
+  };
+  private onWake = () => this.wake();
+
+  private bindWake() {
+    if (this.wakeBound || typeof window === "undefined") return;
+    this.wakeBound = true;
+    document.addEventListener("visibilitychange", this.onVisibility);
+    window.addEventListener("online", this.onWake);
+    window.addEventListener("pageshow", this.onWake);
+    window.addEventListener("focus", this.onWake);
+  }
+
+  private unbindWake() {
+    if (!this.wakeBound) return;
+    this.wakeBound = false;
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener("online", this.onWake);
+    window.removeEventListener("pageshow", this.onWake);
+    window.removeEventListener("focus", this.onWake);
+  }
+
   close() {
     this.closedByUser = true;
+    this.unbindWake();
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.connectTimer) clearTimeout(this.connectTimer);
     this.ws?.close();
     this.ws = null;
     this.connected = false;

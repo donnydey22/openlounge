@@ -18,6 +18,8 @@ export interface PublicUser {
   following: number;
   /** Present when the server knows realtime presence */
   online?: boolean;
+  /** When the user was last active in the app (null while online / never seen) */
+  lastSeenAt?: number | null;
 }
 
 export interface Participant {

@@ -386,6 +386,22 @@ export class Store {
     return s.userId;
   }
 
+  /** Record when a session was last active (presence "last seen"); persisted with the session row. */
+  touchSession(token: unknown, at = Date.now()) {
+    if (typeof token !== "string") return;
+    const s = this.sessions.get(sha256(token));
+    if (!s || s.lastSeenAt >= at) return;
+    s.lastSeenAt = at;
+    this.scheduleSave();
+  }
+
+  /** Most recent activity per user (max session last_seen_at) — seeds presence "last seen" after a restart. */
+  lastSeenByUser(): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const s of this.sessions.values()) if ((out.get(s.userId) ?? 0) < s.lastSeenAt) out.set(s.userId, s.lastSeenAt);
+    return out;
+  }
+
   revokeSession(token: unknown) {
     if (typeof token !== "string") return;
     this.sessions.delete(sha256(token));

@@ -42,9 +42,11 @@ interface AppCtx {
   updateMe(patch: { name?: string; bio?: string; color?: string; username?: string; interests?: string[] }): Promise<void>;
   setPhoto(photo: string | null): Promise<void>;
   toast(message: string, href?: string): void;
-  /** User ids currently connected over WebSocket */
+  /** User ids currently online (app open + connected), pushed live over the WebSocket */
   onlineIds: Set<string>;
   isOnline(userId: string): boolean;
+  /** When an offline user was last active (null = online or unknown); `fallback` = value from a fetched PublicUser */
+  lastSeenAt(userId: string, fallback?: number | null): number | null;
 }
 
 const Ctx = createContext<AppCtx | null>(null);
@@ -67,6 +69,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [unreadDms, setUnreadDms] = useState(0);
   const [onboarding, setOnboarding] = useState(false);
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
+  const [lastSeen, setLastSeen] = useState<Map<string, number>>(new Map());
   const activeDm = useRef<string | null>(null);
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
@@ -98,6 +101,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setUnreadDms(0);
     setOnboarding(false);
     setOnlineIds(new Set());
+    setLastSeen(new Map());
   }, []);
 
   // One socket for the app's lifetime; it's used for auth (pre-login) and everything after.
@@ -107,11 +111,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBooted(true);
 
     const s = new RealtimeClient();
+    // Tell the server whether the app is in the foreground (Android WebView backgrounding, hidden tabs)
+    const reportVisibility = () => {
+      if (!tokenRef.current && !loadToken()) return;
+      s.emit("presence:visible", { visible: document.visibilityState !== "hidden" });
+    };
     const resume = () => {
       const t = tokenRef.current ?? loadToken();
       if (!t) return;
       s.request<({ ok: true } & SessionPayload) | { ok: false }>("session:resume", { token: t })
-        .then((res) => (res?.ok ? applySession(res) : dropSession()))
+        .then((res) => {
+          if (!res?.ok) return dropSession();
+          applySession(res);
+          if (document.visibilityState === "hidden") reportVisibility();
+        })
         .catch(() => {
           /* connection dropped mid-request; we'll resume on reconnect */
         });
@@ -126,15 +139,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
     s.on("me:update", ({ user }: { user: Me }) => setMe(user));
     s.on("dm:unread", ({ count }: { count: number }) => setUnreadDms(count));
-    s.on("presence:snapshot", ({ onlineIds: ids }: { onlineIds: string[] }) => setOnlineIds(new Set(ids)));
-    s.on("presence:update", ({ userId, online }: { userId: string; online: boolean }) => {
+    s.on("presence:snapshot", ({ onlineIds: ids, lastSeen: seen }: { onlineIds: string[]; lastSeen?: Record<string, number> }) => {
+      setOnlineIds(new Set(ids));
+      if (seen) setLastSeen(new Map(Object.entries(seen)));
+    });
+    s.on("presence:update", ({ userId, online, lastSeenAt }: { userId: string; online: boolean; lastSeenAt: number | null }) => {
       setOnlineIds((prev) => {
+        if (prev.has(userId) === online) return prev;
         const next = new Set(prev);
         if (online) next.add(userId);
         else next.delete(userId);
         return next;
       });
+      if (!online && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
     });
+    document.addEventListener("visibilitychange", reportVisibility);
     s.on("dm:message", (msg: DirectMessage) => {
       if (msg.toId !== meRef.current?.id) return;
       const active = activeDm.current;
@@ -145,6 +164,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     s.connect();
     setSocket(s);
     return () => {
+      document.removeEventListener("visibilitychange", reportVisibility);
       s.removeAllListeners();
       s.close();
     };
@@ -215,7 +235,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [request],
   );
 
-  const isOnline = useCallback((userId: string) => onlineIds.has(userId) || me?.id === userId, [onlineIds, me?.id]);
+  const isOnline = useCallback((userId: string) => onlineIds.has(userId) || (me?.id === userId && connected), [onlineIds, me?.id, connected]);
+  const lastSeenAt = useCallback(
+    (userId: string, fallback?: number | null) => (onlineIds.has(userId) ? null : (lastSeen.get(userId) ?? fallback ?? null)),
+    [onlineIds, lastSeen],
+  );
 
   const status: Status = !booted ? "booting" : !token ? "signedOut" : me ? "ready" : "connecting";
 
@@ -241,8 +265,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       toast,
       onlineIds,
       isOnline,
+      lastSeenAt,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, onlineIds, isOnline],
+    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, onlineIds, isOnline, lastSeenAt],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
