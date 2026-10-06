@@ -75,7 +75,7 @@ export default function ProfilePage() {
       <main className="mx-auto max-w-lg px-5 pt-10 pb-28 fade-in">
         {/* Clubhouse-like header: avatar left, actions right */}
         <div className="flex items-start justify-between gap-4">
-          <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="xl" online={online} />
+          <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="profile" online={online} />
           <div className="flex flex-wrap justify-end gap-2 pt-1">
             {isMe ? (
               <>

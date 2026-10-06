@@ -8,6 +8,8 @@ const SIZES = {
   md: "h-14 w-14 text-base",
   lg: "h-[72px] w-[72px] text-xl",
   xl: "h-28 w-28 text-3xl",
+  /** Profile header: Clubhouse's profile photo is 22.5% of the screen width (96pt on a 428pt iPhone) */
+  profile: "h-[min(22.5vw,115px)] w-[min(22.5vw,115px)] text-3xl",
 } as const;
 
 const DOT = {
@@ -16,6 +18,7 @@ const DOT = {
   md: "h-3.5 w-3.5 right-0 bottom-0 ring-2",
   lg: "h-4 w-4 right-0.5 bottom-0.5 ring-2",
   xl: "h-5 w-5 right-1 bottom-1 ring-[3px]",
+  profile: "h-5 w-5 right-1 bottom-1 ring-[3px]",
 } as const;
 
 /**
