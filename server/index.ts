@@ -36,6 +36,26 @@ async function main() {
       void api(req, res);
       return;
     }
+    // Ensure HTML/RSC shells are never cached for a year (Android WebView / CDN).
+    // Next may set s-maxage on documents — pin Cache-Control to no-store for non-static paths.
+    const urlPath = (req.url ?? "").split("?")[0];
+    const looksLikeDoc =
+      !urlPath.startsWith("/_next/") &&
+      !urlPath.startsWith("/avatars/") &&
+      !urlPath.startsWith("/api/") &&
+      !/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?|map)$/i.test(urlPath);
+    if (looksLikeDoc) {
+      const noStore = "private, no-cache, no-store, max-age=0, must-revalidate";
+      const origSetHeader = res.setHeader.bind(res);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (res as any).setHeader = (name: string, value: unknown) => {
+        if (String(name).toLowerCase() === "cache-control") return origSetHeader("Cache-Control", noStore);
+        return origSetHeader(name, value as never);
+      };
+      res.setHeader("Cache-Control", noStore);
+      res.setHeader("Pragma", "no-cache");
+      // openlounge-no-store
+    }
     handle(req, res);
   });
   // Raw WebSocket endpoint at /ws (other upgrade requests, e.g. Next HMR, pass through)

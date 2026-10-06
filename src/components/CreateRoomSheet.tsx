@@ -13,8 +13,25 @@ function defaultTitle(topic: string) {
   return topic && topic !== "Other" ? `${topic} room` : "Open Lounge";
 }
 
+/** Wait until the realtime socket is up (or timeout). */
+function waitFor(predicate: () => boolean, ms: number) {
+  return new Promise<boolean>((resolve) => {
+    if (predicate()) return resolve(true);
+    const start = Date.now();
+    const t = setInterval(() => {
+      if (predicate()) {
+        clearInterval(t);
+        resolve(true);
+      } else if (Date.now() - start >= ms) {
+        clearInterval(t);
+        resolve(false);
+      }
+    }, 100);
+  });
+}
+
 export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { request, toast, connected } = useApp();
+  const { request, toast, connected, socket } = useApp();
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState<string>("Tech");
@@ -30,7 +47,12 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
       description,
     };
     try {
-      // In-app room first — never wait on LiveKit. Audio connects after /room/[id] mounts.
+      // Never gate the tap on LiveKit/token/title. If the socket is briefly down, wait a beat.
+      if (!socket?.connected) {
+        const ok = await waitFor(() => !!socket?.connected, 5_000);
+        if (!ok) throw new Error("Not connected — try again");
+      }
+      // In-app room first — audio connects after /room/[id] mounts and soft-fails if needed.
       const res = await request<{ roomId: string }>("room:create", payload);
       const roomId = res.roomId;
       if (!roomId) throw new Error("Couldn't create the room");
@@ -53,6 +75,7 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
           void startRoom();
         }}
         className="space-y-5"
+        data-letsgo="always-on"
       >
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium text-zinc-300">
@@ -100,12 +123,17 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
             className="w-full resize-none rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
           />
         </label>
-        {/* Always highlighted — Clubhouse-style. Only spinner while the create request is in flight. */}
+        {/* Clubhouse-style: ALWAYS emerald / tappable. Busy only shows a spinner — never greys out. */}
         <button
           type="submit"
-          disabled={busy}
+          data-letsgo-btn="1"
           aria-busy={busy}
-          className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent transition hover:bg-emerald-400 active:scale-[0.99] disabled:opacity-70"
+          onClick={(e) => {
+            // Extra path for WebViews that mishandle form submit.
+            e.preventDefault();
+            void startRoom();
+          }}
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 active:scale-[0.99]"
         >
           {busy && <Loader2 className="h-4 w-4 animate-spin" />} 🎉 Let&apos;s go
         </button>
