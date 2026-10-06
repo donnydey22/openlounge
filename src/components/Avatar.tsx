@@ -1,0 +1,123 @@
+import { MicOff } from "lucide-react";
+import { cn, initials } from "@/lib/utils";
+
+const SIZES = {
+  xs: "h-7 w-7 text-[10px]",
+  sm: "h-10 w-10 text-xs",
+  md: "h-14 w-14 text-base",
+  lg: "h-[72px] w-[72px] text-xl",
+  xl: "h-28 w-28 text-3xl",
+} as const;
+
+const DOT = {
+  xs: "h-2 w-2 -right-0 -bottom-0 ring-1",
+  sm: "h-2.5 w-2.5 right-0 bottom-0 ring-2",
+  md: "h-3.5 w-3.5 right-0 bottom-0 ring-2",
+  lg: "h-4 w-4 right-0.5 bottom-0.5 ring-2",
+  xl: "h-5 w-5 right-1 bottom-1 ring-[3px]",
+} as const;
+
+/**
+ * Clubhouse-style soft rounded-hexagon avatar (clip-path #openlounge-hex in layout).
+ * Soft curved corners — not a sharp geometric hexagon.
+ * Speaking glow scales with `level` (0–1) when provided.
+ */
+export function Avatar({
+  name,
+  color,
+  photo,
+  size = "md",
+  speaking = false,
+  /** 0–1 audio level — scales glow intensity / pulse when speaking */
+  level = 0,
+  muted = false,
+  showMuted = false,
+  away = false,
+  online,
+  onPodium = false,
+  className,
+}: {
+  name: string;
+  color: string;
+  photo?: string | null;
+  size?: keyof typeof SIZES;
+  speaking?: boolean;
+  level?: number;
+  muted?: boolean;
+  showMuted?: boolean;
+  away?: boolean;
+  /** green = online, gray = offline; omit to hide the dot */
+  online?: boolean;
+  onPodium?: boolean;
+  className?: string;
+}) {
+  const lvl = Math.max(0, Math.min(1, level));
+  const showGlow = speaking || lvl > 0.02;
+  // Clubhouse-like verbalize: ring scale + opacity track loudness
+  const glowScale = 1 + Math.min(0.22, lvl * 0.45);
+  const glowOpacity = 0.35 + Math.min(0.65, lvl * 1.2);
+  const glowBlur = 4 + lvl * 14;
+
+  return (
+    <div className={cn("relative shrink-0", className)}>
+      {showGlow && (
+        <span
+          className="speaking-glow openlounge-hex absolute -inset-[4px] pointer-events-none"
+          style={{
+            transform: `scale(${glowScale})`,
+            opacity: glowOpacity,
+            boxShadow: `0 0 ${glowBlur}px ${2 + lvl * 6}px rgba(52, 211, 153, ${0.35 + lvl * 0.45})`,
+            border: `2px solid rgba(52, 211, 153, ${0.55 + lvl * 0.4})`,
+          }}
+          aria-hidden
+        />
+      )}
+      {onPodium && (
+        <span
+          className="podium-ring openlounge-hex absolute -inset-[7px] pointer-events-none border-2 border-amber-400/80"
+          aria-hidden
+        />
+      )}
+
+      <div
+        className={cn(
+          "openlounge-hex relative flex items-center justify-center font-semibold text-on-color/95 shadow-inner select-none transition-opacity",
+          SIZES[size],
+          away && "opacity-40",
+        )}
+        style={{ background: `linear-gradient(145deg, ${color}, ${shade(color, -28)})` }}
+        aria-label={name}
+      >
+        {photo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photo} alt="" className="openlounge-hex absolute inset-0 h-full w-full object-cover" draggable={false} />
+        ) : (
+          <span className="relative z-[1]">{initials(name)}</span>
+        )}
+      </div>
+
+      {showMuted && muted && (
+        <span className="absolute -right-1 -bottom-1 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 ring-2 ring-zinc-950">
+          <MicOff className="h-3.5 w-3.5 text-zinc-300" />
+        </span>
+      )}
+
+      {online !== undefined && !(showMuted && muted) && (
+        <span
+          className={cn("absolute z-[2] rounded-full ring-app", DOT[size], online ? "bg-emerald-400" : "bg-zinc-500")}
+          title={online ? "Online" : "Offline"}
+          aria-label={online ? "Online" : "Offline"}
+        />
+      )}
+    </div>
+  );
+}
+
+function shade(hex: string, pct: number) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (c: number) => Math.max(0, Math.min(255, Math.round(c + (c * pct) / 100)));
+  const r = f(n >> 16),
+    g = f((n >> 8) & 0xff),
+    b = f(n & 0xff);
+  return `rgb(${r}, ${g}, ${b})`;
+}

@@ -1,0 +1,139 @@
+// Durable storage backends for the in-memory Store.
+//
+//   DATABASE_URL set   → Postgres (server/pg.ts). This is the production path (Railway Postgres).
+//   DATABASE_URL unset → JSON file at DATA_DIR/db.json (local-dev fallback, logged loudly at boot).
+//
+// The Store keeps everything hot in memory exactly as before and hands the backend a full
+// PersistedDb snapshot on a debounce (~800 ms) and on shutdown. The Postgres backend diffs that
+// snapshot against what it last wrote and only sends the changed rows.
+
+import fs from "node:fs";
+import path from "node:path";
+import type { DirectMessage } from "../src/lib/types";
+
+export interface UserRecord {
+  id: string;
+  name: string;
+  username: string;
+  color: string;
+  bio: string;
+  isBot: boolean;
+  createdAt: number;
+  baseFollowers: number;
+  baseFollowing: number;
+  /** E.164 phone number used to sign in (humans only, never sent to other users) */
+  phone?: string;
+  interests?: string[];
+  /** bumped on every upload; null = no photo */
+  photoVersion?: number | null;
+}
+
+export interface SessionRecord {
+  tokenHash: string;
+  userId: string;
+  createdAt: number;
+  expiresAt: number;
+  lastSeenAt: number;
+}
+
+export interface PersistedRoom {
+  id: string;
+  title: string;
+  topic: string;
+  description: string;
+  hostId: string;
+  createdAt: number;
+}
+
+/** Everything that survives a restart. Same shape as the original db.json. */
+export interface PersistedDb {
+  version: 1;
+  users: UserRecord[];
+  follows: Record<string, string[]>;
+  rooms: PersistedRoom[];
+  dms?: DirectMessage[];
+  sessions?: SessionRecord[];
+  /** userId -> peerId -> last read timestamp */
+  dmReads?: Record<string, Record<string, number>>;
+}
+
+export interface LoadResult {
+  db: PersistedDb | null;
+  /** true when the backend holds no users and has never imported db.json (fresh Postgres) */
+  empty: boolean;
+}
+
+export interface Persistence {
+  kind: "postgres" | "json";
+  /** human-readable location for logs (password redacted) */
+  where: string;
+  load(): Promise<LoadResult>;
+  save(db: PersistedDb): Promise<void>;
+  /** record that a db.json import finished (Postgres only) */
+  markImported?(source: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+// DATA_DIR lets a host mount a persistent volume (e.g. Railway volume at /data). Avatars always live here.
+export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), "data"));
+export const DATA_FILE = path.join(DATA_DIR, "db.json");
+
+/** Readable error text (connection failures are often an AggregateError with an empty message). */
+export function errText(err: unknown): string {
+  const e = err as { message?: string; code?: string; errors?: unknown[] };
+  if (e?.errors?.length) return [...new Set(e.errors.map(errText))].join("; ");
+  return [e?.code, e?.message].filter(Boolean).join(" ") || String(err);
+}
+
+export function readJsonDb(file: string): PersistedDb | null {
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, "utf8")) as PersistedDb;
+}
+
+/** Original behaviour: whole snapshot to db.json via tmp file + atomic rename. */
+export class JsonPersistence implements Persistence {
+  kind = "json" as const;
+  constructor(readonly where: string = DATA_FILE) {}
+
+  async load(): Promise<LoadResult> {
+    try {
+      return { db: readJsonDb(this.where), empty: false };
+    } catch (err) {
+      console.warn("[store] could not load db.json, starting fresh:", err);
+      return { db: null, empty: false };
+    }
+  }
+
+  async save(db: PersistedDb) {
+    try {
+      fs.mkdirSync(path.dirname(this.where), { recursive: true });
+      const tmp = `${this.where}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+      fs.renameSync(tmp, this.where);
+    } catch (err) {
+      console.warn("[store] save failed:", err);
+    }
+  }
+
+  async close() {}
+}
+
+/** Pick the backend from the environment. */
+export async function createPersistence(): Promise<Persistence> {
+  const url = process.env.DATABASE_URL?.trim();
+  if (url) {
+    const { PgPersistence } = await import("./pg");
+    const pg = new PgPersistence(url);
+    await pg.connectAndMigrate();
+    console.log(`[store] storage: Postgres (${pg.where}, TLS ${pg.sslLabel}${pg.tlsActive === null ? "" : pg.tlsActive ? " — encrypted" : " — not encrypted"})`);
+    return pg;
+  }
+  const loud = process.env.NODE_ENV === "production";
+  const msg =
+    `[store] storage: JSON file ${DATA_FILE} — DATABASE_URL is not set.` +
+    (loud
+      ? " ⚠️  Production without Postgres: data only survives if DATA_DIR is on a persistent volume. Set DATABASE_URL (Railway Postgres) for durable storage."
+      : " (local-dev fallback; set DATABASE_URL to use Postgres)");
+  (loud ? console.warn : console.log)(msg);
+  return new JsonPersistence();
+}

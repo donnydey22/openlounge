@@ -1,0 +1,49 @@
+# dependencies / build output
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# env & secrets (only the example is committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+
+# runtime data (db.json fallback, uploaded avatars, any local data dirs)
+data/*
+!data/.gitkeep
+db.json
+db.json.tmp
+avatars/
+/pgdata/
+/postgres-data/
+*.sqlite*
+
+# Android build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/.idea/
+*.apk
+*.aab
+*.idsig
+
+# archives & logs
+*.tar.gz
+*.zip
+*.log
+npm-debug.log*
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.playwright-mcp/

@@ -1,0 +1,359 @@
+// Postgres backend for the Store (used whenever DATABASE_URL is set, e.g. Railway Postgres).
+//
+// - Runs server/migrations/*.sql at boot (in order, once each, under an advisory lock; files are idempotent too).
+// - load(): reads every table into the same PersistedDb shape db.json used.
+// - save(snapshot): diffs against what was last written and upserts/deletes only changed rows,
+//   all in one transaction. On failure nothing is marked as written, so the next save retries it.
+
+import fs from "node:fs";
+import path from "node:path";
+import pg from "pg";
+import { conversationId } from "./conversation";
+import { errText, type LoadResult, type PersistedDb, type Persistence } from "./persistence";
+
+// BIGINT (int8) columns hold epoch-ms timestamps — safe as JS numbers.
+pg.types.setTypeParser(20, (v) => Number(v));
+
+const MIGRATION_LOCK = 72_727_001;
+const CONNECT_ATTEMPTS = Number(process.env.DATABASE_CONNECT_ATTEMPTS || 15);
+
+/** Postgres TEXT can't hold NUL bytes; strip them so one odd message can't wedge every future save. */
+const t = (s: unknown) => String(s ?? "").replace(/\u0000/g, "");
+const tn = (s: unknown) => (s === undefined || s === null ? null : t(s));
+
+type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads", Map<string, unknown[]>>;
+type Snapshot = Record<keyof Rows, Map<string, string>>;
+const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads"];
+const SEP = "\u0001";
+
+function migrationsDir() {
+  const candidates = [
+    typeof __dirname !== "undefined" ? path.join(__dirname, "migrations") : "",
+    path.join(process.cwd(), "server", "migrations"),
+  ].filter(Boolean);
+  const dir = candidates.find((d) => fs.existsSync(d));
+  if (!dir) throw new Error(`[pg] migrations folder not found (looked in ${candidates.join(", ")})`);
+  return dir;
+}
+
+type SslChoice = { ssl: pg.PoolConfig["ssl"] | undefined; label: string };
+
+/**
+ * TLS for the Postgres connection.
+ *   DATABASE_SSL=disable|require|verify  → explicit override.
+ *   ?sslmode= in the URL                 → libpq meaning (require/prefer = encrypt without CA check, verify-* = verify).
+ *   *.railway.internal                   → no TLS (Railway private network; this is what ${{Postgres.DATABASE_URL}} gives you).
+ *   *.rlwy.net / *.railway.app           → TLS without CA check (Railway's public TCP proxy uses a self-signed cert).
+ *   anything else (localhost …)          → no TLS, like plain node-postgres.
+ * The sslmode param is always stripped from the URL so it can't override this (node-postgres would treat
+ * sslmode=require as verify-full and reject Railway's self-signed cert).
+ */
+export function chooseSsl(url: string): SslChoice & { connectionString: string } {
+  let host = "";
+  let sslmode = "";
+  let connectionString = url;
+  try {
+    const u = new URL(url);
+    host = u.hostname.toLowerCase();
+    sslmode = (u.searchParams.get("sslmode") || "").toLowerCase();
+    u.searchParams.delete("sslmode");
+    u.searchParams.delete("uselibpqcompat");
+    connectionString = u.toString();
+  } catch {
+    /* keep as-is */
+  }
+  const noVerify = { rejectUnauthorized: false };
+  const pick = (mode: string, why: string): SslChoice | null => {
+    if (["disable", "off", "false", "0", "allow"].includes(mode)) return { ssl: false, label: `off (${why})` };
+    if (["require", "prefer", "true", "1", "no-verify", "on"].includes(mode)) return { ssl: noVerify, label: `on, no CA check (${why})` };
+    if (["verify", "verify-ca", "verify-full"].includes(mode)) return { ssl: { rejectUnauthorized: true }, label: `on, verified (${why})` };
+    return null;
+  };
+  const choice =
+    pick((process.env.DATABASE_SSL || "").toLowerCase(), "DATABASE_SSL") ??
+    pick(sslmode, `sslmode=${sslmode}`) ??
+    (host.endsWith(".railway.internal")
+      ? { ssl: false, label: "off (Railway private network)" }
+      : host.endsWith(".rlwy.net") || host.endsWith(".railway.app")
+        ? { ssl: noVerify, label: "on, no CA check (Railway public proxy)" }
+        : { ssl: undefined, label: "off (default)" });
+  return { ...choice, connectionString };
+}
+
+export function redactUrl(url: string) {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname}`;
+  } catch {
+    return "postgres";
+  }
+}
+
+export class PgPersistence implements Persistence {
+  kind = "postgres" as const;
+  where: string;
+  sslLabel: string;
+  /** whether the live connection is actually TLS (from pg_stat_ssl), null if unknown */
+  tlsActive: boolean | null = null;
+  private pool: pg.Pool;
+  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map() };
+
+  constructor(url: string) {
+    this.where = redactUrl(url);
+    const { ssl, label, connectionString } = chooseSsl(url);
+    this.sslLabel = label;
+    this.pool = new pg.Pool({ connectionString, ssl, max: Number(process.env.DATABASE_POOL_MAX || 5), connectionTimeoutMillis: 10_000 });
+    this.pool.on("error", (err) => console.warn("[pg] idle client error:", err.message));
+  }
+
+  /** Connect (retrying while the database boots) and apply pending migrations. Throws a clear error on failure. */
+  async connectAndMigrate() {
+    let lastErr: unknown;
+    for (let i = 1; i <= CONNECT_ATTEMPTS; i++) {
+      try {
+        await this.pool.query("SELECT 1");
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[pg] cannot reach ${this.where} (attempt ${i}/${CONNECT_ATTEMPTS}): ${errText(err)}`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    if (!lastErr) {
+      const r = await this.pool.query<{ ssl: boolean }>("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()").catch(() => null);
+      this.tlsActive = r?.rows[0]?.ssl ?? null;
+    }
+    if (lastErr) throw new Error(`[pg] could not connect to Postgres at ${this.where}: ${errText(lastErr)}. Check DATABASE_URL (Railway: reference the Postgres service's DATABASE_URL).`);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK]);
+      await client.query(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+      );
+      const done = new Set((await client.query<{ version: string }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version));
+      const dir = migrationsDir();
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+      for (const file of files) {
+        if (done.has(file)) continue;
+        const sql = fs.readFileSync(path.join(dir, file), "utf8");
+        await client.query("BEGIN");
+        try {
+          await client.query(sql);
+          await client.query("INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", [file]);
+          await client.query("COMMIT");
+          console.log(`[pg] applied migration ${file}`);
+        } catch (err) {
+          await client.query("ROLLBACK");
+          throw new Error(`[pg] migration ${file} failed: ${errText(err)}`);
+        }
+      }
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK]).catch(() => {});
+      client.release();
+    }
+  }
+
+  // ---------- read ----------
+
+  async load(): Promise<LoadResult> {
+    const q = <R extends pg.QueryResultRow>(sql: string, params?: unknown[]) => this.pool.query<R>(sql, params).then((r) => r.rows);
+    // expired sessions would have been dropped from db.json on the next write; drop them here
+    await q("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
+    const [users, interests, follows, rooms, dms, sessions, reads, meta] = await Promise.all([
+      q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null }>(
+        "SELECT * FROM users ORDER BY created_at, id",
+      ),
+      q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
+      q<{ follower_id: string; followee_id: string }>("SELECT follower_id, followee_id FROM follows ORDER BY created_at, follower_id, followee_id"),
+      q<{ id: string; title: string; topic: string; description: string; host_id: string; created_at: number }>("SELECT * FROM rooms ORDER BY created_at, id"),
+      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number }>(
+        "SELECT id, from_id, from_name, from_color, to_id, text, created_at FROM dms ORDER BY created_at, id",
+      ),
+      q<{ token_hash: string; user_id: string; created_at: number; expires_at: number; last_seen_at: number }>("SELECT * FROM sessions"),
+      q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
+      q<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'json_imported'"),
+    ]);
+
+    const interestsOf = new Map<string, string[]>();
+    for (const r of interests) (interestsOf.get(r.user_id) ?? interestsOf.set(r.user_id, []).get(r.user_id)!).push(r.interest);
+    const db: PersistedDb = {
+      version: 1,
+      users: users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        color: u.color,
+        bio: u.bio,
+        isBot: false,
+        createdAt: u.created_at,
+        baseFollowers: u.base_followers,
+        baseFollowing: u.base_following,
+        ...(u.phone !== null ? { phone: u.phone } : {}),
+        interests: interestsOf.get(u.id) ?? [],
+        photoVersion: u.photo_version,
+      })),
+      follows: {},
+      rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at })),
+      sessions: sessions.map((s) => ({ tokenHash: s.token_hash, userId: s.user_id, createdAt: s.created_at, expiresAt: s.expires_at, lastSeenAt: s.last_seen_at })),
+      dmReads: {},
+    };
+    for (const f of follows) (db.follows[f.follower_id] ??= []).push(f.followee_id);
+    for (const r of reads) (db.dmReads![r.user_id] ??= {})[r.peer_id] = r.last_read_at;
+
+    this.written = this.serialize(this.rows(db));
+    return { db, empty: users.length === 0 && meta.length === 0 };
+  }
+
+  // ---------- write ----------
+
+  /** PersistedDb → table rows keyed by primary key. Rows owned by an unknown user are skipped (FK safety). */
+  private rows(db: PersistedDb): Rows {
+    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map() };
+    const humans = new Set<string>();
+    for (const u of db.users ?? []) {
+      humans.add(u.id);
+      out.users.set(u.id, [
+        u.id,
+        t(u.name),
+        t(u.username),
+        t(u.color),
+        t(u.bio),
+        tn(u.phone),
+        u.createdAt,
+        Math.round(u.baseFollowers ?? 0),
+        Math.round(u.baseFollowing ?? 0),
+        u.photoVersion ?? null,
+        (u.interests ?? []).map(t),
+      ]);
+    }
+    for (const [follower, list] of Object.entries(db.follows ?? {})) {
+      if (!humans.has(follower)) continue;
+      for (const followee of new Set(list)) out.follows.set(`${follower}${SEP}${followee}`, [follower, t(followee)]);
+    }
+    for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
+    for (const m of db.dms ?? [])
+      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt]);
+    for (const s of db.sessions ?? []) if (humans.has(s.userId)) out.sessions.set(s.tokenHash, [s.tokenHash, s.userId, s.createdAt, s.expiresAt, s.lastSeenAt]);
+    for (const [uid, peers] of Object.entries(db.dmReads ?? {})) {
+      if (!humans.has(uid)) continue;
+      for (const [peer, ts] of Object.entries(peers)) out.dmReads.set(`${uid}${SEP}${peer}`, [uid, t(peer), ts]);
+    }
+    return out;
+  }
+
+  private serialize(rows: Rows): Snapshot {
+    const s = {} as Snapshot;
+    for (const k of TABLES) s[k] = new Map([...rows[k]].map(([key, v]) => [key, JSON.stringify(v)]));
+    return s;
+  }
+
+  async save(db: PersistedDb) {
+    const rows = this.rows(db);
+    const next = this.serialize(rows);
+    const up = {} as Record<keyof Rows, unknown[][]>;
+    const del = {} as Record<keyof Rows, string[]>;
+    let changes = 0;
+    for (const k of TABLES) {
+      up[k] = [...next[k]].filter(([key, v]) => this.written[k].get(key) !== v).map(([key]) => rows[k].get(key)!);
+      del[k] = [...this.written[k].keys()].filter((key) => !next[k].has(key));
+      changes += up[k].length + del[k].length;
+    }
+    if (!changes) return;
+
+    const col = (list: unknown[][], i: number) => list.map((r) => r[i]);
+    const pairs = (keys: string[]) => [keys.map((k) => k.split(SEP)[0]), keys.map((k) => k.split(SEP)[1])];
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // users (+ their ordered interests)
+      if (up.users.length) {
+        const u = up.users;
+        await client.query(
+          `INSERT INTO users (id, name, username, color, bio, phone, created_at, base_followers, base_following, photo_version)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::int[], $9::int[], $10::bigint[])
+           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, username = EXCLUDED.username, color = EXCLUDED.color, bio = EXCLUDED.bio,
+             phone = EXCLUDED.phone, created_at = EXCLUDED.created_at, base_followers = EXCLUDED.base_followers,
+             base_following = EXCLUDED.base_following, photo_version = EXCLUDED.photo_version`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => col(u, i)),
+        );
+        const ids = col(u, 0) as string[];
+        await client.query("DELETE FROM user_interests WHERE user_id = ANY($1::text[])", [ids]);
+        const iu: string[] = [], ip: number[] = [], iv: string[] = [];
+        for (const r of u) (r[10] as string[]).forEach((interest, pos) => (iu.push(r[0] as string), ip.push(pos), iv.push(interest)));
+        if (iu.length)
+          await client.query("INSERT INTO user_interests (user_id, position, interest) SELECT * FROM unnest($1::text[], $2::smallint[], $3::text[])", [iu, ip, iv]);
+      }
+      // follows
+      if (del.follows.length)
+        await client.query(
+          "DELETE FROM follows f USING unnest($1::text[], $2::text[]) AS d(a, b) WHERE f.follower_id = d.a AND f.followee_id = d.b",
+          pairs(del.follows),
+        );
+      if (up.follows.length)
+        await client.query("INSERT INTO follows (follower_id, followee_id) SELECT * FROM unnest($1::text[], $2::text[]) ON CONFLICT DO NOTHING", [
+          col(up.follows, 0),
+          col(up.follows, 1),
+        ]);
+      // rooms (only open, user-created rooms are in the snapshot; ended rooms disappear → deleted)
+      if (del.rooms.length) await client.query("DELETE FROM rooms WHERE id = ANY($1::text[])", [del.rooms]);
+      if (up.rooms.length)
+        await client.query(
+          `INSERT INTO rooms (id, title, topic, description, host_id, created_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[])
+           ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, topic = EXCLUDED.topic, description = EXCLUDED.description,
+             host_id = EXCLUDED.host_id, created_at = EXCLUDED.created_at`,
+          [0, 1, 2, 3, 4, 5].map((i) => col(up.rooms, i)),
+        );
+      // DMs (immutable; per-conversation cap trims show up as deletes)
+      if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
+      if (up.dms.length)
+        await client.query(
+          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[])
+           ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color`,
+          [0, 1, 2, 3, 4, 5, 6, 7].map((i) => col(up.dms, i)),
+        );
+      // sessions
+      if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);
+      if (up.sessions.length)
+        await client.query(
+          `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::bigint[], $5::bigint[])
+           ON CONFLICT (token_hash) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, last_seen_at = EXCLUDED.last_seen_at`,
+          [0, 1, 2, 3, 4].map((i) => col(up.sessions, i)),
+        );
+      // DM read cursors
+      if (del.dmReads.length)
+        await client.query("DELETE FROM dm_reads r USING unnest($1::text[], $2::text[]) AS d(a, b) WHERE r.user_id = d.a AND r.peer_id = d.b", pairs(del.dmReads));
+      if (up.dmReads.length)
+        await client.query(
+          `INSERT INTO dm_reads (user_id, peer_id, last_read_at) SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[])
+           ON CONFLICT (user_id, peer_id) DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
+          [0, 1, 2].map((i) => col(up.dmReads, i)),
+        );
+      // users removed last (cascades). The app never deletes accounts today; kept for completeness.
+      if (del.users.length) await client.query("DELETE FROM users WHERE id = ANY($1::text[])", [del.users]);
+      await client.query("COMMIT");
+      this.written = next;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markImported(source: string) {
+    await this.pool.query(
+      "INSERT INTO openlounge_meta (key, value) VALUES ('json_imported', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+      [`${source} @ ${new Date().toISOString()}`],
+    );
+  }
+
+  async close() {
+    await this.pool.end().catch(() => {});
+  }
+}

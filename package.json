@@ -1,0 +1,40 @@
+{
+  "name": "openlounge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open Lounge \u2014 a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "next build",
+    "start": "cross-env NODE_ENV=production tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
+    "db:import": "tsx scripts/import-db-json.ts",
+    "smoke": "node scripts/smoke-ws.mjs"
+  },
+  "engines": {
+    "node": ">=20.9"
+  },
+  "dependencies": {
+    "cross-env": "^7.0.3",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.19.1",
+    "lucide-react": "^1.52.0",
+    "next": "^16.3.8",
+    "pg": "^8.23.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8.18.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3"
+  }
+}

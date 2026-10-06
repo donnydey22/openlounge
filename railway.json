@@ -1,0 +1,16 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": ["server/**", "src/**", "scripts/**", "package.json", "package-lock.json", "Dockerfile", "docker-entrypoint.sh", "next.config.ts", "postcss.config.mjs", "tsconfig.json", "railway.json"]
+  },
+  "deploy": {
+    "startCommand": "/usr/local/bin/docker-entrypoint.sh /app/node_modules/.bin/tsx server/index.ts",
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+    "numReplicas": 1
+  }
+}

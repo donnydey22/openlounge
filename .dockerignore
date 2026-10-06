@@ -1,0 +1,16 @@
+node_modules
+.next
+data
+docs
+android
+ios
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+npm-debug.log*
+.git
+*.apk
+*.tar.gz
+*.log
+/clubroom.apk
