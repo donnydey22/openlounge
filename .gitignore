@@ -49,3 +49,6 @@ logs/
 .playwright-mcp/
 android/keystore.properties
 backups/
+
+# hosted app downloads
+!public/downloads/*.apk
