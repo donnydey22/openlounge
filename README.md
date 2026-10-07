@@ -73,7 +73,6 @@ Sessions are stored per tab (sessionStorage, with localStorage as the fallback f
 - Sessions are random 256-bit tokens. The server stores only their SHA-256 hash (Postgres `sessions` table, or `db.json` locally), with a 60-day sliding expiry. Sign out revokes the session.
 - The SMS provider is pluggable (`server/otp.ts`):
   - `demo` (default): shows the code on screen.
-  - `twilio`: set `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM`.
   - Other providers implement the `SmsProvider` interface.
 
 **Rooms**
@@ -150,7 +149,7 @@ browser ──HTTPS──▶ Node server (server/index.ts, one port)
 | `server/ws.ts` | Tiny WebSocket hub: request/ack, channels, heartbeat |
 | `server/realtime.ts` | All realtime handlers plus the LiveKit permission sync |
 | `server/livekit.ts` | LiveKit tokens, `setCanPublish`, `muteParticipantAudio`, `closeLiveKitRoom` |
-| `server/otp.ts` | OTP service plus SMS providers (demo, Twilio) |
+| `server/otp.ts` | OTP service plus the pluggable SMS provider (demo) |
 | `server/store.ts` | In-memory state (all reads), persisted on a debounce (users, sessions, follows, rooms, DMs) |
 | `server/persistence.ts` | Storage backend selection (`DATABASE_URL` → Postgres, else `db.json`), JSON backend |
 | `server/pg.ts` | Postgres backend: boot migrations, load, diff-based transactional saves |
@@ -205,7 +204,7 @@ The repo includes a `Dockerfile` (multi-stage: `npm ci` → `next build` → sli
    LIVEKIT_API_KEY=<key>
    LIVEKIT_API_SECRET=<secret>
    DATA_DIR=/data
-   SMS_PROVIDER=demo        # or twilio + TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM
+   SMS_PROVIDER=demo
    ```
    `PORT` is injected by Railway, and the server binds `0.0.0.0:$PORT`. On first boot the schema is created automatically (`[pg] applied migration 001_init.sql` in the deploy logs).
 5. **Volume:** add a Railway volume mounted at `/data`. With Postgres it only holds uploaded **avatar images**; without it, profile photos are lost on redeploy (everything else is in Postgres).
@@ -214,7 +213,7 @@ The repo includes a `Dockerfile` (multi-stage: `npm ci` → `next build` → sli
 
 Notes:
 - **Keep one replica.** Durable data is in Postgres, but every read is served from process memory and live room state (presence, hands, podium, room chat) is memory-only. Scaling out would need Redis pub/sub and shared presence in place of the in-memory store and `WsHub` channels.
-- **Demo OTP is not secure.** Anyone can sign in as any number. The server logs a warning when demo OTP runs in production. Use `SMS_PROVIDER=twilio` (or another provider) before sharing the URL publicly.
+- **Demo OTP is not secure.** Anyone can sign in as any number. The server logs a warning when demo OTP runs in production. Plug in a real OTP provider before sharing the URL publicly.
 - Any Docker host works the same way (Fly.io, Render, a VPS behind Caddy or nginx). The proxy just needs to forward WebSocket upgrades on `/ws`.
 
 ```bash
@@ -228,7 +227,7 @@ docker run -p 3000:3000 -v openlounge-data:/data --env-file .env openlounge
 
 | Area | Now | For production |
 |---|---|---|
-| OTP | Demo provider shows codes; Twilio adapter included | Real SMS provider, per-phone and per-IP rate limits, fraud checks |
+| OTP | Demo provider shows codes | Real SMS provider, per-phone and per-IP rate limits, fraud checks |
 | Storage | Postgres (or `db.json` locally), one process with an in-memory cache | + Redis pub/sub / shared presence for multiple instances; avatars to object storage |
 | Audio | LiveKit Cloud (needs credentials) | Same; add LiveKit webhooks for presence reconciliation |
 | Bots | Off by default; `DEMO_SEED=1` adds seeded rooms, bot speakers and chatter, simulated follower counts | Leave `DEMO_SEED` unset |
