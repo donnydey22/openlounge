@@ -4,6 +4,7 @@ import Link from "next/link";
 import { MessageCircle, Search, Settings, WifiOff } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { useApp } from "./AppProvider";
+import { HeaderWordmark } from "./brand/HeaderWordmark";
 
 export function TopBar() {
   const { me, offline, unreadDms } = useApp();
@@ -13,7 +14,7 @@ export function TopBar() {
         <Link href="/" className="flex min-w-0 items-center text-lg max-[359px]:text-base" aria-label="Open Lounge — hallway">
           <span className="inline-flex items-center gap-2">
             <span className="text-2xl" aria-hidden="true">🎙️</span>
-            <span className="ol-word font-bold tracking-tight whitespace-nowrap">Open Lounge</span>
+            <HeaderWordmark />
           </span>
         </Link>
         <div className="flex items-center gap-1">
