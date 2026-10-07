@@ -14,7 +14,8 @@
       },
       "ios": {
         "buildConfiguration": "Release",
-        "enterpriseProvisioning": "adhoc"
+        "enterpriseProvisioning": "adhoc",
+        "credentialsSource": "local"
       }
     },
     "production": {
@@ -25,7 +26,8 @@
         "EXPO_NO_TELEMETRY": "1"
       },
       "ios": {
-        "buildConfiguration": "Release"
+        "buildConfiguration": "Release",
+        "credentialsSource": "local"
       }
     }
   },

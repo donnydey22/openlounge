@@ -13,7 +13,11 @@
       "buildNumber": "7",
       "deploymentTarget": "16.4",
       "supportsTablet": false,
-      "icon": "./assets/icon.png",
+      "icon": {
+        "light": "./assets/app-icon/ios-1024.png",
+        "dark": "./assets/app-icon/ios-1024-dark.png",
+        "tinted": "./assets/app-icon/ios-1024-tinted.png"
+      },
       "config": {
         "usesNonExemptEncryption": false
       },
