@@ -13,7 +13,7 @@ export function TopBar() {
       <div className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4">
         <Link href="/" className="flex min-w-0 items-center text-lg max-[359px]:text-base" aria-label="Open Lounge — hallway">
           <span className="inline-flex items-center gap-2">
-            <span className="text-2xl" aria-hidden="true">🎙️</span>
+            <span className="ol-head-mic text-2xl" aria-hidden="true">🎙️</span>
             <HeaderWordmark />
           </span>
         </Link>

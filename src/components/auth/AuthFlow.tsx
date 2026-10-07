@@ -30,6 +30,19 @@ function initialEntry(): { step: Step; pending: PendingSignup | null } {
 
 type Step = "linkChoice" | "welcome" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
+// Welcome wordmark: big staggered letter entrance, then a strong steady pulse (globals.css .ol-splash-*).
+function SplashWordmark() {
+  return (
+    <span className="ol-word ol-splash-word font-bold tracking-tight whitespace-nowrap text-3xl" aria-label="Open Lounge">
+      {Array.from("Open Lounge").map((ch, i) => (
+        <span key={i} aria-hidden="true" style={{ animationDelay: `${120 + i * 45}ms, ${1400 + i * 45}ms` }}>
+          {ch === " " ? "\u00a0" : ch}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function AuthFlow() {
   const { request, completeLogin, finishOnboarding, onboarding, follow, updateMe, connected, toast } = useApp();
   const [entry] = useState(initialEntry);
@@ -354,8 +367,8 @@ export function AuthFlow() {
         <div className="flex flex-1 flex-col items-center justify-center text-center">
           <h1 className="sr-only">Welcome to Open Lounge</h1>
           <span className="mb-2 inline-flex flex-col items-center gap-5">
-            <span className="text-[80px] leading-none" aria-hidden="true">🎙️</span>
-            <span className="ol-word font-bold tracking-tight whitespace-nowrap text-3xl">Open Lounge</span>
+            <span className="ol-splash-mic text-[80px] leading-none" aria-hidden="true">🎙️</span>
+            <SplashWordmark />
           </span>
           <p className="mt-4 max-w-xs text-[15px] leading-relaxed text-zinc-400">
             Drop in on live conversations with founders, artists and friends. Raise your hand to speak up.
