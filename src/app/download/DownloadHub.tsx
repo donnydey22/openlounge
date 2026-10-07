@@ -85,6 +85,9 @@ export function DownloadHub() {
           <h1 className="mt-3 text-3xl font-bold tracking-tight text-zinc-100 md:text-5xl">Open Lounge for every device</h1>
           <p className="mt-2 text-zinc-500 md:text-base">Live audio rooms on Android, iPhone and the web.</p>
         </div>
+        <div className="w-44 shrink-0 rounded-[2.2rem] border-[6px] border-zinc-800 bg-black p-1 shadow-2xl shadow-black/60 md:w-56" data-testid="app-screenshot">
+          <img src="/downloads/app-screenshot.png" alt="Open Lounge welcome screen" className="block w-full rounded-[1.7rem]" />
+        </div>
         <figure className="flex flex-col items-center">
           <img src="/downloads/qr.png" alt="QR code for openlounge.app/download" className="w-32 rounded-2xl bg-white p-2 md:w-52" data-testid="download-qr" />
           <figcaption className="mt-2 text-xs text-zinc-500 md:text-sm">Scan to open on your phone</figcaption>
