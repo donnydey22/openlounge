@@ -6,6 +6,7 @@
 // Phone verification goes through the server's OtpService (demo SMS provider by default).
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ArrowRight, Camera, Check, Loader2, Phone } from "lucide-react";
 import { AVATAR_COLORS, USERNAME_RE, type PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -350,6 +351,9 @@ export function AuthFlow() {
           >
             Already have an account? Sign in →
           </button>
+          <p className="mt-3 text-center text-xs leading-relaxed text-zinc-500" data-testid="legal-consent">
+            By continuing you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>.
+          </p>
         </Footer>
       </Shell>
     );
@@ -398,7 +402,7 @@ export function AuthFlow() {
           </div>
           <ErrorText>{error}</ErrorText>
           <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">
-            By entering your number, you agree to our Terms of Service and Privacy Policy. We&apos;ll text you a 6-digit code.
+            By entering your number, you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>, including our zero-tolerance policy for objectionable content and abusive behavior. We&apos;ll text you a 6-digit code.
           </p>
           {authCfg?.firebase && (
             <p className="mt-2 text-center text-[10px] leading-snug text-zinc-600" data-testid="recaptcha-disclosure">
@@ -482,7 +486,7 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={!emailOk || password.length < 8} busy={busy}>
               Create account <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
-            <p className="mt-4 text-center text-xs leading-relaxed text-zinc-500">By signing up, you agree to our Terms of Service and Privacy Policy.</p>
+            <p className="mt-4 text-center text-xs leading-relaxed text-zinc-500">By signing up, you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>.</p>
           </Footer>
         </form>
       </Shell>

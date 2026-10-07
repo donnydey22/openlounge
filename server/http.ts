@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
+import { REPORT_REASONS, SUPPORT_EMAIL, isAdmin } from "./moderation";
 import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
@@ -220,6 +221,48 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
     await store.flush().catch(() => {});
     return json(res, 200, { ok: true });
+  }
+
+  // ---- UGC safety (App Store 1.2): blocks, reports, admin review. Authorization: Bearer <access token> ----
+  if (/^\/api\/(me\/blocks|reports|admin\/reports)(\/|$)/.test(url)) {
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) {
+      res.setHeader("WWW-Authenticate", `Bearer error="invalid_token"`);
+      return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    }
+    const uid = auth.userId;
+    const blockedList = () => store.blockedIds(uid).map((id) => store.publicUser(id)).filter(Boolean);
+    // GET → { blocked: PublicUser[], blockedBy: string[] (ids whose content to hide) }
+    if (url === "/api/me/blocks" && req.method === "GET")
+      return json(res, 200, { ok: true, blocked: blockedList(), hidden: [...store.hiddenIds(uid)], admin: isAdmin(uid) });
+    // POST { userId, block: boolean }
+    if (url === "/api/me/blocks" && req.method === "POST") {
+      const b = await readJson(req);
+      const r = store.setBlock(uid, String(b.userId ?? ""), b.block !== false);
+      if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+      return json(res, 200, { ok: true, blocked: blockedList(), hidden: [...store.hiddenIds(uid)] });
+    }
+    // POST { targetType: user|room|message|dm, targetId, reason, note?, roomId? }
+    if (url === "/api/reports" && req.method === "POST") {
+      const r = store.createReport(uid, await readJson(req));
+      if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+      return json(res, 201, { ok: true, id: r.report.id, duplicate: r.duplicate });
+    }
+    if (url === "/api/reports/reasons" && req.method === "GET") return json(res, 200, { ok: true, reasons: REPORT_REASONS, support: SUPPORT_EMAIL });
+    if (url.startsWith("/api/admin/")) {
+      if (!isAdmin(uid)) return json(res, 403, { ok: false, error: "Admins only" });
+      if (url === "/api/admin/reports" && req.method === "GET") {
+        const qs = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+        return json(res, 200, { ok: true, reports: store.listReports({ status: qs.get("status") ?? undefined, limit: Number(qs.get("limit")) || 200 }) });
+      }
+      const m = url.match(/^\/api\/admin\/reports\/(rp_[\w-]{1,80})$/);
+      if (m && req.method === "POST") {
+        const r = store.setReportStatus(m[1], (await readJson(req)).status);
+        if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+        return json(res, 200, { ok: true, report: r.report });
+      }
+    }
+    return json(res, 404, { ok: false, error: "Not found" });
   }
 
   // Social links: Authorization: Bearer <access token>, body { links: { instagram?: string|null, ... } }

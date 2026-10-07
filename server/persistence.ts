@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { DirectMessage } from "../src/lib/types";
+import type { ReportRecord } from "./moderation";
 
 export interface UserRecord {
   id: string;
@@ -98,6 +99,10 @@ export interface PersistedDb {
   dmReads?: Record<string, Record<string, number>>;
   /** sign-in methods (migration 005). Older db.json files have none: phone identities are derived from users.phone. */
   identities?: IdentityRecord[];
+  /** UGC safety (migration 011): who blocked whom */
+  blocks?: { blockerId: string; blockedId: string; createdAt: number }[];
+  /** UGC safety (migration 011): content reports */
+  reports?: ReportRecord[];
 }
 
 export interface OneTimeBackend {

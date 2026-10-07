@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "@/lib/support";
+import { LegalFooter } from "@/components/safety/LegalFooter";
 
 export const metadata: Metadata = { title: "Privacy policy — Open Lounge" };
 export const dynamic = "force-static";
@@ -23,6 +25,7 @@ export default function Privacy() {
         <li>Contacts (optional, opt-in only): one-way hashes of phone numbers, used to find friends already on Open Lounge. Unmatched hashes are deleted within 24 hours. See <Link className="underline" href="/privacy/contacts">Contacts &amp; privacy</Link>.</li>
       </ul>
       <p>Room audio is relayed in real time through LiveKit and is not recorded by Open Lounge.</p>
+      <p className="mt-2">Safety: when you report an account, room or message we store the report, your note and a copy of the reported text so our team can review it. Accounts you block are stored so we can enforce the block.</p>
       <H>How we use it</H>
       <p>Only to run the service: signing you in, showing your profile, delivering messages and notifications, keeping the service secure and preventing abuse. We do not sell your data or use it for advertising.</p>
       <H>Who processes it</H>
@@ -37,7 +40,18 @@ export default function Privacy() {
       <H>Children</H>
       <p>Open Lounge is not intended for children under 13.</p>
       <H>Contact</H>
-      <p>Questions or requests: contact the Open Lounge team through openlounge.app.</p>
+      <p>
+        Questions or requests: email{" "}
+        <a className="underline" href={SUPPORT_MAILTO}>
+          {SUPPORT_EMAIL}
+        </a>
+        . Use of Open Lounge is also subject to our{" "}
+        <Link className="underline" href="/terms">
+          Terms of Use
+        </Link>
+        .
+      </p>
+      <LegalFooter className="mt-10 border-t border-white/5 pt-6" />
     </main>
   );
 }

@@ -4,7 +4,7 @@ import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronDown, Hand, Link2, Loader2, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, Volume2 } from "lucide-react";
+import { ChevronDown, Flag, Hand, Link2, Loader2, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, Volume2 } from "lucide-react";
 import { ROOM_CHAT_HISTORY, type ChatMessage, type Participant, type RoomPresenceEvent, type RoomReaction, type RoomState } from "@/lib/types";
 import { TOPIC_EMOJI, cn, timeAgo } from "@/lib/utils";
 import { formatFull, serverNow, useClockTick } from "@/lib/time";
@@ -17,6 +17,9 @@ import { useLiveKitAudio } from "@/hooks/useLiveKitAudio";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { unlockAudio } from "@/lib/audioUnlock";
 import { RoomChatPanel } from "@/components/chat/RoomChatPanel";
+import { ReportSheet } from "@/components/safety/ReportSheet";
+import { BlockConfirm } from "@/components/safety/BlockConfirm";
+import { useSafety, type ReportTarget } from "@/lib/safety";
 import { DmThread } from "@/components/chat/DmThread";
 import { RoomEventFeed } from "@/components/room/RoomEventFeed";
 import { ReactionBar } from "@/components/room/ReactionBar";
@@ -39,6 +42,9 @@ export default function RoomPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [handsOpen, setHandsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const safety = useSafety(me?.id);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [blockTarget, setBlockTarget] = useState<{ id: string; name: string } | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [showDesc, setShowDesc] = useState(false);
@@ -604,6 +610,8 @@ export default function RoomPage() {
               onSend={sendChat}
               onDelete={deleteChat}
               onAuthorClick={openAuthor}
+              hiddenIds={safety.hidden}
+              onReport={(m) => setReportTarget({ type: "message", id: m.id, roomId, label: m.text })}
             />
           )}
         </div>
@@ -623,6 +631,8 @@ export default function RoomPage() {
             onSend={sendChat}
             onDelete={deleteChat}
             onAuthorClick={openAuthor}
+            hiddenIds={safety.hidden}
+            onReport={(m) => setReportTarget({ type: "message", id: m.id, roomId, label: m.text })}
             onClose={() => setChatOpen(false)}
           />
         </div>
@@ -637,6 +647,34 @@ export default function RoomPage() {
           setSelected(null);
           setDmPeer(uid);
         }}
+        blocked={!!selectedP && safety.isBlocked(selectedP.userId)}
+        onReport={(p) => {
+          setSelected(null);
+          setReportTarget({ type: "user", id: p.userId, label: p.name });
+        }}
+        onBlock={(p) => {
+          setSelected(null);
+          setBlockTarget({ id: p.userId, name: p.name });
+        }}
+      />
+      <ReportSheet
+        target={reportTarget}
+        onClose={() => setReportTarget(null)}
+        onBlock={(() => {
+          const uid = reportTarget?.type === "user" ? reportTarget.id : reportTarget?.type === "message" ? chat.find((m) => m.id === reportTarget.id)?.authorId : undefined;
+          const name = reportTarget?.type === "user" ? reportTarget.label : chat.find((m) => m.id === reportTarget?.id)?.authorName;
+          if (!uid || uid === me?.id || safety.isBlocked(uid)) return undefined;
+          return () => {
+            setReportTarget(null);
+            setBlockTarget({ id: uid, name: name ?? "this account" });
+          };
+        })()}
+      />
+      <BlockConfirm
+        user={blockTarget}
+        blocked={!!blockTarget && safety.isBlocked(blockTarget.id)}
+        onClose={() => setBlockTarget(null)}
+        onDone={(b) => blockTarget && toast(b ? `Blocked ${blockTarget.name}` : `Unblocked ${blockTarget.name}`)}
       />
 
       {/* DM drawer: message someone without leaving the room */}
@@ -703,6 +741,17 @@ export default function RoomPage() {
               className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-white/5"
             >
               <ChevronDown className="h-4 w-4" /> Move myself to audience
+            </button>
+          )}
+          {!amHost && (
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                setReportTarget({ type: "room", id: roomId, label: room.title });
+              }}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+            >
+              <Flag className="h-4 w-4" /> Report room
             </button>
           )}
           {amHost && (

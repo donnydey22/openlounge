@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Trash2, X } from "lucide-react";
+import { ArrowDown, Flag, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
 import { formatClock, serverNow, useClockTick } from "@/lib/time";
@@ -35,6 +35,8 @@ export function RoomChatPanel({
   onSend,
   onDelete,
   onAuthorClick,
+  onReport,
+  hiddenIds,
   onClose,
   className,
 }: {
@@ -46,9 +48,15 @@ export function RoomChatPanel({
   onSend: (text: string) => Promise<boolean>;
   onDelete: (messageId: string) => void;
   onAuthorClick: (userId: string) => void;
+  /** report someone else's message (App Store 1.2) */
+  onReport?: (message: ChatMessage) => void;
+  /** authors whose messages are hidden (blocked either way) */
+  hiddenIds?: Set<string>;
   onClose?: () => void;
   className?: string;
 }) {
+  const all = messages;
+  messages = hiddenIds?.size ? all.filter((m) => !hiddenIds.has(m.authorId)) : all;
   useClockTick(); // soft stamps ("now" → "4m") keep counting
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -115,6 +123,8 @@ export function RoomChatPanel({
             const grouped = !!prev && prev.authorId === m.authorId && m.createdAt - prev.createdAt < GROUP_WINDOW_MS;
             const mine = m.authorId === meId;
             const canDelete = mine || canModerate;
+            const canReport = !mine && !!onReport && !m.authorIsBot;
+            const canAct = canDelete || canReport;
             const isHost = m.authorId === hostId;
             const roleMark = isHost ? "✳︎" : m.authorRole === "speaker" ? "🎙" : null;
             return (
@@ -129,11 +139,11 @@ export function RoomChatPanel({
                   </div>
                 )}
                 <div
-                  onClick={() => canDelete && setSelected((s) => (s === m.id ? null : m.id))}
+                  onClick={() => canAct && setSelected((s) => (s === m.id ? null : m.id))}
                   className={cn(
                     "group relative max-w-[82%] px-3 py-1.5",
                     mine ? "rounded-2xl rounded-br-md bg-emerald-500/15" : "rounded-2xl rounded-bl-md bg-zinc-800/70",
-                    canDelete && "cursor-pointer",
+                    canAct && "cursor-pointer",
                   )}
                 >
                   {!grouped && !mine && (
@@ -157,22 +167,42 @@ export function RoomChatPanel({
                   )}
                   <p className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">{m.text}</p>
                   {!grouped && mine && <div className="mt-0.5 text-right text-[10px] leading-none text-zinc-500">{softTime(m.createdAt)}</div>}
-                  {canDelete && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(m.id);
-                      }}
-                      title={mine ? "Delete message" : "Remove message (host)"}
-                      aria-label="Delete message"
+                  {canAct && (
+                    <div
                       className={cn(
-                        "absolute top-1/2 -translate-y-1/2 rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow transition hover:text-red-400",
-                        mine ? "-left-9" : "-right-9",
+                        "absolute top-1/2 flex -translate-y-1/2 gap-1 transition",
+                        mine ? "right-full mr-1.5" : "left-full ml-1.5",
                         selected === m.id ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
                       )}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                      {canReport && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(null);
+                            onReport!(m);
+                          }}
+                          title="Report message"
+                          aria-label="Report message"
+                          className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-amber-400"
+                        >
+                          <Flag className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(m.id);
+                          }}
+                          title={mine ? "Delete message" : "Remove message (host)"}
+                          aria-label="Delete message"
+                          className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-red-400"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

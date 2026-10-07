@@ -25,6 +25,7 @@ import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId } from "./conversation";
+import { REPORT_REASONS, REPORT_TARGETS, filterText, type ReportReason, type ReportRecord, type ReportTarget } from "./moderation";
 import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
 
 /**
@@ -131,6 +132,13 @@ export function normalizeEmail(raw: unknown): string | null {
 }
 
 const clamp = (s: unknown, max: number) => String(s ?? "").trim().slice(0, max);
+/** clamp + content filter (profanity masked, slurs rejected). Returns null text + error when rejected. */
+function clean(s: unknown, max: number): { text: string; error?: undefined } | { text: null; error: string } {
+  const text = clamp(s, max);
+  if (!text) return { text };
+  const r = filterText(text);
+  return r.ok ? { text: r.text } : { text: null, error: r.error };
+}
 const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)];
 
 export class Store {
@@ -142,6 +150,12 @@ export class Store {
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
   /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
   identities = new Map<string, IdentityRecord>();
+  /** UGC safety: blockerId -> (blockedId -> blockedAt) */
+  blocks = new Map<string, Map<string, number>>();
+  /** UGC safety: content reports (oldest first) */
+  reports: ReportRecord[] = [];
+  private reportRate = new Map<string, number[]>();
+  private blockRate = new Map<string, number[]>();
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
   private awayTimers = new Map<string, NodeJS.Timeout>();
@@ -290,6 +304,14 @@ export class Store {
         for (const [peer, ts] of Object.entries(reads)) mine.set(peer, Math.max(ts, mine.get(peer) ?? 0));
         this.dmReads.set(uid, mine);
       }
+      for (const b of db.blocks ?? []) {
+        if (!this.users.has(b.blockerId)) continue;
+        const m = this.blocks.get(b.blockerId) ?? new Map<string, number>();
+        m.set(b.blockedId, b.createdAt);
+        this.blocks.set(b.blockerId, m);
+      }
+      const seenReports = new Set(this.reports.map((r) => r.id));
+      for (const r of db.reports ?? []) if (!seenReports.has(r.id)) this.reports.push({ ...r });
       console.log(`[store] loaded ${db.users?.length ?? 0} users, ${db.rooms?.length ?? 0} rooms, ${db.dms?.length ?? 0} DMs from ${from}`);
     } catch (err) {
       console.warn(`[store] could not load data from ${from}, starting fresh:`, err);
@@ -348,6 +370,8 @@ export class Store {
       dmReads: Object.fromEntries([...this.dmReads.entries()].map(([k, v]) => [k, Object.fromEntries(v)])),
       sessions: [...this.sessions.values()],
       identities: [...this.identities.values()].filter((i) => this.users.has(i.userId) && !this.users.get(i.userId)!.isBot),
+      blocks: [...this.blocks.entries()].flatMap(([blockerId, m]) => [...m].map(([blockedId, createdAt]) => ({ blockerId, blockedId, createdAt }))),
+      reports: this.reports,
     };
   }
 
@@ -505,12 +529,16 @@ export class Store {
     if (first.length < 1) return { ok: false as const, error: "What's your first name?" };
     const u = this.checkUsername(input.username);
     if (!u.available) return { ok: false as const, error: u.reason ?? "Pick another username" };
+    const bio = clean(input.bio, 280);
+    if (bio.text === null) return { ok: false as const, error: bio.error };
+    const nameCheck = filterText(`${first} ${last} ${u.username}`);
+    if (!nameCheck.ok) return { ok: false as const, error: "Please choose a different name or username." };
     const user: UserRecord = {
       id: `u_${randomUUID()}`,
       name: [first, last].filter(Boolean).join(" "),
       username: u.username,
       color: AVATAR_COLORS.includes(input.color as never) ? (input.color as string) : AVATAR_COLORS[0],
-      bio: clamp(input.bio, 280),
+      bio: bio.text,
       isBot: false,
       createdAt: Date.now(),
       baseFollowers: 0,
@@ -799,6 +827,8 @@ export class Store {
     for (const set of this.follows.values()) set.delete(userId);
     this.dmReads.delete(userId);
     for (const m of this.dmReads.values()) m.delete(userId);
+    this.blocks.delete(userId);
+    for (const m of this.blocks.values()) m.delete(userId);
     for (const list of this.dms.values())
       for (const m of list)
         if (m.fromId === userId) {
@@ -862,13 +892,21 @@ export class Store {
   updateUser(id: string, patch: { name?: string; bio?: string; color?: string; username?: string; interests?: unknown }) {
     const u = this.users.get(id);
     if (!u || u.isBot) return { ok: false as const, error: "Could not update profile" };
+    if (patch.name !== undefined && !filterText(clamp(patch.name, 48)).ok) return { ok: false as const, error: "Please choose a different name." };
+    if (patch.username !== undefined && !filterText(String(patch.username)).ok) return { ok: false as const, error: "Please choose a different username." };
+    let bio: string | undefined;
+    if (patch.bio !== undefined) {
+      const b = clean(patch.bio, 280);
+      if (b.text === null) return { ok: false as const, error: b.error };
+      bio = b.text;
+    }
     if (patch.username !== undefined) {
       const check = this.checkUsername(patch.username, id);
       if (!check.available) return { ok: false as const, error: check.reason ?? "Username unavailable" };
       u.username = check.username;
     }
     if (patch.name !== undefined && clamp(patch.name, 48)) u.name = clamp(patch.name, 48);
-    if (patch.bio !== undefined) u.bio = clamp(patch.bio, 280);
+    if (bio !== undefined) u.bio = bio;
     if (patch.color && AVATAR_COLORS.includes(patch.color as never)) u.color = patch.color;
     if (patch.interests !== undefined) u.interests = this.cleanInterests(patch.interests);
     this.scheduleSave();
@@ -915,7 +953,7 @@ export class Store {
     const mine = new Set(this.users.get(userId)?.interests ?? []);
     const already = new Set(this.followingIds(userId));
     const real = [...this.users.values()]
-      .filter((u) => !u.isBot && u.id !== userId && !already.has(u.id) && !isInternalTestAccount(u))
+      .filter((u) => !u.isBot && u.id !== userId && !already.has(u.id) && !isInternalTestAccount(u) && !this.isBlockedEither(userId, u.id))
       .map((u) => this.publicUser(u.id)!)
       .map((u) => ({ u, shared: u.interests.filter((i) => mine.has(i)).length }))
       .sort((a, b) => b.shared - a.shared || b.u.followers - a.u.followers || b.u.createdAt - a.u.createdAt)
@@ -924,7 +962,7 @@ export class Store {
     const roomTopicOf = new Map<string, string>();
     for (const r of this.rooms.values()) for (const p of r.participants.values()) if (p.role !== "listener") roomTopicOf.set(p.userId, r.topic);
     const topics = new Set([...mine].map((i) => i.split(" ").slice(1).join(" ")));
-    const demo = NOTABLE_USERS.filter((n) => n.id !== userId && !already.has(n.id))
+    const demo = NOTABLE_USERS.filter((n) => n.id !== userId && !already.has(n.id) && !this.isBlockedEither(userId, n.id))
       .map((n) => this.publicUser(n.id))
       .filter((u): u is PublicUser => !!u)
       .map((u) => ({ u, score: topics.has(roomTopicOf.get(u.id) ?? "") ? 0 : 1 }))
@@ -978,6 +1016,7 @@ export class Store {
 
   setFollow(followerId: string, targetId: string, follow: boolean) {
     if (followerId === targetId || !this.users.has(targetId)) return false;
+    if (follow && this.isBlockedEither(followerId, targetId)) return false;
     let set = this.follows.get(followerId);
     if (!set) this.follows.set(followerId, (set = new Set()));
     if (follow) set.add(targetId);
@@ -1090,12 +1129,16 @@ export class Store {
   createRoom(hostId: string, input: { title?: string; topic?: string; description?: string }) {
     const topic = TOPICS.includes(input.topic as never) ? (input.topic as string) : "Other";
     // Clubhouse-style: title is optional — always create a room on "Let's go".
-    const title = clamp(input.title, 80) || (topic !== "Other" ? `${topic} room` : "Open Lounge");
+    const t0 = clean(input.title, 80);
+    if (t0.text === null) return { ok: false as const, error: t0.error };
+    const d0 = clean(input.description, 300);
+    if (d0.text === null) return { ok: false as const, error: d0.error };
+    const title = t0.text || (topic !== "Other" ? `${topic} room` : "Open Lounge");
     const room: RoomRecord = {
       id: randomUUID().slice(0, 8),
       title,
       topic,
-      description: clamp(input.description, 300),
+      description: d0.text,
       hostId,
       createdAt: Date.now(),
       seeded: false,
@@ -1484,7 +1527,9 @@ export class Store {
   sendChat(roomId: string, userId: string, rawText: unknown) {
     const ctx = this.participant(roomId, userId);
     if (!ctx) return { ok: false as const, error: "Join the room to chat" };
-    const text = clamp(rawText, CHAT_MAX_LENGTH);
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, error: c.error };
+    const text = c.text;
     if (!text) return { ok: false as const, error: "Message is empty" };
     if (this.rateLimited(userId)) return { ok: false as const, error: "Slow down a little 🙂" };
     const firstMessage = !ctx.room.chat.some((m) => m.authorId === userId);
@@ -1515,6 +1560,158 @@ export class Store {
     room.chat.splice(idx, 1);
     this.events?.chatDeleted(roomId, messageId);
     return { ok: true as const };
+  }
+
+  // ---------- UGC safety: blocks + reports ----------
+
+  /** true when `blockerId` has blocked `targetId` */
+  isBlocked(blockerId: string, targetId: string) {
+    return this.blocks.get(blockerId)?.has(targetId) ?? false;
+  }
+
+  isBlockedEither(a: string, b: string) {
+    return this.isBlocked(a, b) || this.isBlocked(b, a);
+  }
+
+  /** ids I blocked (newest first) */
+  blockedIds(userId: string) {
+    return [...(this.blocks.get(userId) ?? new Map<string, number>())].sort((x, y) => y[1] - x[1]).map(([id]) => id);
+  }
+
+  /** ids I must not see content from: people I blocked + people who blocked me */
+  hiddenIds(userId: string) {
+    const out = new Set(this.blockedIds(userId));
+    for (const [blocker, m] of this.blocks) if (m.has(userId)) out.add(blocker);
+    return out;
+  }
+
+  private slidingLimit(map: Map<string, number[]>, key: string, windowMs: number, max: number) {
+    const now = Date.now();
+    const recent = (map.get(key) ?? []).filter((t) => now - t < windowMs);
+    if (recent.length >= max) {
+      map.set(key, recent);
+      return true;
+    }
+    recent.push(now);
+    map.set(key, recent);
+    return false;
+  }
+
+  /** Block / unblock. Blocking also removes follows in both directions. 30 changes / minute. */
+  setBlock(userId: string, targetId: string, block: boolean) {
+    const me = this.users.get(userId);
+    if (!me || me.isBot) return { ok: false as const, status: 401, error: "Not signed in" };
+    if (userId === targetId) return { ok: false as const, status: 400, error: "You can't block yourself" };
+    if (!this.users.has(targetId)) return { ok: false as const, status: 404, error: "User not found" };
+    if (this.slidingLimit(this.blockRate, userId, 60_000, 30)) return { ok: false as const, status: 429, error: "Slow down a little 🙂" };
+    let m = this.blocks.get(userId);
+    if (block) {
+      if (!m) this.blocks.set(userId, (m = new Map()));
+      if (!m.has(targetId)) m.set(targetId, Date.now());
+      this.follows.get(userId)?.delete(targetId);
+      this.follows.get(targetId)?.delete(userId);
+    } else m?.delete(targetId);
+    this.scheduleSave();
+    return { ok: true as const, blocked: this.blockedIds(userId) };
+  }
+
+  /**
+   * File a report. Rate limit: 5 / minute and 30 / day per reporter. A repeat report of the same target by the
+   * same reporter while the first is still open is accepted but not duplicated.
+   */
+  createReport(reporterId: string, input: { targetType?: unknown; targetId?: unknown; reason?: unknown; note?: unknown; roomId?: unknown }) {
+    const me = this.users.get(reporterId);
+    if (!me || me.isBot) return { ok: false as const, status: 401, error: "Not signed in" };
+    const targetType = String(input.targetType ?? "") as ReportTarget;
+    if (!REPORT_TARGETS.includes(targetType)) return { ok: false as const, status: 400, error: "Unknown report type" };
+    const reason = String(input.reason ?? "") as ReportReason;
+    if (!REPORT_REASONS.includes(reason)) return { ok: false as const, status: 400, error: "Pick a reason" };
+    const targetId = typeof input.targetId === "string" && /^[\w-]{1,80}$/.test(input.targetId) ? input.targetId : "";
+    if (!targetId) return { ok: false as const, status: 400, error: "Missing target" };
+    const note = clamp(input.note, 1000);
+    const roomIdIn = typeof input.roomId === "string" && /^[\w-]{1,64}$/.test(input.roomId) ? input.roomId : null;
+
+    let targetUserId: string | null = null;
+    let roomId: string | null = null;
+    let snapshot = "";
+    if (targetType === "user") {
+      const u = this.users.get(targetId);
+      if (!u) return { ok: false as const, status: 404, error: "User not found" };
+      if (targetId === reporterId) return { ok: false as const, status: 400, error: "You can't report yourself" };
+      targetUserId = u.id;
+      snapshot = `${u.name} (@${u.username})${u.bio ? ` — ${u.bio}` : ""}`;
+    } else if (targetType === "room") {
+      const r = this.rooms.get(targetId);
+      if (!r) return { ok: false as const, status: 404, error: "Room not found" };
+      targetUserId = r.hostId;
+      roomId = r.id;
+      snapshot = [r.title, r.description].filter(Boolean).join(" — ");
+    } else if (targetType === "message") {
+      const rooms = roomIdIn ? [this.rooms.get(roomIdIn)].filter((r): r is RoomRecord => !!r) : [...this.rooms.values()];
+      const hit = rooms.flatMap((r) => r.chat).find((m) => m.id === targetId);
+      if (!hit) return { ok: false as const, status: 404, error: "Message not found" };
+      targetUserId = hit.authorId;
+      roomId = hit.roomId;
+      snapshot = hit.text;
+    } else {
+      // dm: only a participant of the conversation may report it
+      let hit: DirectMessage | undefined;
+      for (const [key, list] of this.dms) {
+        const [a, b] = key.split("|");
+        if (a !== reporterId && b !== reporterId) continue;
+        hit = list.find((m) => m.id === targetId);
+        if (hit) break;
+      }
+      if (!hit) return { ok: false as const, status: 404, error: "Message not found" };
+      targetUserId = hit.fromId;
+      snapshot = hit.text;
+    }
+    if (targetUserId === reporterId && targetType !== "room") return { ok: false as const, status: 400, error: "You can't report your own content" };
+
+    const dup = this.reports.find((r) => r.reporterId === reporterId && r.targetType === targetType && r.targetId === targetId && r.status === "open");
+    if (dup) return { ok: true as const, report: dup, duplicate: true };
+    if (this.slidingLimit(this.reportRate, `m:${reporterId}`, 60_000, 5) || this.slidingLimit(this.reportRate, `d:${reporterId}`, 86_400_000, 30))
+      return { ok: false as const, status: 429, error: "You've sent a lot of reports — please try again later." };
+    const report: ReportRecord = {
+      id: `rp_${randomUUID()}`,
+      reporterId,
+      targetType,
+      targetId,
+      targetUserId,
+      roomId,
+      reason,
+      note,
+      snapshot: snapshot.slice(0, 2000),
+      status: "open",
+      createdAt: Date.now(),
+    };
+    this.reports.push(report);
+    this.scheduleSave();
+    log.warn("ugc report", { id: report.id, targetType, reason, targetUserId });
+    return { ok: true as const, report, duplicate: false };
+  }
+
+  /** Admin listing, newest first, with reporter / target names resolved. */
+  listReports(opts: { status?: string; limit?: number } = {}) {
+    const name = (id: string | null) => {
+      if (!id) return null;
+      const u = this.users.get(id);
+      return u ? { id: u.id, name: u.name, username: u.username } : { id, name: "(deleted)", username: "" };
+    };
+    return [...this.reports]
+      .filter((r) => !opts.status || r.status === opts.status)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, Math.min(Math.max(opts.limit ?? 200, 1), 1000))
+      .map((r) => ({ ...r, reporter: name(r.reporterId), targetUser: name(r.targetUserId), reportsAgainstTarget: r.targetUserId ? this.reports.filter((x) => x.targetUserId === r.targetUserId).length : 0 }));
+  }
+
+  setReportStatus(id: string, status: unknown) {
+    const r = this.reports.find((x) => x.id === id);
+    if (!r) return { ok: false as const, status: 404, error: "Report not found" };
+    if (!["open", "reviewed", "actioned", "dismissed"].includes(String(status))) return { ok: false as const, status: 400, error: "Bad status" };
+    r.status = status as ReportRecord["status"];
+    this.scheduleSave();
+    return { ok: true as const, report: r };
   }
 
   // ---------- direct messages ----------
@@ -1565,6 +1762,7 @@ export class Store {
       const [a, b] = key.split("|");
       if (a !== userId && b !== userId) continue;
       const peerId = a === userId ? b : a;
+      if (this.isBlockedEither(userId, peerId)) continue;
       const peer = this.publicUser(peerId);
       if (!peer) continue;
       const read = this.lastRead(userId, peerId);
@@ -1575,6 +1773,7 @@ export class Store {
   }
 
   dmHistory(userId: string, peerId: string, before?: number, limit = 60) {
+    if (this.isBlocked(userId, peerId)) return { messages: [], hasMore: false };
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
     const older = before ? list.filter((m) => m.createdAt < before) : list;
     return { messages: older.slice(-limit), hasMore: older.length > limit };
@@ -1586,6 +1785,7 @@ export class Store {
     for (const [key, list] of this.dms) {
       const [a, b] = key.split("|");
       if (a !== userId && b !== userId) continue;
+      if (this.isBlockedEither(a, b)) continue;
       for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) out.push(list[i]);
     }
     out.sort((x, y) => x.createdAt - y.createdAt);
@@ -1595,7 +1795,11 @@ export class Store {
   sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
-    const text = clamp(rawText, CHAT_MAX_LENGTH);
+    if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
+    if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't message this account." };
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, error: c.error };
+    const text = c.text;
     if (!text) return { ok: false as const, error: "Message is empty" };
     const cid = typeof clientId === "string" && /^[\w-]{1,64}$/.test(clientId) ? clientId : undefined;
     if (cid) {

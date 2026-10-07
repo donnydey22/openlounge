@@ -11,6 +11,7 @@ import pg from "pg";
 import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
+import type { ReportRecord } from "./moderation";
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
 
 type SessionRow = {
@@ -90,9 +91,9 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: { attempts?: numb
 const t = (s: unknown) => String(s ?? "").replace(/\u0000/g, "");
 const tn = (s: unknown) => (s === undefined || s === null ? null : t(s));
 
-type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads" | "identities", Map<string, unknown[]>>;
+type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads" | "identities" | "blocks" | "reports", Map<string, unknown[]>>;
 type Snapshot = Record<keyof Rows, Map<string, string>>;
-const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads", "identities"];
+const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads", "identities", "blocks", "reports"];
 const SEP = "\u0001";
 
 function migrationsDir() {
@@ -165,7 +166,7 @@ export class PgPersistence implements Persistence {
   /** whether the live connection is actually TLS (from pg_stat_ssl), null if unknown */
   tlsActive: boolean | null = null;
   private pool: pg.Pool;
-  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map() };
+  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map() };
 
   constructor(url: string) {
     this.where = redactUrl(url);
@@ -250,7 +251,7 @@ export class PgPersistence implements Persistence {
     const q = <R extends pg.QueryResultRow>(sql: string, params?: unknown[]) => this.pool.query<R>(sql, params).then((r) => r.rows);
     // expired sessions would have been dropped from db.json on the next write; drop them here
     await q("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
-    const [users, interests, follows, rooms, dms, sessions, reads, meta, identities] = await Promise.all([
+    const [users, interests, follows, rooms, dms, sessions, reads, meta, identities, blocks, reports] = await Promise.all([
       q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null; password_hash: string | null; social_links: Record<string, string> | null }>(
         "SELECT * FROM users ORDER BY created_at, id",
       ),
@@ -265,6 +266,10 @@ export class PgPersistence implements Persistence {
       q<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'json_imported'"),
       q<{ user_id: string; provider: IdentityProvider; provider_subject: string; email: string | null; verified: boolean; created_at: number; last_used_at: number | null }>(
         "SELECT * FROM auth_identities ORDER BY created_at, provider, provider_subject",
+      ),
+      q<{ blocker_id: string; blocked_id: string; created_at: number }>("SELECT * FROM user_blocks ORDER BY created_at"),
+      q<{ id: string; reporter_id: string; target_type: string; target_id: string; target_user_id: string | null; room_id: string | null; reason: string; note: string; snapshot: string; status: string; created_at: number }>(
+        "SELECT * FROM content_reports ORDER BY created_at, id",
       ),
     ]);
 
@@ -305,6 +310,20 @@ export class PgPersistence implements Persistence {
     };
     for (const f of follows) (db.follows[f.follower_id] ??= []).push(f.followee_id);
     for (const r of reads) (db.dmReads![r.user_id] ??= {})[r.peer_id] = r.last_read_at;
+    db.blocks = blocks.map((b) => ({ blockerId: b.blocker_id, blockedId: b.blocked_id, createdAt: Number(b.created_at) }));
+    db.reports = reports.map((r) => ({
+      id: r.id,
+      reporterId: r.reporter_id,
+      targetType: r.target_type as ReportRecord["targetType"],
+      targetId: r.target_id,
+      targetUserId: r.target_user_id,
+      roomId: r.room_id,
+      reason: r.reason as ReportRecord["reason"],
+      note: r.note,
+      snapshot: r.snapshot,
+      status: r.status as ReportRecord["status"],
+      createdAt: Number(r.created_at),
+    }));
 
     this.written = this.serialize(this.rows(db));
     return { db, empty: users.length === 0 && meta.length === 0 };
@@ -314,7 +333,7 @@ export class PgPersistence implements Persistence {
 
   /** PersistedDb → table rows keyed by primary key. Rows owned by an unknown user are skipped (FK safety). */
   private rows(db: PersistedDb): Rows {
-    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map() };
+    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map() };
     const humans = new Set<string>();
     for (const u of db.users ?? []) {
       humans.add(u.id);
@@ -366,6 +385,9 @@ export class PgPersistence implements Persistence {
     for (const i of db.identities ?? [])
       if (humans.has(i.userId))
         out.identities.set(`${i.provider}${SEP}${i.subject}`, [i.userId, i.provider, t(i.subject), tn(i.email), !!i.verified, i.createdAt, i.lastUsedAt ?? null]);
+    for (const b of db.blocks ?? []) if (humans.has(b.blockerId)) out.blocks.set(`${b.blockerId}${SEP}${b.blockedId}`, [b.blockerId, t(b.blockedId), b.createdAt]);
+    for (const r of db.reports ?? [])
+      out.reports.set(r.id, [r.id, t(r.reporterId), r.targetType, t(r.targetId), tn(r.targetUserId), tn(r.roomId), r.reason, t(r.note), t(r.snapshot), r.status, r.createdAt]);
     return out;
   }
 
@@ -483,6 +505,22 @@ export class PgPersistence implements Persistence {
            ON CONFLICT (provider, provider_subject) DO UPDATE SET user_id = EXCLUDED.user_id, email = EXCLUDED.email, verified = EXCLUDED.verified,
              last_used_at = EXCLUDED.last_used_at`,
           [0, 1, 2, 3, 4, 5, 6].map((i) => col(up.identities, i)),
+        );
+      // UGC safety (011): blocks + reports
+      if (del.blocks.length)
+        await client.query("DELETE FROM user_blocks b USING unnest($1::text[], $2::text[]) AS d(a, c) WHERE b.blocker_id = d.a AND b.blocked_id = d.c", pairs(del.blocks));
+      if (up.blocks.length)
+        await client.query(
+          "INSERT INTO user_blocks (blocker_id, blocked_id, created_at) SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[]) ON CONFLICT DO NOTHING",
+          [0, 1, 2].map((i) => col(up.blocks, i)),
+        );
+      if (del.reports.length) await client.query("DELETE FROM content_reports WHERE id = ANY($1::text[])", [del.reports]);
+      if (up.reports.length)
+        await client.query(
+          `INSERT INTO content_reports (id, reporter_id, target_type, target_id, target_user_id, room_id, reason, note, snapshot, status, created_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::bigint[])
+           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => col(up.reports, i)),
         );
       // users removed last (cascades). The app never deletes accounts today; kept for completeness.
       if (del.users.length) await client.query("DELETE FROM users WHERE id = ANY($1::text[])", [del.users]);

@@ -3,7 +3,11 @@
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ChevronLeft, Loader2, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, X } from "lucide-react";
+import { Sheet } from "../Sheet";
+import { ReportSheet } from "../safety/ReportSheet";
+import { BlockConfirm } from "../safety/BlockConfirm";
+import { useSafety, type ReportTarget } from "@/lib/safety";
 import type { DirectMessage, DmReadReceipt, PublicUser } from "@/lib/types";
 import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
@@ -124,7 +128,14 @@ export function DmThread({
   backStyle?: "chevron" | "close";
   className?: string;
 }) {
-  const { socket, connected, offline, me, request, setActiveDm } = useApp();
+  const { socket, connected, offline, me, request, setActiveDm, toast } = useApp();
+  const safety = useSafety(me?.id);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [blockOpen, setBlockOpen] = useState(false);
+  const iBlocked = safety.isBlocked(peerId);
+  const hiddenPeer = safety.isHidden(peerId);
+  const onReportMessage = useCallback((m: Item) => setReportTarget({ type: "dm", id: m.id, label: m.text }), []);
   const [peer, setPeer] = useState<PublicUser | null>(null);
   const [messages, setMessages] = useState<Item[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -525,12 +536,69 @@ export function DmThread({
             <div className="h-3 w-28 animate-pulse rounded-full bg-zinc-800" />
           </div>
         )}
-        {peer && (
-          <div className="pr-2">
+        {peer && !hiddenPeer && (
+          <div className="pr-1">
             <FollowButton userId={peer.id} small />
           </div>
         )}
+        {peer && !peer.isBot && (
+          <button onClick={() => setMoreOpen(true)} className="mr-1 rounded-full p-2 text-zinc-400 hover:bg-white/5 hover:text-zinc-100" aria-label="More options">
+            <MoreHorizontal className="h-5 w-5" />
+          </button>
+        )}
       </header>
+      {peer && (
+        <>
+          <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title={`@${peer.username}`}>
+            <div className="space-y-1">
+              <button
+                onClick={() => {
+                  setMoreOpen(false);
+                  setReportTarget({ type: "user", id: peer.id, label: peer.name });
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+              >
+                <Flag className="h-4 w-4" /> Report @{peer.username}
+              </button>
+              <button
+                onClick={() => {
+                  setMoreOpen(false);
+                  setBlockOpen(true);
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+              >
+                <Ban className="h-4 w-4" /> {iBlocked ? `Unblock @${peer.username}` : `Block @${peer.username}`}
+              </button>
+              <p className="px-3 pt-2 text-xs text-zinc-500">Tip: press and hold a message to report just that message.</p>
+            </div>
+          </Sheet>
+          <ReportSheet
+            target={reportTarget}
+            onClose={() => setReportTarget(null)}
+            onBlock={
+              iBlocked
+                ? undefined
+                : () => {
+                    setReportTarget(null);
+                    setBlockOpen(true);
+                  }
+            }
+          />
+          <BlockConfirm
+            user={blockOpen ? { id: peer.id, name: peer.name } : null}
+            blocked={iBlocked}
+            onClose={() => setBlockOpen(false)}
+            onDone={(b) => {
+              toast(b ? `Blocked ${peer.name}` : `Unblocked ${peer.name}`);
+              if (b) setMessages([]);
+              else
+                request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId })
+                  .then((r) => (setMessages(r.messages), setHasMore(r.hasMore)))
+                  .catch(() => {});
+            }}
+          />
+        </>
+      )}
 
       <div className="relative min-h-0 flex-1">
         <div
@@ -588,6 +656,7 @@ export function DmThread({
                   showStatus={i === lastMineIdx || m.state === "failed"}
                   latest={i === lastMineIdx}
                   onRetry={retry}
+                  onReport={onReportMessage}
                 />
               ); })}
               {peerTyping && peer && (
@@ -614,6 +683,19 @@ export function DmThread({
       </div>
 
       <div className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {hiddenPeer ? (
+          <div className="flex items-center justify-between gap-3 py-2 text-sm text-zinc-400" data-testid="dm-blocked">
+            <span className="flex items-center gap-2">
+              <Ban className="h-4 w-4 shrink-0 text-red-400" />
+              {iBlocked ? `You blocked ${peer ? firstName(peer.name) : "this account"}.` : "You can't message this account."}
+            </span>
+            {iBlocked && (
+              <button onClick={() => setBlockOpen(true)} className="shrink-0 rounded-full border border-white/15 px-4 py-1.5 text-sm font-semibold text-zinc-200 hover:bg-white/5">
+                Unblock
+              </button>
+            )}
+          </div>
+        ) : (
         <ChatComposer
           onSend={send}
           onTyping={onTyping}
@@ -621,6 +703,7 @@ export function DmThread({
           placeholder={peer ? `Message ${firstName(peer.name)}…` : "Message…"}
           autoFocus
         />
+        )}
       </div>
     </div>
   );
@@ -638,6 +721,7 @@ const MessageRow = memo(function MessageRow({
   showStatus,
   latest,
   onRetry,
+  onReport,
 }: {
   m: Item;
   mine: boolean;
@@ -651,6 +735,7 @@ const MessageRow = memo(function MessageRow({
   showStatus: boolean;
   latest: boolean;
   onRetry: (m: Item) => void;
+  onReport?: (m: Item) => void;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
   void clockTick;
@@ -725,6 +810,16 @@ const MessageRow = memo(function MessageRow({
       {showFull && (
         <div className={cn("fade-in mt-[2px] text-[10.5px] leading-[13px] font-medium text-zinc-500", mine ? "pr-1 text-right" : "pl-9 text-left")} data-testid="dm-fulltime">
           {formatFull(m.createdAt)}
+          {!mine && onReport && !m.state && !peer?.isBot && (
+            <button
+              type="button"
+              onClick={() => onReport(m)}
+              className="ml-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-red-400 hover:bg-red-500/10"
+              data-testid="dm-report"
+            >
+              <Flag className="h-3 w-3" /> Report
+            </button>
+          )}
         </div>
       )}
       {mine && showStatus && <StatusLine m={m} latest={latest} onRetry={onRetry} />}
