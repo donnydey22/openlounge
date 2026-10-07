@@ -102,7 +102,7 @@ export function UserActionSheet({
             <ActionRow icon={<Mic className="h-4 w-4" />} label="Invite to speak" onClick={() => act("host:invite", `Invited ${target.name} to the stage`)} />
           )}
           {amHost && !isMe && target.role === "speaker" && !target.muted && (
-            <ActionRow icon={<MicOff className="h-4 w-4" />} label="Mute speaker" onClick={() => act("host:mute")} />
+            <ActionRow icon={<MicOff className="h-4 w-4 text-red-400" />} label="Mute" onClick={() => act("host:mute", `🔇 Muted ${target.name}`)} />
           )}
           {(amHost || isMe) && target.role !== "listener" && (
             <ActionRow

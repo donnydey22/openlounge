@@ -13,6 +13,7 @@ import { ParticipantTile } from "@/components/room/ParticipantTile";
 import { UserActionSheet } from "@/components/room/UserActionSheet";
 import { useLiveKitAudio } from "@/hooks/useLiveKitAudio";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { unlockAudio } from "@/lib/audioUnlock";
 import { RoomChatPanel } from "@/components/chat/RoomChatPanel";
 import { DmThread } from "@/components/chat/DmThread";
 import { RoomEventFeed } from "@/components/room/RoomEventFeed";
@@ -68,9 +69,9 @@ export default function RoomPage() {
     };
   }, [socket, connected, me, roomId, request, gone]);
 
-  useEffect(() => {
-    if (!connected) setJoined(false);
-  }, [connected]);
+  // NOTE: a WebSocket blip no longer tears down LiveKit audio (we used to set joined=false here).
+  // The join effect above re-joins the room as soon as the socket is back, so the app-level
+  // seat matches the still-running LiveKit connection.
 
   // live updates
   useEffect(() => {
@@ -150,12 +151,13 @@ export default function RoomPage() {
   const localLevel = audio.localLevel;
   // humans: LiveKit active-speaker detection + levels; demo bots: simulated by the server
   const isSpeaking = (p: Participant) => {
+    if (p.muted) return false; // glow always off while muted
     if (p.isBot) return p.speaking;
-    if (p.muted) return false;
     const lvl = audio.levels.get(p.userId) ?? 0;
     return audio.speaking.has(p.userId) || lvl > 0.04;
   };
   const audioLevelOf = (p: Participant) => {
+    if (p.muted) return 0;
     if (p.isBot) return p.speaking ? 0.55 : 0;
     if (p.userId === me?.id) return localLevel;
     return audio.levels.get(p.userId) ?? (isSpeaking(p) ? 0.35 : 0);
@@ -181,10 +183,13 @@ export default function RoomPage() {
   };
 
   const toggleMute = () => {
-    if (!meP) return;
-    const unmuting = meP.muted;
-    if (unmuting && audio.status === "unavailable") toast("🔇 Live audio is off on this server — others see you as unmuted, but no sound is sent.");
-    socket?.emit("self:mute", { roomId, muted: !unmuting });
+    if (!meP || meP.role === "listener") return;
+    unlockAudio(); // user gesture: also unlocks playback (iOS / Android WebView autoplay)
+    const nextMuted = !meP.muted;
+    if (!nextMuted && audio.status === "unavailable") toast("🔇 Live audio is off on this server — others see you as unmuted, but no sound is sent.");
+    // optimistic: flip the local mic + icon now; the server broadcasts room:state to everyone
+    setRoom((r) => (r ? { ...r, participants: r.participants.map((p) => (p.userId === meP.userId ? { ...p, muted: nextMuted, speaking: false } : p)) } : r));
+    socket?.emit("self:mute", { roomId, muted: nextMuted });
   };
 
   const toggleHand = () => {
@@ -411,6 +416,7 @@ export default function RoomPage() {
                   onPodium={p.userId === podiumId}
                   floatingEmoji={tileReactions[p.userId] ?? null}
                   onClick={() => setSelected(p.userId)}
+                  onToggleMute={p.userId === me?.id ? toggleMute : undefined}
                 />
               ))}
             </div>
@@ -459,7 +465,7 @@ export default function RoomPage() {
           )}
           {audio.needsGesture && (
             <button
-              onClick={() => audio.startAudio()}
+              onClick={() => void audio.startAudio()}
               className="mb-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-sky-500/15 py-2.5 text-sm font-medium text-sky-300"
             >
               <Volume2 className="h-4 w-4" /> Tap to enable room audio
@@ -527,10 +533,12 @@ export default function RoomPage() {
 
                   className={cn(
                     "relative overflow-hidden rounded-full p-3.5 transition",
-                    meP.muted ? "bg-zinc-800 text-zinc-300 hover:bg-zinc-700" : "bg-emerald-500 text-on-accent hover:bg-emerald-400",
+                    meP.muted ? "bg-red-500/15 text-red-400 hover:bg-red-500/25" : "bg-emerald-500 text-on-accent hover:bg-emerald-400",
                   )}
                   aria-label={meP.muted ? "Unmute" : "Mute"}
+                  aria-pressed={!meP.muted}
                   title={meP.muted ? "Unmute" : "Mute"}
+                  data-testid="mic-toggle"
                 >
                   {!meP.muted && (
                     <span className="absolute inset-x-0 bottom-0 bg-emerald-300/60 transition-all" style={{ height: `${Math.min(100, localLevel * 400)}%` }} />

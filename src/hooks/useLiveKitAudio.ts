@@ -5,12 +5,25 @@
 // - Everyone in an Open Lounge room joins the matching LiveKit room as a subscriber.
 // - Speakers/hosts get publish permission (token at join; updated server-side on promotion).
 // - Mute state comes from our server (so host-mutes apply) and drives the local mic.
+//   As soon as you're on stage the mic track is PUBLISHED (muted if you're muted), so
+//   unmuting is instant and actually sends audio; muting mutes the LiveKit track itself.
 // - Speaking indicators + audio levels for humans come from LiveKit (ActiveSpeakers + audioLevel).
 // If the server has no LiveKit credentials, `status` is "unavailable" and the UI says so.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track, type Participant as LkParticipant, type RemoteTrack } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  createLocalAudioTrack,
+  type LocalAudioTrack,
+  type Participant as LkParticipant,
+  type RemoteTrack,
+} from "livekit-client";
 import { loadToken } from "@/lib/session";
+import { setActiveAudioRoom, unlockAudio } from "@/lib/audioUnlock";
+
+const MIC_OPTIONS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
 export type AudioStatus = "off" | "connecting" | "connected" | "unavailable" | "error";
 
@@ -39,6 +52,10 @@ export function useLiveKitAudio({
   const [micError, setMicError] = useState<string | null>(null);
   const [localLevel, setLocalLevel] = useState(0);
   const [permVersion, setPermVersion] = useState(0);
+  /** latest wanted mic state; applied serially so rapid taps can't double-publish */
+  const want = useRef({ isSpeaker, muted });
+  want.current = { isSpeaker, muted };
+  const micChain = useRef<Promise<void>>(Promise.resolve());
 
   // connect / disconnect
   useEffect(() => {
@@ -57,8 +74,11 @@ export function useLiveKitAudio({
         if (track.kind !== Track.Kind.Audio) return;
         const el = track.attach();
         el.dataset.lkAudio = "1";
+        el.setAttribute("playsinline", "true"); // iOS WKWebView: never go fullscreen / pause
+        el.autoplay = true;
         document.body.appendChild(el);
         attached.set(track.sid ?? String(Math.random()), [el]);
+        setNeedsGesture(!room.canPlaybackAudio);
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         track.detach().forEach((el) => el.remove());
@@ -98,7 +118,10 @@ export function useLiveKitAudio({
           },
         });
         if (cancelled) return room.disconnect();
+        setActiveAudioRoom(room);
         setStatus("connected");
+        // try to start playback right away (works if the user already tapped); else show the banner
+        await room.startAudio().catch(() => {});
         setNeedsGesture(!room.canPlaybackAudio);
       } catch (err) {
         // Soft-fail: the in-app room already exists; only audio is down.
@@ -112,6 +135,7 @@ export function useLiveKitAudio({
 
     return () => {
       cancelled = true;
+      setActiveAudioRoom(null);
       room.removeAllListeners();
       room.disconnect();
       document.querySelectorAll("[data-lk-audio]").forEach((el) => el.remove());
@@ -122,14 +146,36 @@ export function useLiveKitAudio({
     };
   }, [roomId, enabled, joined]);
 
-  // mic follows server state: on stage + unmuted => publish/enable mic
+  // mic follows server state: on stage => mic track published (muted or live); listener => unpublished
   useEffect(() => {
     const room = roomRef.current;
     if (!room || status !== "connected") return;
-    const want = isSpeaker && !muted;
-    const lp = room.localParticipant;
-    if (want && !lp.permissions?.canPublish) return; // waiting for the server to grant publish (re-runs on permVersion)
-    lp.setMicrophoneEnabled(want, { echoCancellation: true, noiseSuppression: true, autoGainControl: true })
+    const apply = async () => {
+      if (roomRef.current !== room || room.state !== "connected") return;
+      const { isSpeaker: speaker, muted: mute } = want.current;
+      const lp = room.localParticipant;
+      let pub = lp.getTrackPublication(Track.Source.Microphone);
+      if (!speaker) {
+        if (pub?.track) await lp.unpublishTrack(pub.track, true); // releases the mic (OS indicator off)
+        return;
+      }
+      if (!lp.permissions?.canPublish) return; // waiting for the server grant (re-runs on permVersion)
+      if (!pub?.track) {
+        // Publish now even when muted, so the track exists and unmute is instant.
+        const track = await createLocalAudioTrack(MIC_OPTIONS);
+        if (roomRef.current !== room || !want.current.isSpeaker) return track.stop();
+        if (want.current.muted) await track.mute();
+        await lp.publishTrack(track, { source: Track.Source.Microphone });
+        pub = lp.getTrackPublication(Track.Source.Microphone);
+      }
+      const track = pub?.track as LocalAudioTrack | undefined;
+      if (!track) return;
+      const nowMuted = want.current.muted;
+      if (nowMuted && !track.isMuted) await track.mute();
+      else if (!nowMuted && track.isMuted) await track.unmute();
+    };
+    micChain.current = micChain.current
+      .then(apply)
       .then(() => setMicError(null))
       .catch((err: Error) => {
         console.warn("[audio] mic", err);
@@ -152,7 +198,8 @@ export function useLiveKitAudio({
       next.set(room.localParticipant.identity, local);
       setLocalLevel(isSpeaker && !muted ? Math.round(local * 20) / 20 : 0);
       room.remoteParticipants.forEach((p) => {
-        next.set(p.identity, p.audioLevel ?? 0);
+        // muted (TrackMuted) => no level, so the speaking glow can't show
+        next.set(p.identity, p.isMicrophoneEnabled ? (p.audioLevel ?? 0) : 0);
       });
       setLevels(next);
     }, 80);
@@ -160,8 +207,10 @@ export function useLiveKitAudio({
   }, [status, isSpeaker, muted]);
 
   const startAudio = useCallback(async () => {
-    await roomRef.current?.startAudio();
-    setNeedsGesture(false);
+    unlockAudio();
+    const room = roomRef.current;
+    await room?.startAudio().catch(() => {});
+    setNeedsGesture(room ? !room.canPlaybackAudio : false);
   }, []);
 
   return { status, error, speaking, levels, needsGesture, startAudio, micError, localLevel };

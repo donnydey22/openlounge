@@ -3,11 +3,13 @@ import { MessageCircle, User } from "lucide-react";
 import type { RoomSummary } from "@/lib/types";
 import { TOPIC_EMOJI, timeAgo } from "@/lib/utils";
 import { Avatar } from "./Avatar";
+import { unlockAudio } from "@/lib/audioUnlock";
 
 export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: boolean }) {
   return (
     <Link
       href={`/room/${room.id}`}
+      onClick={() => unlockAudio()} // join tap = user gesture → unlock room audio (iOS/Android WebView)
       className={
         "group block rounded-3xl border bg-zinc-900/70 p-5 shadow-lg transition hover:-translate-y-0.5 hover:bg-zinc-900 " +
         (highlight ? "border-emerald-500/30" : "border-white/5")

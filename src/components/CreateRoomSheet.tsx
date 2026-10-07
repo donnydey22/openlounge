@@ -7,6 +7,7 @@ import { TOPICS } from "@/lib/types";
 import { TOPIC_EMOJI, cn } from "@/lib/utils";
 import { Sheet } from "./Sheet";
 import { useApp } from "./AppProvider";
+import { unlockAudio } from "@/lib/audioUnlock";
 
 /** Clubhouse-style default when the host skips the title field. */
 function defaultTitle(topic: string) {
@@ -40,6 +41,7 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
 
   async function startRoom() {
     if (busy) return;
+    unlockAudio(); // Let's Go tap is a user gesture → unlock room audio before navigating
     setBusy(true);
     const payload = {
       title: title.trim() || defaultTitle(topic),

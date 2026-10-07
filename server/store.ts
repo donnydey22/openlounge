@@ -85,7 +85,7 @@ export interface StoreEvents {
 }
 
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
-const AWAY_GRACE_MS = 15_000; // keep your seat during a page refresh
+const AWAY_GRACE_MS = 45_000; // keep your seat during a refresh / network switch / app backgrounding (LiveKit audio keeps playing)
 const EMPTY_ROOM_TTL_MS = 5 * 60_000; // user rooms with no humans end after 5 min
 const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
@@ -922,7 +922,8 @@ export class Store {
     if (ctx.room.hostId !== actorId) return { ok: false as const, error: "Only the host can mute others" };
     ctx.p.muted = true;
     ctx.p.speaking = false;
-    if (actorId !== targetId) this.events?.toast(targetId, "🔇 The host muted you");
+    // Clubhouse rule: moderators can mute, never force-unmute — the speaker can unmute themselves.
+    if (actorId !== targetId) this.events?.toast(targetId, "🔇 A moderator muted you — tap the mic to unmute");
     this.events?.roomChanged(roomId);
     return { ok: true as const };
   }

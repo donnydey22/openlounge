@@ -1,4 +1,4 @@
-import { Hand } from "lucide-react";
+import { Hand, Mic, MicOff } from "lucide-react";
 import type { Participant } from "@/lib/types";
 import { Avatar } from "../Avatar";
 import { firstName } from "@/lib/utils";
@@ -14,6 +14,7 @@ export function ParticipantTile({
   level = 0,
   onPodium = false,
   floatingEmoji,
+  onToggleMute,
 }: {
   p: Participant;
   isHost: boolean;
@@ -26,29 +27,50 @@ export function ParticipantTile({
   onPodium?: boolean;
   /** ephemeral reaction emoji floating above this tile */
   floatingEmoji?: string | null;
+  /** Own stage tile: tapping the mic badge mutes/unmutes (Clubhouse-style) */
+  onToggleMute?: () => void;
 }) {
   const onStage = p.role !== "listener";
+  const selfMic = onStage && !!onToggleMute;
   return (
-    <button
-      onClick={onClick}
+    <div
       className={cn(
-        "group relative flex flex-col items-center gap-1.5 rounded-2xl p-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50",
+        "group relative flex flex-col items-center gap-1.5 rounded-2xl p-1 text-center",
         onPodium && onStage && "podium-tile",
       )}
     >
       <div className="relative">
-        <Avatar
-          name={p.name}
-          color={p.color}
-          photo={p.photoUrl}
-          size={size}
-          speaking={onStage && p.speaking}
-          level={onStage ? level : 0}
-          muted={p.muted}
-          showMuted={onStage}
-          away={p.away}
-          onPodium={onPodium && onStage}
-        />
+        <button onClick={onClick} className="block rounded-[40%] outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50" aria-label={isMe ? "You" : p.name}>
+          <Avatar
+            name={p.name}
+            color={p.color}
+            photo={p.photoUrl}
+            size={size}
+            speaking={onStage && !p.muted && p.speaking}
+            level={onStage && !p.muted ? level : 0}
+            muted={p.muted}
+            showMuted={onStage && !selfMic}
+            away={p.away}
+            onPodium={onPodium && onStage}
+          />
+        </button>
+        {selfMic && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleMute?.();
+            }}
+            className={cn(
+              "absolute -right-1 -bottom-1 z-[3] flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-zinc-900 transition active:scale-90",
+              p.muted ? "bg-zinc-800 text-red-400" : "bg-emerald-500 text-on-accent",
+            )}
+            aria-label={p.muted ? "Unmute" : "Mute"}
+            aria-pressed={!p.muted}
+            title={p.muted ? "Unmute" : "Mute"}
+          >
+            {p.muted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+          </button>
+        )}
         {p.handRaised && (
           <span className="absolute -right-1 -bottom-1 z-[3] flex h-6 w-6 items-center justify-center rounded-full bg-amber-400 ring-2 ring-zinc-900">
             <Hand className="h-3.5 w-3.5 text-ink" />
@@ -65,7 +87,7 @@ export function ParticipantTile({
           </span>
         )}
       </div>
-      <div className="flex max-w-[88px] items-center gap-1 text-xs text-zinc-300 group-hover:text-white">
+      <button onClick={onClick} className="flex max-w-[88px] items-center gap-1 text-xs text-zinc-300 outline-none group-hover:text-white">
         {isHost && (
           <span className="text-emerald-400" title="Host">
             ✳︎
@@ -77,8 +99,8 @@ export function ParticipantTile({
             ●
           </span>
         )}
-      </div>
+      </button>
       {p.away && <span className="-mt-1 text-[10px] text-zinc-500">reconnecting…</span>}
-    </button>
+    </div>
   );
 }
