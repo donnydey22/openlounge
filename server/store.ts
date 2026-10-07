@@ -1856,8 +1856,8 @@ export class Store {
     this.botReplyPending.add(key);
     const typingAt = 700 + Math.random() * 900;
     const replyAt = typingAt + 1400 + Math.random() * 1600;
-    setTimeout(() => this.events?.dmTyping(botId, humanId), typingAt);
-    setTimeout(() => this.events?.dmTyping(botId, humanId), typingAt + 1200);
+    setTimeout(() => !this.isBlockedEither(botId, humanId) && this.events?.dmTyping(botId, humanId), typingAt);
+    setTimeout(() => !this.isBlockedEither(botId, humanId) && this.events?.dmTyping(botId, humanId), typingAt + 1200);
     setTimeout(() => {
       this.botReplyPending.delete(key);
       const human = this.users.get(humanId);

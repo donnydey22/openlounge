@@ -1,5 +1,6 @@
 "use client";
 
+import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -30,6 +31,7 @@ export default function MessagesPage() {
 
   useEffect(() => {
     if (connected) load();
+    else setTyping(new Set());
   }, [connected, load]);
 
   useEffect(() => {
@@ -63,15 +65,25 @@ export default function MessagesPage() {
       clearTimeout(timers.get(from));
       timers.set(
         from,
-        setTimeout(() => setTyping((t) => new Set([...t].filter((x) => x !== from))), 3500),
+        setTimeout(() => setTyping((t) => new Set([...t].filter((x) => x !== from))), 6000),
       );
     };
+    const clearTyping = (from: string) => {
+      clearTimeout(typingTimers.current.get(from));
+      setTyping((t) => (t.has(from) ? new Set([...t].filter((x) => x !== from)) : t));
+    };
+    const onTypingStop = ({ from }: { from: string }) => clearTyping(from);
+    const onMsgTyping = (m: { fromId: string }) => clearTyping(m.fromId);
     socket.on("dm:message", onMsg);
     socket.on("dm:typing", onTyping);
+    socket.on("dm:typing_stop", onTypingStop);
+    socket.on("dm:message", onMsgTyping);
     const timers = typingTimers.current;
     return () => {
       socket.off("dm:message", onMsg);
       socket.off("dm:typing", onTyping);
+      socket.off("dm:typing_stop", onTypingStop);
+      socket.off("dm:message", onMsgTyping);
       for (const t of timers.values()) clearTimeout(t);
     };
   }, [socket, meId, load]);
@@ -140,7 +152,7 @@ export default function MessagesPage() {
                       <div className="mt-0.5 flex items-center gap-2">
                         <p className={cn("min-w-0 flex-1 truncate text-sm", c.unread ? "font-medium text-zinc-200" : "text-zinc-500")}>
                           {isTyping ? (
-                            <span className="text-emerald-400">typing…</span>
+                            <TypingLabel testId="dm-row-typing" />
                           ) : (
                             <>
                               {mine && <span className="text-zinc-500">You: </span>}

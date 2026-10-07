@@ -45,6 +45,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "dm:since": { after: "number?" },
   "dm:read": { peerId: "id", upToMessageId: "id?" },
   "dm:typing": { to: "id" },
+  "dm:typing_stop": { to: "id" },
   "user:get": { userId: "id" },
   "users:list": {},
   "user:follow": { userId: "id", follow: "bool" },

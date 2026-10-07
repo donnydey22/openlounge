@@ -14,6 +14,9 @@ import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
 import { bg, push, setForegroundCheck } from "./push";
 
+const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
+const TYPING_MAX_PER_10S = 20; // typing + typing_stop frames per socket per 10s
+
 /**
  * Firebase Phone Auth: verify the ID token, then the same find-or-create-by-E.164 path as the OTP flow.
  * existing account → new session; unknown number → signup ticket (profile steps follow, then auth:register).
@@ -521,10 +524,26 @@ export function registerRealtime(io: WsHub) {
       }),
     );
 
-    socket.on("dm:typing", ({ to }: { to: string }) => {
+    // Typing indicators: ephemeral relay only (never stored). Delivered to the peer's devices only when the
+    // peer exists and neither side blocked the other; rate-limited per socket on top of the frame bucket.
+    const typingWindow: number[] = [];
+    const lastTypingTo = new Map<string, number>();
+    const relayTyping = (to: unknown, ev: "dm:typing" | "dm:typing_stop") => {
       const userId = me();
-      if (userId && to && to !== userId) io.to(`user:${to}`).emit("dm:typing", { from: userId });
-    });
+      if (!userId || typeof to !== "string" || !to || to === userId) return;
+      const now = Date.now();
+      while (typingWindow.length && now - typingWindow[0] > 10_000) typingWindow.shift();
+      if (typingWindow.length >= TYPING_MAX_PER_10S) return; // drop silently
+      if (ev === "dm:typing" && now - (lastTypingTo.get(to) ?? 0) < TYPING_MIN_GAP_MS) return;
+      if (!store.publicUser(to) || store.isBlockedEither(userId, to)) return;
+      typingWindow.push(now);
+      if (ev === "dm:typing") lastTypingTo.set(to, now);
+      else lastTypingTo.delete(to);
+      if (lastTypingTo.size > 50) lastTypingTo.clear();
+      io.to(`user:${to}`).emit(ev, { from: userId });
+    };
+    socket.on("dm:typing", (d: { to: string }) => relayTyping(d?.to, "dm:typing"));
+    socket.on("dm:typing_stop", (d: { to: string }) => relayTyping(d?.to, "dm:typing_stop"));
 
     // ----- users & follows -----
     socket.on("user:get", ({ userId }: { userId: string }, ack: AckFn = noop) => {
@@ -579,7 +598,10 @@ export function registerRealtime(io: WsHub) {
     );
 
     socket.onClose(() => {
+      // a socket that was mid-typing went away: tell those peers right away instead of waiting for their 6s TTL
       const userId = me();
+      if (userId) for (const to of lastTypingTo.keys()) io.to(`user:${to}`).emit("dm:typing_stop", { from: userId });
+      lastTypingTo.clear();
       userOfSocket.delete(socket.id);
       sessionOfSocket.delete(socket.id);
       otpBudget.delete(socket.id);

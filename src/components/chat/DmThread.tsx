@@ -14,9 +14,14 @@ import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { TypingLabel } from "./TypingDots";
 import { dayDiff, formatClock, formatDaySeparator, formatFull, formatListTime, serverNow, useClockTick } from "@/lib/time";
 import { FollowButton } from "../UserRow";
 import { usePresence } from "@/hooks/usePresence";
+
+const TYPING_SEND_EVERY_MS = 3_000;
+const TYPING_IDLE_MS = 5_000;
+const TYPING_SHOW_MS = 6_000;
 
 /** Consecutive messages from the same person within this window form one group (one avatar, tight spacing). */
 const RENDER_WINDOW = 200;
@@ -272,11 +277,17 @@ export function DmThread({
       if (el && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX) stickToBottom.current = true;
       setPeerTyping(true);
       if (typingTimer.current) clearTimeout(typingTimer.current);
-      typingTimer.current = setTimeout(() => setPeerTyping(false), 3500);
+      typingTimer.current = setTimeout(() => setPeerTyping(false), TYPING_SHOW_MS);
     };
     const onVisible = () => appVisible() && markRead();
     socket.on("dm:message", onMsg);
+    const onTypingStopIn = ({ from }: { from: string }) => {
+      if (from !== peerId) return;
+      if (typingTimer.current) clearTimeout(typingTimer.current);
+      setPeerTyping(false);
+    };
     socket.on("dm:typing", onTyping);
+    socket.on("dm:typing_stop", onTypingStopIn);
     socket.on("dm:read-receipt", onReceipt);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
@@ -284,6 +295,7 @@ export function DmThread({
     return () => {
       socket.off("dm:message", onMsg);
       socket.off("dm:typing", onTyping);
+      socket.off("dm:typing_stop", onTypingStopIn);
       socket.off("dm:read-receipt", onReceipt);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
@@ -294,6 +306,11 @@ export function DmThread({
 
   // Back online with the thread already loaded: refresh the latest page so receipts (and anything the
   // catch-up didn't replay) that happened while we were away show up — state survives reconnects.
+  // socket dropped → the peer's typing state is unknown: hide it
+  useEffect(() => {
+    if (!connected) setPeerTyping(false);
+  }, [connected]);
+
   const wasConnected = useRef(connected);
   useEffect(() => {
     const was = wasConnected.current;
@@ -447,13 +464,29 @@ export function DmThread({
     }
   }, [connected, deliver, armStall]);
 
+  // Outgoing typing state: "dm:typing" at most every ~3s while typing; "dm:typing_stop" on send, blur,
+  // clear, 5s idle, or leaving the thread (only if a "typing" went out since the last stop).
+  const typingActive = useRef(false);
+  const typingIdle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onTypingStop = useCallback(() => {
+    if (typingIdle.current) clearTimeout(typingIdle.current);
+    typingIdle.current = null;
+    if (!typingActive.current) return;
+    typingActive.current = false;
+    lastTypingSent.current = 0;
+    socket?.emit("dm:typing_stop", { to: peerId });
+  }, [socket, peerId]);
   const onTyping = () => {
     const now = Date.now();
-    if (now - lastTypingSent.current > 2500) {
+    if (now - lastTypingSent.current >= TYPING_SEND_EVERY_MS) {
       lastTypingSent.current = now;
+      typingActive.current = true;
       socket?.emit("dm:typing", { to: peerId });
     }
+    if (typingIdle.current) clearTimeout(typingIdle.current);
+    typingIdle.current = setTimeout(onTypingStop, TYPING_IDLE_MS);
   };
+  useEffect(() => onTypingStop, [onTypingStop]);
 
   // minute tick / foreground / timezone change → separators ("Today" → "Yesterday" at midnight) re-render
   const clockTick = useClockTick();
@@ -696,13 +729,24 @@ export function DmThread({
             )}
           </div>
         ) : (
+        <>
+        <div className={cn("overflow-hidden px-1 text-[13px] transition-[height,opacity] duration-200 motion-reduce:transition-none", peerTyping && peer ? "h-6 opacity-100" : "h-0 opacity-0")} aria-live="polite">
+          {peerTyping && peer && (
+            <span className="flex h-6 items-center gap-1.5 text-zinc-400">
+              <span className="font-medium text-zinc-300">{firstName(peer.name)}</span>
+              <TypingLabel testId="dm-typing-strip" />
+            </span>
+          )}
+        </div>
         <ChatComposer
           onSend={send}
           onTyping={onTyping}
+          onTypingStop={onTypingStop}
           disabled={messages === null}
           placeholder={peer ? `Message ${firstName(peer.name)}…` : "Message…"}
           autoFocus
         />
+        </>
         )}
       </div>
     </div>

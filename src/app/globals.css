@@ -230,7 +230,15 @@ body {
   }
 }
 .typing-dot {
-  animation: typing-dot 1.1s ease-in-out infinite;
+  animation: typing-dot 1.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot { animation: typing-dot-fade 1.6s ease-in-out infinite; }
+}
+@keyframes typing-dot-fade {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
 }
 
 /* Avatar squircle (clipPath defined in layout.tsx from AVATAR_PATH in src/lib/avatar-shape.ts) */

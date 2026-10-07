@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 export function ChatComposer({
   onSend,
   onTyping,
+  onTypingStop,
   placeholder = "Say something…",
   disabled,
   autoFocus,
@@ -16,6 +17,8 @@ export function ChatComposer({
 }: {
   onSend: (text: string) => Promise<boolean>;
   onTyping?: () => void;
+  /** typing ended: sent, cleared, or the field lost focus */
+  onTypingStop?: () => void;
   placeholder?: string;
   disabled?: boolean;
   autoFocus?: boolean;
@@ -30,6 +33,7 @@ export function ChatComposer({
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
+    onTypingStop?.();
     const ok = await onSend(text.trim());
     setSending(false);
     if (ok) {
@@ -57,9 +61,11 @@ export function ChatComposer({
           disabled={disabled}
           placeholder={placeholder}
           enterKeyHint="send"
+          onBlur={() => onTypingStop?.()}
           onChange={(e) => {
             setText(e.target.value);
-            onTyping?.();
+            if (e.target.value.trim()) onTyping?.();
+            else onTypingStop?.();
             // auto-grow up to ~5 lines
             e.target.style.height = "auto";
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";

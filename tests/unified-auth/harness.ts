@@ -216,6 +216,7 @@ export function wsClient(url: string) {
         setTimeout(() => pending.has(id) && reject(new Error(`timeout ${ev}`)), 8000);
       }),
     close: () => ws.close(),
+    ws,
   };
 }
 

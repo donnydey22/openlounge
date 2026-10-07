@@ -23,6 +23,7 @@
     "loadtest:ws": "node --import tsx scripts/loadtest-ws.ts",
     "db:backup": "bash scripts/pg-backup.sh",
     "test:ugc": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/ugc-safety/*.test.ts",
+    "test:typing": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/typing/*.test.ts",
     "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts"
   },
   "engines": {
