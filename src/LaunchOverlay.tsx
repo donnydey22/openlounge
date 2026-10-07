@@ -62,12 +62,13 @@ export function LaunchOverlay({ ready, theme, onShown }: { ready: boolean; theme
   const bgOpacity = entered.current ? fade : 1;
   return (
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.c, { backgroundColor: bg, opacity: bgOpacity }]}>
-      <Animated.Text
-        accessible={false}
-        style={{ color: fg, fontSize: SIZE, fontWeight: '700', letterSpacing: track, opacity: fade, transform: [{ scale }] }}
-      >
-        Open Lounge
-      </Animated.Text>
+      {/* Native-driven opacity/scale live on this wrapper; the JS-driven letterSpacing stays on the inner Text so the
+          two drivers never share an animated node (mixing them throws RCTFatal in Release). */}
+      <Animated.View style={{ opacity: fade, transform: [{ scale }] }}>
+        <Animated.Text accessible={false} style={{ color: fg, fontSize: SIZE, fontWeight: '700', letterSpacing: track }}>
+          Open Lounge
+        </Animated.Text>
+      </Animated.View>
     </Animated.View>
   );
 }
