@@ -70,11 +70,14 @@ test("one member across phone / email / Google / Apple / native deep link", asyn
 
   const signIn: Record<string, () => Promise<{ access: string; refresh: string; userId: string }>> = {
     "Phone (demo OTP)": async () => { const r = await phoneLogin(app.wsUrl, phone); r.client.close(); return { access: r.res.access, refresh: r.res.refresh, userId: r.res.user.id }; },
+    "Phone (Firebase, mocked token)": async () => { const r = await api(app.base, "/api/auth/firebase", { idToken: "matrix-fb-token" }); assert.equal(r.data.status, "existing"); return { access: r.data.access, refresh: r.data.refresh, userId: r.data.user?.id }; },
     "Email + password": async () => { const r = await api(app.base, "/auth/email/login", { email, password: pw }); return { access: r.data.access, refresh: r.data.refresh, userId: r.data.user?.id }; },
     "Google (mocked)": async () => { const r = await oauthRoundTrip(app, mock, "google", { sub: gsub, email_verified: true }); assert.equal(r.stage, "exchange"); const d = (r as any).exchange.data; return { access: d.access, refresh: d.refresh, userId: d.user?.id }; },
     "Apple (mocked)": async () => { const r = await oauthRoundTrip(app, mock, "apple", { sub: asub }); assert.equal(r.stage, "exchange"); const d = (r as any).exchange.data; return { access: d.access, refresh: d.refresh, userId: d.user?.id }; },
     "Wrapper deep link (Google app=1)": async () => { const r = await oauthRoundTrip(app, mock, "google", { sub: gsub }, { query: `app=1&cc=${cc}`, codeVerifier: verifier }); assert.match((r as any).location, /^openlounge:\/\/auth\?code=/); const d = (r as any).exchange.data; return { access: d.access, refresh: d.refresh, userId: d.user?.id }; },
   };
+  const fb = await import("../../server/firebase");
+  fb.setPhoneVerifier(async (tok) => (tok === "matrix-fb-token" ? { ok: true, phone, uid: "fb-matrix" } : { ok: false, error: "bad" }));
   const methods = Object.keys(signIn);
   const ws = async (access: string) => { const c = wsClient(app.wsUrl); await c.open; const r = await c.req("session:resume", { token: access }); assert.equal(r.ok, true); return c; };
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -148,6 +151,7 @@ test("one member across phone / email / Google / Apple / native deep link", asyn
     await api(app.base, "/auth/logout", {}, { token: s.access });
   }
   friend.client.close();
+  fb.setPhoneVerifier(null);
 });
 
 test("real phone verified later (Firebase) links to the existing member; demo codes can't link once demo OTP is off", async () => {
