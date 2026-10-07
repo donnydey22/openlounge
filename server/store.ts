@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   ConversationSummary,
   DirectMessage,
+  DmReadReceipt,
   Participant,
   PublicUser,
   RoomPresenceEvent,
@@ -81,6 +82,8 @@ export interface StoreEvents {
   chatDeleted(roomId: string, messageId: string): void;
   dmMessage(msg: DirectMessage): void;
   dmTyping(fromId: string, toId: string): void;
+  /** someone saw messages in a DM conversation (read receipt for the sender) */
+  dmRead?(receipt: DmReadReceipt): void;
   roomPresence(ev: RoomPresenceEvent): void;
   roomReaction(reaction: RoomReaction): void;
   /** a session was revoked (logout, logout-all, refresh-token reuse): sign its sockets out */
@@ -1305,15 +1308,34 @@ export class Store {
     return this.dmReads.get(userId)?.get(peerId) ?? 0;
   }
 
-  markDmRead(userId: string, peerId: string) {
+  /**
+   * `userId` has seen the conversation with `peerId` up to `upToMessageId` (default: everything). Moves the
+   * unread pointer and stamps readAt on every message from peerId up to there that wasn't seen yet. Returns
+   * whether the unread pointer moved, and the read receipt to push to the sender (null if nothing new was seen).
+   */
+  markDmRead(userId: string, peerId: string, upToMessageId?: unknown): { changed: boolean; receipt: DmReadReceipt | null } {
     let reads = this.dmReads.get(userId);
     if (!reads) this.dmReads.set(userId, (reads = new Map()));
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
-    const latest = list.length ? list[list.length - 1].createdAt : Date.now();
-    if ((reads.get(peerId) ?? 0) >= latest) return false;
-    reads.set(peerId, latest);
-    this.scheduleSave();
-    return true;
+    let target = list.length - 1;
+    if (typeof upToMessageId === "string" && upToMessageId) {
+      const i = list.findIndex((m) => m.id === upToMessageId);
+      if (i >= 0) target = i;
+    }
+    const now = Date.now();
+    let receipt: DmReadReceipt | null = null;
+    for (let i = 0; i <= target; i++) {
+      const m = list[i];
+      if (m.fromId !== peerId || m.toId !== userId || m.readAt) continue;
+      m.readAt = now;
+      receipt = { peerId, readerId: userId, upToMessageId: m.id, readAt: now };
+    }
+    const cursor = target >= 0 ? list[target].createdAt : now;
+    const changed = (reads.get(peerId) ?? 0) < cursor;
+    if (changed) reads.set(peerId, cursor);
+    if (changed || receipt) this.scheduleSave();
+    if (receipt) this.events?.dmRead?.(receipt);
+    return { changed, receipt };
   }
 
   unreadDmCount(userId: string) {
@@ -1386,6 +1408,7 @@ export class Store {
       toId,
       text,
       createdAt: Date.now(),
+      readAt: null,
       ...(clientId ? { clientId } : {}),
     };
     list.push(msg);

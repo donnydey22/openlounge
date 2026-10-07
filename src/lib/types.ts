@@ -141,6 +141,8 @@ export interface DirectMessage {
   toId: string;
   text: string;
   createdAt: number;
+  /** When the recipient saw it (read receipt, epoch ms); null/absent = sent, not seen yet */
+  readAt?: number | null;
   /** Sender's photo (on pushed / catch-up messages; not stored) */
   fromPhotoUrl?: string | null;
   /** Sender-generated id echoed back so an optimistic bubble is replaced in place (no flicker / duplicate) */
@@ -151,6 +153,17 @@ export interface ConversationSummary {
   peer: PublicUser;
   lastMessage: DirectMessage;
   unread: number;
+}
+
+/**
+ * "dm:read-receipt" — pushed to both participants' user rooms when `readerId` has seen the conversation with
+ * `peerId` (the sender of the messages that were read) up to and including `upToMessageId`.
+ */
+export interface DmReadReceipt {
+  peerId: string;
+  readerId: string;
+  upToMessageId: string;
+  readAt: number;
 }
 
 // ---------- auth ----------

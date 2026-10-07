@@ -208,8 +208,8 @@ export class PgPersistence implements Persistence {
       q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
       q<{ follower_id: string; followee_id: string }>("SELECT follower_id, followee_id FROM follows ORDER BY created_at, follower_id, followee_id"),
       q<{ id: string; title: string; topic: string; description: string; host_id: string; created_at: number }>("SELECT * FROM rooms ORDER BY created_at, id"),
-      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number }>(
-        "SELECT id, from_id, from_name, from_color, to_id, text, created_at FROM dms ORDER BY created_at, id",
+      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null }>(
+        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at FROM dms ORDER BY created_at, id",
       ),
       q<SessionRow>("SELECT * FROM sessions"),
       q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
@@ -236,7 +236,7 @@ export class PgPersistence implements Persistence {
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
-      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null })),
       sessions: sessions.map(sessionFromRow),
       dmReads: {},
     };
@@ -275,7 +275,7 @@ export class PgPersistence implements Persistence {
     }
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
-      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt]);
+      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null]);
     for (const s of db.sessions ?? [])
       if (humans.has(s.userId))
         out.sessions.set(s.tokenHash, [
@@ -364,14 +364,15 @@ export class PgPersistence implements Persistence {
              host_id = EXCLUDED.host_id, created_at = EXCLUDED.created_at`,
           [0, 1, 2, 3, 4, 5].map((i) => col(up.rooms, i)),
         );
-      // DMs (immutable; per-conversation cap trims show up as deletes)
+      // DMs (text immutable; read_at set once when seen; per-conversation cap trims show up as deletes)
       if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
       if (up.dms.length)
         await client.query(
-          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[])
-           ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color`,
-          [0, 1, 2, 3, 4, 5, 6, 7].map((i) => col(up.dms, i)),
+          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[])
+           ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color,
+             read_at = COALESCE(dms.read_at, EXCLUDED.read_at)`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => col(up.dms, i)),
         );
       // sessions
       if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);

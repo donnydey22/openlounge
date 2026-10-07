@@ -3,8 +3,9 @@
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ChevronLeft, Loader2, RotateCcw, X } from "lucide-react";
-import type { DirectMessage, PublicUser } from "@/lib/types";
+import { ArrowDown, Check, CheckCheck, ChevronLeft, Loader2, RotateCcw, X } from "lucide-react";
+import type { DirectMessage, DmReadReceipt, PublicUser } from "@/lib/types";
+import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
@@ -48,6 +49,19 @@ function newClientId() {
   }
 }
 
+/** Apply a read receipt: messages from `fromId` to `toId` up to `upToMessageId` were seen at `readAt`. */
+function applyReceipt(list: Item[], fromId: string, toId: string, upToMessageId: string, readAt: number): Item[] {
+  const idx = list.findIndex((m) => m.id === upToMessageId);
+  const limit = idx >= 0 ? list[idx].createdAt : readAt;
+  let changed = false;
+  const next = list.map((m) => {
+    if (m.state || m.readAt || m.fromId !== fromId || m.toId !== toId || m.createdAt > limit) return m;
+    changed = true;
+    return { ...m, readAt };
+  });
+  return changed ? next : list;
+}
+
 /** Merge server messages into the list: dedupe by id / clientId, keep optimistic ones, keep order. */
 function mergeMessages(list: Item[], incoming: DirectMessage[]): Item[] {
   let next = list;
@@ -56,7 +70,11 @@ function mergeMessages(list: Item[], incoming: DirectMessage[]): Item[] {
     if (i >= 0) {
       if (next[i].state || next[i].id !== m.id) {
         next = next === list ? [...list] : next;
-        next[i] = { ...m, clientId: next[i].clientId ?? m.clientId }; // swap in place (same key → no flicker)
+        // swap in place (same key → no flicker); never lose a read receipt we already have
+        next[i] = { ...m, clientId: next[i].clientId ?? m.clientId, readAt: m.readAt ?? next[i].readAt ?? null };
+      } else if (m.readAt && !next[i].readAt) {
+        next = next === list ? [...list] : next;
+        next[i] = { ...next[i], readAt: m.readAt }; // seen while we were away (history refetch after reconnect)
       }
       continue;
     }
@@ -106,9 +124,31 @@ export function DmThread({
   const isSelf = me?.id === peerId;
   const presence = usePresence(peerId, peer?.lastSeenAt);
 
+  // Read receipts: tell the server only when the thread is really on screen (page/app visible, thread open)
+  // and there is something from the peer we haven't marked seen yet.
   const markRead = useCallback(() => {
-    socket?.emit("dm:read", { peerId });
+    if (!socket || !appVisible()) return;
+    const list = messagesRef.current ?? [];
+    let upTo: Item | null = null;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].fromId === peerId && !list[i].state) {
+        upTo = list[i];
+        break;
+      }
+    }
+    if (!upTo) return;
+    if (list.every((m) => m.fromId !== peerId || !!m.readAt)) return;
+    const now = Date.now();
+    if (lastMarked.current.id === upTo.id && now - lastMarked.current.at < 4_000) return; // receipt on its way
+    lastMarked.current = { id: upTo.id, at: now };
+    socket.emit("dm:read", { peerId, upToMessageId: upTo.id });
   }, [socket, peerId]);
+  const lastMarked = useRef<{ id: string; at: number }>({ id: "", at: 0 });
+
+  // whenever the visible list changes (history loaded, new message, reconnect refresh) → maybe mark seen
+  useEffect(() => {
+    if (messages?.length) markRead();
+  }, [messages, markRead]);
 
   // reset when switching threads (drawer reuse)
   useEffect(() => {
@@ -131,7 +171,6 @@ export function DmThread({
         setMessages((list) => mergeMessages(r.messages, list ?? []));
         setHasMore(r.hasMore);
         stickToBottom.current = true;
-        markRead();
       })
       .catch((e: Error) => {
         loadedFor.current = null; // retry on the next (re)connect
@@ -161,8 +200,13 @@ export function DmThread({
       setMessages((list) => mergeMessages(list ?? [], [m]));
       if (m.fromId === peerId) {
         setPeerTyping(false);
-        if (document.visibilityState === "visible") markRead();
       }
+    };
+    const onReceipt = (r: DmReadReceipt) => {
+      if (!me) return;
+      // peer saw my messages → ✓✓ ; I saw theirs on another device → keep local state in sync
+      if (r.readerId === peerId && r.peerId === me.id) setMessages((list) => (list ? applyReceipt(list, me.id, peerId, r.upToMessageId, r.readAt) : list));
+      else if (r.readerId === me.id && r.peerId === peerId) setMessages((list) => (list ? applyReceipt(list, peerId, me.id, r.upToMessageId, r.readAt) : list));
     };
     const onTyping = ({ from }: { from: string }) => {
       if (from !== peerId) return;
@@ -172,17 +216,39 @@ export function DmThread({
       if (typingTimer.current) clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setPeerTyping(false), 3500);
     };
-    const onVisible = () => document.visibilityState === "visible" && markRead();
+    const onVisible = () => appVisible() && markRead();
     socket.on("dm:message", onMsg);
     socket.on("dm:typing", onTyping);
+    socket.on("dm:read-receipt", onReceipt);
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
       socket.off("dm:message", onMsg);
       socket.off("dm:typing", onTyping);
+      socket.off("dm:read-receipt", onReceipt);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
+      window.removeEventListener("focus", onVisible);
       if (typingTimer.current) clearTimeout(typingTimer.current);
     };
-  }, [socket, peerId, me?.id, markRead]);
+  }, [socket, peerId, me, markRead]);
+
+  // Back online with the thread already loaded: refresh the latest page so receipts (and anything the
+  // catch-up didn't replay) that happened while we were away show up — state survives reconnects.
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const was = wasConnected.current;
+    wasConnected.current = connected;
+    if (!connected || was || loadedFor.current !== peerId) return;
+    request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId })
+      .then((r) => {
+        setMessages((list) => mergeMessages(list ?? [], r.messages));
+      })
+      .catch(() => {
+        /* next reconnect tries again */
+      });
+  }, [connected, peerId, request, markRead]);
 
   // Pin to the newest message before paint (no visible jump) unless the user scrolled up.
   useLayoutEffect(() => {
@@ -484,6 +550,7 @@ const MessageRow = memo(function MessageRow({
             {last && peer && <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />}
           </div>
         )}
+        {mine && m.state !== "failed" && <Receipt m={m} />}
         <div
           title={formatClock(m.createdAt)}
           className={cn(
@@ -500,13 +567,15 @@ const MessageRow = memo(function MessageRow({
         </div>
       </div>
       {mine && showStatus && (
-        <div className="mt-1 pr-1 text-right text-[11px] text-zinc-500">
+        <div className="mt-1 pr-1 text-right text-[11px] text-zinc-500" data-testid="dm-status-line">
           {m.state === "failed" ? (
             <button onClick={() => onRetry(m)} className="inline-flex items-center gap-1 text-red-400 hover:underline">
               <RotateCcw className="h-3 w-3" /> Not sent · Tap to retry
             </button>
           ) : m.state === "sending" ? (
             "Sending…"
+          ) : m.readAt ? (
+            <span>Seen {formatClock(m.readAt)}</span>
           ) : (
             "Sent"
           )}
@@ -515,3 +584,28 @@ const MessageRow = memo(function MessageRow({
     </div>
   );
 });
+
+/**
+ * iMessage-style delivery ticks next to my bubble: faint ✓ while the server hasn't acked yet, muted ✓ once
+ * stored (sent), ✓✓ in the accent colour once the recipient has seen it.
+ */
+function Receipt({ m }: { m: Item }) {
+  const state = m.state === "sending" ? "pending" : m.readAt ? "seen" : "sent";
+  const label = state === "pending" ? "Sending" : state === "seen" ? `Seen ${formatClock(m.readAt!)}` : "Sent";
+  return (
+    <span
+      className={cn(
+        "mb-0.5 inline-flex h-3.5 w-4 shrink-0 items-center justify-end self-end transition-colors duration-300",
+        state === "pending" && "text-zinc-500 opacity-40",
+        state === "sent" && "text-zinc-500",
+        state === "seen" && "text-emerald-400",
+      )}
+      data-receipt={state}
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      {state === "seen" ? <CheckCheck className="h-3.5 w-3.5" strokeWidth={2.5} /> : <Check className="h-3.5 w-3.5" strokeWidth={2.5} />}
+    </span>
+  );
+}

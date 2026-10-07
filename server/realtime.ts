@@ -121,6 +121,10 @@ export function registerRealtime(io: WsHub) {
         c?.emit("session:revoked", {});
       }
     },
+    dmRead(receipt) {
+      // the sender's devices flip ✓ → ✓✓; the reader's other devices clear their unread state
+      io.to(`user:${receipt.peerId}`).to(`user:${receipt.readerId}`).emit("dm:read-receipt", receipt);
+    },
     dmMessage(msg) {
       // deliver to every tab of both participants (sender's other tabs stay in sync)
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
@@ -373,12 +377,14 @@ export function registerRealtime(io: WsHub) {
       }),
     );
 
-    socket.on("dm:read", ({ peerId }: { peerId: string }, ack: AckFn = noop) =>
+    // The client sends this only while the thread is actually on screen (page visible + thread open).
+    // upToMessageId (optional) = newest message the reader has seen; the receipt goes out via events.dmRead.
+    socket.on("dm:read", ({ peerId, upToMessageId }: { peerId: string; upToMessageId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        if (store.markDmRead(userId, peerId)) {
-          io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
-        }
-        ack({ ok: true });
+        if (typeof peerId !== "string" || !peerId) return ack({ ok: false, error: "User not found" });
+        const r = store.markDmRead(userId, peerId, upToMessageId);
+        if (r.changed) io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
+        ack({ ok: true, receipt: r.receipt });
       }),
     );
 
