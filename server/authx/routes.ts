@@ -19,6 +19,12 @@
 //   POST /auth/identities/remove {id}    (Bearer) detach one (never the last)
 //   POST /auth/link/start {provider,app?}(Bearer) → {url} to start Google/Apple in "link to my account" mode
 //   POST /auth/email/link {email,password}(Bearer) add email+password (after clicking the emailed link)
+//   POST /auth/link/phone {linkCode,idToken}     "Already have an account?": Firebase phone proof → attach the pending
+//                                                Google/Apple/email identity to that phone account → session
+//
+// A sign-in that would create a NEW account answers status "new" with a signup ticket (create a new account) AND a
+// linkCode: a short-lived, single-use `link_intent` code holding the pending identity. Nothing is linked until the
+// person proves a phone number that already has an account. Never links by name or unverified data.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -27,10 +33,13 @@ import { deriveKey, deviceLabel, sha256 } from "../auth";
 import type { IdentityProvider } from "../persistence";
 import { verifyIdToken, claimTrue } from "./jwt";
 import { appleClientSecret, appleConfig, emailEnabled, endpoints, googleConfig, providerFlags, publicBaseUrl, redirectUri } from "./providers";
-import { describeIdentities, linkToUser, parseIdentityId, resolveSignIn, type ExternalIdentity } from "./accounts";
+import { describeIdentities, linkToPhoneAccount, linkToUser, parseIdentityId, resolveSignIn, type ExternalIdentity } from "./accounts";
 import { dummyVerify, hashPassword, needsRehash, passwordProblem, verifyPassword } from "./password";
 import { LIMITS, allow, peekAllowed } from "./ratelimit";
-import { issueTicket } from "./signup";
+import { dropTicket, issueTicket } from "./signup";
+import { verifyPhoneIdToken } from "../firebase";
+import { normalizePhone } from "../otp";
+import { bg, push } from "../push";
 import { alreadyRegisteredMail, resetPasswordMail, sendMail, verifyEmailMail } from "./mailer";
 
 type OAuthProvider = "google" | "apple";
@@ -42,6 +51,7 @@ const RESET_TTL_MS = 30 * 60_000;
 const VERIFY_TTL_MS = 24 * 60 * 60_000;
 const EXCHANGE_TTL_MS = 5 * 60_000;
 const INTENT_TTL_MS = 10 * 60_000;
+const PENDING_LINK_TTL_MS = 15 * 60_000;
 const STATE_TTL_MS = 10 * 60_000;
 
 // ---------- small HTTP helpers ----------
@@ -310,7 +320,13 @@ async function oauthCallback(p: OAuthProvider, req: IncomingMessage, res: Server
 
   let payload: Record<string, unknown>;
   if (st.u) {
-    const r = linkToUser(store, st.u, ext);
+    let r: { ok: true } | { ok: false; code: string } = linkToUser(store, st.u, ext);
+    // taken: a signed-in phone account (who just proved this Google/Apple too) may absorb an EMPTY duplicate
+    if (!r.ok && r.code === "taken" && store.identitiesOf(st.u).some((i) => i.provider === "phone" && i.verified)) {
+      const m = linkToPhoneAccount(store, st.u, ext);
+      if (m.ok && m.removedDuplicate) await cleanupDuplicate(m.removedDuplicate);
+      r = m;
+    }
     if (!r.ok) return fail(r.code === "taken" ? "taken" : "failed");
     payload = { kind: "linked", provider: p };
   } else {
@@ -322,6 +338,49 @@ async function oauthCallback(p: OAuthProvider, req: IncomingMessage, res: Server
   }
   const oneTime = await createCode("exchange", { ...payload, cc: st.cc }, EXCHANGE_TTL_MS);
   finish(res, st, { code: oneTime }, clear, status);
+}
+
+// ---------- "Already have an Open Lounge account?" (pending identity → phone account) ----------
+
+type PendingIdentity = { provider: IdentityProvider; subject: string; email: string | null; verified: boolean };
+type PendingLink = { identity: PendingIdentity; ticket: string; passwordHash?: string | null };
+
+/** A brand-new identity: signup ticket (create a new account) + link code (link it to my phone account instead). */
+async function newAccountChoice(identity: PendingIdentity, passwordHash: string | null = null) {
+  const ticket = issueTicket({ kind: "identity", identity, passwordHash });
+  const linkCode = await createCode("link_intent", { pending: { identity, ticket, passwordHash } satisfies PendingLink }, PENDING_LINK_TTL_MS);
+  return { ticket, linkCode };
+}
+
+async function cleanupDuplicate(userId: string) {
+  const n = push();
+  if (n) bg(n.deleteUserData(userId));
+  await store.flush().catch(() => {});
+}
+
+async function linkPhone(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  if (!allow(`linkphone:ip:${clientIp(req)}`, LIMITS.exchangeIp)) return tooMany(res);
+  const v = await verifyPhoneIdToken(str(body.idToken, 5000));
+  if (!v.ok) return json(res, 400, { ok: false, error: v.error });
+  const e164 = normalizePhone(v.phone);
+  // single use: the code is spent here; on a recoverable error we hand back a fresh one with the same payload
+  const p = await consumeCode<{ pending?: PendingLink }>("link_intent", body.linkCode);
+  const pending = p?.pending;
+  if (!pending?.identity) return json(res, 400, { ok: false, error: "That sign-in took too long. Please start again." });
+  const retry = async (status: number, error: string, code?: string) =>
+    json(res, status, { ok: false, error, ...(code ? { code } : {}), linkCode: await createCode("link_intent", { pending }, PENDING_LINK_TTL_MS) });
+  if (!e164) return retry(400, "That phone number isn't supported");
+  const owner = store.userByPhone(e164);
+  if (!owner) return retry(404, "No Open Lounge account uses that number. Try another number, or create a new account.", "no_account");
+  const id = pending.identity;
+  const r = linkToPhoneAccount(store, owner.id, { provider: id.provider, subject: id.subject, email: id.email, emailVerified: id.verified });
+  if (!r.ok) return retry(409, r.error, r.code);
+  if (r.removedDuplicate) await cleanupDuplicate(r.removedDuplicate);
+  if (id.provider === "email" && pending.passwordHash && !store.passwordHashOf(owner.id)) store.setPasswordHash(owner.id, pending.passwordHash);
+  dropTicket(pending.ticket);
+  await store.flush().catch(() => {}); // the link is durable before the session is handed out
+  console.log(`[auth] linked ${id.provider} to phone account ${owner.id} after phone verification`);
+  json(res, 200, { ...sessionBody(owner.id, req, body.device), linked: id.provider, removedDuplicate: !!r.removedDuplicate });
 }
 
 // ---------- email ----------
@@ -371,8 +430,8 @@ async function emailVerify(req: IncomingMessage, res: ServerResponse, body: Reco
     if (!store.passwordHashOf(r.userId)) store.setPasswordHash(r.userId, p.passwordHash);
     return json(res, 200, sessionBody(r.userId, req, body.device));
   }
-  const ticket = issueTicket({ kind: "identity", identity: r.identity, passwordHash: p.passwordHash });
-  json(res, 200, { ok: true, status: "new", ticket, profile: { firstName: "", lastName: "", email: p.email } });
+  const choice = await newAccountChoice(r.identity, p.passwordHash);
+  json(res, 200, { ok: true, status: "new", ...choice, profile: { firstName: "", lastName: "", email: p.email } });
 }
 
 async function emailLogin(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
@@ -438,7 +497,7 @@ async function resetPassword(req: IncomingMessage, res: ServerResponse, body: Re
 
 /** Paths handled here (both /auth/* and /api/auth/*). */
 export const UNIFIED_AUTH_PATH =
-  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/start|email\/(?:signup|login|verify|link)|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
+  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link)|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
 
 /** Top-level browser navigations (redirect responses; not subject to the CORS check — Apple posts from appleid.apple.com). */
 export function isNavigationRoute(path: string) {
@@ -484,8 +543,8 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
       }
       if (p.kind === "session" && p.userId && store.users.has(p.userId)) return json(res, 200, { ...sessionBody(p.userId, req, body.device), provider: p.provider }), true;
       if (p.kind === "signup" && p.identity) {
-        const ticket = issueTicket({ kind: "identity", identity: p.identity });
-        return json(res, 200, { ok: true, status: "new", ticket, profile: p.hints ?? {}, provider: (p.identity as { provider: string }).provider }), true;
+        const choice = await newAccountChoice(p.identity);
+        return json(res, 200, { ok: true, status: "new", ...choice, profile: p.hints ?? {}, provider: (p.identity as { provider: string }).provider }), true;
       }
       if (p.kind === "linked") return json(res, 200, { ok: true, status: "linked", provider: p.provider }), true;
       return expired(), true;
@@ -505,6 +564,8 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
       if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
       return await emailSignup(req, res, body, userId), true;
     }
+    case "/auth/link/phone":
+      return await linkPhone(req, res, body), true;
     case "/auth/link/start": {
       const userId = await authed(req);
       if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;

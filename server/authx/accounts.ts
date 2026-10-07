@@ -84,3 +84,83 @@ export function parseIdentityId(id: unknown): { provider: IdentityProvider; subj
   if (!m) return null;
   return { provider: m[1] as IdentityProvider, subject: Buffer.from(m[2], "base64url").toString("utf8") };
 }
+
+// ---------- linking a Google/Apple/email identity to an existing (phone) account ----------
+//
+// Used by (a) the sign-in "Already have an Open Lounge account?" step, after the person re-proves their phone with
+// Firebase, and (b) Settings → add Google/Apple. Both prove control of BOTH sides (provider sign-in + phone/session),
+// so a `taken` identity may be moved off a *disposable* duplicate account — never off an account with real data.
+
+/** A duplicate is only disposable while it is this young. */
+export const DUPLICATE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+export interface AccountDataCounts {
+  dms: number;
+  roomsHosted: number;
+  roomsJoined: number;
+  following: number;
+  followers: number;
+}
+
+export function accountDataCounts(store: Store, userId: string): AccountDataCounts {
+  let dms = 0;
+  for (const list of store.dms.values()) for (const m of list) if (m.fromId === userId || m.toId === userId) dms++;
+  let roomsHosted = 0;
+  let roomsJoined = 0;
+  for (const r of store.rooms.values()) {
+    if (r.hostId === userId) roomsHosted++;
+    else if (r.participants.has(userId)) roomsJoined++;
+  }
+  const following = store.follows.get(userId)?.size ?? 0;
+  let followers = 0;
+  for (const [f, set] of store.follows) if (f !== userId && set.has(userId)) followers++;
+  return { dms, roomsHosted, roomsJoined, following, followers };
+}
+
+/**
+ * Can `ownerId` be deleted so its only identity (provider, subject) moves elsewhere? Only when it is an empty,
+ * recently created account whose ONLY sign-in method is that identity (no phone, no second method).
+ */
+export function disposableDuplicate(store: Store, ownerId: string, ext: { provider: IdentityProvider; subject: string }, now = Date.now()): { ok: true } | { ok: false; reason: string } {
+  const u = store.users.get(ownerId);
+  if (!u || u.isBot) return { ok: false, reason: "no_user" };
+  if (u.phone) return { ok: false, reason: "has_phone" };
+  const ids = store.identitiesOf(ownerId);
+  if (ids.length !== 1 || ids[0].provider !== ext.provider || ids[0].subject !== ext.subject) return { ok: false, reason: "other_methods" };
+  if (now - u.createdAt > DUPLICATE_MAX_AGE_MS) return { ok: false, reason: "too_old" };
+  const c = accountDataCounts(store, ownerId);
+  if (c.dms || c.roomsHosted || c.roomsJoined || c.following || c.followers) return { ok: false, reason: "has_data" };
+  return { ok: true };
+}
+
+export type LinkExistingResult =
+  | { ok: true; already: boolean; removedDuplicate: string | null }
+  | { ok: false; code: "taken" | "has_phone" | "no_user" | "no_phone"; error: string };
+
+export const TAKEN_WITH_DATA_ERROR =
+  "That sign-in is already used by another Open Lounge account that has its own messages, rooms or follows, so it can't be moved automatically. Sign in with it and delete that account in Settings first, or contact support.";
+
+/**
+ * Attach `ext` to `userId` (an account with a verified phone). If `ext` already belongs to a disposable duplicate
+ * (see above), that duplicate is deleted and the identity moves here. Anything else that's taken is refused.
+ * The caller removes the duplicate's push data (device tokens) using `removedDuplicate`.
+ */
+export function linkToPhoneAccount(store: Store, userId: string, ext: ExternalIdentity): LinkExistingResult {
+  const u = store.users.get(userId);
+  if (!u || u.isBot) return { ok: false, code: "no_user", error: "Account not found" };
+  if (!store.identitiesOf(userId).some((i) => i.provider === "phone" && i.verified)) return { ok: false, code: "no_phone", error: "Verify a phone number on this account first." };
+  const known = store.findIdentity(ext.provider, ext.subject);
+  let removedDuplicate: string | null = null;
+  if (known && known.userId === userId) return { ok: true, already: true, removedDuplicate };
+  if (known && store.users.has(known.userId)) {
+    if (!disposableDuplicate(store, known.userId, ext).ok) return { ok: false, code: "taken", error: TAKEN_WITH_DATA_ERROR };
+    const d = store.deleteAccount(known.userId);
+    if (!d.ok) return { ok: false, code: "taken", error: TAKEN_WITH_DATA_ERROR };
+    removedDuplicate = known.userId;
+    console.log(`[auth] moved ${ext.provider} identity from empty duplicate ${known.userId} to ${userId}`);
+  }
+  const r = store.addIdentity(userId, { provider: ext.provider, subject: ext.subject, email: normalizeEmail(ext.email), verified: !!ext.email && ext.emailVerified });
+  if (!r.ok) return { ok: false, code: r.code, error: r.error };
+  store.touchIdentity(ext.provider, ext.subject);
+  return { ok: true, already: false, removedDuplicate };
+}
