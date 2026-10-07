@@ -24,6 +24,7 @@ import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId } from "./conversation";
+import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
 
 /**
  * Demo seeding (bot users, seeded rooms, bot chat, bot DM replies, newcomer waves, bot audiences)
@@ -88,6 +89,8 @@ export interface StoreEvents {
   roomReaction(reaction: RoomReaction): void;
   /** a session was revoked (logout, logout-all, refresh-token reuse): sign its sockets out */
   sessionRevoked?(sessionId: string): void;
+  /** the user's own profile changed outside a socket handler (REST): push me:update to their sockets */
+  meChanged?(userId: string, user: Me): void;
 }
 
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
@@ -685,6 +688,29 @@ export class Store {
     return { ok: true as const, user: this.me(id)! };
   }
 
+  /** Social links: 10 saves / minute per user (same sliding-window pattern as chat). */
+  private socialRate = new Map<string, number[]>();
+  updateSocialLinks(id: string, input: unknown) {
+    const u = this.users.get(id);
+    if (!u || u.isBot) return { ok: false as const, status: 404, error: "Could not update profile" };
+    const now = Date.now();
+    const recent = (this.socialRate.get(id) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= 10) {
+      this.socialRate.set(id, recent);
+      return { ok: false as const, status: 429, error: "Slow down a little 🙂" };
+    }
+    recent.push(now);
+    this.socialRate.set(id, recent);
+    const r = normalizeSocialLinks(input, u.socialLinks ?? {});
+    if (!r.ok) return { ok: false as const, status: 400, error: r.error, errors: r.errors as Partial<Record<SocialKey, string>> };
+    u.socialLinks = r.links;
+    this.scheduleSave();
+    this.broadcastUserChange(id);
+    const me = this.me(id)!;
+    this.events?.meChanged?.(id, me);
+    return { ok: true as const, user: me };
+  }
+
   me(id: string): Me | null {
     const pub = this.publicUser(id);
     const u = this.users.get(id);
@@ -742,6 +768,7 @@ export class Store {
       photoUrl: this.photoUrl(u),
       interests: u.interests ?? [],
       bio: u.bio,
+      socialLinks: sanitizeStoredLinks(u.socialLinks),
       isBot: u.isBot,
       createdAt: u.createdAt,
       followers: u.baseFollowers + this.followerIds(id).length,

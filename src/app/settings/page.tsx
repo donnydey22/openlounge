@@ -12,9 +12,10 @@ import { NotificationToggle } from "@/components/NotificationToggle";
 import { useTheme } from "@/components/ThemeProvider";
 import { Sheet } from "@/components/Sheet";
 import { InterestChips } from "@/components/profile/InterestChips";
+import { SocialLinksForm } from "@/components/profile/SocialLinksForm";
 
 export default function SettingsPage() {
-  const { me, signOut, updateMe, toast, reportError } = useApp();
+  const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [interestsOpen, setInterestsOpen] = useState(false);
@@ -101,6 +102,8 @@ export default function SettingsPage() {
             </button>
           </div>
         </section>
+
+        <SocialLinksForm me={me} onSaved={setMeLocal} toast={toast} />
 
         <section>
           <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">About</h2>

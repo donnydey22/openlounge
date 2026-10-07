@@ -212,6 +212,19 @@ async function api(req: IncomingMessage, res: ServerResponse) {
     });
     return json(res, 200, { ok: true, url: livekit.url, token });
   }
+  // Social links: Authorization: Bearer <access token>, body { links: { instagram?: string|null, ... } }
+  // Partial update: listed keys are set (handle or URL, normalized) or cleared ("" / null); others are kept.
+  if (url === "/api/me/social-links" && (req.method === "POST" || req.method === "PUT")) {
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) {
+      res.setHeader("WWW-Authenticate", `Bearer error="invalid_token"`);
+      return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    }
+    const body = await readJson(req);
+    const r = store.updateSocialLinks(auth.userId, body.links);
+    if (!r.ok) return json(res, r.status, { ok: false, error: r.error, ...("errors" in r ? { errors: r.errors } : {}) });
+    return json(res, 200, { ok: true, user: r.user });
+  }
   json(res, 404, { ok: false, error: "Not found" });
 }
 

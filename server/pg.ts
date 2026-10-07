@@ -202,7 +202,7 @@ export class PgPersistence implements Persistence {
     // expired sessions would have been dropped from db.json on the next write; drop them here
     await q("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
     const [users, interests, follows, rooms, dms, sessions, reads, meta] = await Promise.all([
-      q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null }>(
+      q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null; social_links: Record<string, string> | null }>(
         "SELECT * FROM users ORDER BY created_at, id",
       ),
       q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
@@ -233,6 +233,7 @@ export class PgPersistence implements Persistence {
         ...(u.phone !== null ? { phone: u.phone } : {}),
         interests: interestsOf.get(u.id) ?? [],
         photoVersion: u.photo_version,
+        socialLinks: u.social_links ?? {},
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
@@ -267,6 +268,7 @@ export class PgPersistence implements Persistence {
         Math.round(u.baseFollowing ?? 0),
         u.photoVersion ?? null,
         (u.interests ?? []).map(t),
+        JSON.stringify(u.socialLinks ?? {}),
       ]);
     }
     for (const [follower, list] of Object.entries(db.follows ?? {})) {
@@ -329,12 +331,12 @@ export class PgPersistence implements Persistence {
       if (up.users.length) {
         const u = up.users;
         await client.query(
-          `INSERT INTO users (id, name, username, color, bio, phone, created_at, base_followers, base_following, photo_version)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::int[], $9::int[], $10::bigint[])
+          `INSERT INTO users (id, name, username, color, bio, phone, created_at, base_followers, base_following, photo_version, social_links)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::int[], $9::int[], $10::bigint[], $11::jsonb[])
            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, username = EXCLUDED.username, color = EXCLUDED.color, bio = EXCLUDED.bio,
              phone = EXCLUDED.phone, created_at = EXCLUDED.created_at, base_followers = EXCLUDED.base_followers,
-             base_following = EXCLUDED.base_following, photo_version = EXCLUDED.photo_version`,
-          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => col(u, i)),
+             base_following = EXCLUDED.base_following, photo_version = EXCLUDED.photo_version, social_links = EXCLUDED.social_links`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11].map((i) => col(u, i)),
         );
         const ids = col(u, 0) as string[];
         await client.query("DELETE FROM user_interests WHERE user_id = ANY($1::text[])", [ids]);
@@ -442,6 +444,7 @@ export class PgPersistence implements Persistence {
       ...(u.phone !== null ? { phone: u.phone } : {}),
       interests,
       photoVersion: u.photo_version,
+      socialLinks: u.social_links ?? {},
     };
     return { session, user };
   }

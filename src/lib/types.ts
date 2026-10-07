@@ -12,6 +12,8 @@ export interface PublicUser {
   photoUrl: string | null;
   interests: string[];
   bio: string;
+  /** canonical https URLs keyed by network; empty object = none */
+  socialLinks?: import("./socialLinks").SocialLinks;
   isBot: boolean;
   createdAt: number;
   followers: number;

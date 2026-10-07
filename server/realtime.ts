@@ -113,6 +113,9 @@ export function registerRealtime(io: WsHub) {
     roomReaction(reaction) {
       io.to(`room:${reaction.roomId}`).emit("room:reaction", reaction);
     },
+    meChanged(userId, user) {
+      io.to(`user:${userId}`).emit("me:update", { user });
+    },
     sessionRevoked(sessionId) {
       for (const [connId, sid] of [...sessionOfSocket]) {
         if (sid !== sessionId) continue;
