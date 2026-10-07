@@ -2,13 +2,19 @@
 
 import { useApp } from "@/components/AppProvider";
 import { timeAgo } from "@/lib/utils";
-import { useClockTick } from "@/lib/time";
+import { formatClock, formatFull, formatListTime, dayDiff, useClockTick } from "@/lib/time";
+
+/** "Active 10:49 PM" / "Active Yesterday" — the absolute twin of lastSeenLabel, from the SAME timestamp. */
+export function lastSeenAbsolute(ts: number | null | undefined): string | null {
+  if (!ts) return null;
+  return dayDiff(ts) <= 0 ? formatClock(ts) : formatListTime(ts);
+}
 
 /** "Active 5m ago" style label for an offline user's last-seen timestamp. */
 export function lastSeenLabel(ts: number | null | undefined): string | null {
   if (!ts) return null;
   const ago = timeAgo(ts);
-  return ago === "just now" ? "Active just now" : `Active ${ago} ago`;
+  return ago === "just now" ? "Active now" : `Active ${ago} ago`;
 }
 
 /**
@@ -31,5 +37,8 @@ export function usePresence(userId: string | null | undefined, fallbackLastSeen?
     dot: status === "offline" ? null : status,
     lastSeenAt: seen,
     label: online ? "Online" : status === "away" ? "Away" : lastSeenLabel(seen),
+    /** absolute local time of the same lastSeenAt (tooltip), so "Active 9m ago" and "10:49 PM" never disagree */
+    seenAt: seen ? lastSeenAbsolute(seen) : null,
+    seenTitle: seen ? formatFull(seen) : undefined,
   };
 }

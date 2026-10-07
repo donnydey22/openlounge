@@ -8,7 +8,7 @@ import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { dropTicket, getTicket, issueTicket } from "./authx/signup";
-import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
+import { ACTIVITY_THROTTLE_MS, PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
@@ -198,6 +198,12 @@ export function registerRealtime(io: WsHub) {
       const userId = me();
       if (!userId) return (ack ?? noop)({ ok: false, error: "Not signed in" });
       fn(userId);
+    };
+
+    // any authenticated interaction moves "last seen" forward (throttled; no-op while online)
+    socket.onAny = (ev) => {
+      const uid = me();
+      if (uid && ev !== "presence:visible") presence.activity(uid, Date.now(), ACTIVITY_THROTTLE_MS);
     };
 
     const signIn = (userId: string, sessionId: string) => {
@@ -486,7 +492,10 @@ export function registerRealtime(io: WsHub) {
 
     // clientId (optional) is echoed on the stored message so the sender's optimistic bubble is swapped in place
     socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.sendDm(userId, to, text, clientId))),
+      authed(ack, (userId) => {
+        presence.activity(userId);
+        ack(store.sendDm(userId, to, text, clientId));
+      }),
     );
 
     // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
@@ -503,6 +512,9 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => {
         if (typeof peerId !== "string" || !peerId) return ack({ ok: false, error: "User not found" });
         const r = store.markDmRead(userId, peerId, upToMessageId);
+        // a read receipt proves activity: "last seen" must never be older than the "Seen 10:49" it produced
+        const readAt = (r.receipt as { readAt?: number } | null | undefined)?.readAt;
+        presence.activity(userId, typeof readAt === "number" ? readAt : Date.now());
         if (r.changed) io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
         ack({ ok: true, receipt: r.receipt });
       }),

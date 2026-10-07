@@ -11,6 +11,7 @@
 // Changes are debounced so a page refresh / quick reconnect doesn't flicker:
 //   socket closed (or killed by the server heartbeat) → offline after CLOSE_GRACE_MS
 //   app backgrounded (visibilitychange → hidden)     → away after AWAY_GRACE_MS
+//   backgrounded app whose socket died               → offline after HIDDEN_GRACE_MS (was 120 s, now 2 s)
 // Changes are pushed to every signed-in socket as
 //   "presence:update" { userId, online, status, lastSeenAt }
 // (`online` stays the legacy boolean = status === "online"; `status` is additive.)
@@ -23,12 +24,15 @@ const envMs = (name: string, dflt: number) => {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n >= 0 ? n : dflt;
 };
-export const CLOSE_GRACE_MS = envMs("PRESENCE_CLOSE_GRACE_MS", 4_000);
+export const CLOSE_GRACE_MS = envMs("PRESENCE_CLOSE_GRACE_MS", 1_500);
 /** a connection that was already backgrounded when it closed (phone app frozen/killed by the OS) stays "away" this long */
-export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 120_000);
+export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 2_000);
 /** foreground → background: amber after this (short, so the dot follows the tab quickly but a quick app switch doesn't blink) */
 export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
-const SWEEP_MS = 15_000;
+/** safety-net re-evaluation (cheap: only walks non-offline users) */
+/** generic ws interaction while away/offline: at most one persist+broadcast per user per this window */
+export const ACTIVITY_THROTTLE_MS = envMs("PRESENCE_ACTIVITY_THROTTLE_MS", 10_000);
+export const SWEEP_MS = envMs("PRESENCE_SWEEP_MS", 2_000);
 
 interface ConnState {
   userId: string;
@@ -43,8 +47,10 @@ export interface PresenceUpdate {
   /** legacy boolean (true only while "online") */
   online: boolean;
   status: PresenceStatus;
-  /** when the user was last active (null while online / never seen) */
+  /** when the user was last active (null while online / never seen) — server epoch ms, the ONLY last-seen value */
   lastSeenAt: number | null;
+  /** server clock when this was sent (client clock-skew correction) */
+  now: number;
 }
 
 export class Presence {
@@ -64,9 +70,17 @@ export class Presence {
     private lastSeen: Map<string, number> = new Map(),
   ) {
     // Catch state changes that don't come with an explicit event (room ended while backgrounded, …)
-    setInterval(() => {
+    this.sweep = setInterval(() => {
       for (const userId of [...this.status.keys()]) this.update(userId);
-    }, SWEEP_MS).unref();
+    }, Math.max(250, SWEEP_MS));
+    this.sweep.unref();
+  }
+  private sweep: NodeJS.Timeout;
+
+  stop() {
+    clearInterval(this.sweep);
+    for (const p of this.timers.values()) clearTimeout(p.t);
+    this.timers.clear();
   }
 
   isOnline(userId: string) {
@@ -89,7 +103,10 @@ export class Presence {
     const onlineIds: string[] = [];
     const awayIds: string[] = [];
     for (const [id, st] of this.status) (st === "online" ? onlineIds : awayIds).push(id);
-    return { onlineIds, awayIds, lastSeen: Object.fromEntries(this.lastSeen) };
+    // last seen only for users who are NOT online (an online user's old value would be a stale cache on the client)
+    const lastSeen: Record<string, number> = {};
+    for (const [id, at] of this.lastSeen) if (this.status.get(id) !== "online") lastSeen[id] = at;
+    return { onlineIds, awayIds, lastSeen, now: Date.now() };
   }
 
   /** A connection authenticated as userId (login, signup or session resume). */
@@ -129,6 +146,21 @@ export class Presence {
     c.visible = visible;
     if (!visible && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
     this.update(c.userId);
+  }
+
+  /**
+   * The user did something (sent / read a DM, …) on connection `connId`. If they aren't shown as online (e.g. a
+   * backgrounded native app marking a message read), move "last seen" forward so it can never be older than a
+   * read receipt / message they produced — the relative and absolute times stay congruent.
+   */
+  activity(userId: string, at = Date.now(), throttleMs = 0) {
+    if (this.isOnline(userId)) return;
+    const prev = this.lastSeen.get(userId) ?? 0;
+    if (at <= prev || at - prev < throttleMs) return;
+    this.lastSeen.set(userId, at);
+    const token = [...(this.byUser.get(userId) ?? [])].map((id) => this.conns.get(id)?.token).find(Boolean);
+    if (token) this.persistLastSeen(token, at);
+    this.broadcast({ userId, online: false, status: this.statusOf(userId), lastSeenAt: at, now: Date.now() });
   }
 
   /** Re-evaluate after something that affects activity (room join/leave). */
@@ -196,7 +228,8 @@ export class Presence {
     } else if (was === "online" || !this.lastSeen.has(userId)) {
       // stopped being active: record "last seen"
       const d = this.departed.get(userId);
-      const at = d?.at ?? Date.now();
+      // never move backwards (seeded value from sessions.last_seen_at or an activity bump may be newer)
+      const at = Math.max(d?.at ?? Date.now(), this.lastSeen.get(userId) ?? 0);
       this.lastSeen.set(userId, at);
       const token = d?.token ?? [...(this.byUser.get(userId) ?? [])].map((id) => this.conns.get(id)?.token).find(Boolean);
       if (token) this.persistLastSeen(token, at);
@@ -205,7 +238,7 @@ export class Presence {
       lastSeenAt = this.lastSeen.get(userId) ?? null;
     }
     if (to === "offline") this.departed.delete(userId);
-    this.broadcast({ userId, online: to === "online", status: to, lastSeenAt });
+    this.broadcast({ userId, online: to === "online", status: to, lastSeenAt, now: Date.now() });
   }
 
   private broadcast(u: PresenceUpdate) {
