@@ -9,6 +9,7 @@ import { THEME_COLORS, themeInitScript } from "@/lib/theme";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_PUBLIC_ORIGIN || "https://openlounge.app"),
   title: "Open Lounge — live audio rooms",
   description: "A Clubhouse-style social audio MVP built with Next.js, WebSockets and LiveKit.",
   applicationName: "Open Lounge",

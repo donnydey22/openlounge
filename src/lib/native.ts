@@ -4,6 +4,7 @@ export interface OpenLoungeNativeBridge {
   getPushToken?(): string; // "" until FCM hands one out
   getPlatform?(): string; // "android" | "ios"
   share?(text: string, url: string): void;
+  haptic?(type: string): void;
   /** shows the OS permission prompt if needed; result comes back via window.__olContacts(json) */
   requestContacts?(): void;
   contactsPermission?(): string; // "granted" | "denied" | "prompt"
@@ -72,4 +73,11 @@ export async function shareLink(text: string, url: string): Promise<"native" | "
   } catch {
     return "failed";
   }
+}
+
+/** Native haptic tick (Android/iOS wrappers); no-op on the web. */
+export function haptic(type: "light" | "medium" | "success" = "light") {
+  try {
+    (native() as (OpenLoungeNativeBridge & { haptic?(t: string): void }) | null)?.haptic?.(type);
+  } catch {}
 }

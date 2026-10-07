@@ -6,6 +6,7 @@ import { compact } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import { useApp } from "./AppProvider";
 import { usePresence } from "@/hooks/usePresence";
+import { haptic } from "@/lib/native";
 
 export function FollowButton({ userId, small }: { userId: string; small?: boolean }) {
   const { me, following, follow } = useApp();
@@ -16,6 +17,7 @@ export function FollowButton({ userId, small }: { userId: string; small?: boolea
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
+        haptic(on ? "light" : "success");
         follow(userId, !on);
       }}
       className={
