@@ -248,7 +248,8 @@ await t("DEMO_OTP_ENABLED default on, can be turned off", () => {
 await t("firebase phone login: verified token → existing user session / new user ticket; rejected token", async () => {
   const { store } = await import("../server/store");
   await store.init();
-  const { firebasePhoneLogin, signupTickets } = await import("../server/realtime");
+  const { firebasePhoneLogin } = await import("../server/realtime");
+  const { getTicket } = await import("../server/authx/signup");
   const acct = store.createAccount("+14155550123", { firstName: "Fire", username: "firetest" });
   assert.ok(acct.ok);
   setPhoneVerifier(async (tok) => (tok === "good-existing" ? { ok: true, phone: "+14155550123", uid: "f1" } : tok === "good-new" ? { ok: true, phone: "+14155550777", uid: "f2" } : { ok: false, error: "bad" }));
@@ -262,7 +263,7 @@ await t("firebase phone login: verified token → existing user session / new us
   }
   const r2 = await firebasePhoneLogin("good-new", "test");
   assert.ok(r2.ok && r2.status === "new");
-  if (r2.ok && r2.status === "new") assert.equal(signupTickets.get(r2.ticket)?.phone, "+14155550777");
+  if (r2.ok && r2.status === "new") { const tk = getTicket(r2.ticket); assert.equal(tk?.kind === "phone" ? tk.phone : null, "+14155550777"); }
   assert.equal((await firebasePhoneLogin("forged", "test")).ok, false);
   setPhoneVerifier(null);
   // real verifier without Firebase configured refuses

@@ -276,7 +276,7 @@ export function registerRealtime(io: WsHub) {
         if (!res.ok) return ack(res);
         dropTicket(input.ticket);
         if (input.photo) store.setPhoto(res.user.id, input.photo);
-        bg(push()?.contactJoined(res.user.id, t.kind === "phone" ? t.phone : undefined));
+        if (t.kind === "phone") bg(push()?.contactJoined(res.user.id, t.phone));
         const creds = store.createSession(res.user.id, deviceLabel(input.device, ua));
         ack({ ok: true, ...creds, ...signIn(res.user.id, creds.sessionId) });
       },
