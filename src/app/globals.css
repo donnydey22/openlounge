@@ -699,3 +699,7 @@ html.ol-recaptcha-active body,
 html.ol-recaptcha-active body:has([aria-modal]) {
   overflow: auto !important;
 }
+
+/* Hide the floating reCAPTCHA badge; the required Google disclosure is shown under the phone form instead
+   (allowed by Google's reCAPTCHA FAQ when the disclosure text is visible in the user flow). */
+.grecaptcha-badge { visibility: hidden !important; }

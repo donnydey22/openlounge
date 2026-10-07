@@ -1,6 +1,8 @@
 // Firebase JS SDK (web): phone auth with an invisible reCAPTCHA. Loaded lazily — only when the server says
 // Firebase phone auth is on (auth:config). The web config is public by design.
 import type { ConfirmationResult, RecaptchaVerifier } from "firebase/auth";
+import { hasNativePhoneAuth, nativeSendPhoneCode, type PhoneSession } from "./nativePhone";
+export type { PhoneSession } from "./nativePhone";
 
 const config = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBYGoBfnu03JtFgqSd8G5iOgHF3RC3wvU0",
@@ -19,11 +21,34 @@ async function auth() {
   const app = getApps()[0] ?? initializeApp(config);
   const a = getAuth(app);
   a.useDeviceLanguage();
+  // reCAPTCHA Enterprise (score-based, no visual challenge): when the project's phone recaptchaConfig is AUDIT/ENFORCE,
+  // the SDK (v11+) uses it automatically. Pre-loading the config avoids an extra round-trip on send; if it fails
+  // (Enterprise not configured) we silently stay on the classic invisible reCAPTCHA v2 path.
+  if (!recaptchaConfigLoaded) {
+    recaptchaConfigLoaded = true;
+    try {
+      const { initializeRecaptchaConfig } = await import("firebase/auth");
+      await initializeRecaptchaConfig(a);
+    } catch {
+      /* Enterprise not enabled → v2 invisible fallback */
+    }
+  }
   return a;
 }
+let recaptchaConfigLoaded = false;
 
 /** Sends the SMS. `containerId` is an (empty) element id for the invisible reCAPTCHA. */
-export async function sendPhoneCode(e164: string, containerId: string): Promise<ConfirmationResult> {
+export async function sendPhoneCode(e164: string, containerId: string): Promise<PhoneSession> {
+  // Installed apps: native Firebase phone auth (Play Integrity / silent APNs) — no web reCAPTCHA at all.
+  if (hasNativePhoneAuth()) return nativeSendPhoneCode(e164, codeMessage);
+  return wrap(await sendWebPhoneCode(e164, containerId));
+}
+
+function wrap(c: ConfirmationResult): PhoneSession {
+  return { confirm: (code) => confirmWeb(c, code) };
+}
+
+async function sendWebPhoneCode(e164: string, containerId: string): Promise<ConfirmationResult> {
   const a = await auth();
   const { RecaptchaVerifier, signInWithPhoneNumber } = await import("firebase/auth");
   // The invisible reCAPTCHA container (and Google's challenge popup) must live directly under <body>, outside any
@@ -52,7 +77,11 @@ export async function sendPhoneCode(e164: string, containerId: string): Promise<
 }
 
 /** Confirms the 6-digit code; returns a Firebase ID token for the server (then signs out of Firebase locally). */
-export async function confirmPhoneCode(c: ConfirmationResult, code: string): Promise<string> {
+export function confirmPhoneCode(s: PhoneSession, code: string): Promise<string> {
+  return s.confirm(code);
+}
+
+async function confirmWeb(c: ConfirmationResult, code: string): Promise<string> {
   try {
     const cred = await c.confirm(code);
     const token = await cred.user.getIdToken();
@@ -65,7 +94,10 @@ export async function confirmPhoneCode(c: ConfirmationResult, code: string): Pro
 
 function phoneError(e: unknown): string {
   console.error(e);
-  const code = (e as { code?: string })?.code ?? "";
+  return codeMessage((e as { code?: string })?.code ?? "");
+}
+
+function codeMessage(code: string): string {
   if (code.includes("billing-not-enabled")) return "Phone sign-in is temporarily unavailable. Please try again soon.";
   if (code.includes("unauthorized-domain")) return "Phone sign-in isn't enabled for this site yet. Please try again soon.";
   if (code.includes("invalid-app-credential")) return "We couldn't verify this device. Refresh the page and try again.";
