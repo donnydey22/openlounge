@@ -27,6 +27,8 @@ ENV NODE_ENV=production \
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
+# static files: /sw.js (notifications service worker) and /icons/* (manifest + notification icons)
+COPY --from=build /app/public ./public
 COPY --from=build /app/server ./server
 COPY --from=build /app/src/lib ./src/lib
 COPY --from=build /app/next.config.ts /app/tsconfig.json ./

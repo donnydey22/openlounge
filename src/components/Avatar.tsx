@@ -4,6 +4,8 @@ import { AVATAR_PATH } from "@/lib/avatar-shape";
 
 const SIZES = {
   xs: "h-7 w-7 text-[10px]",
+  /** in-app notification banner */
+  banner: "h-9 w-9 text-[11px]",
   sm: "h-10 w-10 text-xs",
   md: "h-14 w-14 text-base",
   lg: "h-[72px] w-[72px] text-xl",
@@ -15,6 +17,7 @@ const SIZES = {
 /** In-room presence dot: sits on the squircle edge at the bottom-left diagonal (13% in from each side). */
 const ROOM_DOT = {
   xs: { size: 8, ring: 1.5 },
+  banner: { size: 8, ring: 1.5 },
   sm: { size: 9, ring: 2 },
   md: { size: 10, ring: 2 },
   lg: { size: 12, ring: 2.5 },
@@ -24,6 +27,7 @@ const ROOM_DOT = {
 
 const DOT = {
   xs: "h-2 w-2 -right-0 -bottom-0 ring-1",
+  banner: "h-2.5 w-2.5 -right-0.5 -bottom-0.5 ring-2",
   sm: "h-2.5 w-2.5 right-0 bottom-0 ring-2",
   md: "h-3.5 w-3.5 right-0 bottom-0 ring-2",
   lg: "h-4 w-4 right-0.5 bottom-0.5 ring-2",

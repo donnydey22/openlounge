@@ -3,6 +3,7 @@ import "./globals.css";
 import { AppProvider } from "@/components/AppProvider";
 import { AuthGate } from "@/components/AuthGate";
 import { Toasts } from "@/components/Toasts";
+import { Notifier } from "@/components/Notifier";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { THEME_COLORS, themeInitScript } from "@/lib/theme";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
@@ -10,6 +11,9 @@ import { AVATAR_PATH } from "@/lib/avatar-shape";
 export const metadata: Metadata = {
   title: "Open Lounge — live audio rooms",
   description: "A Clubhouse-style social audio MVP built with Next.js, WebSockets and LiveKit.",
+  applicationName: "Open Lounge",
+  // iPhone: "Add to Home Screen" opens as an app (needed for web notifications on iOS 16.4+)
+  appleWebApp: { capable: true, title: "Open Lounge", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -36,8 +40,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </svg>
         <ThemeProvider>
           <AppProvider>
-            <Toasts />
-            <AuthGate>{children}</AuthGate>
+            <Notifier>
+              <Toasts />
+              <AuthGate>{children}</AuthGate>
+            </Notifier>
           </AppProvider>
         </ThemeProvider>
       </body>

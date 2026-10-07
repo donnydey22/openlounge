@@ -2,16 +2,42 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeClient } from "@/lib/realtime";
-import type { DirectMessage, Me, RoomSummary } from "@/lib/types";
+import type { Me, RoomSummary } from "@/lib/types";
 import { clearToken, loadToken, saveToken } from "@/lib/session";
 
 type Status = "booting" | "signedOut" | "connecting" | "ready";
 
-interface Toast {
+/** Who/what a banner is about: a person (squircle avatar) or the app itself (system events). */
+export type BannerAvatar = { name: string; color: string; photo?: string | null; /** shows their live online dot */ userId?: string } | "app";
+
+/**
+ * One in-app notice. "plain" = short status pill (errors, confirmations), "notice" = Clubhouse-style
+ * notification banner (avatar + bold title + one muted line). Only one is on screen at a time;
+ * the rest wait in a short queue.
+ */
+export interface Toast {
   id: number;
+  kind: "plain" | "notice";
   message: string;
+  body?: string;
   href?: string;
+  avatar?: BannerAvatar;
+  /** same key = replace that banner in place instead of queueing another (e.g. "Alex and 2 others joined") */
+  key?: string;
+  /** bumped when the banner's content is replaced, so its timer restarts */
+  rev: number;
 }
+
+export interface BannerInput {
+  title: string;
+  body?: string;
+  href?: string;
+  avatar?: BannerAvatar;
+  key?: string;
+}
+
+/** Current banner + up to this many waiting */
+const MAX_TOASTS = 3;
 
 export interface SessionPayload {
   user: Me;
@@ -33,6 +59,7 @@ interface AppCtx {
   onboarding: boolean;
   /** DM thread currently on screen ("*" = conversation list) — suppresses DM toasts for it */
   setActiveDm(peerId: string | null): void;
+  getActiveDm(): string | null;
   /** Called by the auth flow once the server has issued a session token */
   completeLogin(token: string, session: SessionPayload, opts?: { onboarding?: boolean }): void;
   finishOnboarding(): void;
@@ -42,6 +69,9 @@ interface AppCtx {
   updateMe(patch: { name?: string; bio?: string; color?: string; username?: string; interests?: string[] }): Promise<void>;
   setPhoto(photo: string | null): Promise<void>;
   toast(message: string, href?: string): void;
+  /** Clubhouse-style in-app notification banner (visible tab) */
+  banner(input: BannerInput): void;
+  dismissToast(id: number): void;
   /** User ids currently online (app open + connected), pushed live over the WebSocket */
   onlineIds: Set<string>;
   isOnline(userId: string): boolean;
@@ -81,11 +111,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     activeDm.current = peerId;
   }, []);
 
-  const toast = useCallback((message: string, href?: string) => {
-    const id = ++toastId.current;
-    setToasts((t) => [...t.slice(-2), { id, message, href }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+  const getActiveDm = useCallback(() => activeDm.current, []);
+
+  // One queue for every in-app notice (timers live in <Toasts/>, which shows only the first item).
+  const pushToast = useCallback((t: Omit<Toast, "id" | "rev">) => {
+    setToasts((list) => {
+      if (t.key) {
+        const i = list.findIndex((x) => x.key === t.key);
+        if (i >= 0) {
+          const next = [...list];
+          next[i] = { ...list[i], ...t, rev: list[i].rev + 1 };
+          return next;
+        }
+      }
+      const item: Toast = { ...t, id: ++toastId.current, rev: 0 };
+      const next = [...list, item];
+      // keep the visible one, drop the oldest waiting ones
+      return next.length > MAX_TOASTS ? [next[0], ...next.slice(next.length - (MAX_TOASTS - 1))] : next;
+    });
   }, []);
+
+  const toast = useCallback((message: string, href?: string) => pushToast({ kind: "plain", message, href }), [pushToast]);
+
+  const banner = useCallback(
+    (b: BannerInput) => pushToast({ kind: "notice", message: b.title, body: b.body, href: b.href, avatar: b.avatar, key: b.key }),
+    [pushToast],
+  );
+
+  const dismissToast = useCallback((id: number) => setToasts((list) => list.filter((x) => x.id !== id)), []);
 
   const applySession = useCallback((s: SessionPayload) => {
     setMe(s.user);
@@ -135,7 +188,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     s.on("disconnect", () => setConnected(false));
     s.on("rooms:update", (list: RoomSummary[]) => setRooms(list));
-    s.on("toast", ({ message }: { message: string }) => toast(message));
+    // server-side system notices (new follower, host handover, raised hand…) → banner with the app icon
+    s.on("toast", ({ message }: { message: string }) => banner({ title: message, avatar: "app" }));
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
     s.on("me:update", ({ user }: { user: Me }) => setMe(user));
     s.on("dm:unread", ({ count }: { count: number }) => setUnreadDms(count));
@@ -154,13 +208,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!online && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
     });
     document.addEventListener("visibilitychange", reportVisibility);
-    s.on("dm:message", (msg: DirectMessage) => {
-      if (msg.toId !== meRef.current?.id) return;
-      const active = activeDm.current;
-      if (active === msg.fromId || active === "*") return;
-      const preview = msg.text.length > 60 ? msg.text.slice(0, 60) + "…" : msg.text;
-      toast(`💬 ${msg.fromName}: ${preview}`, `/messages/${msg.fromId}`);
-    });
+    // dm:message notifications (banner / OS notification) live in <Notifier/>
     s.connect();
     setSocket(s);
     return () => {
@@ -168,7 +216,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       s.removeAllListeners();
       s.close();
     };
-  }, [applySession, dropSession, toast]);
+  }, [applySession, dropSession, banner]);
 
   const request = useCallback(
     async <T,>(event: string, payload?: unknown): Promise<T> => {
@@ -255,6 +303,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       unreadDms,
       onboarding,
       setActiveDm,
+      getActiveDm,
       completeLogin,
       finishOnboarding,
       signOut,
@@ -263,11 +312,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateMe,
       setPhoto,
       toast,
+      banner,
+      dismissToast,
       onlineIds,
       isOnline,
       lastSeenAt,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, onlineIds, isOnline, lastSeenAt],
+    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, banner, dismissToast, onlineIds, isOnline, lastSeenAt],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -21,7 +21,8 @@ export default function HallwayPage() {
     <>
       <TopBar />
       <main className="mx-auto max-w-2xl px-4 pb-32">
-        <section className="pt-6 pb-4">
+        {/* top padding leaves a slot for the in-app notification banner between the header and the greeting */}
+        <section className="pb-4" style={{ paddingTop: "max(1.5rem, calc(var(--ol-banner-h) + 2 * var(--ol-banner-gap)))" }}>
           <h1 className="text-2xl font-bold tracking-tight">Hey {me ? firstName(me.name) : ""} 👋</h1>
           <p className="mt-1 text-sm text-zinc-400">
             {rooms.length} live room{rooms.length === 1 ? "" : "s"} · {totalListening} people in the hallway right now

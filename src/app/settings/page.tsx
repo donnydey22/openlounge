@@ -8,6 +8,7 @@ import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
 import { ThemePicker } from "@/components/ThemePicker";
+import { NotificationToggle } from "@/components/NotificationToggle";
 import { useTheme } from "@/components/ThemeProvider";
 import { Sheet } from "@/components/Sheet";
 import { InterestChips } from "@/components/profile/InterestChips";
@@ -53,6 +54,7 @@ export default function SettingsPage() {
               />
             </span>
           </button>
+          <NotificationToggle />
         </section>
 
         <section className="mb-8">

@@ -14,6 +14,9 @@
 
 :root {
   color-scheme: dark;
+  /* in-app notification banner (Toasts.tsx): fixed height, sits this far below the app header */
+  --ol-banner-h: 52px;
+  --ol-banner-gap: 8px;
   --app-glow: rgba(16, 185, 129, 0.08);
   /* Clubhouse-style speaking ring (used as rgb triplet in Avatar rgba()) */
   --speaking-glow-rgb: 52, 211, 153; /* emerald-400 — soft on dark */
@@ -283,4 +286,49 @@ body {
     animation: fade-in 0.2s linear;
     transition: none;
   }
+}
+
+/* In-app notification banner (Toasts.tsx): slide down + fade in, fade + slide up out */
+@keyframes banner-in {
+  from {
+    transform: translateY(-14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes banner-out {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+}
+.banner-in {
+  animation: banner-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.banner-out {
+  animation: banner-out 0.2s ease-in both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .banner-in {
+    animation: fade-in 0.18s linear both;
+  }
+  .banner-out {
+    animation: banner-fade-out 0.18s linear both;
+  }
+}
+@keyframes banner-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+[data-theme="light"] .banner-in,
+[data-theme="light"] .banner-out {
+  --tw-shadow-color: rgba(24, 24, 27, 0.12);
 }

@@ -8,7 +8,7 @@ import { useApp } from "./AppProvider";
 export function TopBar() {
   const { me, connected, unreadDms } = useApp();
   return (
-    <header className="sticky top-0 z-30 border-b border-white/5 bg-app/80 backdrop-blur-xl">
+    <header data-app-header className="sticky top-0 z-30 border-b border-white/5 bg-app/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4">
         <Link href="/" className="flex items-center gap-2 text-lg font-bold tracking-tight">
           <span className="text-2xl">🎙️</span> Open Lounge

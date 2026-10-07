@@ -3,7 +3,7 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "watchPatterns": ["server/**", "src/**", "scripts/**", "package.json", "package-lock.json", "Dockerfile", "docker-entrypoint.sh", "next.config.ts", "postcss.config.mjs", "tsconfig.json", "railway.json"]
+    "watchPatterns": ["server/**", "src/**", "public/**", "scripts/**", "package.json", "package-lock.json", "Dockerfile", "docker-entrypoint.sh", "next.config.ts", "postcss.config.mjs", "tsconfig.json", "railway.json"]
   },
   "deploy": {
     "startCommand": "/usr/local/bin/docker-entrypoint.sh /app/node_modules/.bin/tsx server/index.ts",

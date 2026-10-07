@@ -164,7 +164,7 @@ export function DmThread({
 
   return (
     <div className={cn("flex flex-col", className)}>
-      <header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/5 px-2">
+      <header data-app-header className="flex h-16 shrink-0 items-center gap-2 border-b border-white/5 px-2">
         <button onClick={onBack} className="rounded-full p-2 text-zinc-300 hover:bg-white/5" aria-label={backStyle === "close" ? "Close" : "Back to messages"}>
           {backStyle === "close" ? <X className="h-5 w-5" /> : <ChevronLeft className="h-6 w-6" />}
         </button>
