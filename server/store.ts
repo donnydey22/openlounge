@@ -108,6 +108,8 @@ export class Store {
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
   private awayTimers = new Map<string, NodeJS.Timeout>();
+  /** Connections whose app/tab is backgrounded (client "presence:visible" false) → seat shows as "away" */
+  private hiddenSockets = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
   private events: StoreEvents | null = null;
   private backend: Persistence | null = null;
@@ -616,6 +618,7 @@ export class Store {
           isBot: u?.isBot ?? false,
           joinedAt: p.joinedAt,
           away: !u?.isBot && p.socketId === null,
+          presence: u?.isBot ? "online" : p.socketId === null || this.hiddenSockets.has(p.socketId) ? "away" : "online",
         };
       }),
     };
@@ -774,6 +777,21 @@ export class Store {
     this.events?.roomChanged(roomId);
     this.events?.roomsListChanged();
     return { ok: true as const };
+  }
+
+  /** Foreground/background report for a connection; re-broadcasts the room it's seated in when the dot changes. */
+  setSocketVisible(socketId: string, visible: boolean) {
+    const was = !this.hiddenSockets.has(socketId);
+    if (visible) this.hiddenSockets.delete(socketId);
+    else this.hiddenSockets.add(socketId);
+    if (was === visible) return;
+    const where = this.roomOfSocket(socketId);
+    if (where) this.events?.roomChanged(where.roomId);
+  }
+
+  /** Connection closed: forget its visibility state. */
+  forgetSocket(socketId: string) {
+    this.hiddenSockets.delete(socketId);
   }
 
   /** Socket dropped: keep the seat for a short grace period (handles page refreshes). */

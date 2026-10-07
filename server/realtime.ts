@@ -219,6 +219,7 @@ export function registerRealtime(io: WsHub) {
     // foreground/background from document.visibilitychange (Android WebView backgrounding, hidden tabs)
     socket.on("presence:visible", ({ visible }: { visible?: boolean }, ack: AckFn = noop) => {
       presence.setVisible(socket.id, visible !== false);
+      store.setSocketVisible(socket.id, visible !== false);
       ack({ ok: true });
     });
 
@@ -400,6 +401,7 @@ export function registerRealtime(io: WsHub) {
       userOfSocket.delete(socket.id);
       tokenOfSocket.delete(socket.id);
       otpBudget.delete(socket.id);
+      store.forgetSocket(socket.id);
       if (!userId) return;
       presence.detach(socket.id);
       const where = store.roomOfSocket(socket.id);

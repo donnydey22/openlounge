@@ -36,6 +36,12 @@ export interface Participant {
   joinedAt: number;
   /** Temporarily disconnected (e.g. page refresh). Removed after a short grace period. */
   away: boolean;
+  /**
+   * Live in-room presence dot: "online" = connected with the app in the foreground,
+   * "away" = app backgrounded, or the connection dropped and the seat is being held.
+   * (Absent on servers older than this field.)
+   */
+  presence?: "online" | "away";
 }
 
 export interface RoomState {

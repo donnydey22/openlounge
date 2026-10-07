@@ -51,6 +51,7 @@ export function ParticipantTile({
             muted={p.muted}
             showMuted={onStage && !selfMic}
             away={p.away}
+            presence={p.presence ?? (p.away ? "away" : "online")}
             onPodium={onPodium && onStage}
           />
         </button>

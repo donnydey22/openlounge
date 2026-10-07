@@ -12,6 +12,16 @@ const SIZES = {
   profile: "h-[min(22.5vw,115px)] w-[min(22.5vw,115px)] text-3xl",
 } as const;
 
+/** In-room presence dot: sits on the squircle edge at the bottom-left diagonal (13% in from each side). */
+const ROOM_DOT = {
+  xs: { size: 8, ring: 1.5 },
+  sm: { size: 9, ring: 2 },
+  md: { size: 10, ring: 2 },
+  lg: { size: 12, ring: 2.5 },
+  xl: { size: 16, ring: 3 },
+  profile: { size: 16, ring: 3 },
+} as const;
+
 const DOT = {
   xs: "h-2 w-2 -right-0 -bottom-0 ring-1",
   sm: "h-2.5 w-2.5 right-0 bottom-0 ring-2",
@@ -38,6 +48,7 @@ export function Avatar({
   showMuted = false,
   away = false,
   online,
+  presence,
   onPodium = false,
   className,
 }: {
@@ -52,6 +63,8 @@ export function Avatar({
   away?: boolean;
   /** green = online, gray = offline; omit to hide the dot */
   online?: boolean;
+  /** In-room live presence (bottom-left): green = here, amber = backgrounded / reconnecting; omit to hide */
+  presence?: "online" | "away" | null;
   onPodium?: boolean;
   className?: string;
 }) {
@@ -131,6 +144,27 @@ export function Avatar({
         <span className="absolute -right-1 -bottom-1 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 ring-2 ring-zinc-950">
           <MicOff className="h-3.5 w-3.5 text-red-400" />
         </span>
+      )}
+
+      {presence && (
+        <span
+          key={presence}
+          data-presence={presence}
+          className={cn(
+            "presence-dot pointer-events-none absolute z-[2] rounded-full",
+            presence === "online" ? "bg-emerald-400" : "bg-amber-400",
+          )}
+          style={{
+            width: ROOM_DOT[size].size,
+            height: ROOM_DOT[size].size,
+            left: `calc(13% - ${ROOM_DOT[size].size / 2}px)`,
+            bottom: `calc(13% - ${ROOM_DOT[size].size / 2}px)`,
+            boxShadow: `0 0 0 ${ROOM_DOT[size].ring}px var(--color-app)`,
+          }}
+          title={presence === "online" ? "Here now" : "Away"}
+          role="img"
+          aria-label={presence === "online" ? "Here now" : "Away"}
+        />
       )}
 
       {online !== undefined && !(showMuted && muted) && (

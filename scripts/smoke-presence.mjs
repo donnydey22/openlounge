@@ -137,6 +137,17 @@ const room = await watcher.req("room:create", { title: "Presence room", topic: "
 await watcher.req("room:join", { roomId: room.roomId });
 const jb = await B3.req("room:join", { roomId: room.roomId });
 check(jb.ok, "B joins room");
+// in-room presence dot (room:state participants[].presence)
+const pres = (st, id) => st.participants.find((p) => p.userId === id)?.presence;
+check(pres(jb.room, B.id) === "online", "room:state: B presence = online after join", jb.room.participants);
+const toAway = watcher.wait("room:state", (st) => pres(st, B.id) === "away", 3000);
+B3.emit("presence:visible", { visible: false });
+await toAway;
+check(true, "room:state: B backgrounded → presence away");
+const toOnline = watcher.wait("room:state", (st) => pres(st, B.id) === "online", 3000);
+B3.emit("presence:visible", { visible: true });
+await toOnline;
+check(true, "room:state: B foreground → presence online");
 const stay = watcher.wait("presence:update", isUpd(B.id, false), 8000).then(() => true, () => false);
 B3.emit("presence:visible", { visible: false });
 check(!(await stay), "backgrounded but listening in a room → stays online");
@@ -144,6 +155,23 @@ const leaveOff = watcher.wait("presence:update", isUpd(B.id, false), 40_000);
 await B3.req("room:leave", { roomId: room.roomId });
 await leaveOff;
 check(true, "left room while backgrounded → offline");
+// connection drop: seat held for the grace window → "away" (+ away flag), then back online on rejoin
+const B5 = await tab(B.token);
+await B5.req("room:join", { roomId: room.roomId });
+const dropAway = watcher.wait("room:state", (st) => pres(st, B.id) === "away" && st.participants.find((p) => p.userId === B.id)?.away === true, 5000);
+B5.ws.terminate();
+await dropAway;
+check(true, "room:state: ws dropped → presence away (seat held)");
+const B6 = await tab(B.token);
+const rj = await B6.req("room:join", { roomId: room.roomId });
+check(pres(rj.room, B.id) === "online", "room:state: rejoined → presence online");
+const gone = watcher.wait("room:state", (st) => !st.participants.some((p) => p.userId === B.id), 3000);
+await B6.req("room:leave", { roomId: room.roomId });
+await gone;
+check(true, "room:state: left → no dot (participant removed)");
+const b6Off = watcher.wait("presence:update", isUpd(B.id, false), 40_000);
+B6.close();
+await b6Off;
 await watcher.req("room:end", { roomId: room.roomId });
 
 // logout → offline immediately
