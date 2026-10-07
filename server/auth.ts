@@ -25,40 +25,83 @@ export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex"
 export const newOpaqueToken = () => randomBytes(32).toString("base64url");
 export const newSessionId = () => `s_${randomBytes(16).toString("hex")}`;
 
-let secret: Buffer | null = null;
-export function setAuthSecret(s: string) {
-  secret = Buffer.from(s, "utf8");
-}
-function key() {
-  if (!secret) {
-    // only reachable before store.init() — keeps tests/scripts working; real servers always call setAuthSecret
-    secret = Buffer.from(process.env.AUTH_SECRET || randomBytes(32).toString("hex"), "utf8");
-  }
-  return secret;
+// ---------- signing keys (rotation-aware) ----------
+//
+//   AUTH_SECRET            current signing key (preferred). Unset → the key stored in the DB (openlounge_meta) / DATA_DIR.
+//   AUTH_SECRET_PREVIOUS   comma-separated old keys, accepted for VERIFICATION only (rotation grace; drop after >= ACCESS_TTL).
+//   When AUTH_SECRET is set, the stored DB key is still accepted for verification (smooth cut-over from the DB key);
+//   set AUTH_SECRET_ACCEPT_DB=0 once every token signed with it has expired (1 h after the switch).
+//
+// Tokens carry a key id: "ol1.<sid>.<exp36>.<sig>.<kid>" (kid = first 8 hex of sha256(key)). Tokens without a kid
+// (issued before this change) are verified against every known key.
+
+export type AuthKey = { kid: string; key: Buffer; source: string };
+const kidOf = (s: string) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
+const mkKey = (s: string, source: string): AuthKey => ({ kid: kidOf(s), key: Buffer.from(s, "utf8"), source });
+
+let signing: AuthKey | null = null;
+let verifying = new Map<string, AuthKey>();
+
+/** Build the key ring. `dbSecret` = key persisted with the data (may be undefined). Returns a summary for logs (no secrets). */
+export function configureAuthKeys(opts: { env?: Record<string, string | undefined>; dbSecret?: string | null } = {}) {
+  const env = opts.env ?? process.env;
+  const current = env.AUTH_SECRET?.trim();
+  const previous = (env.AUTH_SECRET_PREVIOUS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const db = opts.dbSecret?.trim() || null;
+  const ring: AuthKey[] = [];
+  if (current) ring.push(mkKey(current, "env:AUTH_SECRET"));
+  else if (db) ring.push(mkKey(db, "db"));
+  else ring.push(mkKey(randomBytes(32).toString("hex"), "ephemeral"));
+  for (const p of previous) ring.push(mkKey(p, "env:AUTH_SECRET_PREVIOUS"));
+  if (current && db && env.AUTH_SECRET_ACCEPT_DB !== "0") ring.push(mkKey(db, "db"));
+  signing = ring[0];
+  verifying = new Map();
+  for (const k of ring) if (!verifying.has(k.kid)) verifying.set(k.kid, k);
+  return { signingKid: signing.kid, signingSource: signing.source, verifyKids: [...verifying.values()].map((k) => `${k.kid}(${k.source})`) };
 }
 
-const sign = (payload: string) => createHmac("sha256", key()).update(payload).digest("base64url");
+/** @deprecated kept for scripts/tests: single key, no rotation */
+export function setAuthSecret(s: string) {
+  configureAuthKeys({ env: { AUTH_SECRET: s } });
+}
+function signingKey() {
+  // only reachable before store.init() — keeps tests/scripts working; real servers always configure keys
+  if (!signing) configureAuthKeys();
+  return signing!;
+}
+
+const mac = (key: Buffer, payload: string) => createHmac("sha256", key).update(payload).digest("base64url");
+const eq = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+/** A purpose-specific 32-byte key derived from the current signing key (e.g. "oauth-state" cookie encryption, 10 min). */
+export const deriveKey = (label: string) => createHmac("sha256", signingKey().key).update(`openlounge:${label}`).digest();
 
 export function signAccessToken(sessionId: string, expiresAt: number) {
+  const k = signingKey();
   const payload = `ol1.${sessionId}.${expiresAt.toString(36)}`;
-  return `${payload}.${sign(payload)}`;
+  return `${payload}.${mac(k.key, payload)}.${k.kid}`;
 }
 
 export const isAccessToken = (t: unknown): t is string => typeof t === "string" && t.startsWith("ol1.");
 
 /** Verify signature + expiry. Does NOT check the session (caller does). */
-export function parseAccessToken(token: string): { ok: true; sessionId: string; expiresAt: number } | { ok: false; reason: "invalid" | "expired"; sessionId?: string } {
+export function parseAccessToken(token: string): { ok: true; sessionId: string; expiresAt: number; kid: string } | { ok: false; reason: "invalid" | "expired"; sessionId?: string } {
+  signingKey();
   const parts = token.split(".");
-  if (parts.length !== 4 || parts[0] !== "ol1") return { ok: false, reason: "invalid" };
-  const [, sessionId, exp36, sig] = parts;
-  const expected = sign(`ol1.${sessionId}.${exp36}`);
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "invalid" };
+  if ((parts.length !== 4 && parts.length !== 5) || parts[0] !== "ol1") return { ok: false, reason: "invalid" };
+  const [, sessionId, exp36, sig, kid] = parts;
+  const payload = `ol1.${sessionId}.${exp36}`;
+  const candidates = kid !== undefined ? [verifying.get(kid)].filter((k): k is AuthKey => !!k) : [...verifying.values()];
+  const hit = candidates.find((k) => eq(sig, mac(k.key, payload)));
+  if (!hit) return { ok: false, reason: "invalid" };
   const expiresAt = parseInt(exp36, 36);
   if (!Number.isFinite(expiresAt)) return { ok: false, reason: "invalid" };
   if (expiresAt <= Date.now()) return { ok: false, reason: "expired", sessionId };
-  return { ok: true, sessionId, expiresAt };
+  return { ok: true, sessionId, expiresAt, kid: hit.kid };
 }
 
 /** Short device/platform label for a session, from the client hint or the User-Agent. */
@@ -93,6 +136,9 @@ export function originAllowed(origin: string | undefined, host: string | undefin
   if (!origin) return true;
   const o = origin.trim().toLowerCase();
   if (allowed.has(o)) return true;
+  // native app shells (Expo/Capacitor-style WebViews send their scheme as Origin)
+  if (/^(openlounge|capacitor|ionic):\/\/[a-z0-9.-]*$/.test(o)) return true;
+  if (o === "null") return false;
   try {
     const u = new URL(o);
     if (host && u.host === host.toLowerCase()) return true;

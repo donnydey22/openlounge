@@ -1,0 +1,32 @@
+// Contact matching (opt-in). Clients normalize numbers to E.164 and send SHA-256(E.164) hex only.
+// The server never sees raw numbers from address books; it stores HMAC-SHA256(pepper, clientHash) and only
+// for UNMATCHED_HASH_TTL_MS (24 h) — see docs/privacy-contacts.md.
+import { createHash, createHmac, randomBytes } from "node:crypto";
+
+let pepper: string | null = null;
+export function contactsPepper() {
+  if (!pepper) {
+    pepper = process.env.CONTACTS_PEPPER || "";
+    if (!pepper) {
+      pepper = randomBytes(32).toString("hex");
+      console.warn("[contacts] CONTACTS_PEPPER not set — using a per-process pepper (stored hashes won't match after a restart)");
+    }
+  }
+  return pepper;
+}
+export function setContactsPepper(p: string) {
+  pepper = p;
+}
+
+/** what a client sends for a number */
+export const clientHash = (e164: string) => createHash("sha256").update(e164).digest("hex");
+/** what we store / compare */
+export const pepperHash = (clientHex: string) => createHmac("sha256", contactsPepper()).update(clientHex.toLowerCase()).digest("hex");
+
+export const MAX_CONTACTS = 5000;
+export function cleanHashes(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length > MAX_CONTACTS) return null;
+  const out = new Set<string>();
+  for (const h of raw) if (typeof h === "string" && /^[0-9a-f]{64}$/i.test(h)) out.add(h.toLowerCase());
+  return [...out];
+}

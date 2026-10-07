@@ -15,6 +15,7 @@ import { FollowButton } from "../UserRow";
 import { usePresence } from "@/hooks/usePresence";
 
 /** Consecutive messages from the same person within this window form one group (one avatar, tight spacing). */
+const RENDER_WINDOW = 200;
 const GROUP_WINDOW_MS = 3 * 60_000;
 /** A quiet gap this long gets a centred time label (Clubhouse / iMessage style) instead of per-message stamps. */
 const TIME_GAP_MS = 15 * 60_000;
@@ -459,6 +460,11 @@ export function DmThread({
     });
   }, [messages, clockTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // memory/DOM cap: long threads render only the newest RENDER_WINDOW rows ("Show earlier" grows it)
+  const [renderWindow, setRenderWindow] = useState(RENDER_WINDOW);
+  const rowOffset = Math.max(0, rows.length - renderWindow);
+  const visibleRows = rowOffset ? rows.slice(rowOffset) : rows;
+
   const lastMineIdx = useMemo(() => {
     if (!messages || !me) return -1;
     for (let i = messages.length - 1; i >= 0; i--) if (messages[i].fromId === me.id) return i;
@@ -557,7 +563,12 @@ export function DmThread({
                   )}
                 </div>
               )}
-              {rows.map(({ m, sep, newDay, first, last }, i) => (
+              {rowOffset > 0 && (
+                <button type="button" onClick={() => setRenderWindow((w) => w + RENDER_WINDOW)} className="mx-auto my-2 block rounded-full px-3 py-1 text-xs font-semibold text-zinc-400 hover:bg-white/5">
+                  Show earlier messages
+                </button>
+              )}
+              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return (
                 <MessageRow
                   key={keyOf(m)}
                   m={m}
@@ -572,7 +583,7 @@ export function DmThread({
                   latest={i === lastMineIdx}
                   onRetry={retry}
                 />
-              ))}
+              ); })}
               {peerTyping && peer && (
                 <div className="msg-in mt-2 flex items-end gap-2" data-testid="dm-typing">
                   <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />

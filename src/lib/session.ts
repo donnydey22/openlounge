@@ -31,6 +31,11 @@
 //     clearSession on sign-out / when the server definitively rejects the session.
 //   • The object must exist before the page's scripts run (Android: addJavascriptInterface before loadUrl;
 //     iOS/react-native-webview: injectedJavaScriptBeforeContentLoaded).
+//   • Optional: openAuth(url: string): void | Promise<void> — Google / Apple sign-in. Google refuses OAuth inside
+//     embedded WebViews, so the shell must open `url` in the system browser (Android Custom Tab, iOS
+//     ASWebAuthenticationSession / expo-web-browser openAuthSessionAsync), catch the return deep link
+//     openlounge://auth?code=…|error=…, and load https://openlounge.app/auth/complete?<same query> in the WebView.
+//     Without openAuth the Google/Apple buttons are hidden inside the shell. See docs/unified-auth.md.
 //   • On launch the web app calls hydrateFromNative() before deciding signed-in vs sign-in screen: the newer of
 //     {native copy, web storage copy} wins (by savedAt), and the other one is brought up to date.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

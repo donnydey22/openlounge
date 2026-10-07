@@ -25,8 +25,27 @@ export interface UserRecord {
   /** E.164 phone number used to sign in (humans only, never sent to other users) */
   phone?: string;
   interests?: string[];
+  /** canonical https URLs keyed by network (see src/lib/socialLinks.ts) */
+  socialLinks?: Record<string, string>;
   /** bumped on every upload; null = no photo */
   photoVersion?: number | null;
+  /** scrypt hash (server/authx/password.ts) for accounts with an email identity; never leaves the server */
+  passwordHash?: string | null;
+}
+
+export type IdentityProvider = "phone" | "email" | "google" | "apple";
+
+/** One sign-in method attached to a user (migration 005, table auth_identities). */
+export interface IdentityRecord {
+  userId: string;
+  provider: IdentityProvider;
+  /** phone: E.164 · email: lower-cased address · google/apple: the id_token `sub` */
+  subject: string;
+  /** lower-cased email (for email identities = subject); null when the provider gave none */
+  email: string | null;
+  verified: boolean;
+  createdAt: number;
+  lastUsedAt?: number | null;
 }
 
 export interface SessionRecord {
@@ -77,6 +96,41 @@ export interface PersistedDb {
   sessions?: SessionRecord[];
   /** userId -> peerId -> last read timestamp */
   dmReads?: Record<string, Record<string, number>>;
+  /** sign-in methods (migration 005). Older db.json files have none: phone identities are derived from users.phone. */
+  identities?: IdentityRecord[];
+}
+
+export interface OneTimeBackend {
+  put(table: "reset" | "code", row: { hash: string; purpose: string; userId?: string; email?: string; payload?: unknown; createdAt: number; expiresAt: number }): Promise<void>;
+  /** atomically mark used and return the row, or null if unknown / used / expired */
+  consume(table: "reset" | "code", hash: string, purpose: string, now: number): Promise<{ userId?: string; email?: string; payload?: unknown } | null>;
+  /** a still-usable reset token's owner + address, without consuming it */
+  peekReset?(hash: string, now: number): Promise<{ userId: string; email: string } | null>;
+  /** mark every unused reset token of a user as used (after a successful reset) */
+  supersedeResets(userId: string, now: number): Promise<void>;
+}
+
+/** In-memory OneTimeBackend (JSON backend / tests without Postgres). */
+export class MemoryOneTime implements OneTimeBackend {
+  private rows = new Map<string, { purpose: string; userId?: string; email?: string; payload?: unknown; expiresAt: number; usedAt: number | null }>();
+  async put(table: "reset" | "code", row: { hash: string; purpose: string; userId?: string; email?: string; payload?: unknown; createdAt: number; expiresAt: number }) {
+    const now = Date.now();
+    for (const [k, v] of this.rows) if (v.expiresAt < now - 86_400_000) this.rows.delete(k);
+    this.rows.set(`${table}:${row.hash}`, { purpose: row.purpose, userId: row.userId, email: row.email, payload: row.payload, expiresAt: row.expiresAt, usedAt: null });
+  }
+  async consume(table: "reset" | "code", hash: string, purpose: string, now: number) {
+    const r = this.rows.get(`${table}:${hash}`);
+    if (!r || r.purpose !== purpose || r.usedAt !== null || r.expiresAt <= now) return null;
+    r.usedAt = now;
+    return { userId: r.userId, email: r.email, payload: r.payload };
+  }
+  async peekReset(hash: string, now: number) {
+    const r = this.rows.get(`reset:${hash}`);
+    return r && r.usedAt === null && r.expiresAt > now && r.userId && r.email ? { userId: r.userId, email: r.email } : null;
+  }
+  async supersedeResets(userId: string, now: number) {
+    for (const [k, r] of this.rows) if (k.startsWith("reset:") && r.userId === userId && r.usedAt === null) r.usedAt = now;
+  }
 }
 
 export interface LoadResult {
@@ -97,6 +151,14 @@ export interface Persistence {
   findSession?(by: { hash?: string; id?: string }): Promise<{ session: SessionRecord; user: UserRecord | null } | null>;
   /** schema/migration status for /api/health */
   status?(): Promise<{ connected: boolean; migrations: string[] }>;
+  /**
+   * Short-lived single-use secrets (password reset links, email verification links, OAuth exchange codes).
+   * Postgres: tables password_reset_tokens / auth_one_time_codes, consumed atomically (UPDATE … WHERE used_at IS NULL),
+   * so a token works exactly once even across instances. JSON backend: kept in memory (dev only).
+   */
+  oneTime?: OneTimeBackend;
+  /** readiness probe (Postgres only) */
+  ping?(timeoutMs?: number): Promise<{ ok: boolean; ms: number; error?: string }>;
   /** record that a db.json import finished (Postgres only) */
   markImported?(source: string): Promise<void>;
   close(): Promise<void>;
@@ -121,6 +183,7 @@ export function readJsonDb(file: string): PersistedDb | null {
 /** Original behaviour: whole snapshot to db.json via tmp file + atomic rename. */
 export class JsonPersistence implements Persistence {
   kind = "json" as const;
+  oneTime = new MemoryOneTime();
   constructor(readonly where: string = DATA_FILE) {}
 
   async load(): Promise<LoadResult> {

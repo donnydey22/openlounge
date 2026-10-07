@@ -7,10 +7,28 @@ import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
-import { randomBytes } from "node:crypto";
+import { dropTicket, getTicket, issueTicket } from "./authx/signup";
 import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
+import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
+import { bg, push, setForegroundCheck } from "./push";
+
+/**
+ * Firebase Phone Auth: verify the ID token, then the same find-or-create-by-E.164 path as the OTP flow.
+ * existing account → new session; unknown number → signup ticket (profile steps follow, then auth:register).
+ */
+export async function firebasePhoneLogin(idToken: unknown, device: string) {
+  const v = await verifyPhoneIdToken(String(idToken ?? ""));
+  if (!v.ok) return v;
+  const e164 = normalizePhone(v.phone);
+  if (!e164) return { ok: false as const, error: "That phone number isn't supported" };
+  const existing = store.userByPhone(e164);
+  if (existing) return { ok: true as const, status: "existing" as const, userId: existing.id, creds: store.createSession(existing.id, device) };
+  // same signup ticket as phone OTP / email / Google / Apple (server/authx/signup.ts) → one onboarding path
+  const ticket = issueTicket({ kind: "phone", phone: e164 });
+  return { ok: true as const, status: "new" as const, ticket, phone: e164 };
+}
 
 type AckFn = (res: Ack<Record<string, unknown>>) => void;
 const noop: AckFn = () => {};
@@ -35,11 +53,15 @@ export function registerRealtime(io: WsHub) {
   /** pushed DMs carry the sender's current photo so banners / notifications can show it (additive field) */
   const withSenderPhoto = (m: DirectMessage): DirectMessage => ({ ...m, fromPhotoUrl: store.publicUser(m.fromId)?.photoUrl ?? null });
   const otp = new OtpService();
+  // a user is "in the foreground" when any of their connections is visible (not a backgrounded WebView / hidden tab)
+  setForegroundCheck((userId) => {
+    for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
+    return false;
+  });
   console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
   if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
-    console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Set SMS_PROVIDER=twilio before sharing this URL publicly.");
-  /** phone verified but no account yet: ticket -> { phone, expiresAt } */
-  const signupTickets = new Map<string, { phone: string; expiresAt: number }>();
+    console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Configure a real SMS/OTP provider before sharing this URL publicly.");
+  // phone verified but no account yet → a signup ticket (server/authx/signup.ts, shared with email/Google/Apple)
   /** per-socket OTP request budget */
   const otpBudget = new Map<string, number[]>();
   let listTimer: NodeJS.Timeout | null = null;
@@ -113,6 +135,9 @@ export function registerRealtime(io: WsHub) {
     roomReaction(reaction) {
       io.to(`room:${reaction.roomId}`).emit("room:reaction", reaction);
     },
+    meChanged(userId, user) {
+      io.to(`user:${userId}`).emit("me:update", { user });
+    },
     sessionRevoked(sessionId) {
       for (const [connId, sid] of [...sessionOfSocket]) {
         if (sid !== sessionId) continue;
@@ -124,16 +149,33 @@ export function registerRealtime(io: WsHub) {
     dmRead(receipt) {
       // the sender's devices flip ✓ → ✓✓; the reader's other devices clear their unread state
       io.to(`user:${receipt.peerId}`).to(`user:${receipt.readerId}`).emit("dm:read-receipt", receipt);
+      bg(push()?.dmRead(receipt.readerId, receipt.peerId));
     },
     dmMessage(msg) {
       // deliver to every tab of both participants (sender's other tabs stay in sync)
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
+      bg(push()?.dm(msg));
     },
     dmTyping(fromId, toId) {
       io.to(`user:${toId}`).emit("dm:typing", { from: fromId });
     },
   });
+
+  // Auth re-validation for long-lived sockets: a session that expired (or was revoked by a sibling instance) while
+  // the socket stayed open is signed out here; the client gets session:revoked and refreshes / re-authenticates.
+  const revalidate = setInterval(() => {
+    const now = Date.now();
+    for (const [connId, sid] of [...sessionOfSocket]) {
+      if (store.sessionActive(sid, now)) continue;
+      const c = io.get(connId);
+      if (c) {
+        signOutSocket(c);
+        c.emit("session:revoked", { reason: "expired" });
+      }
+    }
+  }, Number(process.env.WS_REVALIDATE_MS || 60_000));
+  revalidate.unref();
 
   /** Server-side sign-out of one connection (logout / revoked session). */
   const signOutSocket = (socket: Conn) => {
@@ -178,6 +220,7 @@ export function registerRealtime(io: WsHub) {
 
     // ----- auth: phone → OTP → (new: profile) → session -----
     socket.on("auth:requestCode", async ({ phone }: { phone: string }, ack: AckFn = noop) => {
+      if (!demoOtpEnabled()) return ack({ ok: false, error: "Use phone verification to sign in" });
       const e164 = normalizePhone(phone);
       if (!e164) return ack({ ok: false, error: "Enter a valid phone number" });
       const now = Date.now();
@@ -191,6 +234,7 @@ export function registerRealtime(io: WsHub) {
     socket.on("auth:verifyCode", ({ phone, code, device }: { phone: string; code: string; device?: string }, ack: AckFn = noop) => {
       const e164 = normalizePhone(phone);
       if (!e164) return ack({ ok: false, error: "Enter a valid phone number" });
+      if (!demoOtpEnabled()) return ack({ ok: false, error: "Use phone verification to sign in" });
       const v = otp.verify(e164, code);
       if (!v.ok) return ack(v);
       const existing = store.userByPhone(e164);
@@ -198,9 +242,18 @@ export function registerRealtime(io: WsHub) {
         const creds = store.createSession(existing.id, deviceLabel(device, ua));
         return ack({ ok: true, status: "existing", ...creds, ...signIn(existing.id, creds.sessionId) });
       }
-      const ticket = randomBytes(24).toString("base64url");
-      signupTickets.set(ticket, { phone: e164, expiresAt: Date.now() + 30 * 60_000 });
+      const ticket = issueTicket({ kind: "phone", phone: e164 });
       ack({ ok: true, status: "new", ticket });
+    });
+
+    socket.on("auth:config", (_: unknown, ack: AckFn = noop) => ack({ ok: true, firebase: firebaseConfigured(), demoOtp: demoOtpEnabled() }));
+
+    // Firebase Phone Auth (web SDK signInWithPhoneNumber → ID token). Same response shape as auth:verifyCode.
+    socket.on("auth:verifyFirebase", async ({ idToken, device }: { idToken: string; device?: string }, ack: AckFn = noop) => {
+      const r = await firebasePhoneLogin(idToken, deviceLabel(device, ua));
+      if (!r.ok) return ack(r);
+      if (r.status === "existing") return ack({ ok: true, status: "existing", ...r.creds, ...signIn(r.userId, r.creds.sessionId) });
+      ack({ ok: true, status: "new", ticket: r.ticket });
     });
 
     socket.on("auth:checkUsername", ({ username }: { username: string }, ack: AckFn = noop) =>
@@ -213,15 +266,56 @@ export function registerRealtime(io: WsHub) {
         input: { ticket: string; firstName: string; lastName: string; username: string; bio: string; color: string; interests: string[]; photo?: string | null; device?: string },
         ack: AckFn = noop,
       ) => {
-        const t = signupTickets.get(input?.ticket);
-        if (!t || t.expiresAt < Date.now()) return ack({ ok: false, error: "Your verification expired — please start again." });
-        const res = store.createAccount(t.phone, input);
+        // same ticket shape for every method: phone OTP, or an email / Google / Apple identity (+ password hash for email)
+        const t = getTicket(input?.ticket);
+        if (!t) return ack({ ok: false, error: "Your verification expired — please start again." });
+        const res =
+          t.kind === "phone"
+            ? store.createAccount(t.phone, input)
+            : store.createAccount(null, input, { identity: t.identity, passwordHash: t.passwordHash ?? null });
         if (!res.ok) return ack(res);
-        signupTickets.delete(input.ticket);
+        dropTicket(input.ticket);
         if (input.photo) store.setPhoto(res.user.id, input.photo);
+        if (t.kind === "phone") bg(push()?.contactJoined(res.user.id, t.phone));
         const creds = store.createSession(res.user.id, deviceLabel(input.device, ua));
         ack({ ok: true, ...creds, ...signIn(res.user.id, creds.sessionId) });
       },
+    );
+
+    // Settings → add a phone number to the signed-in account (code from auth:requestCode). The number becomes a
+    // phone identity on THIS account, so phone OTP login lands here afterwards.
+    socket.on("account:linkPhone", ({ phone, code }: { phone: string; code: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        // Demo codes must never prove ownership once real phone verification is on: otherwise anyone could
+        // attach a stranger's (not yet registered) number and receive their future Firebase sign-in.
+        if (!demoOtpEnabled()) return ack({ ok: false, error: "Use phone verification to add a number" });
+        const e164 = normalizePhone(phone);
+        if (!e164) return ack({ ok: false, error: "Enter a valid phone number" });
+        const owner = store.userByPhone(e164);
+        if (owner && owner.id !== userId) return ack({ ok: false, error: "That number is already linked to another Open Lounge account." });
+        const v = otp.verify(e164, code);
+        if (!v.ok) return ack(v);
+        const r = store.addIdentity(userId, { provider: "phone", subject: e164, verified: true });
+        if (!r.ok) return ack({ ok: false, error: r.error });
+        io.to(`user:${userId}`).emit("me:update", { user: store.me(userId) });
+        ack({ ok: true, user: store.me(userId) });
+      }),
+    );
+
+    // Settings → add phone with real verification (Firebase ID token): links the verified number to THIS member.
+    socket.on("account:linkPhoneFirebase", ({ idToken }: { idToken: string }, ack: AckFn = noop) =>
+      authed(ack, async (userId) => {
+        const v = await verifyPhoneIdToken(String(idToken ?? ""));
+        if (!v.ok) return ack(v);
+        const e164 = normalizePhone(v.phone);
+        if (!e164) return ack({ ok: false, error: "That phone number isn't supported" });
+        const owner = store.userByPhone(e164);
+        if (owner && owner.id !== userId) return ack({ ok: false, error: "That number is already linked to another Open Lounge account." });
+        const r = store.addIdentity(userId, { provider: "phone", subject: e164, verified: true });
+        if (!r.ok) return ack({ ok: false, error: r.error });
+        io.to(`user:${userId}`).emit("me:update", { user: store.me(userId) });
+        ack({ ok: true, user: store.me(userId) });
+      }),
     );
 
     // Same validation as GET /auth/validate. Accepts an access token (v2) or, for older clients and bots,
@@ -267,7 +361,11 @@ export function registerRealtime(io: WsHub) {
     socket.on("rooms:list", (_: unknown, ack: AckFn = noop) => ack({ ok: true, rooms: store.listRooms() }));
 
     socket.on("room:create", (input, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.createRoom(userId, input ?? {}))),
+      authed(ack, (userId) => {
+        const res = store.createRoom(userId, input ?? {});
+        if (res.ok) bg(push()?.roomStarted(res.roomId, store.rooms.get(res.roomId)?.title ?? "", userId));
+        ack(res);
+      }),
     );
 
     socket.on("room:join", ({ roomId }: { roomId: string }, ack: AckFn = noop) =>
@@ -281,6 +379,9 @@ export function registerRealtime(io: WsHub) {
         }
         socket.join(`room:${roomId}`);
         presence.refresh(userId);
+        const rec = store.rooms.get(roomId);
+        if (rec && rec.hostId !== userId)
+          bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, userId));
         ack({ ok: true, room: store.roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled } });
       }),
     );
@@ -318,7 +419,26 @@ export function registerRealtime(io: WsHub) {
     );
 
     socket.on("host:invite", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.inviteToSpeak(roomId, userId, target))),
+      authed(ack, (userId) => {
+        const res = store.inviteToSpeak(roomId, userId, target);
+        if (res.ok) bg(push()?.inviteToSpeak(roomId, store.rooms.get(roomId)?.title ?? "", userId, target));
+        ack(res);
+      }),
+    );
+
+    // Clubhouse "ping": someone in a room pings a person who follows them (or whom they follow) into it
+    socket.on("room:ping", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        if (!store.roleOf(roomId, userId)) return ack({ ok: false, error: "Join the room first" });
+        if (!store.publicUser(target) || target === userId) return ack({ ok: false, error: "User not found" });
+        const linked = store.followerIds(userId).includes(target) || store.followingIds(userId).includes(target);
+        if (!linked) return ack({ ok: false, error: "You can only ping people you follow or who follow you" });
+        if (store.roleOf(roomId, target)) return ack({ ok: false, error: "They're already here" });
+        const title = store.rooms.get(roomId)?.title ?? "";
+        io.to(`user:${target}`).emit("toast", { message: `👋 ${store.publicUser(userId)?.name} pinged you into “${title}”`, href: `/room/${roomId}` });
+        bg(push()?.ping(roomId, title, userId, target));
+        ack({ ok: true });
+      }),
     );
 
     socket.on("host:mute", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
@@ -418,6 +538,7 @@ export function registerRealtime(io: WsHub) {
         if (follow) {
           const name = store.publicUser(userId)?.name;
           io.to(`user:${target}`).emit("toast", { message: `👋 ${name} started following you` });
+          bg(push()?.newFollower(target, userId));
         }
         // keep all of this user's tabs in sync
         io.to(`user:${userId}`).emit("follows:update", { following: store.followingIds(userId) });

@@ -10,7 +10,8 @@ import path from "node:path";
 import pg from "pg";
 import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
-import { errText, type LoadResult, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
+import { log, metrics } from "./log";
+import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
 
 type SessionRow = {
   token_hash: string;
@@ -55,14 +56,43 @@ pg.types.setTypeParser(20, (v) => Number(v));
 
 const MIGRATION_LOCK = 72_727_001;
 const CONNECT_ATTEMPTS = Number(process.env.DATABASE_CONNECT_ATTEMPTS || 15);
+const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
+
+/** SQLSTATEs / socket errors worth retrying: connection loss, admin shutdown (failover/redeploy), serialization/deadlock. */
+const TRANSIENT = new Set(["57P01", "57P02", "57P03", "08000", "08003", "08006", "08001", "08004", "40001", "40P01", "53300", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE"]);
+export function isTransientPgError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null;
+  if (!e) return false;
+  if (e.code && TRANSIENT.has(e.code)) return true;
+  return /Connection terminated|connection timeout|timeout exceeded when trying to connect/i.test(e.message ?? "");
+}
+
+/** Run fn, retrying transient failures with jittered exponential backoff (default 3 attempts). */
+export async function withRetry<T>(fn: () => Promise<T>, opts: { attempts?: number; baseMs?: number; label?: string } = {}): Promise<T> {
+  const attempts = opts.attempts ?? 3;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientPgError(err) || i === attempts - 1) throw err;
+      metrics.inc("pg_retries_total");
+      const delay = (opts.baseMs ?? 100) * 2 ** i * (0.5 + Math.random());
+      log.warn("pg transient error, retrying", { label: opts.label, attempt: i + 1, delayMs: Math.round(delay), code: (err as { code?: string }).code });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
 
 /** Postgres TEXT can't hold NUL bytes; strip them so one odd message can't wedge every future save. */
 const t = (s: unknown) => String(s ?? "").replace(/\u0000/g, "");
 const tn = (s: unknown) => (s === undefined || s === null ? null : t(s));
 
-type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads", Map<string, unknown[]>>;
+type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads" | "identities", Map<string, unknown[]>>;
 type Snapshot = Record<keyof Rows, Map<string, string>>;
-const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads"];
+const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads", "identities"];
 const SEP = "\u0001";
 
 function migrationsDir() {
@@ -135,14 +165,29 @@ export class PgPersistence implements Persistence {
   /** whether the live connection is actually TLS (from pg_stat_ssl), null if unknown */
   tlsActive: boolean | null = null;
   private pool: pg.Pool;
-  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map() };
+  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map() };
 
   constructor(url: string) {
     this.where = redactUrl(url);
     const { ssl, label, connectionString } = chooseSsl(url);
     this.sslLabel = label;
-    this.pool = new pg.Pool({ connectionString, ssl, max: Number(process.env.DATABASE_POOL_MAX || 5), connectionTimeoutMillis: 10_000 });
-    this.pool.on("error", (err) => console.warn("[pg] idle client error:", err.message));
+    this.pool = new pg.Pool({
+      connectionString,
+      ssl,
+      max: num(process.env.DATABASE_POOL_MAX, 5),
+      idleTimeoutMillis: num(process.env.DATABASE_IDLE_TIMEOUT_MS, 30_000),
+      connectionTimeoutMillis: num(process.env.DATABASE_CONNECT_TIMEOUT_MS, 10_000),
+      // server-side guards: no query/transaction may hold a connection forever
+      statement_timeout: num(process.env.DATABASE_STATEMENT_TIMEOUT_MS, 15_000),
+      idle_in_transaction_session_timeout: num(process.env.DATABASE_IDLE_TX_TIMEOUT_MS, 30_000),
+      query_timeout: num(process.env.DATABASE_QUERY_TIMEOUT_MS, 20_000),
+      application_name: "openlounge",
+      keepAlive: true,
+    });
+    this.pool.on("error", (err) => log.warn("pg idle client error", { err }));
+    metrics.gauge("pg_pool_total", () => this.pool.totalCount);
+    metrics.gauge("pg_pool_idle", () => this.pool.idleCount);
+    metrics.gauge("pg_pool_waiting", () => this.pool.waitingCount);
   }
 
   /** Connect (retrying while the database boots) and apply pending migrations. Throws a clear error on failure. */
@@ -167,6 +212,9 @@ export class PgPersistence implements Persistence {
 
     const client = await this.pool.connect();
     try {
+      // migrations (index builds) may legitimately exceed the per-statement guard
+      await client.query("SET statement_timeout = 0");
+      // session-level advisory lock: a second instance booting concurrently waits here, then sees the versions applied
       await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK]);
       await client.query(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
@@ -191,6 +239,7 @@ export class PgPersistence implements Persistence {
       console.log(`[pg] schema up to date: ${files.length} migrations applied (latest ${files.at(-1) ?? "none"})`);
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK]).catch(() => {});
+      await client.query("RESET statement_timeout").catch(() => {});
       client.release();
     }
   }
@@ -201,19 +250,22 @@ export class PgPersistence implements Persistence {
     const q = <R extends pg.QueryResultRow>(sql: string, params?: unknown[]) => this.pool.query<R>(sql, params).then((r) => r.rows);
     // expired sessions would have been dropped from db.json on the next write; drop them here
     await q("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
-    const [users, interests, follows, rooms, dms, sessions, reads, meta] = await Promise.all([
-      q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null }>(
+    const [users, interests, follows, rooms, dms, sessions, reads, meta, identities] = await Promise.all([
+      q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null; password_hash: string | null; social_links: Record<string, string> | null }>(
         "SELECT * FROM users ORDER BY created_at, id",
       ),
       q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
       q<{ follower_id: string; followee_id: string }>("SELECT follower_id, followee_id FROM follows ORDER BY created_at, follower_id, followee_id"),
       q<{ id: string; title: string; topic: string; description: string; host_id: string; created_at: number }>("SELECT * FROM rooms ORDER BY created_at, id"),
-      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null }>(
-        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at FROM dms ORDER BY created_at, id",
+      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null; client_id: string | null }>(
+        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id FROM dms ORDER BY created_at, id",
       ),
       q<SessionRow>("SELECT * FROM sessions"),
       q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
       q<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'json_imported'"),
+      q<{ user_id: string; provider: IdentityProvider; provider_subject: string; email: string | null; verified: boolean; created_at: number; last_used_at: number | null }>(
+        "SELECT * FROM auth_identities ORDER BY created_at, provider, provider_subject",
+      ),
     ]);
 
     const interestsOf = new Map<string, string[]>();
@@ -233,12 +285,23 @@ export class PgPersistence implements Persistence {
         ...(u.phone !== null ? { phone: u.phone } : {}),
         interests: interestsOf.get(u.id) ?? [],
         photoVersion: u.photo_version,
+        socialLinks: u.social_links ?? {},
+        passwordHash: u.password_hash ?? null,
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
-      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}) })),
       sessions: sessions.map(sessionFromRow),
       dmReads: {},
+      identities: identities.map((i) => ({
+        userId: i.user_id,
+        provider: i.provider,
+        subject: i.provider_subject,
+        email: i.email,
+        verified: i.verified,
+        createdAt: i.created_at,
+        lastUsedAt: i.last_used_at,
+      })),
     };
     for (const f of follows) (db.follows[f.follower_id] ??= []).push(f.followee_id);
     for (const r of reads) (db.dmReads![r.user_id] ??= {})[r.peer_id] = r.last_read_at;
@@ -251,7 +314,7 @@ export class PgPersistence implements Persistence {
 
   /** PersistedDb → table rows keyed by primary key. Rows owned by an unknown user are skipped (FK safety). */
   private rows(db: PersistedDb): Rows {
-    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map() };
+    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map() };
     const humans = new Set<string>();
     for (const u of db.users ?? []) {
       humans.add(u.id);
@@ -267,6 +330,8 @@ export class PgPersistence implements Persistence {
         Math.round(u.baseFollowing ?? 0),
         u.photoVersion ?? null,
         (u.interests ?? []).map(t),
+        JSON.stringify(u.socialLinks ?? {}),
+        u.passwordHash ?? null,
       ]);
     }
     for (const [follower, list] of Object.entries(db.follows ?? {})) {
@@ -275,7 +340,7 @@ export class PgPersistence implements Persistence {
     }
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
-      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null]);
+      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId)]);
     for (const s of db.sessions ?? [])
       if (humans.has(s.userId))
         out.sessions.set(s.tokenHash, [
@@ -298,6 +363,9 @@ export class PgPersistence implements Persistence {
       if (!humans.has(uid)) continue;
       for (const [peer, ts] of Object.entries(peers)) out.dmReads.set(`${uid}${SEP}${peer}`, [uid, t(peer), ts]);
     }
+    for (const i of db.identities ?? [])
+      if (humans.has(i.userId))
+        out.identities.set(`${i.provider}${SEP}${i.subject}`, [i.userId, i.provider, t(i.subject), tn(i.email), !!i.verified, i.createdAt, i.lastUsedAt ?? null]);
     return out;
   }
 
@@ -307,7 +375,12 @@ export class PgPersistence implements Persistence {
     return s;
   }
 
+  /** Snapshot save: one transaction, retried on transient errors (connection drop, failover, serialization). */
   async save(db: PersistedDb) {
+    return withRetry(() => this.saveOnce(db), { label: "save" });
+  }
+
+  private async saveOnce(db: PersistedDb) {
     const rows = this.rows(db);
     const next = this.serialize(rows);
     const up = {} as Record<keyof Rows, unknown[][]>;
@@ -329,12 +402,12 @@ export class PgPersistence implements Persistence {
       if (up.users.length) {
         const u = up.users;
         await client.query(
-          `INSERT INTO users (id, name, username, color, bio, phone, created_at, base_followers, base_following, photo_version)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::int[], $9::int[], $10::bigint[])
+          `INSERT INTO users (id, name, username, color, bio, phone, created_at, base_followers, base_following, photo_version, social_links, password_hash)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[], $8::int[], $9::int[], $10::bigint[], $11::jsonb[], $12::text[])
            ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, username = EXCLUDED.username, color = EXCLUDED.color, bio = EXCLUDED.bio,
              phone = EXCLUDED.phone, created_at = EXCLUDED.created_at, base_followers = EXCLUDED.base_followers,
-             base_following = EXCLUDED.base_following, photo_version = EXCLUDED.photo_version`,
-          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => col(u, i)),
+             base_following = EXCLUDED.base_following, photo_version = EXCLUDED.photo_version, social_links = EXCLUDED.social_links, password_hash = EXCLUDED.password_hash`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12].map((i) => col(u, i)),
         );
         const ids = col(u, 0) as string[];
         await client.query("DELETE FROM user_interests WHERE user_id = ANY($1::text[])", [ids]);
@@ -368,11 +441,11 @@ export class PgPersistence implements Persistence {
       if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
       if (up.dms.length)
         await client.query(
-          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[])
+          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[], $10::text[])
            ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color,
-             read_at = COALESCE(dms.read_at, EXCLUDED.read_at)`,
-          [0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => col(up.dms, i)),
+             read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id)`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => col(up.dms, i)),
         );
       // sessions
       if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);
@@ -397,6 +470,20 @@ export class PgPersistence implements Persistence {
            ON CONFLICT (user_id, peer_id) DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
           [0, 1, 2].map((i) => col(up.dmReads, i)),
         );
+      // sign-in identities (after users: FK). Deletes = unlinked methods.
+      if (del.identities.length)
+        await client.query(
+          "DELETE FROM auth_identities a USING unnest($1::text[], $2::text[]) AS d(p, s) WHERE a.provider = d.p AND a.provider_subject = d.s",
+          pairs(del.identities),
+        );
+      if (up.identities.length)
+        await client.query(
+          `INSERT INTO auth_identities (user_id, provider, provider_subject, email, verified, created_at, last_used_at)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::boolean[], $6::bigint[], $7::bigint[])
+           ON CONFLICT (provider, provider_subject) DO UPDATE SET user_id = EXCLUDED.user_id, email = EXCLUDED.email, verified = EXCLUDED.verified,
+             last_used_at = EXCLUDED.last_used_at`,
+          [0, 1, 2, 3, 4, 5, 6].map((i) => col(up.identities, i)),
+        );
       // users removed last (cascades). The app never deletes accounts today; kept for completeness.
       if (del.users.length) await client.query("DELETE FROM users WHERE id = ANY($1::text[])", [del.users]);
       await client.query("COMMIT");
@@ -409,9 +496,57 @@ export class PgPersistence implements Persistence {
     }
   }
 
+  /** single-use secrets: password reset links + other one-time codes (see Persistence.oneTime) */
+  oneTime: OneTimeBackend = {
+    put: async (table, r) => {
+      // opportunistic cleanup of long-dead rows
+      if (Math.random() < 0.05) {
+        const old = Date.now() - 7 * 86_400_000;
+        await this.pool.query("DELETE FROM password_reset_tokens WHERE expires_at < $1", [old]).catch(() => {});
+        await this.pool.query("DELETE FROM auth_one_time_codes WHERE expires_at < $1", [old]).catch(() => {});
+      }
+      if (table === "reset")
+        await this.pool.query(
+          "INSERT INTO password_reset_tokens (token_hash, user_id, email, created_at, expires_at) VALUES ($1, $2, $3, $4, $5)",
+          [r.hash, r.userId, r.email, r.createdAt, r.expiresAt],
+        );
+      else
+        await this.pool.query("INSERT INTO auth_one_time_codes (code_hash, purpose, payload, created_at, expires_at) VALUES ($1, $2, $3, $4, $5)", [
+          r.hash,
+          r.purpose,
+          JSON.stringify(r.payload ?? {}),
+          r.createdAt,
+          r.expiresAt,
+        ]);
+    },
+    consume: async (table, hash, purpose, now) => {
+      if (table === "reset") {
+        const r = await this.pool.query<{ user_id: string; email: string }>(
+          "UPDATE password_reset_tokens SET used_at = $2 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2 RETURNING user_id, email",
+          [hash, now],
+        );
+        return r.rows[0] ? { userId: r.rows[0].user_id, email: r.rows[0].email } : null;
+      }
+      const r = await this.pool.query<{ payload: unknown }>(
+        "UPDATE auth_one_time_codes SET used_at = $3 WHERE code_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > $3 RETURNING payload",
+        [hash, purpose, now],
+      );
+      return r.rows[0] ? { payload: r.rows[0].payload } : null;
+    },
+    peekReset: async (hash, now) => {
+      const r = await this.pool.query<{ user_id: string; email: string }>(
+        "SELECT user_id, email FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2",
+        [hash, now],
+      );
+      return r.rows[0] ? { userId: r.rows[0].user_id, email: r.rows[0].email } : null;
+    },
+    supersedeResets: async (userId, now) => {
+      await this.pool.query("UPDATE password_reset_tokens SET used_at = $2 WHERE user_id = $1 AND used_at IS NULL", [userId, now]);
+    },
+  };
+
+  /** The key persisted in the DB (created on first boot). Returned even when AUTH_SECRET is set: it stays a verification key. */
   async authSecret() {
-    const fromEnv = process.env.AUTH_SECRET?.trim();
-    if (fromEnv) return fromEnv;
     const fresh = randomBytes(32).toString("hex");
     await this.pool.query("INSERT INTO openlounge_meta (key, value) VALUES ('auth_secret', $1) ON CONFLICT (key) DO NOTHING", [fresh]);
     const r = await this.pool.query<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'auth_secret'");
@@ -420,6 +555,10 @@ export class PgPersistence implements Persistence {
 
   /** Session (and its user) straight from Postgres — for sessions a sibling instance created after we loaded. */
   async findSession(by: { hash?: string; id?: string }) {
+    return withRetry(() => this.findSessionOnce(by), { label: "findSession" });
+  }
+
+  private async findSessionOnce(by: { hash?: string; id?: string }) {
     const r = by.hash
       ? await this.pool.query<SessionRow>("SELECT * FROM sessions WHERE token_hash = $1 OR legacy_hash = $1 OR $1 = ANY(prev_hashes) LIMIT 1", [by.hash])
       : await this.pool.query<SessionRow>("SELECT * FROM sessions WHERE id = $1 ORDER BY last_seen_at DESC LIMIT 1", [by.id]);
@@ -442,8 +581,21 @@ export class PgPersistence implements Persistence {
       ...(u.phone !== null ? { phone: u.phone } : {}),
       interests,
       photoVersion: u.photo_version,
+      socialLinks: u.social_links ?? {},
+      passwordHash: u.password_hash ?? null,
     };
     return { session, user };
+  }
+
+  /** Readiness probe: a trivial round-trip with a short timeout. */
+  async ping(timeoutMs = 2000): Promise<{ ok: boolean; ms: number; error?: string }> {
+    const t0 = Date.now();
+    try {
+      await Promise.race([this.pool.query("SELECT 1"), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs))]);
+      return { ok: true, ms: Date.now() - t0 };
+    } catch (err) {
+      return { ok: false, ms: Date.now() - t0, error: errText(err) };
+    }
   }
 
   async status() {

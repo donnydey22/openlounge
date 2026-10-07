@@ -1,5 +1,7 @@
 "use client";
 
+import { applyDeviceClass } from "@/lib/device";
+import { initPushRegistration, unregisterPush } from "@/lib/push";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
@@ -53,6 +55,8 @@ interface AppCtx {
   socket: RealtimeClient | null;
   me: Me | null;
   rooms: RoomSummary[];
+  /** first rooms:update received (hallway shows skeletons until then) */
+  roomsLoaded: boolean;
   following: Set<string>;
   toasts: Toast[];
   /** Total unread direct messages */
@@ -63,11 +67,14 @@ interface AppCtx {
   setActiveDm(peerId: string | null): void;
   getActiveDm(): string | null;
   /** Called by the auth flow once the server has issued a session (refresh token + access token) */
-  completeLogin(token: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }): void;
+  /** `resumeSocket`: the session came over HTTP (email / Google / Apple) — authenticate the socket with it too */
+  completeLogin(token: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean; resumeSocket?: boolean }): void;
   finishOnboarding(): void;
   signOut(): Promise<void>;
   request<T = Record<string, unknown>>(event: string, payload?: unknown): Promise<T>;
   follow(userId: string, follow: boolean): Promise<void>;
+  /** replace the signed-in user with a fresh copy from the server (e.g. a REST response) */
+  setMeLocal(user: Me): void;
   updateMe(patch: { name?: string; bio?: string; color?: string; username?: string; interests?: string[] }): Promise<void>;
   setPhoto(photo: string | null): Promise<void>;
   toast(message: string, href?: string): void;
@@ -124,6 +131,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [roomsLoaded, setRoomsLoaded] = useState(false);
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [unreadDms, setUnreadDms] = useState(0);
@@ -223,9 +231,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    applyDeviceClass();
     const s = new RealtimeClient();
     // Tell the server whether the app is in the foreground (Android WebView backgrounding, hidden tabs)
     const reportVisibility = () => {
+      // thermals: pause every CSS animation while hidden/backgrounded (html[data-hidden] in globals.css)
+      if (appVisible()) delete document.documentElement.dataset.hidden;
+      else document.documentElement.dataset.hidden = "";
       if (!tokenRef.current && !loadToken()) return;
       s.emit("presence:visible", { visible: appVisible() });
     };
@@ -316,7 +328,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setConnected(false);
       if (!offlineTimer) offlineTimer = setTimeout(() => setOffline(true), OFFLINE_HINT_MS);
     });
-    s.on("rooms:update", (list: RoomSummary[]) => setRooms(list));
+    s.on("rooms:update", (list: RoomSummary[]) => {
+      setRooms(list);
+      setRoomsLoaded(true);
+    });
     // server-side system notices (new follower, host handover, raised hand…) → banner with the app icon
     s.on("toast", ({ message }: { message: string }) => banner({ title: message, avatar: "app" }));
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
@@ -396,11 +411,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const completeLogin = useCallback(
-    (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }) => {
+    (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean; resumeSocket?: boolean }) => {
       saveCreds({ refresh: t, access: session.access ?? null, accessExp: session.accessExpiresAt ?? 0, uid: session.user?.id ?? null });
       setToken(t);
       applySession(session);
       setOnboarding(!!opts?.onboarding);
+      if (opts?.resumeSocket) void resumeRef.current?.().catch(() => {});
     },
     [applySession],
   );
@@ -408,7 +424,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const finishOnboarding = useCallback(() => setOnboarding(false), []);
 
   // Settings → Log out: revoke this device's session on the server (POST /auth/logout), detach the socket, clear storage.
+  // register this device's push token (native wrappers) once signed in
+  const meId = me?.id;
+  useEffect(() => {
+    if (meId) initPushRegistration();
+  }, [meId]);
+
   const signOut = useCallback(async () => {
+    await unregisterPush();
     await logout();
     try {
       await socket?.request("session:logout", {}, 2000);
@@ -479,6 +502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       socket,
       me,
       rooms,
+      roomsLoaded,
       following,
       toasts,
       unreadDms,
@@ -491,6 +515,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       request,
       follow,
       updateMe,
+      setMeLocal: setMe,
       setPhoto,
       toast,
       reportError,
@@ -502,7 +527,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       presenceOf,
       offline,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
+    [status, connected, socket, me, rooms, roomsLoaded, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -4,8 +4,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
-import { ACCESS_TTL_MS, MAX_PREV_HASHES, REFRESH_TTL_MS, ROTATION_GRACE_MS, isAccessToken, newOpaqueToken, newSessionId, parseAccessToken, setAuthSecret, sha256, signAccessToken } from "./auth";
+import { randomUUID } from "node:crypto";
+import { log } from "./log";
+import { ACCESS_TTL_MS, MAX_PREV_HASHES, REFRESH_TTL_MS, ROTATION_GRACE_MS, isAccessToken, newOpaqueToken, newSessionId, parseAccessToken, configureAuthKeys, sha256, signAccessToken } from "./auth";
 import type {
   ChatMessage,
   ConversationSummary,
@@ -24,6 +25,7 @@ import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId } from "./conversation";
+import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
 
 /**
  * Demo seeding (bot users, seeded rooms, bot chat, bot DM replies, newcomer waves, bot audiences)
@@ -37,6 +39,10 @@ import {
   createPersistence,
   errText,
   readJsonDb,
+  MemoryOneTime,
+  type IdentityProvider,
+  type IdentityRecord,
+  type OneTimeBackend,
   type Persistence,
   type PersistedDb,
   type SessionRecord,
@@ -88,6 +94,8 @@ export interface StoreEvents {
   roomReaction(reaction: RoomReaction): void;
   /** a session was revoked (logout, logout-all, refresh-token reuse): sign its sockets out */
   sessionRevoked?(sessionId: string): void;
+  /** the user's own profile changed outside a socket handler (REST): push me:update to their sockets */
+  meChanged?(userId: string, user: Me): void;
 }
 
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
@@ -96,6 +104,9 @@ const EMPTY_ROOM_TTL_MS = 5 * 60_000; // user rooms with no humans end after 5 m
 const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
+export const DELETED_USER_ID = "u_deleted";
+const DELETED_NAME = "Deleted account";
+const DELETED_COLOR = "#64748B";
 
 export { conversationId };
 
@@ -112,6 +123,13 @@ export function isInternalTestAccount(u: { id: string; phone?: string }) {
   return TEST_PHONES.has(p) || /^\+1\d{3}55501\d{2}$/.test(p) || /^\+(\d)\1{7,14}$/.test(p);
 }
 
+export const identityKey = (provider: IdentityProvider, subject: string) => `${provider}|${subject}`;
+/** Lower-cased, trimmed email, or null if it doesn't look like one. */
+export function normalizeEmail(raw: unknown): string | null {
+  const e = String(raw ?? "").trim().toLowerCase();
+  return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+}
+
 const clamp = (s: unknown, max: number) => String(s ?? "").trim().slice(0, max);
 const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)];
 
@@ -122,6 +140,8 @@ export class Store {
   dms = new Map<string, DirectMessage[]>(); // conversationId -> messages (oldest first)
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
+  /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
+  identities = new Map<string, IdentityRecord>();
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
   private awayTimers = new Map<string, NodeJS.Timeout>();
@@ -149,7 +169,9 @@ export class Store {
    */
   async init(opts: { importJson?: string } = {}) {
     this.backend = await createPersistence();
-    setAuthSecret(process.env.AUTH_SECRET?.trim() || (await this.backend.authSecret?.()) || randomBytes(32).toString("hex"));
+    // AUTH_SECRET (env) preferred; the DB/DATA_DIR key is the fallback and stays valid for verification (rotation grace)
+    const keys = configureAuthKeys({ dbSecret: (await this.backend.authSecret?.()) ?? null });
+    log.info("auth keys", keys);
     const { db, empty } = await this.backend.load();
     if (db) this.hydrate(db, this.backend.kind === "postgres" ? "Postgres" : DATA_FILE);
 
@@ -168,7 +190,8 @@ export class Store {
 
   attach(events: StoreEvents) {
     this.events = events;
-    setInterval(() => this.tick(), 1500);
+    // unref: the simulation tick must never keep the process alive on shutdown (and tests exit cleanly)
+    setInterval(() => this.tick(), 1500).unref();
   }
 
   // ---------- seeding & persistence ----------
@@ -226,6 +249,9 @@ export class Store {
         // older demo users (pre phone-auth) get a generated handle
         this.users.set(u.id, { ...u, isBot: false, username: u.username || this.uniqueUsername(u.name) });
       }
+      for (const i of db.identities ?? []) if (this.users.has(i.userId)) this.identities.set(identityKey(i.provider, i.subject), { ...i });
+      // every phone number is a phone identity (db.json files and rows written by a pre-005 server have none yet)
+      for (const u of db.users ?? []) if (u.phone) this.ensurePhoneIdentity(u.id, u.phone, u.createdAt);
       const now0 = Date.now();
       const legacyOf = new Set((db.sessions ?? []).map((s) => s.legacyHash).filter((h): h is string => !!h));
       for (const s of db.sessions ?? []) {
@@ -321,6 +347,7 @@ export class Store {
       dms: [...this.dms.values()].flat(),
       dmReads: Object.fromEntries([...this.dmReads.entries()].map(([k, v]) => [k, Object.fromEntries(v)])),
       sessions: [...this.sessions.values()],
+      identities: [...this.identities.values()].filter((i) => this.users.has(i.userId) && !this.users.get(i.userId)!.isBot),
     };
   }
 
@@ -328,9 +355,110 @@ export class Store {
 
   // ----- accounts (phone auth) -----
 
+  /** Phone sign-in: the phone identity decides the account (users.phone is its mirror, kept as a fallback). */
   userByPhone(phone: string) {
+    const id = this.identities.get(identityKey("phone", phone));
+    if (id) {
+      const u = this.users.get(id.userId);
+      if (u) return u;
+    }
     for (const u of this.users.values()) if (u.phone === phone) return u;
     return null;
+  }
+
+  // ----- sign-in identities (unified accounts: phone / email / google / apple) -----
+
+  findIdentity(provider: IdentityProvider, subject: string): IdentityRecord | null {
+    return this.identities.get(identityKey(provider, subject)) ?? null;
+  }
+
+  identitiesOf(userId: string): IdentityRecord[] {
+    return [...this.identities.values()].filter((i) => i.userId === userId).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /**
+   * The one account that owns a VERIFIED identity with this email (any provider), for automatic linking.
+   * null when nobody does — or when two different accounts do (ambiguous: never guess).
+   */
+  userByVerifiedEmail(email: string | null | undefined): string | null {
+    const e = normalizeEmail(email);
+    if (!e) return null;
+    const owners = new Set<string>();
+    for (const i of this.identities.values()) if (i.verified && i.email === e && this.users.has(i.userId)) owners.add(i.userId);
+    return owners.size === 1 ? [...owners][0] : null;
+  }
+
+  private ensurePhoneIdentity(userId: string, phone: string, at = Date.now()) {
+    const k = identityKey("phone", phone);
+    if (this.identities.has(k)) return;
+    this.identities.set(k, { userId, provider: "phone", subject: phone, email: null, verified: true, createdAt: at, lastUsedAt: null });
+  }
+
+  /**
+   * Attach a sign-in method to an account. Fails if that (provider, subject) belongs to someone else.
+   * A phone identity also sets users.phone (one phone number per account).
+   */
+  addIdentity(userId: string, rec: { provider: IdentityProvider; subject: string; email?: string | null; verified: boolean }) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return { ok: false as const, code: "no_user" as const, error: "Account not found" };
+    const k = identityKey(rec.provider, rec.subject);
+    const existing = this.identities.get(k);
+    if (existing && existing.userId !== userId) return { ok: false as const, code: "taken" as const, error: "That sign-in method is already linked to another Open Lounge account." };
+    if (rec.provider === "phone") {
+      const other = this.userByPhone(rec.subject);
+      if (other && other.id !== userId) return { ok: false as const, code: "taken" as const, error: "That number is already linked to another Open Lounge account." };
+      if (u.phone && u.phone !== rec.subject) return { ok: false as const, code: "has_phone" as const, error: "Your account already has a phone number." };
+      u.phone = rec.subject;
+    }
+    const now = Date.now();
+    const email = normalizeEmail(rec.email);
+    if (existing) {
+      existing.email = email ?? existing.email;
+      existing.verified = existing.verified || rec.verified;
+    } else {
+      this.identities.set(k, { userId, provider: rec.provider, subject: rec.subject, email, verified: rec.verified, createdAt: now, lastUsedAt: null });
+    }
+    this.scheduleSave();
+    return { ok: true as const, identity: this.identities.get(k)! };
+  }
+
+  /** Detach a sign-in method. The last remaining method can't be removed (the account would be unreachable). */
+  removeIdentity(userId: string, provider: IdentityProvider, subject: string) {
+    const k = identityKey(provider, subject);
+    const i = this.identities.get(k);
+    if (!i || i.userId !== userId) return { ok: false as const, error: "That sign-in method isn't on your account." };
+    if (this.identitiesOf(userId).length <= 1) return { ok: false as const, error: "Add another way to sign in before removing this one." };
+    this.identities.delete(k);
+    const u = this.users.get(userId)!;
+    if (provider === "phone" && u.phone === subject) delete u.phone;
+    if (provider === "email" && !this.identitiesOf(userId).some((x) => x.provider === "email")) u.passwordHash = null;
+    this.scheduleSave();
+    return { ok: true as const };
+  }
+
+  touchIdentity(provider: IdentityProvider, subject: string, at = Date.now()) {
+    const i = this.identities.get(identityKey(provider, subject));
+    if (!i) return;
+    i.lastUsedAt = at;
+    this.scheduleSave();
+  }
+
+  passwordHashOf(userId: string) {
+    return this.users.get(userId)?.passwordHash ?? null;
+  }
+
+  setPasswordHash(userId: string, hash: string | null) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return false;
+    u.passwordHash = hash;
+    this.scheduleSave();
+    return true;
+  }
+
+  /** Short-lived single-use secrets (reset links, verification links, exchange codes). */
+  private memOneTime = new MemoryOneTime();
+  get oneTime(): OneTimeBackend {
+    return this.backend?.oneTime ?? this.memOneTime;
   }
 
   private uniqueUsername(name: string) {
@@ -359,11 +487,19 @@ export class Store {
     return { username, available: true, reason: null };
   }
 
+  /**
+   * New account. Phone signups pass the verified number (as before); email / Google / Apple signups pass
+   * phone = null plus the identity that proved who they are (and the password hash for email).
+   */
   createAccount(
-    phone: string,
+    phone: string | null,
     input: { firstName?: string; lastName?: string; username?: string; bio?: string; color?: string; interests?: unknown },
+    extra: { identity?: { provider: IdentityProvider; subject: string; email?: string | null; verified: boolean }; passwordHash?: string | null } = {},
   ) {
-    if (this.userByPhone(phone)) return { ok: false as const, error: "An account already exists for this number — sign in instead." };
+    if (phone && this.userByPhone(phone)) return { ok: false as const, error: "An account already exists for this number — sign in instead." };
+    if (extra.identity && this.findIdentity(extra.identity.provider, extra.identity.subject))
+      return { ok: false as const, error: "An account already exists for this sign-in — sign in instead." };
+    if (!phone && !extra.identity) return { ok: false as const, error: "Your verification expired — please start again." };
     const first = clamp(input.firstName, 24);
     const last = clamp(input.lastName, 24);
     if (first.length < 1) return { ok: false as const, error: "What's your first name?" };
@@ -379,11 +515,14 @@ export class Store {
       createdAt: Date.now(),
       baseFollowers: 0,
       baseFollowing: 0,
-      phone,
+      ...(phone ? { phone } : {}),
       interests: this.cleanInterests(input.interests),
       photoVersion: null,
+      passwordHash: extra.passwordHash ?? null,
     };
     this.users.set(user.id, user);
+    if (phone) this.ensurePhoneIdentity(user.id, phone, user.createdAt);
+    if (extra.identity) this.addIdentity(user.id, extra.identity);
     this.scheduleSave();
     return { ok: true as const, user };
   }
@@ -474,7 +613,10 @@ export class Store {
         console.log(`[auth] session ${found.session.id} refreshed from Postgres (updated by another instance)`);
         return found.session;
       }
-      if (found.user && !this.users.has(found.user.id)) this.users.set(found.user.id, found.user);
+      if (found.user && !this.users.has(found.user.id)) {
+        this.users.set(found.user.id, found.user);
+        if (found.user.phone) this.ensurePhoneIdentity(found.user.id, found.user.phone, found.user.createdAt);
+      }
       if (!this.users.has(found.session.userId)) return null;
       this.indexSession(found.session);
       console.log(`[auth] loaded session ${found.session.id} from Postgres (created by another instance)`);
@@ -602,6 +744,19 @@ export class Store {
     return out;
   }
 
+  /** Is this session still usable (not revoked/expired)? Used to re-validate long-lived sockets. */
+  sessionActive(sessionId: string | undefined, now = Date.now()) {
+    if (!sessionId) return false;
+    const s = this.sessionById.get(sessionId);
+    return !!s && this.usable(s, now) === "ok";
+  }
+
+  /** Readiness: DB round-trip (JSON backend is always ready once loaded). */
+  async ping(timeoutMs = 2000) {
+    if (!this.backend) return { ok: false, ms: 0, error: "not initialized" };
+    return this.backend.ping ? this.backend.ping(timeoutMs) : { ok: true, ms: 0 };
+  }
+
   /** Record when a session was last active (presence "last seen"); persisted with the session row. */
   touchSession(sessionId: unknown, at = Date.now()) {
     if (typeof sessionId !== "string") return;
@@ -624,6 +779,42 @@ export class Store {
     let active = 0;
     for (const s of this.sessions.values()) if (!s.revokedAt) active++;
     return { ...st, sessions: active };
+  }
+
+  // ----- account deletion (App Store 5.1.1(v)) -----
+
+  /**
+   * Permanently delete a member: sessions (tokens), sign-in identities, follows (both directions), read markers,
+   * interests, avatar and the user row. DMs they sent are kept for the other person but anonymised
+   * ("Deleted account"); rooms they hosted are ended and re-attributed to a placeholder host.
+   * Device tokens, notification prefs and contact hashes live in the push repo and are removed by the caller.
+   */
+  deleteAccount(userId: string) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return { ok: false as const, status: 404, error: "Account not found" };
+    const revoked = this.revokeSession(undefined, { allForUser: userId });
+    for (const s of [...this.sessions.values()]) if (s.userId === userId) this.dropSession(s);
+    for (const [k, idn] of [...this.identities]) if (idn.userId === userId) this.identities.delete(k);
+    this.follows.delete(userId);
+    for (const set of this.follows.values()) set.delete(userId);
+    this.dmReads.delete(userId);
+    for (const m of this.dmReads.values()) m.delete(userId);
+    for (const list of this.dms.values())
+      for (const m of list)
+        if (m.fromId === userId) {
+          m.fromName = DELETED_NAME;
+          m.fromColor = DELETED_COLOR;
+        }
+    for (const r of this.rooms.values())
+      if (r.hostId === userId) {
+        r.hostId = DELETED_USER_ID;
+        r.ended = true;
+      }
+    fs.rmSync(path.join(AVATAR_DIR, `${userId}.img`), { force: true });
+    fs.rmSync(path.join(AVATAR_DIR, `${userId}.type`), { force: true });
+    this.users.delete(userId);
+    this.scheduleSave();
+    return { ok: true as const, revokedSessions: revoked.length };
   }
 
   // ----- profile -----
@@ -685,6 +876,29 @@ export class Store {
     return { ok: true as const, user: this.me(id)! };
   }
 
+  /** Social links: 10 saves / minute per user (same sliding-window pattern as chat). */
+  private socialRate = new Map<string, number[]>();
+  updateSocialLinks(id: string, input: unknown) {
+    const u = this.users.get(id);
+    if (!u || u.isBot) return { ok: false as const, status: 404, error: "Could not update profile" };
+    const now = Date.now();
+    const recent = (this.socialRate.get(id) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= 10) {
+      this.socialRate.set(id, recent);
+      return { ok: false as const, status: 429, error: "Slow down a little 🙂" };
+    }
+    recent.push(now);
+    this.socialRate.set(id, recent);
+    const r = normalizeSocialLinks(input, u.socialLinks ?? {});
+    if (!r.ok) return { ok: false as const, status: 400, error: r.error, errors: r.errors as Partial<Record<SocialKey, string>> };
+    u.socialLinks = r.links;
+    this.scheduleSave();
+    this.broadcastUserChange(id);
+    const me = this.me(id)!;
+    this.events?.meChanged?.(id, me);
+    return { ok: true as const, user: me };
+  }
+
   me(id: string): Me | null {
     const pub = this.publicUser(id);
     const u = this.users.get(id);
@@ -742,6 +956,7 @@ export class Store {
       photoUrl: this.photoUrl(u),
       interests: u.interests ?? [],
       bio: u.bio,
+      socialLinks: sanitizeStoredLinks(u.socialLinks),
       isBot: u.isBot,
       createdAt: u.createdAt,
       followers: u.baseFollowers + this.followerIds(id).length,

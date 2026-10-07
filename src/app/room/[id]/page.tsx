@@ -367,7 +367,7 @@ export default function RoomPage() {
     <div className="mx-auto max-w-2xl lg:grid lg:max-w-6xl lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-6 lg:px-4">
      <div className="flex min-h-dvh min-w-0 flex-col">
       {/* header */}
-      <header data-app-header className="sticky top-0 z-30 flex h-16 items-center justify-between bg-app/80 px-3 backdrop-blur-xl">
+      <header data-app-header className="sticky top-0 z-30 flex h-[calc(4rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] items-center justify-between bg-app/80 px-3 backdrop-blur-xl">
         <button onClick={() => router.push("/")} className="flex items-center gap-1 rounded-full px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-white/5" title="Back to hallway (leaves the room)">
           <ChevronDown className="h-5 w-5" /> Hallway
         </button>
@@ -383,7 +383,7 @@ export default function RoomPage() {
       <main className="relative flex-1 px-3 pb-4" data-audio-status={audio.status}>
         {/* hosts & speakers get joins as a batched notification banner instead ("Alex and 3 others joined") */}
         <RoomEventFeed events={onStage ? presenceFeed.filter((e) => e.type !== "join") : presenceFeed} />
-        <div className="relative rounded-[2rem] border border-white/5 bg-zinc-900/70 px-5 pt-6 pb-8 shadow-2xl">
+        <div className="relative rounded-[2rem] border border-white/5 bg-zinc-900/70 px-5 pt-6 pb-8 shadow-2xl" style={{ marginTop: "calc(var(--ol-banner-h) + var(--ol-banner-gap))" }}>
           <ReactionBurst reactions={burstReactions} />
           <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
             <span>
@@ -410,11 +410,11 @@ export default function RoomPage() {
               <div className="mt-4 flex items-center gap-2 rounded-2xl border border-amber-400/20 bg-amber-400/5 px-3 py-2">
                 <span className="text-sm">🎙</span>
                 <div className="min-w-0 flex-1 text-xs">
-                  <div className="font-semibold text-amber-300">Podium</div>
+                  <div className="podium-label font-semibold text-amber-300">Podium</div>
                   <div className="truncate text-zinc-400">
                     {holder ? (
                       <>
-                        <span className="text-zinc-200">{holder.userId === me?.id ? "You" : holder.name}</span> holds speaking priority
+                        <span className="text-zinc-200">{holder.userId === me?.id ? "You" : holder.name}</span> {holder.userId === me?.id ? "hold" : "holds"} speaking priority
                       </>
                     ) : (
                       "No one on the podium — unmute or claim it from stage"
@@ -511,7 +511,7 @@ export default function RoomPage() {
           )}
           <ReactionBar open={reactOpen} onPick={sendReaction} onClose={() => setReactOpen(false)} />
           <div className="flex items-center justify-between rounded-full border border-white/5 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur">
-            <button onClick={leave} className="rounded-full bg-zinc-800 px-5 py-3 text-sm font-semibold text-red-300 transition hover:bg-zinc-700">
+            <button onClick={leave} className="shrink-0 whitespace-nowrap rounded-full bg-zinc-800 px-4 py-3 text-sm font-semibold text-red-300 transition hover:bg-zinc-700 sm:px-5">
               ✌️ Leave quietly
             </button>
             <div className="flex items-center gap-2">

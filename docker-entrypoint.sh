@@ -6,6 +6,15 @@
 set -e
 DATA_DIR="${DATA_DIR:-/data}"
 APP_USER="${APP_USER:-node}"
+# Size the V8 heap to the container (75% of the cgroup memory limit, 256–2048 MB) unless NODE_OPTIONS already sets it,
+# so Node GCs before the container is OOM-killed instead of growing to its default ceiling.
+case "${NODE_OPTIONS:-}" in *max-old-space-size*) ;; *)
+  lim=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo max)
+  if [ "$lim" != "max" ] && [ "$lim" -lt 68719476736 ] 2>/dev/null; then
+    mb=$((lim / 1048576 * 3 / 4)); [ "$mb" -lt 256 ] && mb=256; [ "$mb" -gt 2048 ] && mb=2048
+    export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=$mb"
+  fi ;;
+esac
 if [ "$(id -u)" = "0" ]; then
   mkdir -p "$DATA_DIR/avatars"
   chown "$APP_USER:$APP_USER" "$DATA_DIR" "$DATA_DIR/avatars" 2>/dev/null || true

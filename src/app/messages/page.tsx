@@ -123,7 +123,7 @@ export default function MessagesPage() {
               const st = c.peer.isBot ? "offline" : presenceOf(c.peer.id);
               const isTyping = typing.has(c.peer.id);
               return (
-                <li key={c.peer.id}>
+                <li key={c.peer.id} className="cv-auto [contain-intrinsic-size:auto_72px]">
                   <Link
                     href={`/messages/${c.peer.id}`}
                     data-testid="dm-row"

@@ -12,6 +12,8 @@ export interface PublicUser {
   photoUrl: string | null;
   interests: string[];
   bio: string;
+  /** canonical https URLs keyed by network; empty object = none */
+  socialLinks?: import("./socialLinks").SocialLinks;
   isBot: boolean;
   createdAt: number;
   followers: number;
@@ -231,4 +233,18 @@ export interface RoomPresenceEvent {
   color: string;
   photoUrl: string | null;
   at: number;
+}
+
+/** Per-user push notification settings (server: server/push/prefs.ts) */
+export interface NotifPrefsClient {
+  dm: boolean;
+  roomInvite: boolean;
+  followedRoom: boolean;
+  trendingRoom: boolean;
+  scheduledRoom: boolean;
+  recentRoom: boolean;
+  newFollower: boolean;
+  contactJoined: boolean;
+  contactsOptIn: boolean;
+  quietHours: { start: string; end: string; tz: string } | null;
 }

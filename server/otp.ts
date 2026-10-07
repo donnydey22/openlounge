@@ -2,8 +2,8 @@
 //
 // Demo mode (default, no keys): codes are logged to the server console and returned
 // to the client so the UI can show them on screen. The fixed code 000000 also works.
-// Production: set SMS_PROVIDER=twilio + TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM
-// (or implement SmsProvider for any other gateway) — no client changes needed.
+// Production: implement SmsProvider for a real gateway and select it in createSmsProvider() — no client changes needed.
+// (The old Twilio provider was removed: it was never configured and Twilio is not used by this project.)
 
 import { createHash, randomInt } from "node:crypto";
 
@@ -22,36 +22,9 @@ class DemoSmsProvider implements SmsProvider {
   }
 }
 
-/** Minimal Twilio REST client (no SDK dependency). Only used when configured. */
-class TwilioSmsProvider implements SmsProvider {
-  readonly name = "twilio";
-  readonly revealsCodes = false;
-  constructor(
-    private sid: string,
-    private token: string,
-    private from: string,
-  ) {}
-  async send(to: string, body: string) {
-    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${this.sid}/Messages.json`, {
-      method: "POST",
-      headers: {
-        Authorization: "Basic " + Buffer.from(`${this.sid}:${this.token}`).toString("base64"),
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({ To: to, From: this.from, Body: body }),
-    });
-    if (!res.ok) throw new Error(`Twilio error ${res.status}: ${await res.text()}`);
-  }
-}
-
 export function createSmsProvider(): SmsProvider {
-  const { SMS_PROVIDER, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM } = process.env;
-  if (SMS_PROVIDER === "twilio") {
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM) {
-      throw new Error("SMS_PROVIDER=twilio requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM");
-    }
-    return new TwilioSmsProvider(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM);
-  }
+  if (process.env.SMS_PROVIDER && process.env.SMS_PROVIDER !== "demo")
+    throw new Error(`SMS_PROVIDER=${process.env.SMS_PROVIDER} is not supported (only "demo" is built in)`);
   return new DemoSmsProvider();
 }
 
