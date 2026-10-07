@@ -72,7 +72,8 @@ export type BridgeRequest =
   | { __ol: 1; method: 'share'; value: { text: string; url: string } }
   | { __ol: 1; method: 'requestContacts' }
   | { __ol: 1; method: 'openAppSettings' }
-  | { __ol: 1; method: 'requestNotificationPermission' };
+  | { __ol: 1; method: 'requestNotificationPermission' }
+  | { __ol: 1; method: 'setBadge'; value: number };
 
 export function parseBridgeMessage(data: string): BridgeRequest | null {
   try {
@@ -96,6 +97,10 @@ export function parseBridgeMessage(data: string): BridgeRequest | null {
       }
       case 'requestContacts':
       case 'openAppSettings':
+      case 'setBadge':
+        return typeof m.value === 'number' && Number.isFinite(m.value) && m.value >= 0
+          ? { __ol: 1, method: 'setBadge', value: Math.min(9999, Math.floor(m.value)) }
+          : null;
       case 'requestNotificationPermission':
         return { __ol: 1, method: m.method } as BridgeRequest;
     }
@@ -197,7 +202,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts', 'badge']),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
       getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
@@ -207,6 +212,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       contactsPermission: function () { return 'prompt'; },
       openAppSettings: function () { post({ __ol: 1, method: 'openAppSettings' }); },
       requestNotificationPermission: function () { post({ __ol: 1, method: 'requestNotificationPermission' }); },
+      setBadge: function (n) { post({ __ol: 1, method: 'setBadge', value: Number(n) || 0 }); },
       getSession: function () {
         return call('getSession').then(function (v) { return typeof v === 'string' ? v : null; });
       },

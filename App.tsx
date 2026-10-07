@@ -1,4 +1,5 @@
 import * as Network from 'expo-network';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
@@ -316,6 +317,10 @@ function Shell() {
           return;
         case 'openAppSettings':
           Linking.openSettings().catch(() => {});
+          return;
+        case 'setBadge':
+          // app-icon badge = total unread reported by the web app (0 clears)
+          void Notifications.setBadgeCountAsync(msg.value).catch(() => {});
           return;
         case 'requestNotificationPermission':
           // the page calls this after sign-in; iOS shows its prompt once
