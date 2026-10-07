@@ -5,6 +5,14 @@ import * as Contacts from 'expo-contacts';
 import { getLocales } from 'expo-localization';
 
 export async function readContactsForPage(): Promise<string> {
+  try {
+    return await readContactsUnsafe();
+  } catch {
+    return JSON.stringify({ granted: false });
+  }
+}
+
+async function readContactsUnsafe(): Promise<string> {
   const perm = await Contacts.requestPermissionsAsync();
   if (perm.status !== 'granted') return JSON.stringify({ granted: false });
   const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name], pageSize: 5000 });

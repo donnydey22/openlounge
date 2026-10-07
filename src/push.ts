@@ -1,42 +1,118 @@
-// Push (FCM via @react-native-firebase/messaging, so the server sends to iOS and Android the same way) and
-// notification display/taps via expo-notifications. NOT BUILT YET — needs an APNs auth key uploaded to Firebase
-// (Project settings → Cloud Messaging → Apple app configuration) and an EAS build with the aps-environment entitlement.
-import {
-  AuthorizationStatus,
-  getInitialNotification,
-  getMessaging,
-  getToken,
-  onNotificationOpenedApp,
-  onTokenRefresh as fcmOnTokenRefresh,
-  registerDeviceForRemoteMessages,
-  requestPermission,
-  setBackgroundMessageHandler,
-} from '@react-native-firebase/messaging';
-import * as Notifications from 'expo-notifications';
+// Push (FCM via @react-native-firebase/messaging) + notification display/taps via expo-notifications.
+//
+// Launch safety (0.2.5 b12): NOTHING here touches Firebase or expo-notifications at module load. The native
+// modules are required lazily inside initPush(), which App.tsx calls only after the WebView's first load finished
+// (+1.5 s). Every call is wrapped so a missing/broken native module or missing Firebase config just disables push.
 
 export type PushTokenListener = (token: string) => void;
 
-Notifications.setNotificationHandler({
-  // the server only pushes when the app isn't in the foreground; if one lands anyway, show it quietly
-  handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false }),
-});
+type Messaging = typeof import('@react-native-firebase/messaging');
 
-/** Asks iOS for permission (once; later calls are no-ops) and returns the FCM token, or '' if denied. */
+let msgMod: Messaging | null = null;
+let initDone = false;
+let available = false;
+
+function log(where: string, e: unknown) {
+  try {
+    console.warn(`[push] ${where} failed (ignored):`, e instanceof Error ? e.message : String(e));
+  } catch {}
+}
+
+/** Firebase configured natively (GoogleService-Info.plist bundled → FirebaseApp.configure() ran)? */
+function firebaseConfigured(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const app = require('@react-native-firebase/app') as typeof import('@react-native-firebase/app');
+    const apps = app.getApps();
+    if (!apps.length) return false;
+    const o = apps[0].options;
+    return !!(o && o.appId && o.messagingSenderId);
+  } catch (e) {
+    log('firebase config check', e);
+    return false;
+  }
+}
+
+function messaging(): Messaging | null {
+  if (!available) return null;
+  return msgMod;
+}
+
+/** Call once, after the app mounted and the WebView finished its first load. Returns whether push is usable. */
+export function initPush(): boolean {
+  if (initDone) return available;
+  initDone = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications') as typeof import('expo-notifications');
+    Notifications.setNotificationHandler({
+      // the server only pushes when the app isn't in the foreground; if one lands anyway, show it quietly
+      handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false }),
+    });
+  } catch (e) {
+    log('setNotificationHandler', e);
+  }
+  if (!firebaseConfigured()) {
+    log('init', 'Firebase not configured; push disabled');
+    return false;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    msgMod = require('@react-native-firebase/messaging') as Messaging;
+    available = true;
+  } catch (e) {
+    log('load messaging', e);
+    return false;
+  }
+  try {
+    const M = msgMod;
+    M.setBackgroundMessageHandler(M.getMessaging(), async (m) => {
+      try {
+        if (m.data?.clear === '1' && typeof m.data.tag === 'string') await clearDelivered(m.data.tag);
+      } catch {}
+    });
+  } catch (e) {
+    log('setBackgroundMessageHandler', e);
+  }
+  return available;
+}
+
+/** Asks iOS for permission (once; later calls are no-ops) and returns the FCM token, or '' if denied/unavailable. */
 export async function requestPushPermissionAndToken(): Promise<string> {
   try {
-    const m = getMessaging();
-    const status = await requestPermission(m);
-    const ok = status === AuthorizationStatus.AUTHORIZED || status === AuthorizationStatus.PROVISIONAL;
+    if (!initPush()) return '';
+    const M = messaging();
+    if (!M) return '';
+    const m = M.getMessaging();
+    const status = await M.requestPermission(m);
+    const ok = status === M.AuthorizationStatus.AUTHORIZED || status === M.AuthorizationStatus.PROVISIONAL;
     if (!ok) return '';
-    await registerDeviceForRemoteMessages(m);
-    return await getToken(m);
-  } catch {
+    await M.registerDeviceForRemoteMessages(m);
+    return await M.getToken(m);
+  } catch (e) {
+    log('requestPermission/getToken', e);
     return '';
   }
 }
 
 export function onTokenRefresh(cb: PushTokenListener): () => void {
-  return fcmOnTokenRefresh(getMessaging(), cb);
+  try {
+    const M = messaging();
+    if (!M) return () => {};
+    const unsub = M.onTokenRefresh(M.getMessaging(), (t) => {
+      try {
+        cb(t);
+      } catch {}
+    });
+    return () => {
+      try {
+        unsub();
+      } catch {}
+    };
+  } catch (e) {
+    log('onTokenRefresh', e);
+    return () => {};
+  }
 }
 
 const pathOf = (data: Record<string, unknown> | undefined): string | null => {
@@ -46,22 +122,36 @@ const pathOf = (data: Record<string, unknown> | undefined): string | null => {
 
 /** Notification taps (cold start + background) → in-app path like /messages/u_1 or /room/ab12. */
 export function onNotificationOpen(cb: (path: string) => void): () => void {
-  getInitialNotification(getMessaging())
-    .then((m) => {
-      const p = pathOf(m?.data);
+  try {
+    const M = messaging();
+    if (!M) return () => {};
+    const m = M.getMessaging();
+    M.getInitialNotification(m)
+      .then((n) => {
+        const p = pathOf(n?.data);
+        if (p) cb(p);
+      })
+      .catch(() => {});
+    const unsub = M.onNotificationOpenedApp(m, (n) => {
+      const p = pathOf(n?.data);
       if (p) cb(p);
-    })
-    .catch(() => {});
-  const unsub = onNotificationOpenedApp(getMessaging(), (m) => {
-    const p = pathOf(m?.data);
-    if (p) cb(p);
-  });
-  return unsub;
+    });
+    return () => {
+      try {
+        unsub();
+      } catch {}
+    };
+  } catch (e) {
+    log('onNotificationOpen', e);
+    return () => {};
+  }
 }
 
 /** "clear" data messages (DM read elsewhere): drop delivered notifications for that thread. */
 export async function clearDelivered(tag: string) {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications') as typeof import('expo-notifications');
     const list = await Notifications.getPresentedNotificationsAsync();
     for (const n of list) {
       const d = (n.request.content.data ?? {}) as Record<string, unknown>;
@@ -69,7 +159,3 @@ export async function clearDelivered(tag: string) {
     }
   } catch {}
 }
-
-setBackgroundMessageHandler(getMessaging(), async (m) => {
-  if (m.data?.clear === '1' && typeof m.data.tag === 'string') await clearDelivered(m.data.tag);
-});

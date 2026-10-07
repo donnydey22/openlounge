@@ -10,7 +10,7 @@
     "backgroundColor": "#1C1C1E",
     "ios": {
       "bundleIdentifier": "com.donnydey.openlounge",
-      "buildNumber": "10",
+      "buildNumber": "12",
       "deploymentTarget": "16.4",
       "supportsTablet": false,
       "icon": {
@@ -189,6 +189,7 @@
           }
         }
       ],
+      "./plugins/withSafeFirebaseConfigure.js",
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
       [

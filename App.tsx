@@ -32,7 +32,7 @@ import {
 } from './src/config';
 import { playHaptic } from './src/haptics';
 import { readContactsForPage } from './src/contacts';
-import { onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
+import { initPush, onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
 import { type LinkTarget, isNativeAuthStart, resolveIncomingLink } from './src/links';
 import * as Session from './src/sessionStore';
 import { type Theme, loadTheme, saveTheme } from './src/themeStore';
@@ -40,8 +40,10 @@ import { schemeOf } from './src/url';
 
 // Keep the native splash (same artwork/colours as Android's launch screen) up until the page has painted and the
 // web app finished its session check (OpenLoungeNative.ready() or the automatic AuthGate check in bridge.ts).
-SplashScreen.preventAutoHideAsync().catch(() => {});
-SplashScreen.setOptions({ fade: false, duration: 0 }); // LaunchOverlay takes over seamlessly (same bg)
+try {
+  SplashScreen.preventAutoHideAsync().catch(() => {});
+  SplashScreen.setOptions({ fade: false, duration: 0 }); // LaunchOverlay takes over seamlessly (same bg)
+} catch {}
 
 const themeColor = (t: Theme) => (t === 'light' ? COLORS.light : COLORS.dark);
 
@@ -112,7 +114,9 @@ function Shell() {
     if (fromWeb) themeFromWeb.current = true;
     else if (themeFromWeb.current) return; // the page already reported its (newer) theme
     setThemeState(t);
-    SystemUI.setBackgroundColorAsync(themeColor(t)).catch(() => {});
+    try {
+      SystemUI.setBackgroundColorAsync(themeColor(t)).catch(() => {});
+    } catch {}
     if (fromWeb) saveTheme(t);
   }, []);
 
@@ -162,11 +166,14 @@ function Shell() {
 
   // Network comes back → retry immediately (NWPathMonitor via expo-network).
   useEffect(() => {
-    const sub = Network.addNetworkStateListener((s) => {
+    let sub: { remove: () => void } = { remove: () => {} };
+    try {
+    sub = Network.addNetworkStateListener((s) => {
       if (!offlineRef.current || s.isConnected === false || s.isInternetReachable === false) return;
       if (Date.now() - lastRetryAt.current < 1500) return; // path updates arrive in bursts
       retryNow();
     });
+    } catch {}
     return () => sub.remove();
   }, [retryNow]);
 
@@ -233,9 +240,41 @@ function Shell() {
     },
     [inject],
   );
-  useEffect(() => onTokenRefresh(deliverPushToken), [deliverPushToken]);
-  // notification tap → open its deep link (/messages/<peer>, /room/<id>) in the WebView
-  useEffect(() => onNotificationOpen((path) => navigate(new URL(path, START_URL).toString())), [navigate]);
+  // Push is initialised only after the WebView's first load finished (+1.5 s), never at launch, and any failure
+  // just leaves push off (see src/push.ts).
+  const [pushReady, setPushReady] = useState(false);
+  const pushTimerSet = useRef(false);
+  const schedulePushInit = useCallback(() => {
+    if (pushTimerSet.current) return;
+    pushTimerSet.current = true;
+    setTimeout(() => {
+      try {
+        setPushReady(initPush());
+      } catch (e) {
+        console.warn('[push] init failed (ignored):', e);
+      }
+    }, 1500);
+  }, []);
+  useEffect(() => {
+    if (!pushReady) return;
+    let offRefresh = () => {};
+    let offOpen = () => {};
+    try {
+      offRefresh = onTokenRefresh(deliverPushToken);
+      // notification tap → open its deep link (/messages/<peer>, /room/<id>) in the WebView
+      offOpen = onNotificationOpen((path) => {
+        try {
+          navigate(new URL(path, START_URL).toString());
+        } catch {}
+      });
+    } catch (e) {
+      console.warn('[push] listeners failed (ignored):', e);
+    }
+    return () => {
+      offRefresh();
+      offOpen();
+    };
+  }, [pushReady, deliverPushToken, navigate]);
 
   // Deep links: cold start + while running.
   useEffect(() => {
@@ -319,7 +358,12 @@ function Shell() {
           return;
         case 'requestNotificationPermission':
           // the page calls this after sign-in; iOS shows its prompt once
-          requestPushPermissionAndToken().then(deliverPushToken);
+          requestPushPermissionAndToken()
+            .then((t) => {
+              setPushReady(true);
+              deliverPushToken(t);
+            })
+            .catch(() => {});
           return;
         case 'openAuth':
           if (!isNativeAuthStart(msg.value)) {
@@ -448,6 +492,7 @@ function Shell() {
             clearRetry();
             if (offlineRef.current) setOfflineBoth(false);
             hideSplash(); // first page loaded → reveal (LaunchOverlay also self-caps at 1.5s)
+            schedulePushInit();
           }}
           onError={(e) => {
             if (IGNORED_LOAD_ERRORS.has(e.nativeEvent.code)) return;
