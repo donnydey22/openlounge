@@ -37,7 +37,7 @@ export function registerRealtime(io: WsHub) {
   const otp = new OtpService();
   console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
   if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
-    console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Set SMS_PROVIDER=twilio before sharing this URL publicly.");
+    console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Configure a real SMS/OTP provider before sharing this URL publicly.");
   /** phone verified but no account yet: ticket -> { phone, expiresAt } */
   const signupTickets = new Map<string, { phone: string; expiresAt: number }>();
   /** per-socket OTP request budget */
@@ -134,6 +134,21 @@ export function registerRealtime(io: WsHub) {
       io.to(`user:${toId}`).emit("dm:typing", { from: fromId });
     },
   });
+
+  // Auth re-validation for long-lived sockets: a session that expired (or was revoked by a sibling instance) while
+  // the socket stayed open is signed out here; the client gets session:revoked and refreshes / re-authenticates.
+  const revalidate = setInterval(() => {
+    const now = Date.now();
+    for (const [connId, sid] of [...sessionOfSocket]) {
+      if (store.sessionActive(sid, now)) continue;
+      const c = io.get(connId);
+      if (c) {
+        signOutSocket(c);
+        c.emit("session:revoked", { reason: "expired" });
+      }
+    }
+  }, Number(process.env.WS_REVALIDATE_MS || 60_000));
+  revalidate.unref();
 
   /** Server-side sign-out of one connection (logout / revoked session). */
   const signOutSocket = (socket: Conn) => {
