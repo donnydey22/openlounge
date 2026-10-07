@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PhoneSession } from "@/lib/firebaseClient";
-import { ChevronRight, Loader2, Mail, Phone, Plus, X } from "lucide-react";
+import { AtSign, ChevronRight, Loader2, Mail, Phone, Plus, X } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { Sheet } from "@/components/Sheet";
 import { AppleLogo, GoogleLogo, useProviders } from "@/components/auth/ProviderButtons";
@@ -36,12 +36,14 @@ export function SignInMethods() {
   const { toast, request } = useApp();
   const flags = useProviders();
   const [items, setItems] = useState<Identity[] | null>(null);
-  const [sheet, setSheet] = useState<null | "phone" | "email">(null);
+  const [sheet, setSheet] = useState<null | "phone" | "email" | "password">(null);
+  const [account, setAccount] = useState<{ username: string | null; hasPassword: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const r = await authGet<{ identities: Identity[] }>("/auth/identities", { auth: true });
+    const r = await authGet<{ identities: Identity[]; username?: string | null; hasPassword?: boolean }>("/auth/identities", { auth: true });
     if (r?.identities) setItems(r.identities);
+    if (r) setAccount({ username: r.username ?? null, hasPassword: !!r.hasPassword });
   }, []);
 
   useEffect(() => {
@@ -138,6 +140,16 @@ export function SignInMethods() {
             )}
           </div>
         ))}
+        {items && account?.username && (
+          <button className={row} onClick={() => setSheet("password")} data-testid="username-password-row">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800"><AtSign className="h-4 w-4 text-zinc-300" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium">Username &amp; password</span>
+              <span className="block truncate text-xs text-zinc-500">@{account.username} · {account.hasPassword ? "password set" : "no password yet"}</span>
+            </span>
+            <span className="text-xs font-semibold text-sky-400">{account.hasPassword ? "Change" : "Set password"}</span>
+          </button>
+        )}
         {items && !has("phone") && (
           <button className={row} onClick={() => setSheet("phone")}>
             <Plus className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Add phone number</span> <ChevronRight className="h-4 w-4 text-zinc-500" />
@@ -169,6 +181,17 @@ export function SignInMethods() {
             setSheet(null);
             void load();
             toast("✅ Phone number added");
+          }}
+        />
+      </Sheet>
+      <Sheet open={sheet === "password"} onClose={() => setSheet(null)} title={account?.hasPassword ? "Change password" : "Set a password"}>
+        <SetPassword
+          username={account?.username ?? ""}
+          hasPassword={!!account?.hasPassword}
+          onDone={(msg) => {
+            setSheet(null);
+            void load();
+            toast(msg);
           }}
         />
       </Sheet>
@@ -399,5 +422,52 @@ function AddEmailCode({ onDone }: { onDone: () => void }) {
         </button>
       )}
     </div>
+  );
+}
+
+/** Settings → Username & password: sign in as @username with this password (it's also the email + password one). */
+function SetPassword({ username, hasPassword, onDone }: { username: string; hasPassword: boolean; onDone: (msg: string) => void }) {
+  const [current, setCurrent] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ok = password.length >= 8 && (!hasPassword || current.length > 0);
+  async function submit(remove = false) {
+    setBusy(true);
+    setError(null);
+    try {
+      await authPost(remove ? "/auth/password/remove" : "/auth/password/set", { password, currentPassword: current }, { auth: true });
+      onDone(remove ? "Password removed" : `✅ Password saved — sign in as @${username} on any device`);
+    } catch (err) {
+      setError(err instanceof AuthFormError ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ok) void submit();
+      }}
+    >
+      <p className="mb-4 text-sm text-zinc-400">
+        Sign in with <span className="font-semibold text-zinc-200">@{username}</span> and this password on any device. It&apos;s the same account.
+      </p>
+      <input type="text" autoComplete="username" value={username} readOnly hidden />
+      <div className="space-y-3">
+        {hasPassword && <PasswordInput autoComplete="current-password" aria-label="Current password" placeholder="Current password" value={current} onChange={setCurrent} />}
+        <PasswordInput autoComplete="new-password" aria-label="New password" placeholder="New password (8+ characters)" value={password} onChange={setPassword} />
+      </div>
+      {error && <p className="mt-3 text-center text-sm text-red-400">{error}</p>}
+      <button type="submit" disabled={!ok || busy} className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent hover:bg-emerald-400 disabled:opacity-40">
+        {busy && <Loader2 className="h-4 w-4 animate-spin" />} {hasPassword ? "Change password" : "Save password"}
+      </button>
+      {hasPassword && (
+        <button type="button" disabled={!current || busy} onClick={() => confirm("Remove your password? You can still sign in with your other methods.") && void submit(true)} className="mt-3 w-full text-center text-sm font-semibold text-zinc-400 hover:text-red-400 disabled:opacity-40">
+          Remove password
+        </button>
+      )}
+    </form>
   );
 }

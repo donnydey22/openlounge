@@ -23,6 +23,11 @@
 //   POST /auth/email/code/verify {email,code}    → session | signup ticket + linkCode (same rules as a verified email)
 //   POST /auth/email/code/link/start {email}  (Bearer) code to add/verify an email on MY account (Settings)
 //   POST /auth/email/code/link/verify {email,code} (Bearer) → email identity (verified) on my account
+//   POST /auth/username/login {username,password}  @username (or username, any case) + account password → session
+//   POST /auth/username/code/start {username}      6-digit code to the account's verified email → {email:"d***@gmail.com", phone:"•••• 1234"|null}
+//   POST /auth/username/code/verify {username,code} → session
+//   POST /auth/password/set {password,currentPassword?} (Bearer) set / change the account password (Settings)
+//   POST /auth/password/remove {currentPassword}        (Bearer) remove it
 //   POST /auth/link/phone {linkCode,idToken}     "Already have an account?": Firebase phone proof → attach the pending
 //                                                Google/Apple/email identity to that phone account → session
 //
@@ -39,7 +44,7 @@ import { verifyIdToken, claimTrue } from "./jwt";
 import { appleClientSecret, appleConfig, emailEnabled, endpoints, googleConfig, providerFlags, publicBaseUrl, redirectUri } from "./providers";
 import { describeIdentities, linkToPhoneAccount, linkToUser, parseIdentityId, resolveSignIn, type ExternalIdentity } from "./accounts";
 import { dummyVerify, hashPassword, needsRehash, passwordProblem, verifyPassword } from "./password";
-import { LIMITS, allow, peekAllowed } from "./ratelimit";
+import { LIMITS, allow, clearFailures, isLockedOut, peekAllowed, recordFailure } from "./ratelimit";
 import { dropTicket, issueTicket } from "./signup";
 import { verifyPhoneIdToken } from "../firebase";
 import { normalizePhone } from "../otp";
@@ -590,11 +595,114 @@ async function emailCodeLinkVerify(req: IncomingMessage, res: ServerResponse, bo
   json(res, 200, { ok: true, status: "linked", provider: "email", email: c.email, identities: describeIdentities(store, userId) });
 }
 
+// ---------- @username sign-in (password, or a code to the account's verified email) ----------
+// A username is public, so it's never a credential on its own. Both paths land in sessionBody() — the same
+// v2 session + rotating refresh token as every other method — on the one unified account that owns the handle.
+
+export const USERNAME_BAD_LOGIN = "Username or password is incorrect";
+const USERNAME_BAD_CODE = "That code isn't right or has expired. Request a new one.";
+
+/** "donny@gmail.com" → "d***@gmail.com" */
+export function maskEmail(email: string) {
+  const at = email.lastIndexOf("@");
+  if (at < 1) return "***";
+  return `${email[0]}***${email.slice(at)}`;
+}
+/** "+14155550123" → "•••• 0123" */
+export const maskPhone = (e164: string) => `•••• ${e164.replace(/\D/g, "").slice(-4)}`;
+
+async function usernameLogin(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  const username = store.normalizeUsername(str(body.username, 64));
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!username || !password) return json(res, 400, { ok: false, error: "Enter your username and password." });
+  const ip = clientIp(req);
+  if (!allow(`ulogin:ip:${ip}`, LIMITS.usernameLoginIp) || isLockedOut(username, ip)) return tooMany(res);
+  const user = store.userByUsername(username);
+  const hash = user ? store.passwordHashOf(user.id) : null;
+  // unknown username / no password set: same work (a full scrypt), same answer, same strike
+  const ok = hash ? await verifyPassword(password, hash) : (await dummyVerify(password), false);
+  if (!ok || !user || !hash) {
+    recordFailure(username, ip);
+    return json(res, 401, { ok: false, error: USERNAME_BAD_LOGIN });
+  }
+  clearFailures(username, ip);
+  if (needsRehash(hash)) store.setPasswordHash(user.id, await hashPassword(password));
+  json(res, 200, { ...sessionBody(user.id, req, body.device), provider: "username" });
+}
+
+const usernameOtpKey = (userId: string) => `username:${userId}:`;
+
+async function usernameCodeStart(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  const username = store.normalizeUsername(str(body.username, 64));
+  if (!username) return json(res, 400, { ok: false, error: "Enter your username." });
+  // lookups are budgeted per IP: the masked destination is the one thing this endpoint can reveal
+  if (!allow(`ulookup:ip:${clientIp(req)}`, LIMITS.usernameLookupIp)) return tooMany(res);
+  const user = store.userByUsername(username);
+  const email = user && emailEnabled() ? store.verifiedEmailOf(user.id) : null;
+  const phone = user?.phone ? maskPhone(user.phone) : null;
+  const nothing = { ok: true, sent: false, email: null, phone: null };
+  if (!user) return json(res, 200, nothing);
+  if (!email) return json(res, 200, { ...nothing, phone });
+  const key = usernameOtpKey(user.id);
+  const now = Date.now();
+  const prev = await store.emailOtp.get(key);
+  if (prev && prev.usedAt === null && now - prev.createdAt < EMAIL_CODE_COOLDOWN_MS) {
+    const wait = Math.ceil((EMAIL_CODE_COOLDOWN_MS - (now - prev.createdAt)) / 1000);
+    return json(res, 429, { ok: false, error: `Please wait ${wait}s before requesting another code.`, resendIn: wait, email: maskEmail(email), phone });
+  }
+  if (!allow(`ucode:user:${user.id}`, LIMITS.usernameCodeUser) || !allow(`emailcode:email:${email}`, LIMITS.emailCodeEmail)) return tooMany(res);
+  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  await store.flush().catch(() => {}); // the row references users(id)
+  await store.emailOtp.put({ key, email, purpose: "username", userId: user.id, codeHash: otpHash(key, code), createdAt: now, expiresAt: now + EMAIL_CODE_TTL_MS });
+  await sendMail(emailCodeMail(email, code, false, true));
+  json(res, 200, { ok: true, sent: true, email: maskEmail(email), phone, resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
+}
+
+async function usernameCodeVerify(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  if (!allow(`emailverify:ip:${clientIp(req)}`, LIMITS.emailVerifyIp)) return tooMany(res);
+  const code = str(body.code, 20).replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) return json(res, 400, { ok: false, error: "Enter the 6-digit code." });
+  const user = store.userByUsername(str(body.username, 64));
+  if (!user) return json(res, 400, { ok: false, error: USERNAME_BAD_CODE });
+  const key = usernameOtpKey(user.id);
+  const now = Date.now();
+  const row = await store.emailOtp.attempt(key, EMAIL_CODE_MAX_ATTEMPTS, now);
+  if (!row) {
+    const cur = await store.emailOtp.get(key);
+    if (cur && cur.usedAt === null && cur.expiresAt > now && cur.attempts >= EMAIL_CODE_MAX_ATTEMPTS)
+      return json(res, 429, { ok: false, error: "Too many wrong codes. Request a new one.", attemptsLeft: 0 });
+    return json(res, 400, { ok: false, error: USERNAME_BAD_CODE });
+  }
+  const hash = otpHash(key, code);
+  if (!safeEqual(hash, row.codeHash)) {
+    const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts;
+    return json(res, left > 0 ? 400 : 429, { ok: false, error: left > 0 ? USERNAME_BAD_CODE : "Too many wrong codes. Request a new one.", attemptsLeft: left });
+  }
+  if (!(await store.emailOtp.markUsed(key, hash, now))) return json(res, 400, { ok: false, error: USERNAME_BAD_CODE });
+  json(res, 200, { ...sessionBody(user.id, req, body.device), provider: "username" });
+}
+
+/** Settings → Sign-in methods → Password. Changing or removing an existing one needs the current one. */
+async function setAccountPassword(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>, userId: string, remove: boolean) {
+  if (!allow(`pwset:user:${userId}`, LIMITS.loginEmail)) return tooMany(res);
+  const current = store.passwordHashOf(userId);
+  if (current && !(await verifyPassword(body.currentPassword, current))) return json(res, 401, { ok: false, error: "Your current password isn't right." });
+  if (remove) {
+    store.setPasswordHash(userId, null);
+  } else {
+    const problem = passwordProblem(body.password);
+    if (problem) return json(res, 400, { ok: false, error: problem });
+    store.setPasswordHash(userId, await hashPassword(body.password as string));
+  }
+  await store.flush().catch(() => {});
+  json(res, 200, { ok: true, hasPassword: !remove, username: store.users.get(userId)?.username ?? null });
+}
+
 // ---------- router ----------
 
 /** Paths handled here (both /auth/* and /api/auth/*). */
 export const UNIFIED_AUTH_PATH =
-  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link|code\/(?:start|verify|link\/(?:start|verify)))|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
+  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link|code\/(?:start|verify|link\/(?:start|verify)))|password\/(?:forgot|reset|set|remove)|username\/(?:login|code\/(?:start|verify))|(?:google|apple)\/(?:start|callback))$/;
 
 /** Top-level browser navigations (redirect responses; not subject to the CORS check — Apple posts from appleid.apple.com). */
 export function isNavigationRoute(path: string) {
@@ -623,7 +731,7 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
   if (route === "/auth/identities") {
     const userId = await authed(req);
     if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
-    json(res, 200, { ok: true, identities: describeIdentities(store, userId), hasPassword: !!store.passwordHashOf(userId), providers: providerFlags() });
+    json(res, 200, { ok: true, identities: describeIdentities(store, userId), hasPassword: !!store.passwordHashOf(userId), username: store.users.get(userId)?.username ?? null, providers: providerFlags() });
     return true;
   }
   const body = await readBody(req);
@@ -671,6 +779,18 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
       if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
       if (route.endsWith("/start")) return await emailCodeStart(req, res, body, userId), true;
       return await emailCodeLinkVerify(req, res, body, userId), true;
+    }
+    case "/auth/username/login":
+      return await usernameLogin(req, res, body), true;
+    case "/auth/username/code/start":
+      return await usernameCodeStart(req, res, body), true;
+    case "/auth/username/code/verify":
+      return await usernameCodeVerify(req, res, body), true;
+    case "/auth/password/set":
+    case "/auth/password/remove": {
+      const userId = await authed(req);
+      if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
+      return await setAccountPassword(req, res, body, userId, route.endsWith("/remove")), true;
     }
     case "/auth/link/phone":
       return await linkPhone(req, res, body), true;

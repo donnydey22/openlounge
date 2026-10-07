@@ -433,7 +433,7 @@ export class Store {
     this.identities.delete(k);
     const u = this.users.get(userId)!;
     if (provider === "phone" && u.phone === subject) delete u.phone;
-    if (provider === "email" && !this.identitiesOf(userId).some((x) => x.provider === "email")) u.passwordHash = null;
+    // (the password is the account's, not the email's: it keeps working for @username sign-in — migration 012)
     this.scheduleSave();
     return { ok: true as const };
   }
@@ -479,6 +479,20 @@ export class Store {
       .trim()
       .replace(/^@/, "")
       .toLowerCase();
+  }
+
+  /** Username sign-in lookup: case-insensitive, leading @ stripped. Bots can't sign in. */
+  userByUsername(raw: unknown) {
+    const username = this.normalizeUsername(raw);
+    if (!USERNAME_RE.test(username)) return null;
+    for (const u of this.users.values()) if (u.username === username && !u.isBot) return u;
+    return null;
+  }
+
+  /** Where a username sign-in code may go: the account's verified email (email identity first, then Google/Apple). */
+  verifiedEmailOf(userId: string): string | null {
+    const ids = this.identitiesOf(userId).filter((i) => i.verified && i.email);
+    return (ids.find((i) => i.provider === "email") ?? ids[0])?.email ?? null;
   }
 
   usernameAvailable(username: string, exceptUserId?: string) {

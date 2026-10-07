@@ -113,7 +113,7 @@ export interface OneTimeBackend {
 export interface EmailOtpRow {
   key: string;
   email: string;
-  purpose: "signin" | "link";
+  purpose: "signin" | "link" | "username";
   userId: string | null;
   codeHash: string;
   attempts: number;

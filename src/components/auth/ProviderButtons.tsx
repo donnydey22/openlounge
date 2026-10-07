@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import type React from "react";
-import { Loader2, Mail } from "lucide-react";
+import { AtSign, Loader2, Mail } from "lucide-react";
 import { canUseOAuth, fetchProviders, startOAuth, type OAuthProvider, type ProviderFlags } from "@/lib/authApi";
 import { cn } from "@/lib/utils";
 
@@ -55,14 +55,14 @@ export function useProviders() {
   return flags;
 }
 
-export function ProviderButtons({ onEmail, className, divider = true }: { onEmail: () => void; className?: string; divider?: boolean }) {
+export function ProviderButtons({ onEmail, onUsername, className, divider = true }: { onEmail: () => void; onUsername?: () => void; className?: string; divider?: boolean }) {
   const flags = useProviders();
   const [busy, setBusy] = useState<OAuthProvider | null>(null);
   if (!flags) return null;
   const oauth = canUseOAuth();
   const apple = flags.apple && oauth;
   const google = flags.google && oauth;
-  if (!apple && !google && !flags.email) return null; // nothing configured: the screen looks exactly as before
+  if (!apple && !google && !flags.email && !onUsername) return null; // nothing configured: the screen looks exactly as before
 
   const start = async (p: OAuthProvider) => {
     setBusy(p);
@@ -100,6 +100,14 @@ export function ProviderButtons({ onEmail, className, divider = true }: { onEmai
               <Mail className="h-[18px] w-[18px]" strokeWidth={2.25} />
             </IconSlot>
             Continue with email
+          </button>
+        )}
+        {onUsername && (
+          <button type="button" onClick={onUsername} disabled={!!busy} className={cn(authBtn, "btn-auth-secondary")} data-testid="username-signin">
+            <IconSlot>
+              <AtSign className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            </IconSlot>
+            Continue with username
           </button>
         )}
       </div>

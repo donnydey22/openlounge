@@ -651,7 +651,7 @@ export class PgPersistence implements Persistence {
 interface OtpDbRow {
   otp_key: string;
   email: string;
-  purpose: "signin" | "link";
+  purpose: "signin" | "link" | "username";
   user_id: string | null;
   code_hash: string;
   attempts: number;

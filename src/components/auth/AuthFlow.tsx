@@ -24,10 +24,11 @@ function initialEntry(): { step: Step; pending: PendingSignup | null } {
   if (typeof window === "undefined") return { step: "welcome", pending: null };
   const pending = takePendingSignup();
   if (pending) return { step: pending.linkCode ? "linkChoice" : "name", pending };
-  return { step: new URLSearchParams(location.search).get("signin") === "email" ? "email" : "welcome", pending: null };
+  const signin = new URLSearchParams(location.search).get("signin");
+  return { step: signin === "email" ? "email" : signin === "username" ? "usernameSignin" : "welcome", pending: null };
 }
 
-type Step = "linkChoice" | "welcome" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
+type Step = "linkChoice" | "welcome" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "usernameSignin" | "usernameCode" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
 export function AuthFlow() {
   const { request, completeLogin, finishOnboarding, onboarding, follow, updateMe, connected, toast } = useApp();
@@ -40,6 +41,9 @@ export function AuthFlow() {
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [busy, setBusy] = useState(false);
+  // @username sign-in: password, or a code to the account's verified email (masked)
+  const [handle, setHandle] = useState("");
+  const [codeTo, setCodeTo] = useState<{ email: string | null; phone: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // phone + code
@@ -201,6 +205,61 @@ export function AuthFlow() {
         setLinkCode(res.linkCode ?? "");
         go(res.linkCode ? "linkChoice" : "name");
       } else throw new AuthFormError("Something went wrong. Please try again.");
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+      setCode("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const handleOk = /^@?[a-zA-Z0-9_]{3,20}$/.test(handle.trim());
+
+  function welcomeBack(res: SessionResult) {
+    completeLogin(res.token, res, { resumeSocket: true });
+    toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
+  }
+
+  async function usernameSignIn() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      welcomeBack(await authPost<SessionResult>("/auth/username/login", { username: handle.trim(), password }));
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendUsernameCode() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await authPost<{ sent: boolean; email: string | null; phone: string | null; resendIn?: number }>("/auth/username/code/start", { username: handle.trim() });
+      setCodeTo({ email: r.email, phone: r.phone });
+      if (r.sent) {
+        setResendIn(r.resendIn ?? 60);
+        setCode("");
+        go("usernameCode");
+      } else if (r.phone) {
+        setError(`We can't email a code for this account. Text one to the number ending ${r.phone.slice(-4)} — sign in with your phone.`);
+      } else setError("We couldn't send a code for that username. Check it, or sign in another way.");
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyUsernameCode(value: string) {
+    if (value.length !== 6 || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      welcomeBack(await authPost<SessionResult>("/auth/username/code/verify", { username: handle.trim(), code: value }));
     } catch (e) {
       setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
       setCode("");
@@ -379,7 +438,7 @@ export function AuthFlow() {
             </IconSlot>
             Continue with phone
           </button>
-          <ProviderButtons onEmail={() => go("emailCode")} />
+          <ProviderButtons onEmail={() => go("emailCode")} onUsername={() => go("usernameSignin")} />
           <button
             onClick={() => {
               setMode("signin");
@@ -450,7 +509,7 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
               Next <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
-            {!linking && <ProviderButtons onEmail={() => go("emailCode")} />}
+            {!linking && <ProviderButtons onEmail={() => go("emailCode")} onUsername={() => go("usernameSignin")} />}
             {linking ? null : mode !== "signin" ? (
               <button type="button" onClick={() => setMode("signin")} className="auth-alt-link text-sky-400 hover:underline">
                 Already have an account? Sign in →
@@ -520,6 +579,80 @@ export function AuthFlow() {
         </div>
         <Footer>
           <PrimaryButton onClick={() => verifyEmailCode(code)} disabled={code.length !== 6} busy={busy}>
+            Verify <ArrowRight className="h-4 w-4" />
+          </PrimaryButton>
+        </Footer>
+      </Shell>
+    );
+  }
+
+  if (step === "usernameSignin") {
+    return (
+      <Shell stepKey={step} onBack={() => go("welcome")}>
+        <Title sub="Sign in with your @username and password.">Welcome back!</Title>
+        <form
+          className="contents"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (handleOk && password) usernameSignIn();
+          }}
+        >
+          <div className="mt-8 space-y-3">
+            <TextInput autoFocus autoComplete="username" autoCapitalize="none" spellCheck={false} aria-label="Username" placeholder="@username" value={handle} onChange={(v) => setHandle(v.replace(/\s/g, ""))} maxLength={21} />
+            <PasswordInput autoComplete="current-password" aria-label="Password" placeholder="Password" value={password} onChange={setPassword} />
+          </div>
+          <ErrorText>{error}</ErrorText>
+          <Footer>
+            <PrimaryButton type="submit" disabled={!handleOk || !password} busy={busy}>
+              Sign in <ArrowRight className="h-4 w-4" />
+            </PrimaryButton>
+            <button type="button" disabled={!handleOk || busy} onClick={sendUsernameCode} className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline disabled:opacity-50" data-testid="username-code">
+              Send me a code instead →
+            </button>
+            {codeTo?.phone && !codeTo.email && (
+              <button type="button" onClick={() => { setMode("signin"); go("phone"); }} className="mt-3 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
+                Text a code to {codeTo.phone} →
+              </button>
+            )}
+            <p className="mt-4 text-center text-xs leading-relaxed text-zinc-500">No password yet? Sign in another way, then add one in Settings → Sign-in methods.</p>
+          </Footer>
+        </form>
+      </Shell>
+    );
+  }
+
+  if (step === "usernameCode") {
+    return (
+      <Shell stepKey={step} onBack={() => go("usernameSignin")}>
+        <Title sub={codeTo?.email ? `Sent to ${codeTo.email}` : undefined}>Enter the code we just emailed you</Title>
+        <CodeInput
+          value={code}
+          disabled={busy}
+          onChange={(v) => {
+            setCode(v);
+            if (v.length === 6) verifyUsernameCode(v);
+          }}
+        />
+        <ErrorText>{error}</ErrorText>
+        <div className="mt-6 text-center text-sm text-zinc-500">
+          Didn&apos;t get it? Check spam, or{" "}
+          {resendIn > 0 ? (
+            <span>resend in {resendIn}s</span>
+          ) : (
+            <button onClick={sendUsernameCode} className="font-semibold text-sky-400 hover:underline">
+              tap to resend
+            </button>
+          )}
+        </div>
+        {codeTo?.phone && (
+          <div className="mt-3 text-center text-sm">
+            <button type="button" onClick={() => { setMode("signin"); go("phone"); }} className="font-semibold text-sky-400 hover:underline">
+              Text a code to {codeTo.phone} instead
+            </button>
+          </div>
+        )}
+        <Footer>
+          <PrimaryButton onClick={() => verifyUsernameCode(code)} disabled={code.length !== 6} busy={busy}>
             Verify <ArrowRight className="h-4 w-4" />
           </PrimaryButton>
         </Footer>
