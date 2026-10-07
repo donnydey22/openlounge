@@ -57,7 +57,7 @@ export function DownloadHub() {
         data-testid="get-app-tab"
         className={`fixed top-1/2 z-50 -translate-y-1/2 rounded-l-xl bg-zinc-800 px-2 py-4 text-sm font-semibold text-zinc-100 shadow-lg transition-[right] duration-300 [writing-mode:vertical-rl] ${open ? "right-[min(24rem,88vw)]" : "right-0"}`}
       >
-        Get the app
+        get the app
       </button>
 
       <div
