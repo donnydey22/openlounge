@@ -21,6 +21,15 @@ async function main() {
   await app.prepare();
 
   const server = createServer((req, res) => {
+    // Short link for the Android APK download (302 so the target can change via ANDROID_DOWNLOAD_URL).
+    if (req.method === "GET" || req.method === "HEAD") {
+      const p = (req.url ?? "").split("?")[0];
+      if (p === "/android" || p === "/android/") {
+        const target = process.env.ANDROID_DOWNLOAD_URL || "https://i.diawi.com/drKdz2";
+        res.writeHead(302, { Location: target, "Cache-Control": "no-store" }).end();
+        return;
+      }
+    }
     // uploaded profile photos: /avatars/<userId>?v=<version>
     if (req.url?.startsWith("/avatars/")) {
       const id = decodeURIComponent(req.url.slice("/avatars/".length).split("?")[0]);
