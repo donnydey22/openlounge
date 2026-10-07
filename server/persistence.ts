@@ -25,6 +25,8 @@ export interface UserRecord {
   /** E.164 phone number used to sign in (humans only, never sent to other users) */
   phone?: string;
   interests?: string[];
+  /** canonical https URLs keyed by network (see src/lib/socialLinks.ts) */
+  socialLinks?: Record<string, string>;
   /** bumped on every upload; null = no photo */
   photoVersion?: number | null;
 }

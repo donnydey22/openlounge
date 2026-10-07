@@ -70,6 +70,8 @@ interface AppCtx {
   signOut(): Promise<void>;
   request<T = Record<string, unknown>>(event: string, payload?: unknown): Promise<T>;
   follow(userId: string, follow: boolean): Promise<void>;
+  /** replace the signed-in user with a fresh copy from the server (e.g. a REST response) */
+  setMeLocal(user: Me): void;
   updateMe(patch: { name?: string; bio?: string; color?: string; username?: string; interests?: string[] }): Promise<void>;
   setPhoto(photo: string | null): Promise<void>;
   toast(message: string, href?: string): void;
@@ -498,6 +500,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       request,
       follow,
       updateMe,
+      setMeLocal: setMe,
       setPhoto,
       toast,
       reportError,
