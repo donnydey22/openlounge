@@ -18,6 +18,8 @@ export interface PushMessage {
   data?: Record<string, string>;
   /** data-only "clear this tag" message (DM read on another device) */
   clear?: boolean;
+  /** total unread for the recipient (also sent as data.badge) → iOS aps.badge, Android launcher badge */
+  badge?: number;
 }
 
 export interface SendResult {
@@ -57,10 +59,10 @@ export class FcmSender implements PushSender {
             token: t.token,
             data,
             apns: msg.clear
-              ? { headers: { "apns-push-type": "background", "apns-priority": "5" }, payload: { aps: { contentAvailable: true } } }
+              ? { headers: { "apns-push-type": "background", "apns-priority": "5" }, payload: { aps: { contentAvailable: true, ...(msg.badge !== undefined ? { badge: msg.badge } : {}) } } }
               : {
                   headers: { "apns-collapse-id": msg.tag.slice(0, 64), "apns-priority": "10" },
-                  payload: { aps: { alert: { title: msg.title, body: msg.body }, sound: "default", threadId: msg.tag, mutableContent: true } },
+                  payload: { aps: { alert: { title: msg.title, body: msg.body }, sound: "default", threadId: msg.tag, mutableContent: true, ...(msg.badge !== undefined ? { badge: msg.badge } : {}) } },
                 },
           };
         return {

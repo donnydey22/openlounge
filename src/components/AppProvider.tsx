@@ -136,6 +136,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [unreadDms, setUnreadDms] = useState(0);
+  // app-icon badge in the native shells (Android ShortcutBadger / iOS setBadgeCount): total unread = unread DMs
+  // (+ unread notifications once there is a notification inbox). Opening a DM lowers dm:unread → badge updates/clears.
+  useEffect(() => {
+    try {
+      (window as unknown as { OpenLoungeNative?: { setBadge?: (n: number) => void } }).OpenLoungeNative?.setBadge?.(unreadDms);
+    } catch {
+      /* older shells */
+    }
+  }, [unreadDms]);
   const [onboarding, setOnboarding] = useState(false);
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [lastSeen, setLastSeen] = useState<Map<string, number>>(new Map());

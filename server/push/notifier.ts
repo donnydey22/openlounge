@@ -16,6 +16,8 @@ export interface NotifierDeps {
   /** all (non-bot) users with a phone: [userId, e164] — contact matching */
   usersWithPhones(): Iterable<[string, string]>;
   isBot?(userId: string): boolean;
+  /** app-icon badge: total unread for the user (unread DMs + unread notifications; main has no notification inbox yet, so = unread DMs) */
+  badgeCount?(userId: string): number;
   now?(): number;
 }
 
@@ -97,9 +99,21 @@ export class Notifier {
     if (opts.dedupeKey) this.dedupe.set(`${userId}|${opts.dedupeKey}`, now);
     if (ACTIVE_ROOM_TYPES.includes(type)) this.lastActiveRoom.set(userId, now);
     this.hourly.set(capKey, [...recent, now]);
-    const res = await this.d.sender.send(tokens, msg);
+    const res = await this.d.sender.send(tokens, this.withBadge(userId, msg));
     for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
     return "sent";
+  }
+
+  /** every push carries the current total unread as data.badge (Android launcher badge / iOS aps.badge) */
+  private withBadge(userId: string, msg: PushMessage): PushMessage {
+    if (!this.d.badgeCount) return msg;
+    let n = 0;
+    try {
+      n = Math.max(0, Math.floor(this.d.badgeCount(userId)) || 0);
+    } catch {
+      return msg;
+    }
+    return { ...msg, badge: n, data: { ...(msg.data ?? {}), badge: String(n) } };
   }
 
   // ---------- triggers ----------
@@ -122,7 +136,7 @@ export class Notifier {
   async dmRead(readerId: string, peerId: string) {
     const tokens = await this.d.repo.tokensFor(readerId);
     if (!tokens.length) return;
-    const res = await this.d.sender.send(tokens, { type: "clear", title: "", body: "", channel: "messages", tag: `dm:${peerId}`, url: "", clear: true });
+    const res = await this.d.sender.send(tokens, this.withBadge(readerId, { type: "clear", title: "", body: "", channel: "messages", tag: `dm:${peerId}`, url: "", clear: true }));
     for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
   }
 
