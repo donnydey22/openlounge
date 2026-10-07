@@ -25,6 +25,7 @@ export default function InvitePage() {
   const [members, setMembers] = useState<PublicUser[]>([]);
   const [others, setOthers] = useState<ContactEntry[]>([]);
   const [optedIn, setOptedIn] = useState(false);
+  const [limited, setLimited] = useState(false);
 
   useEffect(() => {
     setCount(invitesShared());
@@ -66,6 +67,7 @@ export default function InvitePage() {
         setPhase("denied");
         return;
       }
+      setLimited(res.limited);
       const entries = await prepareContacts(res.contacts, res.country);
       const r = await matchContacts(entries.map((e) => e.hash));
       const matched = new Set(r.matchedHashes);
@@ -132,6 +134,14 @@ export default function InvitePage() {
             </div>
           ) : phase === "results" ? (
             <>
+              {limited && (
+                <div className="mb-4 flex items-center gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
+                  <span className="flex-1">Only the contacts you selected were checked. Allow full access in Settings.</span>
+                  {native()?.openAppSettings && (
+                    <button onClick={() => native()?.openAppSettings?.()} className="shrink-0 rounded-full border border-amber-200/30 px-3 py-1.5 text-xs font-semibold">Settings</button>
+                  )}
+                </div>
+              )}
               <div className="mb-2 text-sm font-semibold">Friends on Open Lounge {members.length ? `· ${members.length}` : ""}</div>
               <div className="mb-5 overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/70">
                 {members.length === 0 && <div className="p-4 text-sm text-zinc-500">None of your contacts are here yet — invite them below.</div>}

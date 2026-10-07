@@ -33,7 +33,7 @@ export interface NativeContact {
 }
 
 /** Ask the native wrapper for contacts (OS prompt first). Resolves null if declined/unavailable. */
-export function readNativeContacts(timeoutMs = 60_000): Promise<{ contacts: NativeContact[]; country: string } | null> {
+export function readNativeContacts(timeoutMs = 60_000): Promise<{ contacts: NativeContact[]; country: string; limited: boolean } | null> {
   const n = native();
   if (!n?.requestContacts) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -43,7 +43,7 @@ export function readNativeContacts(timeoutMs = 60_000): Promise<{ contacts: Nati
       clearTimeout(t);
       try {
         const j = JSON.parse(json);
-        resolve(j && j.granted ? { contacts: j.contacts ?? [], country: String(j.country || "US").toUpperCase() } : null);
+        resolve(j && j.granted ? { contacts: j.contacts ?? [], country: String(j.country || "US").toUpperCase(), limited: j.accessPrivileges === "limited" } : null);
       } catch {
         resolve(null);
       }
