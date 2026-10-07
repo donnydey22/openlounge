@@ -15,7 +15,14 @@ export async function readContactsForPage(): Promise<string> {
 async function readContactsUnsafe(): Promise<string> {
   const perm = await Contacts.requestPermissionsAsync();
   if (perm.status !== 'granted') return JSON.stringify({ granted: false });
-  const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name], pageSize: 5000 });
+  // page through everything (no fixed cap); only name + phone numbers are requested
+  const data: Contacts.Contact[] = [];
+  for (let pageOffset = 0; pageOffset < 50_000; ) {
+    const page = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name], pageSize: 1000, pageOffset });
+    data.push(...page.data);
+    if (!page.hasNextPage || !page.data.length) break;
+    pageOffset += page.data.length;
+  }
   const contacts = data
     .map((c) => ({ name: c.name ?? '', numbers: (c.phoneNumbers ?? []).map((p) => p.number ?? p.digits ?? '').filter(Boolean) }))
     .filter((c) => c.numbers.length);
