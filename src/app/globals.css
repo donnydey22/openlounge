@@ -673,3 +673,10 @@ html[data-lowend] .skeleton {
 html[data-lowend] .speaking-glow-bloom {
   filter: none !important;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-step-in,
+  .auth-welcome-in {
+    animation: none;
+  }
+}
