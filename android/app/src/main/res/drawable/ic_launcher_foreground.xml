@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#F2B366"
-        android:pathData="M54,34c-7.7,0 -14,6.3 -14,14v8c0,7.7 6.3,14 14,14s14,-6.3 14,-14v-8c0,-7.7 -6.3,-14 -14,-14z" />
-    <path
-        android:fillColor="#5B8C5A"
-        android:pathData="M40,60c0,7.7 6.3,14 14,14s14,-6.3 14,-14h-4c0,5.5 -4.5,10 -10,10s-10,-4.5 -10,-10h-4z" />
-    <path
-        android:fillColor="#F2B366"
-        android:pathData="M52,74h4v8h-4z" />
+<!-- Open Lounge mic mark (master: openlounge public/brand/mark.svg, 1024 grid). Glyph scaled to 62% = inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="54" android:translateY="54" android:scaleX="0.065390625" android:scaleY="0.065390625">
+        <group android:translateX="-512" android:translateY="-504">
+            <path android:fillColor="#FFFFFF" android:pathData="M400,312a112,112 0 0,1 224,0v160a112,112 0 0,1 -224,0z" />
+            <path android:fillColor="#10B981" android:fillAlpha="0.9" android:pathData="M468,296h88a12,12 0 0,1 0,24h-88a12,12 0 0,1 0,-24zM468,360h88a12,12 0 0,1 0,24h-88a12,12 0 0,1 0,-24zM468,424h88a12,12 0 0,1 0,24h-88a12,12 0 0,1 0,-24z" />
+            <path android:strokeColor="#FFFFFF" android:strokeWidth="64" android:strokeLineCap="round" android:fillColor="#00000000"
+                android:pathData="M304,480v16a208,208 0 0,0 416,0v-16M512,712v104M400,824h224" />
+        </group>
+    </group>
 </vector>
