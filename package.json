@@ -2,7 +2,7 @@
   "name": "openlounge",
   "version": "0.1.0",
   "private": true,
-  "description": "Open Lounge \u2014 a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
+  "description": "Open Lounge — a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
   "scripts": {
     "dev": "tsx server/index.ts",
     "build": "next build",
