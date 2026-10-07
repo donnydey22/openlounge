@@ -9,6 +9,7 @@ import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
+import { LaunchOverlay } from './src/LaunchOverlay';
 import { OfflineScreen } from './src/OfflineScreen';
 import {
   audioResumeScript,
@@ -40,7 +41,7 @@ import { schemeOf } from './src/url';
 // Keep the native splash (same artwork/colours as Android's launch screen) up until the page has painted and the
 // web app finished its session check (OpenLoungeNative.ready() or the automatic AuthGate check in bridge.ts).
 SplashScreen.preventAutoHideAsync().catch(() => {});
-SplashScreen.setOptions({ fade: true, duration: 280 });
+SplashScreen.setOptions({ fade: false, duration: 0 }); // LaunchOverlay takes over seamlessly (same bg)
 
 const themeColor = (t: Theme) => (t === 'light' ? COLORS.light : COLORS.dark);
 
@@ -70,6 +71,7 @@ function openInSafariView(url: string) {
 function Shell() {
   const insets = useSafeAreaInsets();
   const webRef = useRef<WebView>(null);
+  const [launchReady, setLaunchReady] = useState(false);
   const [theme, setThemeState] = useState<Theme>('dark'); // the web app defaults to dark
   const [offline, setOffline] = useState(false);
   const [webKey, setWebKey] = useState(0);
@@ -96,7 +98,7 @@ function Shell() {
   const hideSplash = useCallback(() => {
     if (splashHidden.current) return;
     splashHidden.current = true;
-    SplashScreen.hideAsync().catch(() => {});
+    setLaunchReady(true); // fades the wordmark overlay out; the native splash was already handed to it
   }, []);
 
   useEffect(() => {
@@ -445,8 +447,7 @@ function Shell() {
             retryAttempt.current = 0;
             clearRetry();
             if (offlineRef.current) setOfflineBoth(false);
-            // Fallback if the page never reports ready (older web build): short grace, then fade the splash.
-            setTimeout(hideSplash, 1500);
+            hideSplash(); // first page loaded → reveal (LaunchOverlay also self-caps at 1.5s)
           }}
           onError={(e) => {
             if (IGNORED_LOAD_ERRORS.has(e.nativeEvent.code)) return;
@@ -460,6 +461,7 @@ function Shell() {
         />
       </View>
 
+      <LaunchOverlay ready={launchReady} theme={theme} onShown={() => SplashScreen.hideAsync().catch(() => {})} />
       {offline && <OfflineScreen theme={theme} onRetryNow={retryNow} insets={insets} />}
     </View>
   );
