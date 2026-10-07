@@ -1,6 +1,6 @@
 // Contact sheet + home-screen mockups for the app-icon set (preview only).
 import sharp from "sharp";
-const A = "assets/app-icon/", O = process.argv[2] || "/workspace/integration-screens/logo/";
+const A = "assets/app-icon/", O = process.argv[2] || "/workspace/integration-screens/logo/final-";
 const mask = (s, r) => Buffer.from(`<svg width="${s}" height="${s}"><rect width="${s}" height="${s}" rx="${r}" fill="#fff"/></svg>`);
 const circle = (s) => Buffer.from(`<svg width="${s}" height="${s}"><circle cx="${s/2}" cy="${s/2}" r="${s/2}" fill="#fff"/></svg>`);
 async function masked(file, s, m, bg) {
@@ -35,5 +35,5 @@ await screen("icon-home-ios-tinted.png", { bg: "#0b1320", text: "#eee" }, "iOS 1
 await screen("icon-home-android.png", { bg: "#efe7da", text: "#111" }, "Android — adaptive", and);
 await screen("icon-home-android-themed.png", { bg: "#1e2a24", text: "#eee" }, "Android 13 — themed (monochrome)", mono);
 const files = ["icon-home-ios-light.png", "icon-home-ios-dark.png", "icon-home-ios-tinted.png", "icon-home-android.png", "icon-home-android-themed.png"];
-await sharp({ create: { width: 540 * 5, height: 960, channels: 4, background: "#fff" } }).composite(files.map((f, i) => ({ input: O + f, left: i * 540, top: 0 }))).png().toFile(O + "icon-home-mockups.png");
+await sharp({ create: { width: 540 * 5, height: 960, channels: 4, background: "#fff" } }).composite(files.map((f, i) => ({ input: O + f, left: i * 540, top: 0 }))).png().toFile(O + "icon-final-mockups-sheet.png");
 console.log("mockups →", O);
