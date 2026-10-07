@@ -54,7 +54,7 @@ export function PrimaryButton({
       type={type}
       onClick={onClick}
       disabled={disabled || busy}
-      className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-4 text-[17px] font-semibold text-on-accent shadow-lg shadow-emerald-500/20 transition duration-200 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-40 disabled:shadow-none"
+      className="flex w-full items-center justify-center gap-2 h-[52px] rounded-full bg-emerald-500 text-[17px] font-semibold text-on-accent shadow-lg shadow-emerald-500/20 transition duration-200 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-40 disabled:shadow-none"
     >
       {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : children}
     </button>

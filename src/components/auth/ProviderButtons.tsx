@@ -6,6 +6,7 @@
 // guidelines (standard "G" mark, neutral light/dark theme).
 
 import { useEffect, useState } from "react";
+import type React from "react";
 import { Loader2, Mail } from "lucide-react";
 import { canUseOAuth, fetchProviders, startOAuth, type OAuthProvider, type ProviderFlags } from "@/lib/authApi";
 import { cn } from "@/lib/utils";
@@ -29,14 +30,24 @@ export function GoogleLogo({ className }: { className?: string }) {
   );
 }
 
-const base =
-  "flex w-full items-center justify-center gap-2.5 rounded-full py-3.5 text-[17px] font-semibold transition duration-200 active:scale-[0.98] disabled:opacity-50";
+// One visual family for every sign-in option (phone / Apple / Google / email): same height, radius, padding,
+// icon slot and weight. Colours live in globals.css (.btn-auth-*) so light/dark parity is explicit.
+export const authBtn = "btn-auth";
+export function IconSlot({ children }: { children: React.ReactNode }) {
+  return <span className="btn-auth-icon">{children}</span>;
+}
+
+let cachedFlags: ProviderFlags | null = null;
 
 export function useProviders() {
-  const [flags, setFlags] = useState<ProviderFlags | null>(null);
+  // cached across screens so welcome → phone never re-flows while the request is in flight
+  const [flags, setFlags] = useState<ProviderFlags | null>(cachedFlags);
   useEffect(() => {
     let live = true;
-    void fetchProviders().then((f) => live && setFlags(f));
+    void fetchProviders().then((f) => {
+      cachedFlags = f;
+      if (live) setFlags(f);
+    });
     return () => {
       live = false;
     };
@@ -66,26 +77,28 @@ export function ProviderButtons({ onEmail, className, divider = true }: { onEmai
   return (
     <div className={cn("w-full", className)} data-testid="provider-buttons">
       {divider && (
-        <div className="my-5 flex items-center gap-3 text-xs font-medium tracking-wide text-zinc-500 uppercase">
-          <span className="h-px flex-1 bg-white/10" /> or <span className="h-px flex-1 bg-white/10" />
+        <div className="auth-divider" aria-hidden>
+          <span /> or <span />
         </div>
       )}
-      <div className="space-y-3">
+      <div className="auth-stack">
         {apple && (
-          <button type="button" onClick={() => start("apple")} disabled={!!busy} className={cn(base, "btn-apple font-[system-ui]")} style={{ fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif" }}>
-            {busy === "apple" ? <Loader2 className="h-5 w-5 animate-spin" /> : <AppleLogo className="-mt-0.5 h-[19px] w-[16px]" />}
+          <button type="button" onClick={() => start("apple")} disabled={!!busy} className={cn(authBtn, "btn-auth-apple")}>
+            <IconSlot>{busy === "apple" ? <Loader2 className="h-5 w-5 animate-spin" /> : <AppleLogo className="-mt-0.5 h-[19px] w-[16px]" />}</IconSlot>
             Continue with Apple
           </button>
         )}
         {google && (
-          <button type="button" onClick={() => start("google")} disabled={!!busy} className={cn(base, "btn-google")}>
-            {busy === "google" ? <Loader2 className="h-5 w-5 animate-spin" /> : <GoogleLogo className="h-[18px] w-[18px]" />}
+          <button type="button" onClick={() => start("google")} disabled={!!busy} className={cn(authBtn, "btn-auth-secondary")}>
+            <IconSlot>{busy === "google" ? <Loader2 className="h-5 w-5 animate-spin" /> : <GoogleLogo className="h-[18px] w-[18px]" />}</IconSlot>
             Continue with Google
           </button>
         )}
         {flags.email && (
-          <button type="button" onClick={onEmail} disabled={!!busy} className={cn(base, "border border-white/15 bg-zinc-900 text-zinc-100 hover:bg-zinc-800")}>
-            <Mail className="h-[18px] w-[18px]" />
+          <button type="button" onClick={onEmail} disabled={!!busy} className={cn(authBtn, "btn-auth-secondary")}>
+            <IconSlot>
+              <Mail className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            </IconSlot>
             Continue with email
           </button>
         )}

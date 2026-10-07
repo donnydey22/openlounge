@@ -6,7 +6,7 @@
 // Phone verification goes through the server's OtpService (demo SMS provider by default).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Camera, Check, Loader2 } from "lucide-react";
+import { ArrowRight, Camera, Check, Loader2, Phone } from "lucide-react";
 import { AVATAR_COLORS, USERNAME_RE, type PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { fileToAvatarDataUrl } from "@/lib/image";
@@ -15,7 +15,7 @@ import { InterestChips } from "../profile/InterestChips";
 import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
-import { ProviderButtons } from "./ProviderButtons";
+import { IconSlot, ProviderButtons } from "./ProviderButtons";
 import { AuthFormError, authPost, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
 
 /** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
@@ -246,21 +246,26 @@ export function AuthFlow() {
           </div>
         </div>
         <Footer>
-          <PrimaryButton
+          <button
+            type="button"
             onClick={() => {
               setMode("signup");
               go("phone");
             }}
+            className="btn-auth btn-auth-primary"
           >
-            Get your username 👋
-          </PrimaryButton>
+            <IconSlot>
+              <Phone className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            </IconSlot>
+            Continue with phone
+          </button>
           <ProviderButtons onEmail={() => go("email")} />
           <button
             onClick={() => {
               setMode("signin");
               go("phone");
             }}
-            className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline"
+            className="auth-alt-link text-sky-400 hover:underline"
           >
             Already have an account? Sign in →
           </button>
@@ -319,6 +324,15 @@ export function AuthFlow() {
               Next <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
             <ProviderButtons onEmail={() => go("email")} />
+            {mode !== "signin" ? (
+              <button type="button" onClick={() => setMode("signin")} className="auth-alt-link text-sky-400 hover:underline">
+                Already have an account? Sign in →
+              </button>
+            ) : (
+              <button type="button" onClick={() => setMode("signup")} className="auth-alt-link text-sky-400 hover:underline">
+                New here? Create an account →
+              </button>
+            )}
           </Footer>
         </form>
       </Shell>
