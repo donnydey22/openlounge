@@ -1,45 +1,64 @@
-// Generates every app-icon asset from ONE master: the glyph + gradient of public/brand/mark.svg (1024 grid).
-// Run: node scripts/brand/gen-icons.mjs [outDir=assets/app-icon]
+// Generates the master mark and every app-icon asset from ONE source: the header mic (scripts/brand/mic.mjs).
+// Run: node scripts/brand/gen-icons.mjs            → writes a STAGING copy only (default /workspace/integration-screens/logo/icon-staging)
+//      APPLY=1 node scripts/brand/gen-icons.mjs    → writes into the repo (public/brand, public/icons, assets/app-icon, android mipmaps)
+// APPLY also needs mipmap-anydpi-v26/ic_launcher*.xml to point foreground/monochrome at @mipmap/ (bitmap layers).
+// Mic art is swappable: MIC_SRC=path/to/128x128.svg (see scripts/brand/mic.mjs). Icon art is ON HOLD pending Donny's reference.
 import sharp from "sharp";
 import fs from "node:fs";
 import path from "node:path";
-const out = process.argv[2] || "assets/app-icon";
+import { placed } from "./mic.mjs";
+const ROOT = process.env.APPLY ? "." : process.env.STAGING || "/workspace/integration-screens/logo/icon-staging";
+const R = (p) => path.join(ROOT, p);
+const out = R("assets/app-icon");
+for (const d of ["public/brand", "public/icons"]) fs.mkdirSync(R(d), { recursive: true });
 fs.mkdirSync(out, { recursive: true });
-const GRAD = `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34D399"/><stop offset="1" stop-color="#059669"/></linearGradient>`;
-const HL = `<linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>`;
-// glyph: capsule, grille levels (optional), yoke + stand. scale s around centre (512,504)
-const glyph = (fg, lvl, s = 1) => `<g transform="translate(512 512) scale(${s}) translate(-512 -504)">
-<rect x="400" y="200" width="224" height="384" rx="112" fill="${fg}"/>
-${lvl ? `<g fill="${lvl}"><rect x="456" y="296" width="112" height="24" rx="12"/><rect x="456" y="360" width="112" height="24" rx="12"/><rect x="456" y="424" width="112" height="24" rx="12"/></g>` : ""}
-<path d="M304 480v16a208 208 0 0 0 416 0v-16M512 712v104M400 824h224" fill="none" stroke="${fg}" stroke-width="64" stroke-linecap="round"/></g>`;
-const svg = (body, defs = "") => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>${GRAD}${HL}${defs}</defs>${body}</svg>`);
-const full = (s = 0.78) => svg(`<rect width="1024" height="1024" fill="url(#g)"/><rect width="1024" height="1024" fill="url(#hl)"/>${glyph("#fff", "#10B981", s)}`);
-const SQ = fs.readFileSync("public/brand/mark.svg", "utf8");
-const png = (buf, size, file, opts = {}) => {
-  let p = sharp(buf, { density: 300 }).resize(size, size);
-  if (opts.flatten) p = p.flatten({ background: opts.flatten });
-  return p.png().toFile(path.join(out, file));
-};
+const SQ = "M1024 512L1024 684L1022 739L1020 778L1017 810L1013 837L1008 861L1002 881L995 900L988 917L979 932L969 945L958 958L945 969L932 979L917 988L900 995L881 1002L861 1008L837 1013L810 1017L778 1020L739 1022L684 1024L512 1024L340 1024L285 1022L246 1020L214 1017L187 1013L163 1008L143 1002L124 995L107 988L92 979L79 969L66 958L55 945L45 932L36 917L29 900L22 881L16 861L11 837L7 810L4 778L2 739L0 684L0 512L0 340L2 285L4 246L7 214L11 187L16 163L22 143L29 124L36 107L45 92L55 79L66 66L79 55L92 45L107 36L124 29L143 22L163 16L187 11L214 7L246 4L285 2L340 0L512 0L684 0L739 2L778 4L810 7L837 11L861 16L881 22L900 29L917 36L932 45L945 55L958 66L969 79L979 92L988 107L995 124L1002 143L1008 163L1013 187L1017 214L1020 246L1022 285L1024 340Z";
+const DEFS = `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34D399"/><stop offset="1" stop-color="#059669"/></linearGradient><linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>`;
+const svg = (body) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>${DEFS}</defs>${body}</svg>`);
+const BG = `<rect width="1024" height="1024" fill="url(#g)"/><rect width="1024" height="1024" fill="url(#hl)"/>`;
+const SCALE = { full: 6.2, safe: 4.6 }; // full-bleed icon vs Android 66/108 safe zone & maskable
+const mono = (s, color = "#fff") => `<mask id="m"><rect width="1024" height="1024" fill="#000"/>${placed("mask", s)}</mask><rect width="1024" height="1024" fill="${color}" mask="url(#m)"/>`;
+// master (squircle badge) — used by the web LogoMark/favicon too
+const master = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>${DEFS}</defs><path d="${SQ}" fill="url(#g)"/><path d="${SQ}" fill="url(#hl)"/>${placed("color", SCALE.full)}</svg>`;
+fs.writeFileSync(R("public/brand/mark.svg"), master);
+fs.copyFileSync(R("public/brand/mark.svg"), path.join(out, "master.svg"));
+const png = (buf, size, file, flatten) => { let p = sharp(buf, { density: 300 }).resize(size, size); if (flatten) p = p.flatten({ background: flatten }); return p.png().toFile(file.includes("/") ? R(file) : path.join(out, file)); };
+const full = svg(BG + placed("color", SCALE.full));
+const safeFull = svg(BG + placed("color", SCALE.safe));
+const fg = svg(placed("color", SCALE.safe));
+const mono66 = svg(mono(SCALE.safe));
 const jobs = [
-  // iOS (Expo "ios.icon"): 1024 opaque square, iOS applies the mask
-  png(full(), 1024, "ios-1024.png", { flatten: "#059669" }),
-  // iOS 18 dark: transparent bg, emerald glyph (system supplies dark backdrop)
-  png(svg(glyph("#34D399", "#0b0f0e", 0.78)), 1024, "ios-1024-dark.png"),
-  // iOS 18 tinted: grayscale glyph on transparent (system tints luminance)
-  png(svg(glyph("#ffffff", "#8a8a8a", 0.78)), 1024, "ios-1024-tinted.png"),
-  // Android adaptive layers (Expo adaptiveIcon), 432 = 108dp@xxxhdpi; glyph in the 66dp safe zone
-  png(svg(glyph("#fff", "#10B981", 0.62)), 1024, "android-adaptive-foreground.png"),
-  png(svg(`<rect width="1024" height="1024" fill="url(#g)"/>`), 1024, "android-adaptive-background.png", { flatten: "#059669" }),
-  png(svg(glyph("#fff", null, 0.62)), 1024, "android-adaptive-monochrome.png"),
-  png(full(), 512, "play-store-512.png", { flatten: "#059669" }),
-  // web
-  png(Buffer.from(SQ), 192, "pwa-192.png"),
-  png(Buffer.from(SQ), 512, "pwa-512.png"),
-  png(full(0.62), 512, "pwa-maskable-512.png", { flatten: "#059669" }),
-  png(full(), 180, "apple-touch-icon-180.png", { flatten: "#059669" }),
-  png(Buffer.from(SQ.replace(/<g fill="#10B981"[^]*?<\/g>/, "")), 32, "favicon-32.png"),
-  png(Buffer.from(SQ.replace(/<g fill="#10B981"[^]*?<\/g>/, "")), 16, "favicon-16.png"),
+  png(full, 1024, "ios-1024.png", "#059669"),
+  png(svg(placed("onDark", SCALE.full)), 1024, "ios-1024-dark.png"),
+  png(svg(mono(SCALE.full, "#fff")), 1024, "ios-1024-tinted.png"),
+  png(fg, 1024, "android-adaptive-foreground.png"),
+  png(svg(`<rect width="1024" height="1024" fill="url(#g)"/>`), 1024, "android-adaptive-background.png", "#059669"),
+  png(mono66, 1024, "android-adaptive-monochrome.png"),
+  png(full, 512, "play-store-512.png", "#059669"),
+  png(Buffer.from(master), 192, "pwa-192.png"),
+  png(Buffer.from(master), 512, "pwa-512.png"),
+  png(safeFull, 512, "pwa-maskable-512.png", "#059669"),
+  png(full, 180, "apple-touch-icon-180.png", "#059669"),
+  png(Buffer.from(master), 32, "favicon-32.png"),
+  png(Buffer.from(master), 16, "favicon-16.png"),
+  // web app (public/) copies
+  png(Buffer.from(master), 192, "public/icons/icon-192.png"),
+  png(Buffer.from(master), 512, "public/icons/icon-512.png"),
+  png(safeFull, 512, "public/icons/maskable-512.png", "#059669"),
 ];
+// Android mipmaps: adaptive layers (108dp) + legacy square/round (48dp)
+const D = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
+const circle = (s) => Buffer.from(`<svg width="${s}" height="${s}"><circle cx="${s / 2}" cy="${s / 2}" r="${s / 2}"/></svg>`);
+const rr = (s) => Buffer.from(`<svg width="${s}" height="${s}"><rect width="${s}" height="${s}" rx="${s * 0.2}"/></svg>`);
+for (const [d, k] of Object.entries(D)) {
+  const dir = `android/app/src/main/res/mipmap-${d}`;
+  fs.mkdirSync(R(dir), { recursive: true });
+  jobs.push(png(fg, 108 * k, `${dir}/ic_launcher_foreground.png`));
+  jobs.push(png(mono66, 108 * k, `${dir}/ic_launcher_monochrome.png`));
+  const s = 48 * k;
+  const base = sharp(safeFull, { density: 300 }).resize(s, s).png().toBuffer();
+  jobs.push(base.then((b) => sharp(b).composite([{ input: rr(s), blend: "dest-in" }]).png().toFile(R(`${dir}/ic_launcher.png`))));
+  jobs.push(base.then((b) => sharp(b).composite([{ input: circle(s), blend: "dest-in" }]).png().toFile(R(`${dir}/ic_launcher_round.png`))));
+}
 await Promise.all(jobs);
-fs.copyFileSync("public/brand/mark.svg", path.join(out, "master.svg"));
-console.log("icons →", out, fs.readdirSync(out).join(", "));
+console.log("icons generated →", ROOT);
