@@ -9,7 +9,7 @@ import { useApp } from "@/components/AppProvider";
 import { TOPIC_EMOJI, cn, firstName } from "@/lib/utils";
 
 export default function HallwayPage() {
-  const { me, rooms, following } = useApp();
+  const { me, rooms, following, roomsLoaded } = useApp();
   const [creating, setCreating] = useState(false);
   const [topic, setTopic] = useState<string>("All");
 
@@ -47,10 +47,13 @@ export default function HallwayPage() {
         </div>
 
         <div className="space-y-4">
+          {!roomsLoaded &&
+            rooms.length === 0 &&
+            [0, 1, 2].map((i) => <div key={i} className="skeleton h-40 rounded-3xl" aria-hidden />)}
           {visible.map((r) => (
             <RoomCard key={r.id} room={r} highlight={r.speakers.some((s) => following.has(s.id) || s.id === me?.id)} />
           ))}
-          {visible.length === 0 && (
+          {roomsLoaded && visible.length === 0 && (
             <div className="rounded-3xl border border-dashed border-white/10 p-10 text-center text-zinc-500">
               <div className="mb-2 text-3xl">🌙</div>
               It&apos;s quiet in here. Start a room and get the conversation going.

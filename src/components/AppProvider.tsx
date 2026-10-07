@@ -53,6 +53,8 @@ interface AppCtx {
   socket: RealtimeClient | null;
   me: Me | null;
   rooms: RoomSummary[];
+  /** first rooms:update received (hallway shows skeletons until then) */
+  roomsLoaded: boolean;
   following: Set<string>;
   toasts: Toast[];
   /** Total unread direct messages */
@@ -124,6 +126,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [roomsLoaded, setRoomsLoaded] = useState(false);
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [unreadDms, setUnreadDms] = useState(0);
@@ -316,7 +319,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setConnected(false);
       if (!offlineTimer) offlineTimer = setTimeout(() => setOffline(true), OFFLINE_HINT_MS);
     });
-    s.on("rooms:update", (list: RoomSummary[]) => setRooms(list));
+    s.on("rooms:update", (list: RoomSummary[]) => {
+      setRooms(list);
+      setRoomsLoaded(true);
+    });
     // server-side system notices (new follower, host handover, raised hand…) → banner with the app icon
     s.on("toast", ({ message }: { message: string }) => banner({ title: message, avatar: "app" }));
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
@@ -479,6 +485,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       socket,
       me,
       rooms,
+      roomsLoaded,
       following,
       toasts,
       unreadDms,
@@ -502,7 +509,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       presenceOf,
       offline,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
+    [status, connected, socket, me, rooms, roomsLoaded, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

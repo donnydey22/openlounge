@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
 /** Mobile-style bottom sheet (centered dialog on larger screens). */
@@ -22,11 +22,35 @@ export function Sheet({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Keyboard-aware: cap the sheet to the *visual* viewport (iOS/Android keyboards shrink it)
+  // and keep the focused field in view.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    const el = panel.current;
+    const fit = () => el?.style.setProperty("--sheet-vh", `${Math.round(vv?.height ?? window.innerHeight)}px`);
+    fit();
+    vv?.addEventListener("resize", fit, { passive: true });
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) setTimeout(() => t.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
+    };
+    el?.addEventListener("focusin", onFocus);
+    return () => {
+      vv?.removeEventListener("resize", fit);
+      el?.removeEventListener("focusin", onFocus);
+    };
+  }, [open]);
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal>
       <div className="fade-in absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="sheet-in relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-white/5 bg-zinc-900 p-5 pb-8 shadow-2xl sm:rounded-3xl">
+      <div
+        ref={panel}
+        className="sheet-in relative max-h-[min(85dvh,calc(var(--sheet-vh,100dvh)-env(safe-area-inset-top,0px)-12px))] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-3xl border border-white/5 bg-zinc-900 p-5 pb-[max(2rem,calc(env(safe-area-inset-bottom,0px)+1rem))] shadow-2xl [scroll-padding-bottom:6rem] sm:rounded-3xl"
+      >
         <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-zinc-700 sm:hidden" />
         {title && (
           <div className="mb-4 flex items-center justify-between">
