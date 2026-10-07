@@ -68,7 +68,7 @@ export function fetchProviders(): Promise<ProviderFlags> {
 
 // ---------- Google / Apple ----------
 
-type NativeAuthBridge = { openAuth?: (url: string) => void | Promise<void> };
+type NativeAuthBridge = { openAuth?: (url: string) => void | Promise<void>; getPlatform?: () => string };
 const nativeBridge = () => (typeof window === "undefined" ? null : ((window as unknown as { OpenLoungeNative?: NativeAuthBridge }).OpenLoungeNative ?? null));
 
 /** Inside a native shell (Android WebView / iOS wrapper)? */
@@ -80,6 +80,22 @@ export const inNativeShell = () => typeof navigator !== "undefined" && (hasNativ
  * the system browser (Custom Tab / ASWebAuthenticationSession) and route openlounge://auth?code=… back to
  * /auth/complete?code=… in the WebView.
  */
+/** Native wrapper platform ("android" | "ios"), or null on the plain web. */
+export function nativePlatform(): "android" | "ios" | null {
+  if (!inNativeShell()) return null;
+  try {
+    const p = nativeBridge()?.getPlatform?.();
+    if (p === "android" || p === "ios") return p;
+  } catch {
+    /* ignore */
+  }
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return /OpenLoungeAndroid|Android/i.test(ua) ? "android" : /OpenLoungeiOS|iPhone|iPad/i.test(ua) ? "ios" : null;
+}
+
+/** Sign in with Apple is offered on iOS and the web, not inside the Android app (Donny's call). */
+export const showAppleHere = () => nativePlatform() !== "android";
+
 export const canUseOAuth = () => !inNativeShell() || typeof nativeBridge()?.openAuth === "function";
 
 const VERIFIER_KEY = "openlounge:oauth-verifier";

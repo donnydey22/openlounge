@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import type React from "react";
 import { Loader2, Mail } from "lucide-react";
-import { canUseOAuth, fetchProviders, startOAuth, type OAuthProvider, type ProviderFlags } from "@/lib/authApi";
+import { canUseOAuth, showAppleHere, fetchProviders, startOAuth, type OAuthProvider, type ProviderFlags } from "@/lib/authApi";
 import { cn } from "@/lib/utils";
 
 export function AppleLogo({ className }: { className?: string }) {
@@ -60,7 +60,7 @@ export function ProviderButtons({ onEmail, className, divider = true }: { onEmai
   const [busy, setBusy] = useState<OAuthProvider | null>(null);
   if (!flags) return null;
   const oauth = canUseOAuth();
-  const apple = flags.apple && oauth;
+  const apple = flags.apple && oauth && showAppleHere();
   const google = flags.google && oauth;
   if (!apple && !google && !flags.email) return null; // nothing configured: the screen looks exactly as before
 
