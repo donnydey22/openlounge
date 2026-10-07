@@ -7,7 +7,7 @@ import { bumpClock } from "@/lib/time";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
 import { clearToken, hydrateFromNative, loadCreds, loadToken, saveCreds } from "@/lib/session";
-import { SignedOutError, getAccessToken, logout, refreshSession, validateStoredSession } from "@/lib/auth";
+import { SignedOutError, getAccessToken, logout, persistSessionCookie, recoverFromCookie, refreshSession, validateStoredSession } from "@/lib/auth";
 import { FriendlyError, GENERIC_COPY, NETWORK_COPY, friendlyMessage, isTransient, toFriendly } from "@/lib/errors";
 
 type Status = "booting" | "signedOut" | "connecting" | "ready";
@@ -371,11 +371,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSocket(s);
     // Reconcile the native shell's token store (Android SharedPreferences / iOS Keychain) with web storage first —
     // localStorage may have been evicted or belong to another origin — then decide. Until then: splash.
-    void hydrateFromNative().then((c) => {
+    // Nothing in web/native storage → the httpOnly refresh cookie may still hold the session (storage evicted).
+    const recover = async (attempt = 0): Promise<Awaited<ReturnType<typeof hydrateFromNative>>> => {
+      try {
+        return await recoverFromCookie();
+      } catch {
+        if (disposed || attempt >= 2) return null;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        return recover(attempt + 1);
+      }
+    };
+    void hydrateFromNative().then(async (c0) => {
+      if (disposed) return;
+      const c = c0 ?? (await recover());
       if (disposed) return;
       setToken(c?.refresh ?? null);
       setBooted(true);
       if (!c) return;
+      if (c0) void persistSessionCookie();
       void boot();
       if (s.connected && !meRef.current) void resumeRef.current?.();
     });
@@ -423,6 +436,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean; resumeSocket?: boolean }) => {
       saveCreds({ refresh: t, access: session.access ?? null, accessExp: session.accessExpiresAt ?? 0, uid: session.user?.id ?? null });
       setToken(t);
+      void persistSessionCookie();
       applySession(session);
       setOnboarding(!!opts?.onboarding);
       if (opts?.resumeSocket) void resumeRef.current?.().catch(() => {});

@@ -45,6 +45,7 @@ async function postJson(path: string, body: unknown, headers: Record<string, str
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body ?? {}),
       cache: "no-store",
+      credentials: "same-origin",
       signal: ctrl.signal,
     });
     const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -210,4 +211,36 @@ export async function logout(all = false) {
     }
   }
   clearToken();
+}
+
+/**
+ * Mirror the current refresh token into the server's httpOnly cookie (after a socket sign-in, which can't set
+ * cookies). Best effort: a failure only means the cookie fallback isn't there yet.
+ */
+export async function persistSessionCookie(): Promise<void> {
+  const c = loadCreds();
+  if (!c) return;
+  try {
+    await postJson("/api/auth/persist", { refreshToken: c.refresh }, {}, 8_000);
+  } catch {
+    /* offline: next refresh sets it */
+  }
+}
+
+/**
+ * Web storage is empty (evicted by the browser, cleared, new WebView profile): try the httpOnly refresh cookie.
+ * → Creds when the server still knows the session; null when there is no cookie / it was rejected.
+ * Throws TransientAuthError when offline so the caller can retry instead of showing the sign-in screen.
+ */
+export async function recoverFromCookie(): Promise<Creds | null> {
+  if (loadCreds()) return loadCreds();
+  const { status, data } = await postJson("/api/auth/refresh", { device: deviceHint() });
+  if (data?.ok && typeof data.access === "string" && typeof data.refresh === "string") {
+    const user = data.user as Me | null;
+    const next: Creds = { refresh: data.refresh, access: data.access, accessExp: Number(data.accessExpiresAt) || 0, uid: user?.id ?? null };
+    saveCreds(next);
+    return next;
+  }
+  if (status === 401 || status === 400) return null;
+  throw new TransientAuthError();
 }
