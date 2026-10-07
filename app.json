@@ -10,7 +10,7 @@
     "backgroundColor": "#1C1C1E",
     "ios": {
       "bundleIdentifier": "com.donnydey.openlounge",
-      "buildNumber": "7",
+      "buildNumber": "10",
       "deploymentTarget": "16.4",
       "supportsTablet": false,
       "icon": {
@@ -31,7 +31,8 @@
         ],
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": false,
-        "NSContactsUsageDescription": "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime."
+        "NSContactsUsageDescription": "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -129,6 +130,22 @@
             "NSPrivacyCollectedDataTypePurposes": [
               "NSPrivacyCollectedDataTypePurposeAppFunctionality"
             ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeAudioData",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeDeviceID",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
           }
         ]
       },
@@ -193,7 +210,8 @@
         {
           "ios": {
             "networkInspector": false,
-            "useFrameworks": "static"
+            "useFrameworks": "static",
+            "deploymentTarget": "16.4"
           },
           "android": {
             "networkInspector": false
