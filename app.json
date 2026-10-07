@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "Open Lounge",
+    "slug": "openlounge",
+    "version": "0.2.3",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#1C1C1E",
+    "ios": {
+      "bundleIdentifier": "com.donnydey.openlounge",
+      "buildNumber": "6",
+      "supportsTablet": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Open Lounge uses your microphone so you can speak in rooms.",
+        "NSCameraUsageDescription": "Open Lounge uses your camera only when you choose to take a photo, for example for your profile picture.",
+        "NSPhotoLibraryUsageDescription": "Open Lounge lets you pick a photo, for example for your profile picture.",
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "UIStatusBarStyle": "UIStatusBarStyleLightContent"
+      }
+    },
+    "android": {
+      "package": "com.donnydey.openlounge",
+      "adaptiveIcon": {
+        "backgroundColor": "#1C1C1E",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#1C1C1E"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "networkInspector": false
+          },
+          "android": {
+            "networkInspector": false
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "startUrl": "https://openlounge.app"
+    }
+  }
+}
