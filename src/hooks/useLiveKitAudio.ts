@@ -20,7 +20,7 @@ import {
   type Participant as LkParticipant,
   type RemoteTrack,
 } from "livekit-client";
-import { loadToken } from "@/lib/session";
+import { authFetch } from "@/lib/auth";
 import { setActiveAudioRoom, unlockAudio } from "@/lib/audioUnlock";
 
 const MIC_OPTIONS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
@@ -96,18 +96,19 @@ export function useLiveKitAudio({
       setStatus("connecting");
       setError(null);
       try {
-        const res = await fetch("/api/livekit/token", {
+        // access token attached; a 401 refreshes silently and retries once
+        const res = await authFetch("/api/livekit/token", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${loadToken() ?? ""}` },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ roomId }),
         });
-        const body = (await res.json()) as { ok: boolean; url?: string; token?: string; error?: string; configured?: boolean };
+        const body = ((await res.json().catch(() => null)) ?? { ok: false }) as { ok: boolean; url?: string; token?: string; error?: string; configured?: boolean };
         if (cancelled) return;
         if (res.status === 503 || body.configured === false) {
           setStatus("unavailable");
           return;
         }
-        if (!body.ok || !body.url || !body.token) throw new Error(body.error || "Couldn't get an audio token");
+        if (!body.ok || !body.url || !body.token) throw new Error("audio token");
         // Railway has no inbound UDP — self-hosted LiveKit is force_tcp. Prefer TCP ICE
         // candidates and give signalling/ICE more time so a slow proxy doesn't fail the room.
         await room.connect(body.url, body.token, {
@@ -127,8 +128,7 @@ export function useLiveKitAudio({
         // Soft-fail: the in-app room already exists; only audio is down.
         if (cancelled) return;
         console.warn("[audio] LiveKit connect failed", err);
-        const msg = (err as Error)?.message || "Live audio couldn't connect";
-        setError(msg.length > 120 ? "Live audio couldn't connect" : msg);
+        setError("Live audio couldn't connect");
         setStatus("error");
       }
     })();
@@ -179,7 +179,7 @@ export function useLiveKitAudio({
       .then(() => setMicError(null))
       .catch((err: Error) => {
         console.warn("[audio] mic", err);
-        setMicError(/permission|denied|notallowed/i.test(err.message + err.name) ? "Microphone permission denied" : err.message);
+        setMicError(/permission|denied|notallowed/i.test(err.message + err.name) ? "Microphone permission denied" : "Couldn't use the microphone. Tap to try again.");
       });
   }, [isSpeaker, muted, status, permVersion]);
 

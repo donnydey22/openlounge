@@ -24,7 +24,8 @@ const envMs = (name: string, dflt: number) => {
   return Number.isFinite(n) && n >= 0 ? n : dflt;
 };
 export const CLOSE_GRACE_MS = envMs("PRESENCE_CLOSE_GRACE_MS", 4_000);
-export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 30_000);
+/** a connection that was already backgrounded when it closed (phone app frozen/killed by the OS) stays "away" this long */
+export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 120_000);
 /** foreground → background: amber after this (short, so the dot follows the tab quickly but a quick app switch doesn't blink) */
 export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
 const SWEEP_MS = 15_000;
@@ -117,7 +118,8 @@ export class Presence {
     set?.delete(connId);
     if (set && set.size === 0) this.byUser.delete(c.userId);
     if (wasActive && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
-    this.update(c.userId, graceMs);
+    // backgrounded app whose socket died: keep the amber dot for a while instead of flipping to offline
+    this.update(c.userId, !wasActive && graceMs === CLOSE_GRACE_MS ? Math.max(graceMs, HIDDEN_GRACE_MS) : graceMs);
   }
 
   /** Client reported foreground/background (document.visibilityState). */
@@ -170,6 +172,9 @@ export class Presence {
     const graceMs = to === "away" ? AWAY_GRACE_MS : closeGraceMs;
     const at = Date.now() + graceMs;
     if (pending && pending.to === to && pending.at <= at) return; // already scheduled sooner
+    // a routine re-evaluation (sweep, room refresh) never shortens a pending backgrounded-app grace; only an
+    // explicit fast path (logout: grace 0) does
+    if (pending && pending.to === to && closeGraceMs >= CLOSE_GRACE_MS) return;
     if (pending) clearTimeout(pending.t);
     const t = setTimeout(() => {
       this.timers.delete(userId);

@@ -154,7 +154,7 @@ export function AuthFlow() {
       if (list.length) await updateMe({ interests: list });
       const res = await request<{ users: PublicUser[] }>("onboarding:suggestions");
       setSuggestions(res.users);
-      setPicked(new Set(res.users.slice(0, 6).map((u) => u.id)));
+      setPicked(new Set()); // nothing pre-selected: people choose who to follow
       go("follow");
     } catch (e) {
       setError((e as Error).message);

@@ -9,18 +9,21 @@ import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { randomBytes } from "node:crypto";
 import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
+import { deviceLabel } from "./auth";
+import type { IncomingMessage } from "node:http";
 
 type AckFn = (res: Ack<Record<string, unknown>>) => void;
 const noop: AckFn = () => {};
 
 export function registerRealtime(io: WsHub) {
   const userOfSocket = new Map<string, string>();
-  const tokenOfSocket = new Map<string, string>();
+  /** socket -> session id it authenticated with (logout / revocation / "last seen") */
+  const sessionOfSocket = new Map<string, string>();
   /** Online presence (multi-tab/device aware, heartbeat + visibility driven). See presence.ts. */
   const presence = new Presence(
     io,
     (connId) => store.roomOfSocket(connId) !== null,
-    (token, at) => store.touchSession(token, at),
+    (sessionId, at) => store.touchSession(sessionId, at),
     store.lastSeenByUser(),
   );
   const withOnline = <T extends { id: string }>(u: T): T & { online: boolean; lastSeenAt: number | null; presence: PresenceStatus } => ({
@@ -110,6 +113,14 @@ export function registerRealtime(io: WsHub) {
     roomReaction(reaction) {
       io.to(`room:${reaction.roomId}`).emit("room:reaction", reaction);
     },
+    sessionRevoked(sessionId) {
+      for (const [connId, sid] of [...sessionOfSocket]) {
+        if (sid !== sessionId) continue;
+        const c = io.get(connId);
+        if (c) signOutSocket(c);
+        c?.emit("session:revoked", {});
+      }
+    },
     dmMessage(msg) {
       // deliver to every tab of both participants (sender's other tabs stay in sync)
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
@@ -120,7 +131,22 @@ export function registerRealtime(io: WsHub) {
     },
   });
 
-  io.onConnection((socket: Conn) => {
+  /** Server-side sign-out of one connection (logout / revoked session). */
+  const signOutSocket = (socket: Conn) => {
+    const userId = userOfSocket.get(socket.id);
+    if (userId) {
+      const where = store.roomOfSocket(socket.id);
+      if (where) store.leave(where.roomId, userId);
+      socket.leave(`user:${userId}`);
+      socket.leave(PRESENCE_CHANNEL);
+      presence.detach(socket.id, 0);
+    }
+    userOfSocket.delete(socket.id);
+    sessionOfSocket.delete(socket.id);
+  };
+
+  io.onConnection((socket: Conn, req: IncomingMessage) => {
+    const ua = req?.headers?.["user-agent"];
     const me = () => userOfSocket.get(socket.id);
     const authed = (ack: AckFn | undefined, fn: (userId: string) => void) => {
       const userId = me();
@@ -128,14 +154,14 @@ export function registerRealtime(io: WsHub) {
       fn(userId);
     };
 
-    const signIn = (userId: string, token: string) => {
+    const signIn = (userId: string, sessionId: string) => {
       const prev = me();
       if (prev && prev !== userId) socket.leave(`user:${prev}`);
       userOfSocket.set(socket.id, userId);
-      tokenOfSocket.set(socket.id, token);
+      sessionOfSocket.set(socket.id, sessionId);
       socket.join(`user:${userId}`);
       socket.join(PRESENCE_CHANNEL);
-      presence.attach(socket.id, userId, token);
+      presence.attach(socket.id, userId, sessionId);
       socket.emit("rooms:update", store.listRooms());
       socket.emit("presence:snapshot", presence.snapshot());
       const user = store.me(userId);
@@ -158,15 +184,15 @@ export function registerRealtime(io: WsHub) {
       ack(res.ok ? { ...res, phone: e164 } : res);
     });
 
-    socket.on("auth:verifyCode", ({ phone, code }: { phone: string; code: string }, ack: AckFn = noop) => {
+    socket.on("auth:verifyCode", ({ phone, code, device }: { phone: string; code: string; device?: string }, ack: AckFn = noop) => {
       const e164 = normalizePhone(phone);
       if (!e164) return ack({ ok: false, error: "Enter a valid phone number" });
       const v = otp.verify(e164, code);
       if (!v.ok) return ack(v);
       const existing = store.userByPhone(e164);
       if (existing) {
-        const token = store.createSession(existing.id);
-        return ack({ ok: true, status: "existing", token, ...signIn(existing.id, token) });
+        const creds = store.createSession(existing.id, deviceLabel(device, ua));
+        return ack({ ok: true, status: "existing", ...creds, ...signIn(existing.id, creds.sessionId) });
       }
       const ticket = randomBytes(24).toString("base64url");
       signupTickets.set(ticket, { phone: e164, expiresAt: Date.now() + 30 * 60_000 });
@@ -180,7 +206,7 @@ export function registerRealtime(io: WsHub) {
     socket.on(
       "auth:register",
       (
-        input: { ticket: string; firstName: string; lastName: string; username: string; bio: string; color: string; interests: string[]; photo?: string | null },
+        input: { ticket: string; firstName: string; lastName: string; username: string; bio: string; color: string; interests: string[]; photo?: string | null; device?: string },
         ack: AckFn = noop,
       ) => {
         const t = signupTickets.get(input?.ticket);
@@ -189,29 +215,32 @@ export function registerRealtime(io: WsHub) {
         if (!res.ok) return ack(res);
         signupTickets.delete(input.ticket);
         if (input.photo) store.setPhoto(res.user.id, input.photo);
-        const token = store.createSession(res.user.id);
-        ack({ ok: true, token, ...signIn(res.user.id, token) });
+        const creds = store.createSession(res.user.id, deviceLabel(input.device, ua));
+        ack({ ok: true, ...creds, ...signIn(res.user.id, creds.sessionId) });
       },
     );
 
-    socket.on("session:resume", ({ token }: { token: string }, ack: AckFn = noop) => {
-      const userId = store.resolveSession(token);
-      if (!userId) return ack({ ok: false, error: "Session expired" });
-      ack({ ok: true, ...signIn(userId, token) });
+    // Same validation as GET /auth/validate. Accepts an access token (v2) or, for older clients and bots,
+    // a legacy session token. On failure: { ok:false, reason:'expired'|'invalid'|'revoked' } — a v2 client
+    // refreshes silently and retries; `error` is kept for clients older than v2.
+    socket.on("session:resume", async ({ token }: { token: string }, ack: AckFn = noop) => {
+      let r: Awaited<ReturnType<typeof store.authenticate>>;
+      try {
+        r = await store.authenticate(token);
+      } catch {
+        // database hiccup: never report "signed out" — drop the socket so the client reconnects and resumes again
+        socket.ws.close(1013, "try again");
+        return;
+      }
+      if (!r.ok) return ack({ ok: false, reason: r.reason, error: "Session expired" } as never);
+      ack({ ok: true, ...signIn(r.userId, r.sessionId) });
     });
 
-    socket.on("session:logout", (_: unknown, ack: AckFn = noop) => {
+    socket.on("session:logout", ({ all }: { all?: boolean } = {}, ack: AckFn = noop) => {
       const userId = me();
-      store.revokeSession(tokenOfSocket.get(socket.id));
-      if (userId) {
-        const where = store.roomOfSocket(socket.id);
-        if (where) store.leave(where.roomId, userId);
-        socket.leave(`user:${userId}`);
-        socket.leave(PRESENCE_CHANNEL);
-        presence.detach(socket.id, 0);
-      }
-      userOfSocket.delete(socket.id);
-      tokenOfSocket.delete(socket.id);
+      const sid = sessionOfSocket.get(socket.id);
+      signOutSocket(socket);
+      store.revokeSession(sid, all && userId ? { allForUser: userId } : {});
       ack({ ok: true });
     });
 
@@ -222,6 +251,7 @@ export function registerRealtime(io: WsHub) {
     // foreground/background from document.visibilitychange (Android WebView backgrounding, hidden tabs)
     socket.on("presence:visible", ({ visible }: { visible?: boolean }, ack: AckFn = noop) => {
       presence.setVisible(socket.id, visible !== false);
+      socket.hidden = visible === false;
       store.setSocketVisible(socket.id, visible !== false);
       ack({ ok: true });
     });
@@ -411,7 +441,7 @@ export function registerRealtime(io: WsHub) {
     socket.onClose(() => {
       const userId = me();
       userOfSocket.delete(socket.id);
-      tokenOfSocket.delete(socket.id);
+      sessionOfSocket.delete(socket.id);
       otpBudget.delete(socket.id);
       store.forgetSocket(socket.id);
       if (!userId) return;

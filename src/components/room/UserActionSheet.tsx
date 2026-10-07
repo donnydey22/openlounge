@@ -23,7 +23,7 @@ export function UserActionSheet({
   /** Open a DM with this user without leaving the room */
   onMessage?: (userId: string) => void;
 }) {
-  const { me, request, following, follow, toast } = useApp();
+  const { me, request, following, follow, toast, reportError } = useApp();
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   useEffect(() => {
@@ -44,7 +44,7 @@ export function UserActionSheet({
       if (success) toast(success);
       onClose();
     } catch (e) {
-      toast((e as Error).message);
+      reportError(e);
     }
   };
 

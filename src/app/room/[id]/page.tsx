@@ -1,5 +1,6 @@
 "use client";
 
+import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -27,7 +28,8 @@ type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
 export default function RoomPage() {
   const { id: roomId } = useParams<{ id: string }>();
   const router = useRouter();
-  const { socket, connected, me, request, following, toast } = useApp();
+  const { socket, connected, me, request, following, toast, reportError } = useApp();
+  const [joinAttempt, setJoinAttempt] = useState(0);
 
   const [room, setRoom] = useState<RoomState | null>(null);
   const [joined, setJoined] = useState(false);
@@ -55,6 +57,7 @@ export default function RoomPage() {
     if (!socket || !connected || !me || gone) return;
     leftRef.current = false;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     request<{ room: RoomState; chat: ChatMessage[]; audio: { enabled: boolean } }>("room:join", { roomId })
       .then((res) => {
         if (cancelled) return;
@@ -65,12 +68,18 @@ export default function RoomPage() {
       })
       .catch((e: Error) => {
         if (cancelled) return;
-        setGone({ kind: /ended/i.test(e.message) ? "ended" : "error", message: e.message });
+        // connection trouble: try again quietly (a reconnect also re-runs this effect)
+        if (isTransient(e)) {
+          retryTimer = setTimeout(() => setJoinAttempt((n) => n + 1), 2_000);
+          return;
+        }
+        setGone({ kind: /ended/i.test(e.message) ? "ended" : "error", message: friendlyMessage(e, "This room isn't available right now.") });
       });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [socket, connected, me, roomId, request, gone]);
+  }, [socket, connected, me, roomId, request, gone, joinAttempt]);
 
   // NOTE: a WebSocket blip no longer tears down LiveKit audio (we used to set joined=false here).
   // The join effect above re-joins the room as soon as the socket is back, so the app-level
@@ -225,7 +234,7 @@ export default function RoomPage() {
     try {
       await request("host:invite", { roomId, userId });
     } catch (e) {
-      toast((e as Error).message);
+      reportError(e);
     }
   };
 
@@ -233,7 +242,7 @@ export default function RoomPage() {
     try {
       await request("reaction:send", { roomId, emoji });
     } catch (e) {
-      toast((e as Error).message);
+      reportError(e);
     }
   };
 
@@ -242,7 +251,7 @@ export default function RoomPage() {
     try {
       await request("podium:set", { roomId, userId: me.id });
     } catch (e) {
-      toast((e as Error).message);
+      reportError(e);
     }
   };
 
@@ -253,7 +262,7 @@ export default function RoomPage() {
       await request("room:end", { roomId });
       router.push("/");
     } catch (e) {
-      toast((e as Error).message);
+      reportError(e);
     }
   };
 
@@ -306,7 +315,7 @@ export default function RoomPage() {
         await request("chat:send", { roomId, text });
         return true;
       } catch (e) {
-        toast((e as Error).message);
+        reportError(e);
         return false;
       }
     },
@@ -318,7 +327,7 @@ export default function RoomPage() {
       try {
         await request("chat:delete", { roomId, messageId });
       } catch (e) {
-        toast((e as Error).message);
+        reportError(e);
       }
     },
     [request, roomId, toast],
@@ -731,7 +740,7 @@ function AudioStatusPill({ status, error }: { status: string; error: string | nu
       cls: "bg-amber-400/10 text-amber-400",
       text: "🔇 Live audio is off — this server has no LiveKit credentials. Stage, hands and chat still work.",
     },
-    error: { cls: "bg-amber-400/10 text-amber-300", text: `🔇 Live audio is having trouble${error ? ` (${error})` : ""}. Room is still open — stage, hands and chat work.` },
+    error: { cls: "bg-amber-400/10 text-amber-300", text: "🔇 Live audio is reconnecting. Room is still open — stage, hands and chat work." },
   };
   const m = map[status];
   if (!m) return null;

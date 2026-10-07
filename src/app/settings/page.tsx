@@ -14,7 +14,7 @@ import { Sheet } from "@/components/Sheet";
 import { InterestChips } from "@/components/profile/InterestChips";
 
 export default function SettingsPage() {
-  const { me, signOut, updateMe, toast } = useApp();
+  const { me, signOut, updateMe, toast, reportError } = useApp();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [interestsOpen, setInterestsOpen] = useState(false);
@@ -122,7 +122,7 @@ export default function SettingsPage() {
               toast("Interests updated");
               setInterestsOpen(false);
             } catch (e) {
-              toast((e as Error).message);
+              reportError(e);
             } finally {
               setBusy(false);
             }

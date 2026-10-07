@@ -4,7 +4,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { ACCESS_TTL_MS, MAX_PREV_HASHES, REFRESH_TTL_MS, ROTATION_GRACE_MS, isAccessToken, newOpaqueToken, newSessionId, parseAccessToken, setAuthSecret, sha256, signAccessToken } from "./auth";
 import type {
   ChatMessage,
   ConversationSummary,
@@ -82,6 +83,8 @@ export interface StoreEvents {
   dmTyping(fromId: string, toId: string): void;
   roomPresence(ev: RoomPresenceEvent): void;
   roomReaction(reaction: RoomReaction): void;
+  /** a session was revoked (logout, logout-all, refresh-token reuse): sign its sockets out */
+  sessionRevoked?(sessionId: string): void;
 }
 
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
@@ -89,11 +92,22 @@ const AWAY_GRACE_MS = 45_000; // keep your seat during a refresh / network switc
 const EMPTY_ROOM_TTL_MS = 5 * 60_000; // user rooms with no humans end after 5 min
 const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
-const SESSION_TTL_MS = 60 * 24 * 60 * 60_000; // 60 days, sliding
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
-const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export { conversationId };
+
+/**
+ * Internal QA / test accounts never appear in onboarding follow suggestions (they stay in the database and can
+ * still sign in): NANP fictional numbers 555-0100…0199, repeated-digit numbers (+1 111 111 1111), plus anything
+ * listed in INTERNAL_TEST_PHONES / INTERNAL_TEST_USER_IDS (comma-separated).
+ */
+const TEST_PHONES = new Set((process.env.INTERNAL_TEST_PHONES ?? "").split(",").map((x) => x.replace(/[^\d+]/g, "")).filter(Boolean));
+const TEST_IDS = new Set((process.env.INTERNAL_TEST_USER_IDS ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+export function isInternalTestAccount(u: { id: string; phone?: string }) {
+  if (TEST_IDS.has(u.id)) return true;
+  const p = u.phone ?? "";
+  return TEST_PHONES.has(p) || /^\+1\d{3}55501\d{2}$/.test(p) || /^\+(\d)\1{7,14}$/.test(p);
+}
 
 const clamp = (s: unknown, max: number) => String(s ?? "").trim().slice(0, max);
 const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)];
@@ -132,6 +146,7 @@ export class Store {
    */
   async init(opts: { importJson?: string } = {}) {
     this.backend = await createPersistence();
+    setAuthSecret(process.env.AUTH_SECRET?.trim() || (await this.backend.authSecret?.()) || randomBytes(32).toString("hex"));
     const { db, empty } = await this.backend.load();
     if (db) this.hydrate(db, this.backend.kind === "postgres" ? "Postgres" : DATA_FILE);
 
@@ -209,7 +224,13 @@ export class Store {
         this.users.set(u.id, { ...u, isBot: false, username: u.username || this.uniqueUsername(u.name) });
       }
       const now0 = Date.now();
-      for (const s of db.sessions ?? []) if (s.expiresAt > now0 && this.users.has(s.userId)) this.sessions.set(s.tokenHash, s);
+      const legacyOf = new Set((db.sessions ?? []).map((s) => s.legacyHash).filter((h): h is string => !!h));
+      for (const s of db.sessions ?? []) {
+        if (s.expiresAt <= now0 || !this.users.has(s.userId)) continue;
+        // a pre-v2 row re-inserted by the previous deploy's final flush after we rotated it: same session, skip the duplicate
+        if ((s.scheme ?? 1) === 1 && legacyOf.has(s.tokenHash) && (db.sessions ?? []).some((o) => o !== s && o.legacyHash === s.tokenHash && o.tokenHash !== s.tokenHash)) continue;
+        this.indexSession(s);
+      }
       for (const [k, v] of Object.entries(db.follows ?? {})) this.follows.set(k, new Set(v));
       const now = Date.now();
       for (const r of db.rooms ?? []) {
@@ -368,30 +389,220 @@ export class Store {
     return Array.isArray(raw) ? raw.filter((x): x is string => INTERESTS.includes(x as never)).slice(0, MAX_INTERESTS) : [];
   }
 
-  // ----- sessions -----
+  // ----- sessions (v2: access + rotating refresh tokens; see server/auth.ts) -----
 
-  createSession(userId: string) {
-    const token = randomBytes(32).toString("base64url");
-    const now = Date.now();
-    this.sessions.set(sha256(token), { tokenHash: sha256(token), userId, createdAt: now, lastSeenAt: now, expiresAt: now + SESSION_TTL_MS });
-    this.scheduleSave();
-    return token;
+  /** secondary lookups: legacy token hash / rotated-out refresh hash -> session; session id -> session */
+  private sessionAlias = new Map<string, SessionRecord>();
+  private sessionById = new Map<string, SessionRecord>();
+  /** recently-missed hashes/ids (avoid hitting Postgres for every garbage token) */
+  private sessionMiss = new Map<string, number>();
+
+  private indexSession(s: SessionRecord) {
+    s.id ??= `s_${s.tokenHash.slice(0, 32)}`;
+    s.scheme ??= 1;
+    if (s.legacyHash === undefined) s.legacyHash = s.scheme === 1 ? s.tokenHash : null;
+    s.prevHashes ??= [];
+    this.sessions.set(s.tokenHash, s);
+    this.sessionById.set(s.id, s);
+    if (s.legacyHash && s.legacyHash !== s.tokenHash) this.sessionAlias.set(s.legacyHash, s);
+    for (const h of s.prevHashes) this.sessionAlias.set(h, s);
   }
 
-  resolveSession(token: unknown) {
-    if (typeof token !== "string" || token.length < 20) return null;
-    const s = this.sessions.get(sha256(token));
-    if (!s || s.expiresAt < Date.now() || !this.users.has(s.userId)) return null;
-    s.lastSeenAt = Date.now();
-    s.expiresAt = s.lastSeenAt + SESSION_TTL_MS; // sliding expiry
+  private dropSession(s: SessionRecord) {
+    this.sessions.delete(s.tokenHash);
+    if (this.sessionById.get(s.id!) === s) this.sessionById.delete(s.id!);
+    for (const [h, x] of this.sessionAlias) if (x === s) this.sessionAlias.delete(h);
+  }
+
+  private issue(s: SessionRecord, now = Date.now()) {
+    const accessExpiresAt = now + ACCESS_TTL_MS;
+    s.accessExpiresAt = accessExpiresAt;
+    return { access: signAccessToken(s.id!, accessExpiresAt), accessExpiresAt, refreshExpiresAt: s.expiresAt, sessionId: s.id! };
+  }
+
+  /** New sign-in. `token` (= the refresh token) is kept in the response for clients older than v2. */
+  createSession(userId: string, device = "") {
+    const refresh = newOpaqueToken();
+    const now = Date.now();
+    const s: SessionRecord = {
+      tokenHash: sha256(refresh),
+      userId,
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt: now + REFRESH_TTL_MS,
+      id: newSessionId(),
+      scheme: 2,
+      legacyHash: null,
+      prevHashes: [],
+      rotatedAt: null,
+      accessExpiresAt: null,
+      revokedAt: null,
+      device,
+    };
+    this.indexSession(s);
     this.scheduleSave();
-    return s.userId;
+    return { token: refresh, refresh, ...this.issue(s, now) };
+  }
+
+  /** Session from memory, else from Postgres (a sibling instance may have created it during a deploy overlap). */
+  private async findSession(by: { hash?: string; id?: string }): Promise<SessionRecord | null> {
+    const inMem = by.hash ? (this.sessions.get(by.hash) ?? this.sessionAlias.get(by.hash)) : this.sessionById.get(by.id!);
+    if (inMem) return inMem;
+    const missKey = by.hash ?? by.id!;
+    const missAt = this.sessionMiss.get(missKey);
+    if (missAt && Date.now() - missAt < 30_000) return null;
+    if (!this.backend?.findSession) return null;
+    try {
+      const found = await this.backend.findSession(by);
+      if (!found || found.session.expiresAt <= Date.now()) {
+        this.sessionMiss.set(missKey, Date.now());
+        if (this.sessionMiss.size > 5000) this.sessionMiss.clear();
+        return null;
+      }
+      // re-check memory (another request may have loaded it while we awaited)
+      const again = this.sessions.get(found.session.tokenHash) ?? this.sessionById.get(found.session.id!);
+      if (again) {
+        // Same session, but a sibling instance rotated (or revoked) it after we loaded it: Postgres is newer.
+        // Keeping our stale copy would make the client's fresh refresh token look like reuse.
+        const newer = (found.session.rotatedAt ?? 0) > (again.rotatedAt ?? 0) || (!!found.session.revokedAt && !again.revokedAt);
+        if (!newer) return again;
+        this.dropSession(again);
+        this.indexSession(found.session);
+        console.log(`[auth] session ${found.session.id} refreshed from Postgres (updated by another instance)`);
+        return found.session;
+      }
+      if (found.user && !this.users.has(found.user.id)) this.users.set(found.user.id, found.user);
+      if (!this.users.has(found.session.userId)) return null;
+      this.indexSession(found.session);
+      console.log(`[auth] loaded session ${found.session.id} from Postgres (created by another instance)`);
+      return found.session;
+    } catch (err) {
+      console.warn("[auth] session lookup failed:", errText(err));
+      throw err; // caller treats as transient (never as "signed out")
+    }
+  }
+
+  private usable(s: SessionRecord | null, now = Date.now()): "ok" | "revoked" | "expired" | "invalid" {
+    if (!s || !this.users.has(s.userId)) return "invalid";
+    if (s.revokedAt) return "revoked";
+    if (s.expiresAt <= now) return "expired";
+    return "ok";
+  }
+
+  private touch(s: SessionRecord, now = Date.now()) {
+    s.lastSeenAt = Math.max(s.lastSeenAt, now);
+    s.expiresAt = Math.max(s.expiresAt, now + REFRESH_TTL_MS); // sliding refresh window
+    this.scheduleSave();
+  }
+
+  /**
+   * Validate a credential presented by a client: an access token (v2), or — for clients/bots older than v2 —
+   * a legacy session token or the session's current refresh token. Returns a machine-readable reason on failure.
+   * Throws only on a transient backend error.
+   */
+  async authenticate(token: unknown): Promise<{ ok: true; userId: string; sessionId: string; accessExpiresAt: number | null } | { ok: false; reason: "invalid" | "expired" | "revoked" }> {
+    if (typeof token !== "string" || token.length < 20 || token.length > 400) return { ok: false, reason: "invalid" };
+    const now = Date.now();
+    if (isAccessToken(token)) {
+      const p = parseAccessToken(token);
+      if (!p.ok) {
+        // an expired access token for a dead session is "invalid", not "expired" (nothing to refresh)
+        if (p.reason === "expired" && p.sessionId) {
+          const s = await this.findSession({ id: p.sessionId });
+          const u = this.usable(s, now);
+          return { ok: false, reason: u === "ok" ? "expired" : u };
+        }
+        return { ok: false, reason: "invalid" };
+      }
+      const s = await this.findSession({ id: p.sessionId });
+      const u = this.usable(s, now);
+      if (u !== "ok") return { ok: false, reason: u };
+      // the newest access token is in use → the client definitely holds the newest refresh token
+      if (!s!.confirmedAt && p.expiresAt === s!.accessExpiresAt) s!.confirmedAt = now;
+      this.touch(s!, now);
+      return { ok: true, userId: s!.userId, sessionId: s!.id!, accessExpiresAt: p.expiresAt };
+    }
+    const h = sha256(token);
+    const s = await this.findSession({ hash: h });
+    // accepted directly: the legacy (pre-v2) token, or the current refresh token. Rotated-out refresh tokens are not.
+    if (!s || (s.tokenHash !== h && s.legacyHash !== h)) return { ok: false, reason: "invalid" };
+    const u = this.usable(s, now);
+    if (u !== "ok") return { ok: false, reason: u };
+    if (!s.confirmedAt && s.tokenHash === h) s.confirmedAt = now;
+    this.touch(s, now);
+    return { ok: true, userId: s.userId, sessionId: s.id!, accessExpiresAt: null };
+  }
+
+  /**
+   * Exchange a refresh (or legacy) token for a new access token + a new refresh token (rotation).
+   * Re-presenting a rotated-out refresh token after the grace window = theft → the whole session is revoked.
+   */
+  async refreshSession(token: unknown, device?: string) {
+    type Fail = { ok: false; reason: "invalid" | "expired" | "revoked" | "reused" };
+    if (typeof token !== "string" || token.length < 20 || token.length > 400 || isAccessToken(token)) return { ok: false, reason: "invalid" } as Fail;
+    const now = Date.now();
+    const h = sha256(token);
+    const s = await this.findSession({ hash: h });
+    const u = this.usable(s, now);
+    if (u !== "ok") return { ok: false, reason: u } as Fail;
+    const sess = s!;
+    const isCurrent = sess.tokenHash === h;
+    const isLegacy = sess.legacyHash === h;
+    if (!isCurrent && !isLegacy) {
+      // The immediately-previous refresh token is still fine (1) for a couple of minutes after rotating (two tabs
+      // refreshing at once) and (2) for as long as the client has never used what we rotated it to — i.e. the
+      // /auth/refresh response was lost (app backgrounded/killed mid-request, network drop). Anything else is reuse.
+      const isPrev = sess.prevHashes?.[0] === h;
+      const inGrace = isPrev && ((sess.rotatedAt != null && now - sess.rotatedAt <= ROTATION_GRACE_MS) || !sess.confirmedAt);
+      if (!inGrace) {
+        sess.revokedAt = now;
+        this.scheduleSave();
+        console.warn(`[auth] refresh-token reuse on session ${sess.id} (user ${sess.userId}) — session revoked`);
+        this.events?.sessionRevoked?.(sess.id!);
+        return { ok: false, reason: "reused" } as Fail;
+      }
+    }
+    // rotate
+    const refresh = newOpaqueToken();
+    this.dropSession(sess);
+    // presenting the previous token again (lost response) must not push the current, never-delivered one into prevHashes[0]
+    const lostResponse = !isCurrent && !isLegacy && !sess.confirmedAt;
+    if (lostResponse) {
+      // the never-delivered token is dropped; the replayed one stays "previous" so another lost response is fine too
+      sess.prevHashes = [h, ...(sess.prevHashes ?? []).filter((x) => x !== h && x !== sess.tokenHash)].slice(0, MAX_PREV_HASHES);
+    } else if (sess.tokenHash !== sess.legacyHash) {
+      sess.prevHashes = [sess.tokenHash, ...(sess.prevHashes ?? [])].slice(0, MAX_PREV_HASHES);
+    }
+    sess.tokenHash = sha256(refresh);
+    sess.scheme = 2;
+    sess.rotatedAt = now;
+    sess.confirmedAt = null;
+    if (device && !sess.device) sess.device = device;
+    this.indexSession(sess);
+    this.touch(sess, now);
+    return { ok: true as const, refresh, token: refresh, userId: sess.userId, ...this.issue(sess, now) };
+  }
+
+  /** Revoke one session (logout) or all of a user's sessions. Returns the revoked session ids. */
+  revokeSession(sessionId: string | undefined, opts: { allForUser?: string } = {}) {
+    const now = Date.now();
+    const out: string[] = [];
+    for (const s of this.sessionById.values()) {
+      if (s.revokedAt) continue;
+      if (s.id === sessionId || (opts.allForUser && s.userId === opts.allForUser)) {
+        s.revokedAt = now;
+        out.push(s.id!);
+      }
+    }
+    if (out.length) this.scheduleSave();
+    for (const id of out) this.events?.sessionRevoked?.(id);
+    return out;
   }
 
   /** Record when a session was last active (presence "last seen"); persisted with the session row. */
-  touchSession(token: unknown, at = Date.now()) {
-    if (typeof token !== "string") return;
-    const s = this.sessions.get(sha256(token));
+  touchSession(sessionId: unknown, at = Date.now()) {
+    if (typeof sessionId !== "string") return;
+    const s = this.sessionById.get(sessionId);
     if (!s || s.lastSeenAt >= at) return;
     s.lastSeenAt = at;
     this.scheduleSave();
@@ -404,10 +615,12 @@ export class Store {
     return out;
   }
 
-  revokeSession(token: unknown) {
-    if (typeof token !== "string") return;
-    this.sessions.delete(sha256(token));
-    this.scheduleSave();
+  /** Storage + schema status for /api/health (no secrets). */
+  async storageStatus() {
+    const st = (await this.backend?.status?.()) ?? { connected: this.backend?.kind === "json", migrations: [] as string[] };
+    let active = 0;
+    for (const s of this.sessions.values()) if (!s.revokedAt) active++;
+    return { ...st, sessions: active };
   }
 
   // ----- profile -----
@@ -485,7 +698,7 @@ export class Store {
     const mine = new Set(this.users.get(userId)?.interests ?? []);
     const already = new Set(this.followingIds(userId));
     const real = [...this.users.values()]
-      .filter((u) => !u.isBot && u.id !== userId && !already.has(u.id))
+      .filter((u) => !u.isBot && u.id !== userId && !already.has(u.id) && !isInternalTestAccount(u))
       .map((u) => this.publicUser(u.id)!)
       .map((u) => ({ u, shared: u.interests.filter((i) => mine.has(i)).length }))
       .sort((a, b) => b.shared - a.shared || b.u.followers - a.u.followers || b.u.createdAt - a.u.createdAt)

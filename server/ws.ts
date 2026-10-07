@@ -22,6 +22,13 @@ const MAX_FRAME_BYTES = 2_000_000; // profile photo uploads ride on the socket
 // Ping every 10 s; a socket that misses a pong (and sends nothing) for a full interval is
 // terminated, so dead connections (app killed, network lost) are dropped within ~10–20 s.
 const HEARTBEAT_MS = 10_000;
+/**
+ * A connection whose client reported it is in the background (presence:visible false) may miss pongs for this many
+ * intervals before it is terminated: Android/iOS freeze backgrounded WebViews, so a phone that is merely in a
+ * pocket stops answering pings. Dropping it after 10 s made the app look "disconnected" seconds after the user
+ * switched apps (and forced a full re-auth on return). A killed app still closes its TCP socket immediately.
+ */
+const HIDDEN_MAX_MISSED = Number(process.env.WS_HIDDEN_MAX_MISSED || 18); // ~3 min
 
 export class Conn {
   readonly id = randomUUID();
@@ -30,6 +37,9 @@ export class Conn {
   private handlers = new Map<string, Handler>();
   private closeHandlers: (() => void)[] = [];
   alive = true;
+  /** client says it is backgrounded (tolerate missed pongs, see HIDDEN_MAX_MISSED) */
+  hidden = false;
+  missed = 0;
 
   constructor(
     readonly ws: WebSocket,
@@ -117,18 +127,32 @@ export class WsHub {
   private channels = new Map<string, Set<Conn>>();
   private connectionHandler: (c: Conn, req: IncomingMessage) => void = () => {};
 
-  constructor(server: HttpServer, readonly path = "/ws") {
+  constructor(
+    server: HttpServer,
+    readonly path = "/ws",
+    /** Origin policy: browsers on other sites are refused; no Origin (native apps, bots) is allowed */
+    private allowUpgrade: (req: IncomingMessage) => boolean = () => true,
+  ) {
     server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const pathname = (req.url ?? "").split("?")[0];
       if (pathname !== this.path) return; // leave other upgrades (e.g. Next.js HMR) alone
+      if (!this.allowUpgrade(req)) {
+        socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        return;
+      }
       this.wss.handleUpgrade(req, socket, head, (ws) => this.accept(ws, req));
     });
     const iv = setInterval(() => {
       for (const c of this.conns.values()) {
         if (!c.alive) {
+          if (c.hidden && ++c.missed < HIDDEN_MAX_MISSED) {
+            c.ws.ping();
+            continue;
+          }
           c.ws.terminate();
           continue;
         }
+        c.missed = 0;
         c.alive = false;
         c.ws.ping();
       }

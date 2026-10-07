@@ -12,6 +12,21 @@ const CONNECT_TIMEOUT_MS = 10_000; // a CONNECTING socket stuck this long is ret
 
 type Listener = (data: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+// Native shells (Android WebView wrapper, iOS wrapper) tell the page when the *app* goes to the background, because a
+// WebView inside a backgrounded app often still reports document.visibilityState === "visible":
+//   window.dispatchEvent(new CustomEvent("openlounge:native-visibility", { detail: { visible: false } }))
+let nativeHidden = false;
+export const NATIVE_VISIBILITY_EVENT = "openlounge:native-visibility";
+if (typeof window !== "undefined") {
+  window.addEventListener(NATIVE_VISIBILITY_EVENT, (e) => {
+    nativeHidden = (e as CustomEvent<{ visible?: boolean }>).detail?.visible === false;
+  });
+}
+/** Is the app in the foreground (tab visible AND, inside a native shell, the app not backgrounded)? */
+export function appVisible() {
+  return typeof document === "undefined" || (document.visibilityState !== "hidden" && !nativeHidden);
+}
+
 export class RealtimeClient {
   private ws: WebSocket | null = null;
   private listeners = new Map<string, Set<Listener>>();
@@ -115,7 +130,7 @@ export class RealtimeClient {
     this.stopHeartbeat();
     this.heartbeat = setInterval(() => {
       // hidden pages get their timers throttled; the wake check covers them on return
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (!appVisible()) return;
       void this.check(HEARTBEAT_TIMEOUT_MS);
     }, HEARTBEAT_MS);
   }
@@ -153,7 +168,7 @@ export class RealtimeClient {
   }
 
   private onVisibility = () => {
-    if (document.visibilityState === "visible") this.wake();
+    if (appVisible()) this.wake();
   };
   private onWake = () => this.wake();
 
@@ -161,6 +176,7 @@ export class RealtimeClient {
     if (this.wakeBound || typeof window === "undefined") return;
     this.wakeBound = true;
     document.addEventListener("visibilitychange", this.onVisibility);
+    window.addEventListener(NATIVE_VISIBILITY_EVENT, this.onVisibility);
     window.addEventListener("online", this.onWake);
     window.addEventListener("pageshow", this.onWake);
     window.addEventListener("focus", this.onWake);
@@ -170,6 +186,7 @@ export class RealtimeClient {
     if (!this.wakeBound) return;
     this.wakeBound = false;
     document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener(NATIVE_VISIBILITY_EVENT, this.onVisibility);
     window.removeEventListener("online", this.onWake);
     window.removeEventListener("pageshow", this.onWake);
     window.removeEventListener("focus", this.onWake);

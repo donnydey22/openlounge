@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import type { DirectMessage } from "../src/lib/types";
 
 export interface UserRecord {
@@ -29,11 +30,32 @@ export interface UserRecord {
 }
 
 export interface SessionRecord {
+  /** SHA-256 of the current refresh token (or of the legacy token for pre-v2 sessions) — table primary key */
   tokenHash: string;
   userId: string;
   createdAt: number;
+  /** refresh expiry (sliding) */
   expiresAt: number;
+  /** last used */
   lastSeenAt: number;
+  // ---- v2 (migration 003). Optional so db.json files from older versions still load. ----
+  /** stable session ("family") id, embedded in access tokens */
+  id?: string;
+  /** 1 = pre-v2 session created by an older server, 2 = rotating refresh token */
+  scheme?: number;
+  /** hash of the pre-v2 token, still accepted after rotation so existing devices/bots never get signed out */
+  legacyHash?: string | null;
+  /** rotated-out refresh hashes (newest first) for reuse detection */
+  prevHashes?: string[];
+  rotatedAt?: number | null;
+  /** expiry of the most recently issued access token */
+  accessExpiresAt?: number | null;
+  /** set = revoked (logout / reuse detected); row kept until expiresAt for reuse detection */
+  revokedAt?: number | null;
+  /** device / platform label, e.g. "android-app", "web:mac:safari" */
+  device?: string;
+  /** when the current refresh generation was first used by the client (null = issued, not yet seen in use) */
+  confirmedAt?: number | null;
 }
 
 export interface PersistedRoom {
@@ -69,6 +91,12 @@ export interface Persistence {
   where: string;
   load(): Promise<LoadResult>;
   save(db: PersistedDb): Promise<void>;
+  /** HMAC secret for access tokens, generated once and kept with the data */
+  authSecret?(): Promise<string>;
+  /** sessions created by a sibling instance (deploy overlap) that this process hasn't loaded: look up by token hash / session id */
+  findSession?(by: { hash?: string; id?: string }): Promise<{ session: SessionRecord; user: UserRecord | null } | null>;
+  /** schema/migration status for /api/health */
+  status?(): Promise<{ connected: boolean; migrations: string[] }>;
   /** record that a db.json import finished (Postgres only) */
   markImported?(source: string): Promise<void>;
   close(): Promise<void>;
@@ -113,6 +141,20 @@ export class JsonPersistence implements Persistence {
     } catch (err) {
       console.warn("[store] save failed:", err);
     }
+  }
+
+  async authSecret() {
+    const file = path.join(path.dirname(this.where), "auth-secret");
+    try {
+      const v = fs.readFileSync(file, "utf8").trim();
+      if (v) return v;
+    } catch {
+      /* first boot */
+    }
+    const v = randomBytes(32).toString("hex");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, v, { mode: 0o600 });
+    return v;
   }
 
   async close() {}

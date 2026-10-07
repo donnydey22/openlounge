@@ -1,9 +1,11 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { RealtimeClient } from "@/lib/realtime";
+import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
-import { clearToken, loadToken, saveToken } from "@/lib/session";
+import { clearToken, hydrateFromNative, loadCreds, loadToken, saveCreds } from "@/lib/session";
+import { SignedOutError, getAccessToken, logout, refreshSession, validateStoredSession } from "@/lib/auth";
+import { FriendlyError, GENERIC_COPY, NETWORK_COPY, friendlyMessage, isTransient, toFriendly } from "@/lib/errors";
 
 type Status = "booting" | "signedOut" | "connecting" | "ready";
 
@@ -60,8 +62,8 @@ interface AppCtx {
   /** DM thread currently on screen ("*" = conversation list) — suppresses DM toasts for it */
   setActiveDm(peerId: string | null): void;
   getActiveDm(): string | null;
-  /** Called by the auth flow once the server has issued a session token */
-  completeLogin(token: string, session: SessionPayload, opts?: { onboarding?: boolean }): void;
+  /** Called by the auth flow once the server has issued a session (refresh token + access token) */
+  completeLogin(token: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }): void;
   finishOnboarding(): void;
   signOut(): Promise<void>;
   request<T = Record<string, unknown>>(event: string, payload?: unknown): Promise<T>;
@@ -69,6 +71,11 @@ interface AppCtx {
   updateMe(patch: { name?: string; bio?: string; color?: string; username?: string; interests?: string[] }): Promise<void>;
   setPhoto(photo: string | null): Promise<void>;
   toast(message: string, href?: string): void;
+  /**
+   * A user action failed. Connectivity hiccups and technical failures stay silent (the action is retried or the
+   * UI simply stays as it was); only a human message from the server ("Only the host can do that") is shown.
+   */
+  reportError(e: unknown): void;
   /** Clubhouse-style in-app notification banner (visible tab) */
   banner(input: BannerInput): void;
   dismissToast(id: number): void;
@@ -87,6 +94,22 @@ interface AppCtx {
 const OFFLINE_HINT_MS = 5_000;
 
 const Ctx = createContext<AppCtx | null>(null);
+
+/** Resolve true once the socket is (re)connected, false after `ms`. */
+function waitConnected(s: RealtimeClient, ms: number): Promise<boolean> {
+  if (s.connected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (v: boolean) => {
+      clearTimeout(timer);
+      s.off("connect", onConnect);
+      // give the automatic session:resume a moment to land
+      setTimeout(() => resolve(v), v ? 300 : 0);
+    };
+    const onConnect = () => done(true);
+    const timer = setTimeout(() => done(false), ms);
+    s.on("connect", onConnect);
+  });
+}
 
 export function useApp() {
   const ctx = useContext(Ctx);
@@ -115,6 +138,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const meRef = useRef<Me | null>(null);
   meRef.current = me;
   const toastId = useRef(0);
+  const resumeRef = useRef<(() => Promise<void>) | null>(null);
 
   const setActiveDm = useCallback((peerId: string | null) => {
     activeDm.current = peerId;
@@ -141,6 +165,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toast = useCallback((message: string, href?: string) => pushToast({ kind: "plain", message, href }), [pushToast]);
+
+  const reportError = useCallback(
+    (e: unknown) => {
+      const msg = friendlyMessage(e, GENERIC_COPY);
+      if (isTransient(e) || msg === GENERIC_COPY || msg === NETWORK_COPY) {
+        console.debug("[openlounge] action failed quietly", e);
+        return;
+      }
+      pushToast({ kind: "plain", message: msg });
+    },
+    [pushToast],
+  );
 
   const banner = useCallback(
     (b: BannerInput) => pushToast({ kind: "notice", message: b.title, body: b.body, href: b.href, avatar: b.avatar, key: b.key }),
@@ -169,15 +205,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // One socket for the app's lifetime; it's used for auth (pre-login) and everything after.
   useEffect(() => {
-    const stored = loadToken();
-    setToken(stored);
-    setBooted(true);
+    // Launch: decide signed-in vs signed-out BEFORE any sign-in/onboarding UI renders. With stored credentials
+    // the neutral splash stays up while we validate (refreshing silently); only a definitive "session is over"
+    // from the server shows the sign-in screen. Offline → keep the splash and retry quietly.
+    let disposed = false;
+    let bootTimer: ReturnType<typeof setTimeout> | null = null;
+    const boot = async (attempt = 0) => {
+      if (disposed || !loadCreds()) return;
+      try {
+        const v = await validateStoredSession();
+        if (disposed) return;
+        if (!v) return dropSession();
+        if (!meRef.current) applySession(v);
+      } catch {
+        if (disposed || meRef.current) return; // the socket resume may already have signed us in
+        bootTimer = setTimeout(() => void boot(attempt + 1), Math.min(15_000, 1000 * 2 ** attempt));
+      }
+    };
 
     const s = new RealtimeClient();
     // Tell the server whether the app is in the foreground (Android WebView backgrounding, hidden tabs)
     const reportVisibility = () => {
       if (!tokenRef.current && !loadToken()) return;
-      s.emit("presence:visible", { visible: document.visibilityState !== "hidden" });
+      s.emit("presence:visible", { visible: appVisible() });
     };
     // ---- DM catch-up: nothing is lost across a reconnect, nothing is shown twice ----
     // syncedAt = server time up to which we know we received every pushed DM (last DM / heartbeat).
@@ -205,23 +255,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       void markSynced();
     };
     const syncTimer = setInterval(() => {
-      if (s.connected && meRef.current && document.visibilityState !== "hidden") void markSynced();
+      if (s.connected && meRef.current && appVisible()) void markSynced();
     }, 60_000);
     let offlineTimer: ReturnType<typeof setTimeout> | null = null;
-    const resume = () => {
-      const t = tokenRef.current ?? loadToken();
-      if (!t) return;
-      s.request<({ ok: true } & SessionPayload) | { ok: false }>("session:resume", { token: t })
-        .then((res) => {
-          if (!res?.ok) return dropSession();
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+    let resumeAttempt = 0;
+    type ResumeRes = ({ ok: true } & SessionPayload) | { ok: false; reason?: string };
+    // Authenticate this socket with an access token. expired/invalid → one silent refresh + retry;
+    // a definitive refusal of the refresh token → sign-in screen (no message); anything else → retry quietly.
+    const resumeOnce = async (): Promise<void> => {
+      if (!loadCreds()) return;
+      for (let pass = 0; pass < 2; pass++) {
+        let access: string;
+        try {
+          access = pass === 0 ? await getAccessToken() : (await refreshSession({ ...loadCreds()!, access: null, accessExp: 0 })).access!;
+        } catch (err) {
+          if (err instanceof SignedOutError) return dropSession();
+          throw err;
+        }
+        const res = await s.request<ResumeRes>("session:resume", { token: access });
+        if (res?.ok) {
+          resumeAttempt = 0;
           applySession(res);
-          if (document.visibilityState === "hidden") reportVisibility();
+          if (!appVisible()) reportVisibility();
           void catchUp();
-        })
-        .catch(() => {
-          /* connection dropped mid-request; we'll resume on reconnect */
-        });
+          return;
+        }
+        const reason = (res as { reason?: string } | null)?.reason;
+        if (reason === "revoked") return dropSession();
+        if (reason !== "expired" && reason !== "invalid") break; // older server mid-deploy, odd reply: retry later
+      }
+      throw new Error("resume");
     };
+    let resuming: Promise<void> | null = null;
+    const resume = (): Promise<void> => {
+      if (resumeTimer) clearTimeout(resumeTimer);
+      resumeTimer = null;
+      if (!loadCreds()) return Promise.resolve();
+      resuming ??= resumeOnce()
+        .catch(() => {
+          // offline / timed out / server busy: try again soon while connected (a reconnect also resumes)
+          if (!s.connected) return;
+          resumeTimer = setTimeout(() => void resume(), Math.min(15_000, 1000 * 2 ** resumeAttempt++));
+        })
+        .finally(() => {
+          resuming = null;
+        });
+      return resuming;
+    };
+    resumeRef.current = resume;
+    s.on("session:revoked", () => dropSession());
     s.on("connect", () => {
       if (offlineTimer) clearTimeout(offlineTimer);
       offlineTimer = null;
@@ -258,31 +341,63 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (st !== "online" && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
     });
     document.addEventListener("visibilitychange", reportVisibility);
+    window.addEventListener(NATIVE_VISIBILITY_EVENT, reportVisibility);
     // dm:message notifications (banner / OS notification) live in <Notifier/>
     s.connect();
     setSocket(s);
+    // Reconcile the native shell's token store (Android SharedPreferences / iOS Keychain) with web storage first —
+    // localStorage may have been evicted or belong to another origin — then decide. Until then: splash.
+    void hydrateFromNative().then((c) => {
+      if (disposed) return;
+      setToken(c?.refresh ?? null);
+      setBooted(true);
+      if (!c) return;
+      void boot();
+      if (s.connected && !meRef.current) void resumeRef.current?.();
+    });
     return () => {
+      disposed = true;
+      if (bootTimer) clearTimeout(bootTimer);
+      if (resumeTimer) clearTimeout(resumeTimer);
       clearInterval(syncTimer);
       if (offlineTimer) clearTimeout(offlineTimer);
       document.removeEventListener("visibilitychange", reportVisibility);
+      window.removeEventListener(NATIVE_VISIBILITY_EVENT, reportVisibility);
       s.removeAllListeners();
       s.close();
     };
   }, [applySession, dropSession, banner]);
 
+  // Socket request with graceful failure: waits briefly for a reconnect instead of failing, re-authenticates
+  // silently if the server lost track of us (restart/redeploy), and only ever throws a FriendlyError.
   const request = useCallback(
     async <T,>(event: string, payload?: unknown): Promise<T> => {
-      if (!socket) throw new Error("Not connected");
-      const res = await socket.request<{ ok?: boolean; error?: string }>(event, payload ?? {});
-      if (res && res.ok === false) throw new Error(res.error || "Something went wrong");
-      return res as T;
+      for (let attempt = 0; ; attempt++) {
+        if (!socket) throw new FriendlyError(NETWORK_COPY, true);
+        let res: { ok?: boolean; error?: string; reason?: string } | undefined;
+        try {
+          res = await socket.request<{ ok?: boolean; error?: string }>(event, payload ?? {});
+        } catch (e) {
+          // never sent (socket down): wait for the reconnect and send once more
+          if (attempt === 0 && (e as Error)?.message === "Not connected" && (await waitConnected(socket, 8_000))) continue;
+          throw toFriendly(e);
+        }
+        if (res && res.ok === false) {
+          if (attempt === 0 && res.error === "Not signed in" && loadCreds()) {
+            await resumeRef.current?.().catch(() => {});
+            continue;
+          }
+          throw new FriendlyError(friendlyMessage(res.error));
+        }
+        return res as T;
+      }
     },
     [socket],
   );
 
   const completeLogin = useCallback(
-    (t: string, session: SessionPayload, opts?: { onboarding?: boolean }) => {
-      saveToken(t);
+    (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }) => {
+      saveCreds({ refresh: t, access: session.access ?? null, accessExp: session.accessExpiresAt ?? 0, uid: session.user?.id ?? null });
       setToken(t);
       applySession(session);
       setOnboarding(!!opts?.onboarding);
@@ -292,11 +407,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const finishOnboarding = useCallback(() => setOnboarding(false), []);
 
+  // Settings → Log out: revoke this device's session on the server (POST /auth/logout), detach the socket, clear storage.
   const signOut = useCallback(async () => {
+    await logout();
     try {
-      await socket?.request("session:logout", {}, 3000);
+      await socket?.request("session:logout", {}, 2000);
     } catch {
-      /* offline: token is still dropped locally */
+      /* offline: token is already dropped locally */
     }
     dropSession();
   }, [socket, dropSession]);
@@ -313,10 +430,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const res = await request<{ following: string[] }>("user:follow", { userId, follow: f });
         setFollowing(new Set(res.following));
       } catch (e) {
-        toast((e as Error).message);
+        // put the button back the way the server has it; no error toast
+        setFollowing((prev) => {
+          const next = new Set(prev);
+          if (f) next.delete(userId);
+          else next.add(userId);
+          return next;
+        });
+        reportError(e);
       }
     },
-    [request, toast],
+    [request, reportError],
   );
 
   const updateMe = useCallback(
@@ -369,6 +493,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateMe,
       setPhoto,
       toast,
+      reportError,
       banner,
       dismissToast,
       onlineIds,
@@ -377,7 +502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       presenceOf,
       offline,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
+    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

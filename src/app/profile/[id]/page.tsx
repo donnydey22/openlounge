@@ -1,5 +1,6 @@
 "use client";
 
+import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -22,7 +23,7 @@ import { usePresence } from "@/hooks/usePresence";
 export default function ProfilePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { me, request, following, signOut, updateMe, setPhoto, toast } = useApp();
+  const { me, request, following, signOut, updateMe, setPhoto, toast, reportError } = useApp();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<"followers" | "following" | null>(null);
@@ -32,11 +33,20 @@ export default function ProfilePage() {
   // live presence (pushed over the WebSocket) — not frozen at the time the profile was fetched
   const presence = usePresence(id, profile?.user.lastSeenAt);
 
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
     request<{ profile: UserProfile }>("user:get", { userId: id })
       .then((r) => setProfile(r.profile))
-      .catch((e: Error) => setError(e.message));
-  }, [id, request, following, me]);
+      .catch((e: Error) => {
+        // connection trouble: keep the skeleton and retry quietly
+        if (isTransient(e)) timer = setTimeout(() => setLoadAttempt((n) => n + 1), 2_000);
+        else setError(friendlyMessage(e, "This profile isn't available."));
+      });
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [id, request, following, me, loadAttempt]);
 
   if (error) {
     return (
@@ -228,7 +238,7 @@ export default function ProfilePage() {
                 toast("Profile updated");
                 setEditing(false);
               } catch (e) {
-                toast((e as Error).message);
+                reportError(e);
               }
             }}
           />
@@ -242,7 +252,7 @@ export default function ProfilePage() {
                 toast("Interests updated");
                 setEditingInterests(false);
               } catch (e) {
-                toast((e as Error).message);
+                reportError(e);
               }
             }}
           />

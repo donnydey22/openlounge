@@ -47,3 +47,4 @@ logs/
 .idea/
 .vscode/
 .playwright-mcp/
+android/keystore.properties

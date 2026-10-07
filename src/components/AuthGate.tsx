@@ -9,9 +9,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (status === "signedOut" || (status === "ready" && onboarding)) return <AuthFlow />;
   if (status !== "ready") {
     return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 text-zinc-500">
+      // neutral splash while the stored session is checked (no text: nothing to read, nothing alarming)
+      <div className="flex min-h-dvh flex-col items-center justify-center" data-testid="splash" aria-busy="true" aria-label="Open Lounge">
         <div className="animate-pulse text-4xl">🎙️</div>
-        <p className="text-sm">{status === "connecting" ? "Signing you in…" : "Loading…"}</p>
       </div>
     );
   }

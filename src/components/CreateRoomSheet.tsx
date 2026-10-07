@@ -32,7 +32,7 @@ function waitFor(predicate: () => boolean, ms: number) {
 }
 
 export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { request, toast, connected, socket } = useApp();
+  const { request, toast, reportError, connected, socket } = useApp();
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState<string>("Tech");
@@ -63,7 +63,7 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
       setDescription("");
       router.push(`/room/${roomId}`);
     } catch (err) {
-      toast((err as Error).message || (connected ? "Couldn't start the room" : "Not connected — try again"));
+      reportError(err);
     } finally {
       setBusy(false);
     }

@@ -9,7 +9,46 @@ import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { conversationId } from "./conversation";
-import { errText, type LoadResult, type PersistedDb, type Persistence } from "./persistence";
+import { randomBytes } from "node:crypto";
+import { errText, type LoadResult, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
+
+type SessionRow = {
+  token_hash: string;
+  user_id: string;
+  created_at: number;
+  expires_at: number;
+  last_seen_at: number;
+  id: string | null;
+  scheme: number | null;
+  legacy_hash: string | null;
+  prev_hashes: string[] | null;
+  rotated_at: number | null;
+  access_expires_at: number | null;
+  revoked_at: number | null;
+  device: string | null;
+  confirmed_at: number | null;
+};
+
+/** Rows written by an older server (e.g. the previous deploy still flushing) have NULL id / legacy_hash: treat them as legacy sessions. */
+function sessionFromRow(s: SessionRow): SessionRecord {
+  const scheme = s.scheme ?? 1;
+  return {
+    tokenHash: s.token_hash,
+    userId: s.user_id,
+    createdAt: s.created_at,
+    expiresAt: s.expires_at,
+    lastSeenAt: s.last_seen_at,
+    id: s.id ?? `s_${s.token_hash.slice(0, 32)}`,
+    scheme,
+    legacyHash: s.legacy_hash ?? (scheme === 1 ? s.token_hash : null),
+    prevHashes: s.prev_hashes ?? [],
+    rotatedAt: s.rotated_at,
+    accessExpiresAt: s.access_expires_at,
+    revokedAt: s.revoked_at,
+    device: s.device ?? "",
+    confirmedAt: s.confirmed_at ?? null,
+  };
+}
 
 // BIGINT (int8) columns hold epoch-ms timestamps — safe as JS numbers.
 pg.types.setTypeParser(20, (v) => Number(v));
@@ -149,6 +188,7 @@ export class PgPersistence implements Persistence {
           throw new Error(`[pg] migration ${file} failed: ${errText(err)}`);
         }
       }
+      console.log(`[pg] schema up to date: ${files.length} migrations applied (latest ${files.at(-1) ?? "none"})`);
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK]).catch(() => {});
       client.release();
@@ -171,7 +211,7 @@ export class PgPersistence implements Persistence {
       q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number }>(
         "SELECT id, from_id, from_name, from_color, to_id, text, created_at FROM dms ORDER BY created_at, id",
       ),
-      q<{ token_hash: string; user_id: string; created_at: number; expires_at: number; last_seen_at: number }>("SELECT * FROM sessions"),
+      q<SessionRow>("SELECT * FROM sessions"),
       q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
       q<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'json_imported'"),
     ]);
@@ -197,7 +237,7 @@ export class PgPersistence implements Persistence {
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
       dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at })),
-      sessions: sessions.map((s) => ({ tokenHash: s.token_hash, userId: s.user_id, createdAt: s.created_at, expiresAt: s.expires_at, lastSeenAt: s.last_seen_at })),
+      sessions: sessions.map(sessionFromRow),
       dmReads: {},
     };
     for (const f of follows) (db.follows[f.follower_id] ??= []).push(f.followee_id);
@@ -236,7 +276,24 @@ export class PgPersistence implements Persistence {
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
       out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt]);
-    for (const s of db.sessions ?? []) if (humans.has(s.userId)) out.sessions.set(s.tokenHash, [s.tokenHash, s.userId, s.createdAt, s.expiresAt, s.lastSeenAt]);
+    for (const s of db.sessions ?? [])
+      if (humans.has(s.userId))
+        out.sessions.set(s.tokenHash, [
+          s.tokenHash,
+          s.userId,
+          s.createdAt,
+          s.expiresAt,
+          s.lastSeenAt,
+          s.id ?? `s_${s.tokenHash.slice(0, 32)}`,
+          s.scheme ?? 1,
+          s.legacyHash ?? null,
+          `{${(s.prevHashes ?? []).filter((h) => /^[0-9a-f]{64}$/.test(h)).join(",")}}`,
+          s.rotatedAt ?? null,
+          s.accessExpiresAt ?? null,
+          s.revokedAt ?? null,
+          t(s.device ?? ""),
+          s.confirmedAt ?? null,
+        ]);
     for (const [uid, peers] of Object.entries(db.dmReads ?? {})) {
       if (!humans.has(uid)) continue;
       for (const [peer, ts] of Object.entries(peers)) out.dmReads.set(`${uid}${SEP}${peer}`, [uid, t(peer), ts]);
@@ -319,11 +376,16 @@ export class PgPersistence implements Persistence {
       // sessions
       if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);
       if (up.sessions.length)
+        // prev_hashes travels as a Postgres array literal (unnest can't take a 2-D text[][] of ragged arrays)
         await client.query(
-          `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::bigint[], $5::bigint[])
-           ON CONFLICT (token_hash) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, last_seen_at = EXCLUDED.last_seen_at`,
-          [0, 1, 2, 3, 4].map((i) => col(up.sessions, i)),
+          `INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen_at, id, scheme, legacy_hash, prev_hashes, rotated_at, access_expires_at, revoked_at, device, confirmed_at)
+           SELECT a, b, c, d, e, f, g, h, i::text[], j, k, l, m, n FROM unnest($1::text[], $2::text[], $3::bigint[], $4::bigint[], $5::bigint[], $6::text[], $7::smallint[],
+             $8::text[], $9::text[], $10::bigint[], $11::bigint[], $12::bigint[], $13::text[], $14::bigint[]) AS x(a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+           ON CONFLICT (token_hash) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, last_seen_at = EXCLUDED.last_seen_at,
+             id = EXCLUDED.id, scheme = EXCLUDED.scheme, legacy_hash = EXCLUDED.legacy_hash, prev_hashes = EXCLUDED.prev_hashes,
+             rotated_at = EXCLUDED.rotated_at, access_expires_at = EXCLUDED.access_expires_at, revoked_at = EXCLUDED.revoked_at, device = EXCLUDED.device,
+             confirmed_at = EXCLUDED.confirmed_at`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((i) => col(up.sessions, i)),
         );
       // DM read cursors
       if (del.dmReads.length)
@@ -343,6 +405,52 @@ export class PgPersistence implements Persistence {
       throw err;
     } finally {
       client.release();
+    }
+  }
+
+  async authSecret() {
+    const fromEnv = process.env.AUTH_SECRET?.trim();
+    if (fromEnv) return fromEnv;
+    const fresh = randomBytes(32).toString("hex");
+    await this.pool.query("INSERT INTO openlounge_meta (key, value) VALUES ('auth_secret', $1) ON CONFLICT (key) DO NOTHING", [fresh]);
+    const r = await this.pool.query<{ value: string }>("SELECT value FROM openlounge_meta WHERE key = 'auth_secret'");
+    return r.rows[0]?.value ?? fresh;
+  }
+
+  /** Session (and its user) straight from Postgres — for sessions a sibling instance created after we loaded. */
+  async findSession(by: { hash?: string; id?: string }) {
+    const r = by.hash
+      ? await this.pool.query<SessionRow>("SELECT * FROM sessions WHERE token_hash = $1 OR legacy_hash = $1 OR $1 = ANY(prev_hashes) LIMIT 1", [by.hash])
+      : await this.pool.query<SessionRow>("SELECT * FROM sessions WHERE id = $1 ORDER BY last_seen_at DESC LIMIT 1", [by.id]);
+    const row = r.rows[0];
+    if (!row) return null;
+    const session = sessionFromRow(row);
+    const u = (await this.pool.query("SELECT * FROM users WHERE id = $1", [row.user_id])).rows[0];
+    if (!u) return { session, user: null };
+    const interests = (await this.pool.query<{ interest: string }>("SELECT interest FROM user_interests WHERE user_id = $1 ORDER BY position", [u.id])).rows.map((x) => x.interest);
+    const user: UserRecord = {
+      id: u.id,
+      name: u.name,
+      username: u.username,
+      color: u.color,
+      bio: u.bio,
+      isBot: false,
+      createdAt: u.created_at,
+      baseFollowers: u.base_followers,
+      baseFollowing: u.base_following,
+      ...(u.phone !== null ? { phone: u.phone } : {}),
+      interests,
+      photoVersion: u.photo_version,
+    };
+    return { session, user };
+  }
+
+  async status() {
+    try {
+      const r = await this.pool.query<{ version: string }>("SELECT version FROM schema_migrations ORDER BY version");
+      return { connected: true, migrations: r.rows.map((x) => x.version) };
+    } catch {
+      return { connected: false, migrations: [] };
     }
   }
 

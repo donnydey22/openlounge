@@ -1,5 +1,6 @@
 "use client";
 
+import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowDown, ChevronLeft, Loader2, RotateCcw, X } from "lucide-react";
@@ -134,7 +135,7 @@ export function DmThread({
       })
       .catch((e: Error) => {
         loadedFor.current = null; // retry on the next (re)connect
-        if (e.message !== "Connection lost" && e.message !== "Not connected") setError(e.message);
+        if (!isTransient(e)) setError(friendlyMessage(e, "Couldn't load this conversation. Try again."));
       });
   }, [connected, peerId, request, markRead, isSelf]);
 
@@ -240,9 +241,8 @@ export function DmThread({
         const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId });
         setMessages((list) => mergeMessages(list ?? [], [{ ...r.message, clientId: item.clientId }]));
       } catch (e) {
-        const msg = (e as Error).message;
         // dropped connection: stays "sending" and is re-sent on reconnect; real errors → failed (tap to retry)
-        const transient = msg === "Not connected" || msg === "Connection lost" || msg === "Request timed out";
+        const transient = isTransient(e);
         setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId && x.state ? { ...x, state: transient ? "sending" : "failed" } : x)));
       }
     },
