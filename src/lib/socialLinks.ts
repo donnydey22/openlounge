@@ -25,7 +25,7 @@ const at = (s: string | null) => (s && s.startsWith("@") ? s.slice(1) : null);
 export const SOCIAL_SPECS: Record<Exclude<SocialKey, "website">, Spec> = {
   instagram: { label: "Instagram", placeholder: "@handle or instagram.com/handle", hosts: ["instagram.com"], re: /^(?!.*\.\.)(?!\.)[A-Za-z0-9._]{1,30}(?<!\.)$/, fromPath: first, url: (h) => `https://instagram.com/${h}` },
   x: { label: "X (Twitter)", placeholder: "@handle or x.com/handle", hosts: ["x.com", "twitter.com"], re: /^[A-Za-z0-9_]{1,15}$/, fromPath: first, url: (h) => `https://x.com/${h}` },
-  tiktok: { label: "TikTok", placeholder: "@handle or tiktok.com/@handle", hosts: ["tiktok.com"], re: /^(?!.*\.$)[A-Za-z0-9._]{2,24}$/, fromPath: (p) => at(first(p)), url: (h) => `https://www.tiktok.com/@${h}` },
+  tiktok: { label: "TikTok", placeholder: "@handle or tiktok.com/@handle", hosts: ["tiktok.com"], re: /^(?!.*\.$)[A-Za-z0-9._]{2,24}$/, fromPath: (p) => at(first(p)) ?? first(p), url: (h) => `https://www.tiktok.com/@${h}` },
   youtube: { label: "YouTube", placeholder: "@handle or youtube.com/@handle", hosts: ["youtube.com"], re: /^[A-Za-z0-9._-]{3,30}$/, fromPath: (p) => at(first(p)), url: (h) => `https://www.youtube.com/@${h}` },
   linkedin: { label: "LinkedIn", placeholder: "handle or linkedin.com/in/handle", hosts: ["linkedin.com"], re: /^[A-Za-z0-9-]{3,100}$/, fromPath: (p) => (p[0] === "in" ? p[1] ?? null : null), url: (h) => `https://www.linkedin.com/in/${h}` },
   snapchat: { label: "Snapchat", placeholder: "username or snapchat.com/add/username", hosts: ["snapchat.com"], re: /^[A-Za-z][A-Za-z0-9._-]{1,14}$/, fromPath: (p) => (p[0] === "add" ? p[1] ?? null : null), url: (h) => `https://snapchat.com/add/${h}` },
@@ -61,7 +61,8 @@ export function normalizeSocial(key: SocialKey, raw: unknown): NormResult {
     } catch {
       return { ok: false, error: "Not a valid URL" };
     }
-    if (u.protocol !== "https:") return { ok: false, error: "Website must use https://" };
+    if (u.protocol === "http:") u.protocol = "https:"; // upgrade plain http links
+    if (u.protocol !== "https:") return { ok: false, error: "Website must be an http(s) link" };
     if (u.username || u.password) return { ok: false, error: "Not a valid URL" };
     if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(u.hostname)) return { ok: false, error: "Not a valid domain" };
     if (u.port) return { ok: false, error: "Ports aren't allowed" };
@@ -96,6 +97,28 @@ function decodeURIComponentSafe(s: string) {
   } catch {
     return s;
   }
+}
+
+export type SocialFormState = { errors: Partial<Record<SocialKey, string>>; dirty: boolean; canSave: boolean };
+
+/** Form state for the editor: per-field errors (only real messages — never undefined-valued keys),
+ *  dirty = any field's normalized value differs from what's saved, canSave = dirty && no errors. */
+export function socialFormState(
+  draft: Partial<Record<SocialKey, string>>,
+  saved: SocialLinks,
+  serverErrors: Partial<Record<SocialKey, string | undefined>> = {},
+): SocialFormState {
+  const errors: Partial<Record<SocialKey, string>> = {};
+  let dirty = false;
+  for (const k of SOCIAL_KEYS) {
+    const raw = draft[k] ?? "";
+    const r = normalizeSocial(k, raw);
+    const err = r.ok ? serverErrors[k] : r.error;
+    if (err) errors[k] = err;
+    const value = r.ok ? r.value : raw.trim();
+    if ((value ?? "") !== (saved[k] ?? "")) dirty = true;
+  }
+  return { errors, dirty, canSave: dirty && Object.keys(errors).length === 0 };
 }
 
 /** Validate a whole patch. Returns cleaned links (merged onto `current`) or per-field errors. */

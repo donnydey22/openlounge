@@ -680,3 +680,26 @@ html[data-lowend] .speaking-glow-bloom {
     animation: none;
   }
 }
+
+/* reCAPTCHA challenge (Firebase phone auth): always on top, never clipped, page scrollable while verifying */
+.ol-recaptcha-host { position: relative; z-index: 2147483647; }
+body > div:has(> div > iframe[src*="google.com/recaptcha"]),
+body > div:has(> div > iframe[src*="recaptcha/api2/bframe"]),
+body > div:has(iframe[title*="recaptcha" i]) {
+  z-index: 2147483647 !important;
+  transform: none !important;
+}
+iframe[src*="google.com/recaptcha"],
+iframe[src*="recaptcha.net/recaptcha"] {
+  z-index: 2147483647 !important;
+  max-width: 100vw;
+}
+html.ol-recaptcha-active,
+html.ol-recaptcha-active body,
+html.ol-recaptcha-active body:has([aria-modal]) {
+  overflow: auto !important;
+}
+
+/* Hide the floating reCAPTCHA badge; the required Google disclosure is shown under the phone form instead
+   (allowed by Google's reCAPTCHA FAQ when the disclosure text is visible in the user flow). */
+.grecaptcha-badge { visibility: hidden !important; }

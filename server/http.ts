@@ -5,7 +5,7 @@ import { store } from "./store";
 import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
-import { deviceLabel, originAllowed } from "./auth";
+import { clearRefreshCookie, deviceLabel, originAllowed, readRefreshCookie, refreshCookie } from "./auth";
 import { UNIFIED_AUTH_PATH, handleAuthApi, handleNavigation, isNavigationRoute } from "./authx/routes";
 
 /** Requests answered by api() instead of Next.js. */
@@ -22,6 +22,11 @@ export function json(res: ServerResponse, status: number, body: unknown) {
 /** JSON body (hardening): 16 KB default (HTTP_MAX_BODY_BYTES), 413 above, 400 on malformed JSON (caught in index.ts). */
 const readJson = (req: IncomingMessage, limit = Number(process.env.HTTP_MAX_BODY_BYTES || 16_384)) => readJsonBody(req, limit);
 
+/** Secure cookies everywhere except plain-http localhost (dev/tests). */
+const secureCookies = (req: IncomingMessage) => {
+  if (String(req.headers["x-forwarded-proto"] ?? "").includes("https")) return true;
+  return !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(String(req.headers.host ?? ""));
+};
 const bearer = (req: IncomingMessage) => (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
 
 /**
@@ -92,10 +97,19 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     });
   }
   if (authPath === "/auth/refresh" && req.method === "POST") {
-    // body { refreshToken } (a legacy session token works too) → new access + rotated refresh token
+    // body { refreshToken } (a legacy session token works too) → new access + rotated refresh token.
+    // With no token in the body/header the httpOnly ol_rt cookie is used (recovery after storage eviction).
     const body = await readJson(req);
-    const r = await store.refreshSession(body.refreshToken ?? bearer(req), deviceLabel(body.device, req.headers["user-agent"]));
-    if (!r.ok) return json(res, 401, { ok: false, reason: r.reason });
+    const cookieTok = readRefreshCookie(req.headers.cookie);
+    const presented = body.refreshToken || bearer(req) || cookieTok;
+    const sec = secureCookies(req);
+    const r = await store.refreshSession(presented, deviceLabel(body.device, req.headers["user-agent"]));
+    if (!r.ok) {
+      // only clear the cookie when it is the credential that was rejected (a stale body token must not kill a good cookie)
+      if (cookieTok && presented === cookieTok) res.setHeader("Set-Cookie", clearRefreshCookie(sec));
+      return json(res, 401, { ok: false, reason: r.reason });
+    }
+    res.setHeader("Set-Cookie", refreshCookie(r.refresh, sec));
     return json(res, 200, {
       ok: true,
       access: r.access,
@@ -105,12 +119,23 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
       user: store.me(r.userId),
     });
   }
+  if (authPath === "/auth/persist" && req.method === "POST") {
+    // body { refreshToken }: after a socket sign-in, mirror the CURRENT refresh token into the httpOnly cookie.
+    const body = await readJson(req);
+    const r = typeof body.refreshToken === "string" ? await store.authenticate(body.refreshToken).catch(() => null) : null;
+    if (!r?.ok) return json(res, 401, { ok: false, reason: r && !r.ok ? r.reason : "invalid" });
+    res.setHeader("Set-Cookie", refreshCookie(body.refreshToken as string, secureCookies(req)));
+    return json(res, 200, { ok: true });
+  }
   if (authPath === "/auth/logout" && req.method === "POST") {
-    // Authorization: Bearer <access token> and/or body { refreshToken }; body { all: true } signs out every device
+    // Authorization: Bearer <access token> and/or body { refreshToken } and/or the ol_rt cookie; body { all: true } signs out every device
     const body = await readJson(req);
     let r = await store.authenticate(bearer(req)).catch(() => null);
     if (!r?.ok && typeof body.refreshToken === "string") r = await store.authenticate(body.refreshToken).catch(() => null);
+    const cookieTok = readRefreshCookie(req.headers.cookie);
+    if (!r?.ok && cookieTok) r = await store.authenticate(cookieTok).catch(() => null);
     if (r?.ok) store.revokeSession(r.sessionId, body.all === true ? { allForUser: r.userId } : {});
+    res.setHeader("Set-Cookie", clearRefreshCookie(secureCookies(req)));
     return json(res, 200, { ok: true }); // idempotent: an already-dead session is "logged out" too
   }
 

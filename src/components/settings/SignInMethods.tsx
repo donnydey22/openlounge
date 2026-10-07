@@ -4,7 +4,7 @@
 // buttons to add the missing ones. Whatever method is used later, it's the same profile, follows, rooms and DMs.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ConfirmationResult } from "firebase/auth";
+import type { PhoneSession } from "@/lib/firebaseClient";
 import { ChevronRight, Loader2, Mail, Phone, Plus, X } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { Sheet } from "@/components/Sheet";
@@ -196,7 +196,7 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
   const digits = national.replace(/\D/g, "");
   // real phone verification (Firebase) when the server has it on; the demo code flow otherwise
   const [firebase, setFirebase] = useState(false);
-  const confirmation = useRef<ConfirmationResult | null>(null);
+  const confirmation = useRef<PhoneSession | null>(null);
   useEffect(() => {
     request<{ firebase?: boolean }>("auth:config")
       .then((c) => setFirebase(!!c.firebase))
@@ -272,7 +272,6 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
         {phone ? "Verify & add" : "Send code"}
       </button>
-      <div id="recaptcha-link-phone" />
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
 import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult, type SignInResult } from "@/lib/authApi";
-import type { ConfirmationResult } from "firebase/auth";
+import type { PhoneSession } from "@/lib/firebaseClient";
 
 /** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
 function initialEntry(): { step: Step; pending: PendingSignup | null } {
@@ -56,7 +56,7 @@ export function AuthFlow() {
   const providerName = method === "apple" ? "Apple" : method === "email" ? "your email" : "Google";
   // Firebase Phone Auth when the server has it on; demo OTP (auth:requestCode) otherwise
   const [authCfg, setAuthCfg] = useState<{ firebase: boolean; demoOtp: boolean } | null>(null);
-  const confirmation = useRef<ConfirmationResult | null>(null);
+  const confirmation = useRef<PhoneSession | null>(null);
   useEffect(() => {
     if (!connected || authCfg) return;
     request<{ firebase: boolean; demoOtp: boolean }>("auth:config")
@@ -108,6 +108,8 @@ export function AuthFlow() {
         setResendIn(30);
         setCode("");
         go("code");
+        // Android native instant verification: no code to type — continue straight away.
+        if (confirmation.current.instantToken) setTimeout(() => void verify("000000"), 0);
         return;
       }
       const res = await request<{ phone: string; demoCode?: string; resendIn: number }>("auth:requestCode", { phone: country.dial + digits });
@@ -437,6 +439,13 @@ export function AuthFlow() {
           <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">
             By entering your number, you agree to our Terms of Service and Privacy Policy. We&apos;ll text you a 6-digit code.
           </p>
+          {authCfg?.firebase && (
+            <p className="mt-2 text-center text-[10px] leading-snug text-zinc-600" data-testid="recaptcha-disclosure">
+              This site is protected by reCAPTCHA and the Google{" "}
+              <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer" className="underline">Privacy Policy</a> and{" "}
+              <a href="https://policies.google.com/terms" target="_blank" rel="noreferrer" className="underline">Terms of Service</a> apply.
+            </p>
+          )}
           <Footer>
             <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
               Next <ArrowRight className="h-4 w-4" />

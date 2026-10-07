@@ -186,3 +186,8 @@ export function useClockTick() {
     () => 0,
   );
 }
+
+/** Exact join date in the viewer's local time zone, en-US long format: "October 7, 2026". */
+export function formatJoinDate(ts: number | string | Date) {
+  return new Date(ts).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}

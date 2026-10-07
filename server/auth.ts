@@ -15,7 +15,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const ACCESS_TTL_MS = Number(process.env.AUTH_ACCESS_TTL_MS || 60 * 60_000); // 1 h
-export const REFRESH_TTL_MS = Number(process.env.AUTH_REFRESH_TTL_MS || 90 * 24 * 60 * 60_000); // 90 days, sliding
+export const REFRESH_TTL_MS = Number(process.env.AUTH_REFRESH_TTL_MS || 365 * 24 * 60 * 60_000); // 1 year, sliding (every use extends it) — effectively "until sign-out"
 /** a just-rotated refresh token is still accepted this long (two tabs refreshing at once, a lost response) */
 export const ROTATION_GRACE_MS = 2 * 60_000;
 /** rotated-out refresh hashes remembered per session for reuse detection */
@@ -146,4 +146,30 @@ export function originAllowed(origin: string | undefined, host: string | undefin
     return false;
   }
   return false;
+}
+
+// ---- durable refresh-token cookie (httpOnly) ----
+// Mirrors the current refresh token so a session survives script-storage eviction (Safari ITP 7-day cap on
+// localStorage, cleared site data, a different tab/origin copy going stale). Set on every successful
+// /auth/refresh and on /auth/persist; cleared on logout and whenever the server definitively rejects it.
+export const REFRESH_COOKIE = "ol_rt";
+export function refreshCookie(token: string, secure = true) {
+  return `${REFRESH_COOKIE}=${encodeURIComponent(token)}; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(REFRESH_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
+}
+export function clearRefreshCookie(secure = true) {
+  return `${REFRESH_COOKIE}=; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
+}
+export function readRefreshCookie(cookieHeader: string | undefined): string | null {
+  for (const part of String(cookieHeader ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === REFRESH_COOKIE) {
+      try {
+        const v = decodeURIComponent(part.slice(i + 1).trim());
+        return v || null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
 }

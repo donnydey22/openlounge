@@ -17,6 +17,7 @@ import { Sheet } from "@/components/Sheet";
 import { FollowButton, UserRow } from "@/components/UserRow";
 import { InterestChips } from "@/components/profile/InterestChips";
 import { usePresence } from "@/hooks/usePresence";
+import { formatJoinDate } from "@/lib/time";
 
 /**
  * Profile page — intentionally Clubhouse-clean (precise spacing, soft hex avatar,
@@ -164,7 +165,7 @@ export default function ProfilePage() {
 
         <div className="mt-2 flex items-center gap-1.5 text-[13px] text-zinc-500">
           <CalendarDays className="h-3.5 w-3.5" />
-          Joined {new Date(u.createdAt).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
+          Joined {formatJoinDate(u.createdAt)}
         </div>
 
         {/* Interests */}

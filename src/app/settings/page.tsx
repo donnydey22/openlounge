@@ -31,7 +31,7 @@ export default function SettingsPage() {
   return (
     <>
       <TopBar />
-      <main className="mx-auto max-w-2xl px-4 pt-6 pb-24">
+      <main className="mx-auto max-w-2xl px-4 pt-6 pb-[calc(6rem+env(safe-area-inset-bottom))]">
         <h1 className="mb-6 text-2xl font-bold tracking-tight">Settings</h1>
 
         <section className="mb-8">
