@@ -149,3 +149,42 @@ test("one member across phone / email / Google / Apple / native deep link", asyn
   }
   friend.client.close();
 });
+
+test("real phone verified later (Firebase) links to the existing member; demo codes can't link once demo OTP is off", async () => {
+  resetRateLimits();
+  const fb = await import("../../server/firebase");
+  const phone = `+1415${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
+  fb.setPhoneVerifier(async (tok) => (tok === "fb-good-token" ? { ok: true, phone, uid: "fb-1" } : { ok: false, error: "bad" }));
+  try {
+    // an email member (created via the in-memory SMTP outbox)
+    const email = `later_${uniq()}@example.com`;
+    await api(app.base, "/auth/email/signup", { email, password: "later-pass-1" });
+    const link = [...outbox].reverse().find((m) => m.to === email)!.link!;
+    const v = await api(app.base, "/auth/email/verify", { token: new URL(link).searchParams.get("token") });
+    const c = wsClient(app.wsUrl);
+    await c.open;
+    const reg = await c.req("auth:register", { ticket: v.data.ticket, firstName: "Lia", lastName: "", username: `lia_${uniq()}`, bio: "", color: "#22C55E", interests: [] });
+    assert.equal(reg.ok, true);
+    const uid = reg.user.id;
+    assert.equal((await c.req("account:linkPhoneFirebase", { idToken: "nope" })).ok, false);
+    const linked = await c.req("account:linkPhoneFirebase", { idToken: "fb-good-token" });
+    assert.equal(linked.ok, true, JSON.stringify(linked));
+    c.close();
+    // Firebase phone sign-in on a fresh device → the same member
+    const r = await api(app.base, "/api/auth/firebase", { idToken: "fb-good-token" });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.status, "existing");
+    assert.equal(r.data.user.id, uid);
+    // with demo OTP disabled, a demo code can't attach someone else's number
+    process.env.DEMO_OTP_ENABLED = "0";
+    const c2 = wsClient(app.wsUrl);
+    await c2.open;
+    await c2.req("session:resume", { token: r.data.access });
+    const bad = await c2.req("account:linkPhone", { phone: "+14155550999", code: "000000" });
+    assert.equal(bad.ok, false);
+    c2.close();
+  } finally {
+    delete process.env.DEMO_OTP_ENABLED;
+    fb.setPhoneVerifier(null);
+  }
+});

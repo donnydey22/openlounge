@@ -3,7 +3,8 @@
 // Settings → "Ways to sign in": every method on this ONE account (phone, email + password, Apple, Google), plus
 // buttons to add the missing ones. Whatever method is used later, it's the same profile, follows, rooms and DMs.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ConfirmationResult } from "firebase/auth";
 import { ChevronRight, Loader2, Mail, Phone, Plus } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { Sheet } from "@/components/Sheet";
@@ -155,11 +156,27 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const digits = national.replace(/\D/g, "");
+  // real phone verification (Firebase) when the server has it on; the demo code flow otherwise
+  const [firebase, setFirebase] = useState(false);
+  const confirmation = useRef<ConfirmationResult | null>(null);
+  useEffect(() => {
+    request<{ firebase?: boolean }>("auth:config")
+      .then((c) => setFirebase(!!c.firebase))
+      .catch(() => setFirebase(false));
+  }, [request]);
 
   async function send() {
     setBusy(true);
     setError(null);
     try {
+      if (firebase) {
+        const e164 = country.dial + digits;
+        const { sendPhoneCode } = await import("@/lib/firebaseClient");
+        confirmation.current = await sendPhoneCode(e164, "recaptcha-link-phone");
+        setPhone(e164);
+        setDemo(null);
+        return;
+      }
       const r = await request<{ phone: string; demoCode?: string }>("auth:requestCode", { phone: country.dial + digits });
       setPhone(r.phone);
       setDemo(r.demoCode ?? null);
@@ -173,7 +190,11 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
     setBusy(true);
     setError(null);
     try {
-      await request("account:linkPhone", { phone, code });
+      if (firebase && confirmation.current) {
+        const { confirmPhoneCode } = await import("@/lib/firebaseClient");
+        const idToken = await confirmPhoneCode(confirmation.current, code);
+        await request("account:linkPhoneFirebase", { idToken }); // links the verified number to THIS member
+      } else await request("account:linkPhone", { phone, code });
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -213,6 +234,7 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
         {phone ? "Verify & add" : "Send code"}
       </button>
+      <div id="recaptcha-link-phone" />
     </div>
   );
 }
