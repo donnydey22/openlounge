@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowDownToLine, MessageCircle, Mic, MicOff, Sparkles, UserRound } from "lucide-react";
+import { ArrowDownToLine, Ban, Flag, MessageCircle, Mic, MicOff, Sparkles, UserRound } from "lucide-react";
 import type { Participant, UserProfile } from "@/lib/types";
 import { compact } from "@/lib/utils";
 import { Avatar } from "../Avatar";
@@ -15,6 +15,9 @@ export function UserActionSheet({
   amHost,
   onClose,
   onMessage,
+  onReport,
+  onBlock,
+  blocked,
 }: {
   target: Participant | null;
   roomId: string;
@@ -22,6 +25,10 @@ export function UserActionSheet({
   onClose: () => void;
   /** Open a DM with this user without leaving the room */
   onMessage?: (userId: string) => void;
+  /** App Store 1.2: report / block this participant */
+  onReport?: (target: Participant) => void;
+  onBlock?: (target: Participant) => void;
+  blocked?: boolean;
 }) {
   const { me, request, following, follow, toast, reportError } = useApp();
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -95,6 +102,27 @@ export function UserActionSheet({
           <UserRound className="h-4 w-4" /> Profile
         </Link>
       </div>
+
+      {!isMe && !target.isBot && (onReport || onBlock) && (
+        <div className="mt-4 flex gap-2">
+          {onReport && (
+            <button
+              onClick={() => onReport(target)}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-sm font-medium text-zinc-400 hover:bg-white/5 hover:text-red-400"
+            >
+              <Flag className="h-4 w-4" /> Report
+            </button>
+          )}
+          {onBlock && (
+            <button
+              onClick={() => onBlock(target)}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-sm font-medium text-zinc-400 hover:bg-white/5 hover:text-red-400"
+            >
+              <Ban className="h-4 w-4" /> {blocked ? "Unblock" : "Block"}
+            </button>
+          )}
+        </div>
+      )}
 
       {(amHost || isMe) && (
         <div className="mt-5 space-y-1 border-t border-white/5 pt-4">

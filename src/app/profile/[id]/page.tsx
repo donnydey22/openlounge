@@ -6,7 +6,7 @@ import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { CalendarDays, Camera, Loader2, LogOut, MessageCircle, Pencil, Radio, Settings, Sparkles } from "lucide-react";
+import { Ban, CalendarDays, Camera, Flag, MoreHorizontal, Loader2, LogOut, MessageCircle, Pencil, Radio, Settings, Sparkles } from "lucide-react";
 import { fileToAvatarDataUrl } from "@/lib/image";
 import { AVATAR_COLORS, type UserProfile } from "@/lib/types";
 import { cn, compact } from "@/lib/utils";
@@ -17,6 +17,9 @@ import { Sheet } from "@/components/Sheet";
 import { FollowButton, UserRow } from "@/components/UserRow";
 import { InterestChips } from "@/components/profile/InterestChips";
 import { usePresence } from "@/hooks/usePresence";
+import { ReportSheet } from "@/components/safety/ReportSheet";
+import { BlockConfirm } from "@/components/safety/BlockConfirm";
+import { useSafety, type ReportTarget } from "@/lib/safety";
 
 /**
  * Profile page — intentionally Clubhouse-clean (precise spacing, soft hex avatar,
@@ -32,6 +35,10 @@ export default function ProfilePage() {
   const [editing, setEditing] = useState(false);
   const [editingInterests, setEditingInterests] = useState(false);
   const isMe = me?.id === id;
+  const safety = useSafety(me?.id);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [blockOpen, setBlockOpen] = useState(false);
   // live presence (pushed over the WebSocket) — not frozen at the time the profile was fetched
   const presence = usePresence(id, profile?.user.lastSeenAt);
 
@@ -82,6 +89,7 @@ export default function ProfilePage() {
   }
 
   const u = profile.user;
+  const iBlocked = safety.isBlocked(u.id);
   const online = presence.online;
   const shown = list === "followers" ? profile.followers : list === "following" ? profile.following : [];
   const mockExtra =
@@ -114,14 +122,34 @@ export default function ProfilePage() {
               </>
             ) : (
               <>
-                <FollowButton userId={u.id} />
-                <Link
-                  href={`/messages/${u.id}`}
-                  className="rounded-full border border-white/12 p-2.5 text-zinc-300 hover:bg-white/5"
-                  aria-label="Message"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                </Link>
+                {iBlocked ? (
+                  <button
+                    onClick={() => setBlockOpen(true)}
+                    className="rounded-full border border-red-500/40 px-4 py-2 text-[13px] font-semibold tracking-wide text-red-400 hover:bg-red-500/10"
+                  >
+                    Unblock
+                  </button>
+                ) : (
+                  <>
+                    <FollowButton userId={u.id} />
+                    <Link
+                      href={`/messages/${u.id}`}
+                      className="rounded-full border border-white/12 p-2.5 text-zinc-300 hover:bg-white/5"
+                      aria-label="Message"
+                    >
+                      <MessageCircle className="h-4 w-4" />
+                    </Link>
+                  </>
+                )}
+                {!u.isBot && (
+                  <button
+                    onClick={() => setMoreOpen(true)}
+                    className="rounded-full border border-white/12 p-2.5 text-zinc-300 hover:bg-white/5"
+                    aria-label="More options"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -144,6 +172,12 @@ export default function ProfilePage() {
             {u.isBot && <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">Demo</span>}
           </div>
         </div>
+
+        {iBlocked && (
+          <p className="mt-4 flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-zinc-300">
+            <Ban className="h-4 w-4 shrink-0 text-red-400" /> You blocked this account. They can&apos;t message you and you won&apos;t see their messages.
+          </p>
+        )}
 
         <div className="mt-4 flex items-baseline gap-5">
           <button onClick={() => setList("followers")} className="text-left hover:opacity-80">
@@ -224,6 +258,47 @@ export default function ProfilePage() {
           </button>
         )}
       </main>
+
+      <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title={`@${u.username}`}>
+        <div className="space-y-1">
+          <button
+            onClick={() => {
+              setMoreOpen(false);
+              setReportTarget({ type: "user", id: u.id, label: u.name });
+            }}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+          >
+            <Flag className="h-4 w-4" /> Report @{u.username}
+          </button>
+          <button
+            onClick={() => {
+              setMoreOpen(false);
+              setBlockOpen(true);
+            }}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+          >
+            <Ban className="h-4 w-4" /> {iBlocked ? `Unblock @${u.username}` : `Block @${u.username}`}
+          </button>
+        </div>
+      </Sheet>
+      <ReportSheet
+        target={reportTarget}
+        onClose={() => setReportTarget(null)}
+        onBlock={
+          iBlocked
+            ? undefined
+            : () => {
+                setReportTarget(null);
+                setBlockOpen(true);
+              }
+        }
+      />
+      <BlockConfirm
+        user={blockOpen ? { id: u.id, name: u.name } : null}
+        blocked={iBlocked}
+        onClose={() => setBlockOpen(false)}
+        onDone={(b) => toast(b ? `Blocked ${u.name}` : `Unblocked ${u.name}`)}
+      />
 
       <Sheet open={!!list} onClose={() => setList(null)} title={list === "followers" ? "Followers" : "Following"}>
         <div className="space-y-1">

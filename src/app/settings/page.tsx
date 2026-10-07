@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, ChevronRight, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus } from "lucide-react";
+import { Bell, ChevronRight, FileText, LifeBuoy, ShieldAlert, ShieldCheck, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -15,6 +15,9 @@ import { InterestChips } from "@/components/profile/InterestChips";
 import { SocialLinksForm } from "@/components/profile/SocialLinksForm";
 import { SignInMethods } from "@/components/settings/SignInMethods";
 import { DeleteAccount } from "@/components/settings/DeleteAccount";
+import { BlockedAccounts } from "@/components/settings/BlockedAccounts";
+import { useSafety } from "@/lib/safety";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "@/lib/support";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
@@ -23,6 +26,7 @@ export default function SettingsPage() {
   const [interestsOpen, setInterestsOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>(me?.interests ?? []);
   const [busy, setBusy] = useState(false);
+  const { admin } = useSafety(me?.id);
 
   useEffect(() => {
     if (interestsOpen) setSelected(me?.interests ?? []);
@@ -93,6 +97,7 @@ export default function SettingsPage() {
               <Bell className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Notifications</span>
               <ChevronRight className="h-4 w-4 text-zinc-500" />
             </Link>
+            <BlockedAccounts meId={me?.id} toast={toast} />
             <Link href="/invite" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
               <UserPlus className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Invite friends</span>
               <ChevronRight className="h-4 w-4 text-zinc-500" />
@@ -116,6 +121,33 @@ export default function SettingsPage() {
         <SocialLinksForm me={me} onSaved={setMeLocal} toast={toast} />
         <SignInMethods />
         <DeleteAccount onDeleted={() => signOut()} toast={toast} />
+
+        <section className="mb-8">
+          <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Safety &amp; legal</h2>
+          <div className="overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/70">
+            <Link href="/terms" className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-white/5">
+              <FileText className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Terms of Use</span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </Link>
+            <Link href="/privacy" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
+              <ShieldCheck className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Privacy policy</span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </Link>
+            <a href={SUPPORT_MAILTO} className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
+              <LifeBuoy className="h-4 w-4 text-zinc-400" />
+              <span className="min-w-0 flex-1">
+                Contact &amp; support <span className="block truncate text-xs text-zinc-500">{SUPPORT_EMAIL}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </a>
+            {admin && (
+              <Link href="/admin/reports" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
+                <ShieldAlert className="h-4 w-4 text-amber-400" /> <span className="flex-1">Reports (admin)</span>
+                <ChevronRight className="h-4 w-4 text-zinc-500" />
+              </Link>
+            )}
+          </div>
+        </section>
 
         <section>
           <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">About</h2>
