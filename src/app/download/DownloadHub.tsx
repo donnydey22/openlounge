@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 
 const ANDROID = {
-  file: "/downloads/openlounge-0.2.8.apk",
-  version: "0.2.8 (build 10)",
+  file: "/downloads/openlounge-0.2.9.apk",
+  version: "0.2.9 (build 11)",
   size: "6.9 MB",
-  sha256: "962fab2b666ef958bf128d7d7f76c872bc31fa8c928d7f7fbb59cbdb9dd2e5d7",
+  sha256: "fc34a752e3ab89bbd0880892bbf86669cebf33586b1cdbc96e1f82cb83c77664",
 };
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
