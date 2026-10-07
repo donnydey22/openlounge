@@ -1,5 +1,6 @@
 "use client";
 
+import { Logo } from "@/components/brand/LogoMark";
 import { usePathname } from "next/navigation";
 import { useApp } from "./AppProvider";
 import { AuthFlow } from "./auth/AuthFlow";
@@ -17,7 +18,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       // neutral splash while the stored session is checked (no text: nothing to read, nothing alarming)
       <div className="flex min-h-dvh flex-col items-center justify-center" data-testid="splash" aria-busy="true" aria-label="Open Lounge">
-        <div className="animate-pulse text-4xl">🎙️</div>
+        <Logo size={72} playOnMount wordmark={false} />
       </div>
     );
   }

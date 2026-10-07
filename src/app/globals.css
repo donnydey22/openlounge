@@ -640,3 +640,22 @@ body:has([aria-modal]) {
 .auth-divider span { height: 1px; flex: 1; background: rgb(255 255 255 / 0.1); }
 [data-theme="light"] .auth-divider span { background: rgb(11 11 13 / 0.1); }
 .auth-alt-link { display: block; width: 100%; margin-top: 20px; text-align: center; font-size: 14px; font-weight: 600; }
+
+/* ───────────── Open Lounge mark (components/brand/LogoMark.tsx) ─────────────
+   Static by default. [data-play] runs one ~1.1 s sequence; transform/opacity only (+ one-shot wordmark clip). */
+.ol-mark .ol-arc { opacity: 0; transform-box: view-box; transform-origin: 512px 432px; }
+.ol-mark .ol-capsule, .ol-mark .ol-lvl { transform-box: fill-box; transform-origin: 50% 100%; }
+.ol-logo[data-play] .ol-capsule { animation: ol-settle 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.ol-logo[data-play] .ol-lvl { animation: ol-level 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.ol-logo[data-play] .ol-lvl1 { animation-delay: 120ms; }
+.ol-logo[data-play] .ol-lvl2 { animation-delay: 200ms; }
+.ol-logo[data-play] .ol-lvl3 { animation-delay: 280ms; }
+.ol-logo[data-play] .ol-arc1 { animation: ol-ripple 700ms cubic-bezier(0.22, 1, 0.36, 1) 360ms both; }
+.ol-logo[data-play] .ol-arc2 { animation: ol-ripple 760ms cubic-bezier(0.22, 1, 0.36, 1) 480ms both; }
+.ol-logo[data-play] .ol-word { animation: ol-reveal 900ms cubic-bezier(0.65, 0, 0.35, 1) 160ms both; }
+@keyframes ol-settle { from { transform: scale(0.9, 0.86); } to { transform: none; } }
+@keyframes ol-level { from { transform: scaleX(0.2); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ol-ripple { 0% { opacity: 0; transform: scale(0.86); } 35% { opacity: 0.85; } 100% { opacity: 0; transform: scale(1.12); } }
+@keyframes ol-reveal { from { clip-path: inset(0 100% 0 0); opacity: 0.2; } to { clip-path: inset(0 0 0 0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ol-logo[data-play] * { animation: none !important; } }
+html[data-lowend] .ol-logo[data-play] * { animation: none !important; }

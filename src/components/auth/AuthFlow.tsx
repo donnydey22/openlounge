@@ -5,6 +5,7 @@
 //                           → name → username → photo → bio → [account created] → interests → follow → hallway
 // Phone verification goes through the server's OtpService (demo SMS provider by default).
 
+import { Logo } from "@/components/brand/LogoMark";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Camera, Check, Loader2, Phone } from "lucide-react";
 import { AVATAR_COLORS, USERNAME_RE, type PublicUser } from "@/lib/types";
@@ -234,8 +235,8 @@ export function AuthFlow() {
     return (
       <Shell welcome stepKey={step}>
         <div className="flex flex-1 flex-col items-center justify-center text-center">
-          <div className="mb-6 text-7xl">🎙️</div>
-          <h1 className="text-3xl font-bold tracking-tight">Welcome to Open Lounge</h1>
+          <h1 className="sr-only">Welcome to Open Lounge</h1>
+          <Logo size={96} playOnMount className="mb-2 flex-col !gap-5" textClassName="text-3xl" />
           <p className="mt-4 max-w-xs text-[15px] leading-relaxed text-zinc-400">
             Drop in on live conversations with founders, artists and friends. Raise your hand to speak up.
           </p>

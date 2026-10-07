@@ -3,6 +3,7 @@
 // Where Google / Apple sign-in lands: /auth/complete?code=<one-time code> (or ?error=…). The page redeems the code
 // with POST /auth/exchange and continues like any other sign-in. Native shells route openlounge://auth?code=… here too.
 
+import { Logo } from "@/components/brand/LogoMark";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -42,7 +43,7 @@ export default function AuthCompletePage() {
   return (
     <Shell stepKey="error">
       <div className="flex flex-1 flex-col items-center justify-center text-center">
-        <div className="mb-6 text-6xl">🎙️</div>
+        <Logo size={80} wordmark={false} className="mb-6" />
         <Title sub={error}>{signedIn ? "Couldn't connect that account" : "Let's try that again"}</Title>
       </div>
       <Footer>
