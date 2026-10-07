@@ -1,0 +1,2 @@
+app_identifier("com.donnydey.openlounge")
+team_id(ENV["APPLE_TEAM_ID"]) if ENV["APPLE_TEAM_ID"].to_s != ""

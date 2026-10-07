@@ -1,0 +1,13 @@
+# Tester iPhones/iPads for Open Lounge ad-hoc builds.
+#
+# One device per line:   <UDID>   <name>
+#   - UDID first (00008030-001A2B3C4D5E802E style, or the 40-hex-char format on older devices)
+#   - then any name (spaces allowed), e.g. "Donny iPhone 15"
+#   - blank lines and lines starting with # are ignored
+#
+# Every device listed here is registered in the Apple Developer account (counts toward the
+# 100-devices-per-year limit) and baked into the ad-hoc provisioning profile. After adding a
+# device you must re-run the "iOS ad-hoc build" workflow and re-install the new IPA.
+#
+# Example (remove the leading "# " to use):
+# 00008110-000A1B2C3D4E801E   Donny iPhone

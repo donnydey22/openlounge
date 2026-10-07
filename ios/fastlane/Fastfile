@@ -1,0 +1,207 @@
+# Ad-hoc signing + export for the Open Lounge iOS wrapper.
+#
+# Driven by .github/workflows/ios-adhoc.yml. Uses an App Store Connect API key only
+# (no Apple ID / 2FA, no match repo):
+#   1. ensure the App ID com.donnydey.openlounge exists
+#   2. register tester UDIDs from ios/devices.txt (+ the optional workflow input)
+#   3. get an "Apple Distribution" certificate (reuse DIST_CERT_P12_BASE64 if provided, else create one)
+#   4. regenerate the Ad Hoc provisioning profile so it contains every registered device
+#   5. archive + export OpenLounge.ipa (method: ad-hoc)
+#
+# Required env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (raw .p8 text or base64 of it), APPLE_TEAM_ID
+# Optional env: DIST_CERT_P12_BASE64 + DIST_CERT_P12_PASSWORD, EXTRA_DEVICES, DEVICES_FILE, OUTPUT_DIR
+
+require "base64"
+require "fileutils"
+require "securerandom"
+require "tmpdir"
+
+default_platform(:ios)
+
+APP_ID = "com.donnydey.openlounge"
+APP_NAME = "Open Lounge"
+SCHEME = "OpenLounge"
+TARGET = "OpenLounge"
+
+# Fastfile Ruby code runs with cwd = ios/fastlane, actions run from ios/. Use absolute paths.
+IOS_DIR = ENV["IOS_DIR"] || (File.basename(Dir.pwd) == "fastlane" ? File.expand_path("..", Dir.pwd) : Dir.pwd)
+
+# Parse "<UDID> <name>" lines; also accepts "name=UDID" / "UDID,name" and ';'-separated lists.
+def parse_devices(text)
+  devices = {}
+  text.to_s.split(/[\n;]/).each do |raw|
+    line = raw.sub(/#.*/, "").strip
+    next if line.empty?
+    udid = line[/\b(?:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{40})\b/]
+    UI.user_error!("No valid UDID found in device line: #{raw.strip.inspect}") unless udid
+    name = line.sub(udid, "").gsub(/[=,\t]/, " ").squeeze(" ").strip
+    name = "Tester #{udid[-6..]}" if name.empty?
+    name = name[0, 44]
+    name = "#{name} #{udid[-5..]}" if devices.key?(name)
+    devices[name] = udid
+  end
+  devices
+end
+
+platform :ios do
+  desc "Register devices, fetch Ad Hoc cert + profile with the ASC API key, export a signed ad-hoc IPA"
+  lane :adhoc do
+    team_id = ENV.fetch("APPLE_TEAM_ID").strip
+    project = ENV["XCODE_PROJECT"] || File.join(IOS_DIR, "OpenLounge.xcodeproj")
+    output_dir = ENV["OUTPUT_DIR"] || File.join(IOS_DIR, "build", "adhoc")
+    signing_dir = File.join(Dir.tmpdir, "openlounge-signing")
+    FileUtils.mkdir_p([output_dir, signing_dir])
+
+    # --- App Store Connect API key ------------------------------------------------------
+    key_content = ENV.fetch("ASC_KEY_P8")
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID").strip,
+      issuer_id: ENV.fetch("ASC_ISSUER_ID").strip,
+      key_content: key_content,
+      is_key_content_base64: !key_content.include?("BEGIN PRIVATE KEY"),
+      duration: 1200,
+      in_house: false
+    )
+
+    # --- 1. App ID ---------------------------------------------------------------------
+    if Spaceship::ConnectAPI::BundleId.find(APP_ID)
+      UI.success("App ID #{APP_ID} already exists")
+    else
+      UI.important("Registering App ID #{APP_ID}")
+      Spaceship::ConnectAPI::BundleId.create(
+        name: APP_NAME,
+        identifier: APP_ID,
+        platform: Spaceship::ConnectAPI::Platform::IOS
+      )
+    end
+
+    # --- 2. Devices ---------------------------------------------------------------------
+    devices_file = ENV["DEVICES_FILE"] || File.join(IOS_DIR, "devices.txt")
+    devices = parse_devices(File.exist?(devices_file) ? File.read(devices_file) : "")
+    devices.merge!(parse_devices(ENV["EXTRA_DEVICES"]))
+    if devices.empty?
+      UI.user_error!("No tester devices: add UDIDs to ios/devices.txt or the workflow's 'devices' input. " \
+                     "An ad-hoc profile needs at least one registered device.")
+    end
+    UI.message("Registering #{devices.size} device(s): #{devices.keys.join(', ')}")
+    register_devices(devices: devices, api_key: api_key, platform: "ios")
+
+    # --- 3. Distribution certificate ---------------------------------------------------
+    keychain_name = "openlounge-ci"
+    keychain_password = SecureRandom.hex(20)
+    create_keychain(
+      name: keychain_name,
+      password: keychain_password,
+      default_keychain: true,
+      unlock: true,
+      timeout: 3600,
+      lock_when_sleeps: false,
+      add_to_search_list: true
+    )
+    keychain_path = File.expand_path("~/Library/Keychains/#{keychain_name}-db")
+
+    reused_p12 = false
+    if ENV["DIST_CERT_P12_BASE64"].to_s.strip != ""
+      p12_path = File.join(signing_dir, "dist-cert.p12")
+      File.binwrite(p12_path, Base64.decode64(ENV["DIST_CERT_P12_BASE64"]))
+      import_certificate(
+        certificate_path: p12_path,
+        certificate_password: ENV["DIST_CERT_P12_PASSWORD"].to_s,
+        keychain_name: keychain_name,
+        keychain_password: keychain_password
+      )
+      reused_p12 = true
+      UI.success("Imported the saved Apple Distribution certificate (DIST_CERT_P12_BASE64)")
+    end
+
+    # Reuses a portal cert whose private key is in the keychain; otherwise creates a new one.
+    get_certificates(
+      api_key: api_key,
+      development: false,
+      generate_apple_certs: true,
+      keychain_path: keychain_path,
+      keychain_password: keychain_password,
+      output_path: signing_dir
+    )
+    cert_id = lane_context[SharedValues::CERT_CERTIFICATE_ID]
+    UI.message("Using distribution certificate #{cert_id}")
+
+    # A brand-new cert was created: export it so it can be saved as a secret and reused
+    # (Apple only allows a few distribution certificates per team).
+    key_pem = File.join(signing_dir, "#{cert_id}.p12") # cert writes the PEM private key with this name
+    if !reused_p12 && File.exist?(key_pem)
+      export_password = ENV["DIST_CERT_P12_PASSWORD"].to_s
+      if export_password.empty?
+        UI.important("New distribution certificate #{cert_id} was created but DIST_CERT_P12_PASSWORD is not set, " \
+                     "so it was NOT exported. Set that secret before the next run, or a new certificate is created each time.")
+      else
+        cer = File.join(signing_dir, "#{cert_id}.cer")
+        cert_pem = File.join(signing_dir, "#{cert_id}.cert.pem")
+        out_p12 = File.join(output_dir, "..", "new-dist-cert", "dist-cert.p12")
+        FileUtils.mkdir_p(File.dirname(out_p12))
+        # /usr/bin/openssl is LibreSSL: produces a 3DES/SHA1 PKCS#12 that macOS `security import` accepts.
+        sh("/usr/bin/openssl", "x509", "-inform", "DER", "-in", cer, "-out", cert_pem)
+        sh("/usr/bin/openssl", "pkcs12", "-export", "-inkey", key_pem, "-in", cert_pem,
+           "-name", "Apple Distribution (Open Lounge CI)", "-out", out_p12,
+           "-passout", "env:DIST_CERT_P12_PASSWORD")
+        UI.important("New distribution certificate exported (encrypted with DIST_CERT_P12_PASSWORD) " \
+                     "as the 'new-dist-cert' artifact. Save it as the DIST_CERT_P12_BASE64 secret.")
+      end
+    end
+
+    # --- 4. Ad Hoc provisioning profile (force => always includes every registered device) ---
+    profile_name = "#{APP_ID} AdHoc CI"
+    get_provisioning_profile(
+      api_key: api_key,
+      adhoc: true,
+      force: true,
+      app_identifier: APP_ID,
+      cert_id: cert_id,
+      provisioning_name: profile_name,
+      ignore_profiles_with_different_name: true,
+      output_path: signing_dir,
+      filename: "OpenLounge_AdHoc.mobileprovision"
+    )
+    profile_name = lane_context[SharedValues::SIGH_NAME] || profile_name
+    profile_uuid = lane_context[SharedValues::SIGH_UUID]
+    UI.message("Using provisioning profile '#{profile_name}' (#{profile_uuid})")
+
+    # --- 5. Archive + export -------------------------------------------------------------
+    update_code_signing_settings(
+      path: project,
+      use_automatic_signing: false,
+      team_id: team_id,
+      targets: [TARGET],
+      bundle_identifier: APP_ID,
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile_name
+    )
+
+    build_app(
+      project: project,
+      scheme: SCHEME,
+      configuration: "Release",
+      destination: "generic/platform=iOS",
+      clean: false,
+      silent: true,
+      output_directory: output_dir,
+      output_name: "OpenLounge.ipa",
+      archive_path: File.join(output_dir, "OpenLounge.xcarchive"),
+      derived_data_path: File.join(IOS_DIR, "build", "DerivedData"),
+      buildlog_path: File.join(output_dir, "logs"),
+      codesigning_identity: "Apple Distribution",
+      export_method: "ad-hoc",
+      export_team_id: team_id,
+      export_options: {
+        method: "ad-hoc",
+        signingStyle: "manual",
+        teamID: team_id,
+        provisioningProfiles: { APP_ID => profile_name },
+        compileBitcode: false,
+        thinning: "<none>"
+      }
+    )
+
+    UI.success("Ad-hoc IPA: #{lane_context[SharedValues::IPA_OUTPUT_PATH]}")
+  end
+end

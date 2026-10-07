@@ -47,3 +47,19 @@ logs/
 .idea/
 .vscode/
 .playwright-mcp/
+
+# iOS build outputs & signing material (never commit certs/keys/profiles)
+ios/build/
+ios/DerivedData/
+**/xcuserdata/
+*.xcuserstate
+ios/fastlane/report.xml
+ios/fastlane/README.md
+ios/fastlane/test_output/
+*.ipa
+*.dSYM.zip
+*.mobileprovision
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
