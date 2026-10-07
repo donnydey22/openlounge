@@ -262,7 +262,7 @@ export function AuthFlow() {
       <Shell welcome stepKey={step}>
         <div className="flex flex-1 flex-col items-center justify-center text-center">
           <h1 className="sr-only">Welcome to Open Lounge</h1>
-          <Logo size={96} playOnMount className="mb-2 flex-col !gap-5" textClassName="text-3xl" />
+          <Logo size={96} className="mb-2 flex-col !gap-5" textClassName="text-3xl" />
           <p className="mt-4 max-w-xs text-[15px] leading-relaxed text-zinc-400">
             Drop in on live conversations with founders, artists and friends. Raise your hand to speak up.
           </p>

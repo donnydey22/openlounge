@@ -20,7 +20,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       // neutral splash while the stored session is checked (no text: nothing to read, nothing alarming)
       <div className="flex min-h-dvh flex-col items-center justify-center" data-testid="splash" aria-busy="true" aria-label="Open Lounge">
-        <Logo size={72} playOnMount wordmark={false} />
+        <Logo size={72} wordmark={false} />
       </div>
     );
   }
