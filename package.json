@@ -15,7 +15,11 @@
     "test:social": "tsx scripts/test-social-links.ts",
     "test:social-api": "node scripts/test-social-api.mjs",
     "test:auth": "node --import tsx --test --test-force-exit --test-concurrency=1 tests/unified-auth/*.test.ts",
-    "test:push": "tsx scripts/test-push.ts"
+    "test:push": "tsx scripts/test-push.ts",
+    "test:hardening:unit": "node --import tsx --test tests/hardening/unit.test.ts",
+    "test:hardening": "node --import tsx --test --test-timeout=120000 tests/hardening/unit.test.ts tests/hardening/integration.test.ts",
+    "loadtest:ws": "node --import tsx scripts/loadtest-ws.ts",
+    "db:backup": "bash scripts/pg-backup.sh"
   },
   "engines": {
     "node": ">=20.9"

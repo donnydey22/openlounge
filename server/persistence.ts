@@ -157,6 +157,8 @@ export interface Persistence {
    * so a token works exactly once even across instances. JSON backend: kept in memory (dev only).
    */
   oneTime?: OneTimeBackend;
+  /** readiness probe (Postgres only) */
+  ping?(timeoutMs?: number): Promise<{ ok: boolean; ms: number; error?: string }>;
   /** record that a db.json import finished (Postgres only) */
   markImported?(source: string): Promise<void>;
   close(): Promise<void>;

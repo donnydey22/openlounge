@@ -4,8 +4,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
-import { ACCESS_TTL_MS, MAX_PREV_HASHES, REFRESH_TTL_MS, ROTATION_GRACE_MS, isAccessToken, newOpaqueToken, newSessionId, parseAccessToken, setAuthSecret, sha256, signAccessToken } from "./auth";
+import { randomUUID } from "node:crypto";
+import { log } from "./log";
+import { ACCESS_TTL_MS, MAX_PREV_HASHES, REFRESH_TTL_MS, ROTATION_GRACE_MS, isAccessToken, newOpaqueToken, newSessionId, parseAccessToken, configureAuthKeys, sha256, signAccessToken } from "./auth";
 import type {
   ChatMessage,
   ConversationSummary,
@@ -165,7 +166,9 @@ export class Store {
    */
   async init(opts: { importJson?: string } = {}) {
     this.backend = await createPersistence();
-    setAuthSecret(process.env.AUTH_SECRET?.trim() || (await this.backend.authSecret?.()) || randomBytes(32).toString("hex"));
+    // AUTH_SECRET (env) preferred; the DB/DATA_DIR key is the fallback and stays valid for verification (rotation grace)
+    const keys = configureAuthKeys({ dbSecret: (await this.backend.authSecret?.()) ?? null });
+    log.info("auth keys", keys);
     const { db, empty } = await this.backend.load();
     if (db) this.hydrate(db, this.backend.kind === "postgres" ? "Postgres" : DATA_FILE);
 
@@ -735,6 +738,19 @@ export class Store {
     if (out.length) this.scheduleSave();
     for (const id of out) this.events?.sessionRevoked?.(id);
     return out;
+  }
+
+  /** Is this session still usable (not revoked/expired)? Used to re-validate long-lived sockets. */
+  sessionActive(sessionId: string | undefined, now = Date.now()) {
+    if (!sessionId) return false;
+    const s = this.sessionById.get(sessionId);
+    return !!s && this.usable(s, now) === "ok";
+  }
+
+  /** Readiness: DB round-trip (JSON backend is always ready once loaded). */
+  async ping(timeoutMs = 2000) {
+    if (!this.backend) return { ok: false, ms: 0, error: "not initialized" };
+    return this.backend.ping ? this.backend.ping(timeoutMs) : { ok: true, ms: 0 };
   }
 
   /** Record when a session was last active (presence "last seen"); persisted with the session row. */

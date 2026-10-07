@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
+import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
 import { deviceLabel, originAllowed } from "./auth";
@@ -18,18 +19,8 @@ export function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function readJson(req: IncomingMessage, limit = 10_000): Promise<Record<string, unknown>> {
-  let raw = "";
-  for await (const chunk of req) {
-    raw += chunk;
-    if (raw.length > limit) return {};
-  }
-  try {
-    return JSON.parse(raw || "{}");
-  } catch {
-    return {};
-  }
-}
+/** JSON body (hardening): 16 KB default (HTTP_MAX_BODY_BYTES), 413 above, 400 on malformed JSON (caught in index.ts). */
+const readJson = (req: IncomingMessage, limit = Number(process.env.HTTP_MAX_BODY_BYTES || 16_384)) => readJsonBody(req, limit);
 
 const bearer = (req: IncomingMessage) => (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
 
@@ -133,6 +124,7 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
     const userId = auth.userId;
     const { roomId } = await readJson(req);
+    if (typeof roomId !== "string" || !/^[\w-]{1,64}$/.test(roomId)) return json(res, 400, { ok: false, error: "roomId required" });
     const role = store.roleOf(String(roomId ?? ""), userId);
     if (!role) return json(res, 403, { ok: false, error: "Join the room first" });
     const token = await createJoinToken({

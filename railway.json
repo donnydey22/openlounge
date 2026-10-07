@@ -3,14 +3,29 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "watchPatterns": ["server/**", "src/**", "public/**", "scripts/**", "package.json", "package-lock.json", "Dockerfile", "docker-entrypoint.sh", "next.config.ts", "postcss.config.mjs", "tsconfig.json", "railway.json"]
+    "watchPatterns": [
+      "server/**",
+      "src/**",
+      "public/**",
+      "scripts/**",
+      "package.json",
+      "package-lock.json",
+      "Dockerfile",
+      "docker-entrypoint.sh",
+      "next.config.ts",
+      "postcss.config.mjs",
+      "tsconfig.json",
+      "railway.json"
+    ]
   },
   "deploy": {
     "startCommand": "/usr/local/bin/docker-entrypoint.sh /app/node_modules/.bin/tsx server/index.ts",
-    "healthcheckPath": "/api/health",
+    "healthcheckPath": "/readyz",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5,
-    "numReplicas": 1
+    "numReplicas": 1,
+    "drainingSeconds": 20,
+    "overlapSeconds": 10
   }
 }
