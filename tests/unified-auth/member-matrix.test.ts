@@ -99,7 +99,7 @@ test("one member across phone / email / Google / Apple / native deep link", asyn
     assert.equal(sl.status, 200);
     assert.equal((await c.req("user:follow", { userId: fid, follow: true })).ok, true);
     assert.equal((await c.req("dm:send", { to: fid, text: `dm via ${A} ${tag}` })).ok, true);
-    const prefSet = await api(app.base, "/api/notifications/prefs", { dms: i % 2 === 0, quietHours: { start: "22:00", end: `0${i}:30`, tz: "America/Phoenix" } }, { token: s.access });
+    const prefSet = await api(app.base, "/api/notifications/prefs", { dm: i % 2 === 0, quietHours: { start: "22:00", end: `0${i}:30`, tz: "America/Phoenix" } }, { token: s.access });
     const room = await c.req("room:create", { title: `Room ${tag}`, topic: "Tech" });
     // refresh rotation for this method's session
     const rf = await api(app.base, "/auth/refresh", { refreshToken: s.refresh });
@@ -130,7 +130,7 @@ test("one member across phone / email / Google / Apple / native deep link", asyn
     check(A, "DMs", () => assert.ok(hist.includes(`dm via ${A} ${tag}`)));
     check(A, "room created", () => assert.equal(room.ok, true));
     const prefGet = await api(app.base, "/api/notifications/prefs", undefined, { token: sb.access });
-    check(A, "notification prefs", () => { assert.equal(prefSet.status, 200, JSON.stringify(prefSet.data)); assert.equal(prefGet.data.prefs.quietHours?.end, `0${i}:30`); assert.equal(prefGet.data.prefs.dms, i % 2 === 0); });
+    check(A, "notification prefs", () => { assert.equal(prefSet.status, 200, JSON.stringify(prefSet.data)); assert.equal(prefGet.data.prefs.quietHours?.end, `0${i}:30`); assert.equal(prefGet.data.prefs.dm, i % 2 === 0); });
     // ---- B updates / deletes
     await cb.req("user:update", { bio: "" });
     await cb.req("user:photo", { photo: null });
