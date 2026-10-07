@@ -337,7 +337,7 @@ export function DmThread({
   );
 
   return (
-    <div className={cn("flex flex-col bg-app", className)} data-testid="dm-thread">
+    <div className={cn("flex flex-col", className)} data-testid="dm-thread">
       <header data-app-header className="flex h-16 shrink-0 items-center gap-1 border-b border-white/5 px-2">
         <button onClick={onBack} className="rounded-full p-2 text-zinc-300 hover:bg-white/5" aria-label={backStyle === "close" ? "Close" : "Back to messages"}>
           {backStyle === "close" ? <X className="h-5 w-5" /> : <ChevronLeft className="h-6 w-6" />}
@@ -418,7 +418,7 @@ export function DmThread({
               {peerTyping && peer && (
                 <div className="msg-in mt-2 flex items-end gap-2" data-testid="dm-typing">
                   <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />
-                  <div className="flex items-center gap-1 rounded-[20px] rounded-bl-md bg-zinc-800 px-4 py-3" aria-label={`${firstName(peer.name)} is typing`}>
+                  <div className="dm-theirs flex items-center gap-1 rounded-[20px] rounded-bl-md bg-zinc-800 px-4 py-3" aria-label={`${firstName(peer.name)} is typing`}>
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400" />
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400 [animation-delay:150ms]" />
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400 [animation-delay:300ms]" />
@@ -438,7 +438,7 @@ export function DmThread({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-white/5 bg-app px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <ChatComposer
           onSend={send}
           onTyping={onTyping}
@@ -491,7 +491,7 @@ const MessageRow = memo(function MessageRow({
             "msg-in",
             emoji
               ? "px-1 text-[40px] leading-tight"
-              : cn("px-3.5 py-2", shape, mine ? "bg-emerald-500 text-on-accent" : "bg-zinc-800 text-zinc-100"),
+              : cn("px-3.5 py-2", shape, mine ? "bg-emerald-500 text-on-accent" : "dm-theirs bg-zinc-800 text-zinc-100"),
             m.state === "sending" && "opacity-70",
             m.state === "failed" && "opacity-60",
           )}
