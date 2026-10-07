@@ -14,6 +14,7 @@ import { Avatar } from "../Avatar";
 import { InterestChips } from "../profile/InterestChips";
 import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
+import type { ConfirmationResult } from "firebase/auth";
 
 type Step = "welcome" | "phone" | "code" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
@@ -32,6 +33,15 @@ export function AuthFlow() {
   const [demoCode, setDemoCode] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
   const [ticket, setTicket] = useState("");
+  // Firebase Phone Auth when the server has it on; demo OTP (auth:requestCode) otherwise
+  const [authCfg, setAuthCfg] = useState<{ firebase: boolean; demoOtp: boolean } | null>(null);
+  const confirmation = useRef<ConfirmationResult | null>(null);
+  useEffect(() => {
+    if (!connected || authCfg) return;
+    request<{ firebase: boolean; demoOtp: boolean }>("auth:config")
+      .then((c) => setAuthCfg({ firebase: !!c.firebase, demoOtp: c.demoOtp !== false }))
+      .catch(() => setAuthCfg({ firebase: false, demoOtp: true }));
+  }, [connected, authCfg, request]);
 
   // profile
   const [firstName, setFirstName] = useState("");
@@ -68,6 +78,17 @@ export function AuthFlow() {
     setBusy(true);
     setError(null);
     try {
+      if (authCfg?.firebase) {
+        const e164 = `+${(country.dial + digits).replace(/\D/g, "")}`;
+        const { sendPhoneCode } = await import("@/lib/firebaseClient");
+        confirmation.current = await sendPhoneCode(e164, "recaptcha-container");
+        setPhoneE164(e164);
+        setDemoCode(null);
+        setResendIn(30);
+        setCode("");
+        go("code");
+        return;
+      }
       const res = await request<{ phone: string; demoCode?: string; resendIn: number }>("auth:requestCode", { phone: country.dial + digits });
       setPhoneE164(res.phone);
       setDemoCode(res.demoCode ?? null);
@@ -86,10 +107,15 @@ export function AuthFlow() {
     setBusy(true);
     setError(null);
     try {
-      const res = await request<({ status: "existing"; token: string } & SessionPayload) | { status: "new"; ticket: string }>("auth:verifyCode", {
-        phone: phoneE164,
-        code: value,
-      });
+      type VerifyRes = ({ status: "existing"; token: string } & SessionPayload) | { status: "new"; ticket: string };
+      let res: VerifyRes;
+      if (authCfg?.firebase && confirmation.current) {
+        const { confirmPhoneCode } = await import("@/lib/firebaseClient");
+        const idToken = await confirmPhoneCode(confirmation.current, value);
+        res = await request<VerifyRes>("auth:verifyFirebase", { idToken });
+      } else {
+        res = await request<VerifyRes>("auth:verifyCode", { phone: phoneE164, code: value });
+      }
       if (res.status === "existing") {
         completeLogin(res.token, res);
         toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);

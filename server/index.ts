@@ -7,6 +7,9 @@ import { registerRealtime } from "./realtime";
 import { store } from "./store";
 import fs from "node:fs";
 import { deviceLabel, originAllowed } from "./auth";
+import { firebasePhoneLogin } from "./realtime";
+import { initPush, push } from "./push";
+import { demoOtpEnabled, firebaseConfigured } from "./firebase";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
@@ -15,6 +18,8 @@ const hostname = process.env.HOST || "0.0.0.0";
 async function main() {
   // Durable storage first (Postgres via DATABASE_URL, else db.json) — fail fast before serving anything
   await store.init();
+  initPush();
+  console.log(`[auth] Firebase phone auth: ${firebaseConfigured() ? "on" : "off (FIREBASE_SERVICE_ACCOUNT_JSON not set)"}; demo OTP: ${demoOtpEnabled() ? "on" : "off"}`);
 
   const app = next({ dev, hostname: "localhost", port });
   const handle = app.getRequestHandler();
@@ -93,11 +98,11 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = 10_000): Promise<Record<string, unknown>> {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 10_000) break;
+    if (raw.length > limit) return {};
   }
   try {
     return JSON.parse(raw || "{}");
@@ -193,6 +198,54 @@ async function api(req: IncomingMessage, res: ServerResponse) {
     if (!r?.ok && typeof body.refreshToken === "string") r = await store.authenticate(body.refreshToken).catch(() => null);
     if (r?.ok) store.revokeSession(r.sessionId, body.all === true ? { allForUser: r.userId } : {});
     return json(res, 200, { ok: true }); // idempotent: an already-dead session is "logged out" too
+  }
+
+  // Firebase Phone Auth: body { idToken, device } → { status:"existing", access, refresh, … , user } | { status:"new", ticket }
+  if (authPath === "/auth/firebase" && req.method === "POST") {
+    const body = await readJson(req);
+    const r = await firebasePhoneLogin(body.idToken, deviceLabel(body.device, req.headers["user-agent"]));
+    if (!r.ok) return json(res, 401, r);
+    if (r.status === "new") return json(res, 200, { ok: true, status: "new", ticket: r.ticket });
+    return json(res, 200, { ok: true, status: "existing", ...r.creds, user: store.me(r.userId), following: store.followingIds(r.userId), unreadDms: store.unreadDmCount(r.userId) });
+  }
+
+  // Public profile card (share links openlounge.app/@handle + Open Graph preview): name, handle, bio, photo, counts only
+  const byHandle = url.match(/^\/api\/users\/by-handle\/([A-Za-z0-9_]{1,30})$/);
+  if (byHandle && req.method === "GET") {
+    const h = byHandle[1].toLowerCase();
+    const u = [...store.users.values()].find((x) => !x.isBot && x.username?.toLowerCase() === h);
+    const pub = u ? store.publicUser(u.id) : null;
+    if (!pub) return json(res, 404, { ok: false, error: "Not found" });
+    const { id, name, username, color, photoUrl, bio, followers, following } = pub;
+    return json(res, 200, { ok: true, user: { id, name, username, color, photoUrl, bio, followers, following } });
+  }
+
+  // ---- push / notification settings / contacts (Authorization: Bearer <access token>) ----
+  if (/^\/api\/(push|notifications|contacts)\//.test(url)) {
+    const n = push();
+    if (!n) return json(res, 503, { ok: false, error: "Notifications unavailable" });
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    const uid = auth.userId;
+    if (url === "/api/push/register" && req.method === "POST") {
+      const b = await readJson(req);
+      const r = await n.registerToken(uid, b.token, b.platform);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+    if (url === "/api/push/unregister" && req.method === "POST") return json(res, 200, await n.unregisterToken(uid, (await readJson(req)).token));
+    if (url === "/api/notifications/prefs" && req.method === "GET") return json(res, 200, { ok: true, prefs: await n.getPrefs(uid) });
+    if (url === "/api/notifications/prefs" && req.method === "POST") return json(res, 200, { ok: true, prefs: await n.updatePrefs(uid, await readJson(req)) });
+    if (url === "/api/contacts/match" && req.method === "POST") {
+      const b = await readJson(req, 400_000);
+      const r = await n.matchContacts(uid, b.hashes);
+      if (!r.ok) return json(res, 400, r);
+      return json(res, 200, { ok: true, users: r.userIds.map((id) => store.publicUser(id)).filter(Boolean), matchedHashes: r.matchedHashes, following: store.followingIds(uid) });
+    }
+    if (url === "/api/contacts/delete" && req.method === "POST") {
+      await n.updatePrefs(uid, { contactsOptIn: false });
+      return json(res, 200, { ok: true });
+    }
+    return json(res, 404, { ok: false, error: "Not found" });
   }
 
   // LiveKit join token: Authorization: Bearer <access token>, body { roomId }

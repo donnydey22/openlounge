@@ -1,5 +1,6 @@
 "use client";
 
+import { initPushRegistration, unregisterPush } from "@/lib/push";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
@@ -408,7 +409,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const finishOnboarding = useCallback(() => setOnboarding(false), []);
 
   // Settings → Log out: revoke this device's session on the server (POST /auth/logout), detach the socket, clear storage.
+  // register this device's push token (native wrappers) once signed in
+  const meId = me?.id;
+  useEffect(() => {
+    if (meId) initPushRegistration();
+  }, [meId]);
+
   const signOut = useCallback(async () => {
+    await unregisterPush();
     await logout();
     try {
       await socket?.request("session:logout", {}, 2000);

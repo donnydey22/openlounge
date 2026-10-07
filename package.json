@@ -2,7 +2,7 @@
   "name": "openlounge",
   "version": "0.1.0",
   "private": true,
-  "description": "Open Lounge \u2014 a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
+  "description": "Open Lounge — a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
   "scripts": {
     "dev": "tsx server/index.ts",
     "build": "next build",
@@ -11,13 +11,16 @@
     "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
     "db:import": "tsx scripts/import-db-json.ts",
     "smoke": "node scripts/smoke-ws.mjs",
-    "test:time": "bash scripts/test-time.sh"
+    "test:time": "bash scripts/test-time.sh",
+    "test:push": "tsx scripts/test-push.ts"
   },
   "engines": {
     "node": ">=20.9"
   },
   "dependencies": {
     "cross-env": "^7.0.3",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.5.0",
     "livekit-client": "^2.22.3",
     "livekit-server-sdk": "^2.19.1",
     "lucide-react": "^1.52.0",
