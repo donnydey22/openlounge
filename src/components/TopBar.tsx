@@ -1,6 +1,5 @@
 "use client";
 
-import { Logo } from "@/components/brand/LogoMark";
 import Link from "next/link";
 import { MessageCircle, Search, Settings, WifiOff } from "lucide-react";
 import { Avatar } from "./Avatar";
@@ -12,7 +11,10 @@ export function TopBar() {
     <header data-app-header className="sticky top-0 z-30 border-b border-white/5 bg-app/80 pt-[env(safe-area-inset-top,0px)] backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4">
         <Link href="/" className="flex min-w-0 items-center text-lg max-[359px]:text-base" aria-label="Open Lounge — hallway">
-          <Logo size={30} />
+          <span className="inline-flex items-center gap-2">
+            <span className="text-2xl" aria-hidden="true">🎙️</span>
+            <span className="ol-word font-bold tracking-tight whitespace-nowrap">Open Lounge</span>
+          </span>
         </Link>
         <div className="flex items-center gap-1">
           {/* only after >5 s offline — short blips reconnect silently */}
