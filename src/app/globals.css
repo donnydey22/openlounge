@@ -167,7 +167,7 @@ body {
   }
 }
 .sheet-in {
-  animation: sheet-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+  animation: sheet-in 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes fade-in {

@@ -284,7 +284,7 @@ export class Notifier {
 
   // ---------- contacts ----------
   /** match uploaded client hashes against members; keeps peppered hashes ≤24 h for "X joined" pushes */
-  async matchContacts(ownerId: string, raw: unknown) {
+  async matchContacts(ownerId: string, raw: unknown, append = false) {
     const prefs = await this.d.repo.getPrefs(ownerId);
     if (!prefs.contactsOptIn) return { ok: false as const, error: "Turn on “Find friends from contacts” first" };
     const hashes = cleanHashes(raw);
@@ -301,6 +301,7 @@ export class Notifier {
     await this.d.repo.replaceContactHashes(
       ownerId,
       hashes.filter((h) => !matchedHashes.has(h)).map(pepperHash),
+      append,
     );
     return { ok: true as const, userIds: matches, matchedHashes: [...matchedHashes] };
   }

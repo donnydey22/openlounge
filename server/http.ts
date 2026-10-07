@@ -6,6 +6,7 @@ import { REPORT_REASONS, SUPPORT_EMAIL, isAdmin } from "./moderation";
 import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
+import { allowMatch } from "./push/contacts";
 import { clearRefreshCookie, deviceLabel, originAllowed, readRefreshCookie, refreshCookie } from "./auth";
 import { UNIFIED_AUTH_PATH, handleAuthApi, handleNavigation, isNavigationRoute } from "./authx/routes";
 
@@ -197,8 +198,9 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     if (url === "/api/notifications/prefs" && req.method === "GET") return json(res, 200, { ok: true, prefs: await n.getPrefs(uid) });
     if (url === "/api/notifications/prefs" && req.method === "POST") return json(res, 200, { ok: true, prefs: await n.updatePrefs(uid, await readJson(req)) });
     if (url === "/api/contacts/match" && req.method === "POST") {
+      if (!allowMatch(uid)) return json(res, 429, { ok: false, error: "Too many requests — try again in a few minutes" });
       const b = await readJson(req, 400_000);
-      const r = await n.matchContacts(uid, b.hashes);
+      const r = await n.matchContacts(uid, b.hashes, b.append === true);
       if (!r.ok) return json(res, 400, r);
       return json(res, 200, { ok: true, users: r.userIds.map((id) => store.publicUser(id)).filter(Boolean), matchedHashes: r.matchedHashes, following: store.followingIds(uid) });
     }

@@ -23,7 +23,19 @@ export const clientHash = (e164: string) => createHash("sha256").update(e164).di
 /** what we store / compare */
 export const pepperHash = (clientHex: string) => createHmac("sha256", contactsPepper()).update(clientHex.toLowerCase()).digest("hex");
 
-export const MAX_CONTACTS = 5000;
+export const MAX_CONTACTS = 5000; // per request (clients batch ~500)
+export const MAX_MATCH_REQUESTS_PER_WINDOW = 60; // per user
+export const MATCH_WINDOW_MS = 10 * 60_000;
+const matchHits = new Map<string, number[]>();
+/** bounded per-user rate limit for /api/contacts/match */
+export function allowMatch(userId: string, now = Date.now()): boolean {
+  const arr = (matchHits.get(userId) ?? []).filter((t) => now - t < MATCH_WINDOW_MS);
+  if (arr.length >= MAX_MATCH_REQUESTS_PER_WINDOW) return (matchHits.set(userId, arr), false);
+  arr.push(now);
+  matchHits.set(userId, arr);
+  if (matchHits.size > 10_000) for (const k of matchHits.keys()) { matchHits.delete(k); break; }
+  return true;
+}
 export function cleanHashes(raw: unknown): string[] | null {
   if (!Array.isArray(raw) || raw.length > MAX_CONTACTS) return null;
   const out = new Set<string>();

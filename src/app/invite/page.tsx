@@ -26,6 +26,9 @@ export default function InvitePage() {
   const [others, setOthers] = useState<ContactEntry[]>([]);
   const [optedIn, setOptedIn] = useState(false);
   const [limited, setLimited] = useState(false);
+  const [progress, setProgress] = useState<{ label: string; p: number } | null>(null);
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(100);
 
   useEffect(() => {
     setCount(invitesShared());
@@ -68,13 +71,18 @@ export default function InvitePage() {
         return;
       }
       setLimited(res.limited);
-      const entries = await prepareContacts(res.contacts, res.country);
-      const r = await matchContacts(entries.map((e) => e.hash));
+      setProgress({ label: "Preparing contacts", p: 0 });
+      const entries = await prepareContacts(res.contacts, res.country, (p) => setProgress({ label: "Preparing contacts", p: p * 0.5 }));
+      const r = await matchContacts(entries.map((e) => e.hash), (p) => setProgress({ label: "Checking who's here", p: 0.5 + p * 0.5 }));
       const matched = new Set(r.matchedHashes);
       setMembers(r.users);
-      setOthers(entries.filter((e) => !matched.has(e.hash)).sort((a, b) => a.name.localeCompare(b.name)));
+      setOthers(entries.filter((e) => !matched.has(e.hash)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })));
+      setQuery("");
+      setShown(100);
+      setProgress(null);
       setPhase("results");
     } catch (e) {
+      setProgress(null);
       setPhase("idle");
       reportError(e);
     }
@@ -92,6 +100,9 @@ export default function InvitePage() {
       reportError(e);
     }
   }
+
+  const q = query.trim().toLowerCase();
+  const filtered = q ? others.filter((c) => c.name.toLowerCase().includes(q) || c.e164.includes(q.replace(/[^\d+]/g, "") || "\u0000")) : others;
 
   return (
     <>
@@ -158,9 +169,16 @@ export default function InvitePage() {
               </div>
               {others.length > 0 && (
                 <>
-                  <div className="mb-2 text-sm font-semibold">Invite</div>
-                  <div className="mb-5 overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/70">
-                    {others.slice(0, 200).map((c, i) => (
+                  <div className="mb-2 text-sm font-semibold">Invite · {others.length}</div>
+                  <input
+                    value={query}
+                    onChange={(e) => (setQuery(e.target.value), setShown(100))}
+                    placeholder="Search contacts"
+                    className="mb-2 w-full rounded-full border border-white/10 bg-zinc-900/70 px-4 py-2 text-sm outline-none focus:border-sky-500"
+                  />
+                  <div className="mb-2 overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/70">
+                    {filtered.length === 0 && <div className="p-4 text-sm text-zinc-500">No contacts match “{query}”.</div>}
+                    {filtered.slice(0, shown).map((c, i) => (
                       <div key={c.hash} className={"flex items-center gap-3 px-4 py-2.5 " + (i ? "border-t border-white/5" : "")}>
                         <Avatar name={c.name} color="#64748B" size="sm" />
                         <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
@@ -173,6 +191,12 @@ export default function InvitePage() {
                       </div>
                     ))}
                   </div>
+                  {filtered.length > shown && (
+                    <button onClick={() => setShown((n) => n + 200)} className="mb-5 w-full rounded-full border border-white/15 py-2 text-sm font-semibold text-zinc-200 hover:bg-white/5">
+                      Show more ({filtered.length - shown} left)
+                    </button>
+                  )}
+                  <div className="mb-3" />
                 </>
               )}
               <p className="mb-3 flex items-start gap-2 text-xs text-zinc-500">
@@ -204,6 +228,14 @@ export default function InvitePage() {
                   {phase === "loading" && <Loader2 className="h-4 w-4 animate-spin" />} Find friends
                 </button>
               </div>
+              {phase === "loading" && progress && (
+                <div className="mt-3" role="progressbar" aria-valuenow={Math.round(progress.p * 100)} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="mb-1 text-xs text-zinc-400">{progress.label}… {Math.round(progress.p * 100)}%</div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full bg-sky-500 transition-[width]" style={{ width: `${progress.p * 100}%` }} />
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {optedIn && (

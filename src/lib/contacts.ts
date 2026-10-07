@@ -33,15 +33,34 @@ export interface ContactEntry {
   hash: string;
 }
 
-export async function prepareContacts(contacts: NativeContact[], country: string): Promise<ContactEntry[]> {
-  const seen = new Map<string, ContactEntry>();
+const yieldUI = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/** Normalize + dedupe + hash, in chunks so the UI stays responsive. onProgress gets 0..1. */
+export async function prepareContacts(
+  contacts: NativeContact[],
+  country: string,
+  onProgress?: (p: number) => void,
+): Promise<ContactEntry[]> {
+  const seen = new Map<string, string>(); // e164 -> name
   for (const c of contacts)
     for (const n of c.numbers ?? []) {
       const e164 = toE164(n, country);
-      if (e164 && !seen.has(e164)) seen.set(e164, { name: c.name || e164, e164, hash: await sha256Hex(e164) });
+      if (e164 && !seen.has(e164)) seen.set(e164, c.name || e164);
     }
-  return [...seen.values()].slice(0, 5000);
+  const list = [...seen].slice(0, MAX_CONTACT_NUMBERS);
+  const out: ContactEntry[] = [];
+  for (let i = 0; i < list.length; i += 250) {
+    const chunk = list.slice(i, i + 250);
+    const hashes = await Promise.all(chunk.map(([e164]) => sha256Hex(e164)));
+    chunk.forEach(([e164, name], j) => out.push({ name, e164, hash: hashes[j] }));
+    onProgress?.(out.length / list.length);
+    await yieldUI();
+  }
+  return out;
 }
+
+export const MAX_CONTACT_NUMBERS = 20_000;
+export const MATCH_BATCH = 500;
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await authFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -50,6 +69,22 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return j as T;
 }
 
-export const matchContacts = (hashes: string[]) =>
-  postJson<{ users: PublicUser[]; matchedHashes: string[]; following: string[] }>("/api/contacts/match", { hashes });
+type MatchResult = { users: PublicUser[]; matchedHashes: string[]; following: string[] };
+const matchBatch = (hashes: string[], append: boolean) => postJson<MatchResult>("/api/contacts/match", { hashes, append });
+
+/** Match in batches of MATCH_BATCH; the first batch replaces any previous upload, the rest append. */
+export async function matchContacts(hashes: string[], onProgress?: (p: number) => void): Promise<MatchResult> {
+  const users = new Map<string, PublicUser>();
+  const matched = new Set<string>();
+  let following: string[] = [];
+  const n = Math.max(1, Math.ceil(hashes.length / MATCH_BATCH));
+  for (let b = 0; b < n; b++) {
+    const r = await matchBatch(hashes.slice(b * MATCH_BATCH, (b + 1) * MATCH_BATCH), b > 0);
+    for (const u of r.users) users.set(u.id, u);
+    r.matchedHashes.forEach((h) => matched.add(h));
+    following = r.following;
+    onProgress?.((b + 1) / n);
+  }
+  return { users: [...users.values()].sort((a, b) => a.name.localeCompare(b.name)), matchedHashes: [...matched], following };
+}
 export const deleteUploadedContacts = () => postJson<{ ok: true }>("/api/contacts/delete", {});

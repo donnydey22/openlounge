@@ -9,11 +9,14 @@ export function Sheet({
   onClose,
   title,
   children,
+  footer,
 }: {
   open: boolean;
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
+  /** Optional sticky footer (primary action) that stays visible above the keyboard. */
+  footer?: React.ReactNode;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -29,38 +32,69 @@ export function Sheet({
     if (!open) return;
     const vv = window.visualViewport;
     const el = panel.current;
-    const fit = () => el?.style.setProperty("--sheet-vh", `${Math.round(vv?.height ?? window.innerHeight)}px`);
+    const root = el?.parentElement;
+    // Pin the overlay to the *visual* viewport so the sheet rises above the on-screen keyboard
+    // (iOS Safari / WKWebView / Android WebView) instead of sliding behind it.
+    const fit = () => {
+      const h = Math.round(vv?.height ?? window.innerHeight);
+      el?.style.setProperty("--sheet-vh", `${h}px`);
+      if (root) {
+        root.style.height = `${h}px`;
+        root.style.top = `${Math.round(vv?.offsetTop ?? 0)}px`;
+        const kb = window.innerHeight - h - (vv?.offsetTop ?? 0);
+        root.dataset.kbd = kb > 80 ? "1" : "0";
+      }
+    };
     fit();
     vv?.addEventListener("resize", fit, { passive: true });
+    vv?.addEventListener("scroll", fit, { passive: true });
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden"; // no background page jump while the sheet is open
     const onFocus = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) setTimeout(() => t.scrollIntoView({ block: "center", behavior: "smooth" }), 250);
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) setTimeout(() => t.scrollIntoView({ block: "nearest", behavior: "smooth" }), 300);
     };
     el?.addEventListener("focusin", onFocus);
     return () => {
       vv?.removeEventListener("resize", fit);
+      vv?.removeEventListener("scroll", fit);
+      document.body.style.overflow = prevOverflow;
       el?.removeEventListener("focusin", onFocus);
     };
   }, [open]);
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal>
+    <div className="group fixed inset-x-0 top-0 z-50 flex h-[100dvh] items-end justify-center sm:items-center sm:p-6" role="dialog" aria-modal>
       <div className="fade-in absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         ref={panel}
-        className="sheet-in relative max-h-[min(85dvh,calc(var(--sheet-vh,100dvh)-env(safe-area-inset-top,0px)-12px))] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-3xl border border-white/5 bg-zinc-900 p-5 pb-[max(2rem,calc(env(safe-area-inset-bottom,0px)+1rem))] shadow-2xl [scroll-padding-bottom:6rem] sm:rounded-3xl"
+        className="sheet-in relative flex max-h-[min(92svh,calc(var(--sheet-vh,100dvh)-env(safe-area-inset-top,0px)-8px))] w-full min-w-0 max-w-lg flex-col overflow-hidden rounded-t-[28px] border border-white/5 bg-zinc-900 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] shadow-2xl sm:max-h-[min(85dvh,calc(var(--sheet-vh,100dvh)-3rem))] sm:rounded-3xl"
       >
-        <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-zinc-700 sm:hidden" />
-        {title && (
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold">{title}</h2>
-            <button onClick={onClose} className="rounded-full p-1.5 text-zinc-400 hover:bg-white/5 hover:text-white" aria-label="Close">
-              <X className="h-5 w-5" />
-            </button>
+        <div className="shrink-0 px-5 pt-2.5 sm:pt-5">
+          <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-zinc-700 sm:hidden" aria-hidden />
+          {title && (
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="min-w-0 truncate text-xl font-semibold tracking-tight">{title}</h2>
+              <button onClick={onClose} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white" aria-label="Close">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          )}
+        </div>
+        <div
+          className={
+            "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 [scroll-padding-bottom:1.5rem] " +
+            (footer ? "pb-4" : "pb-[max(2rem,calc(env(safe-area-inset-bottom,0px)+1rem))]")
+          }
+        >
+          {children}
+        </div>
+        {footer && (
+          <div className="shrink-0 border-t border-white/5 bg-zinc-900/95 px-5 pt-3 pb-[max(1rem,calc(env(safe-area-inset-bottom,0px)+0.5rem))] backdrop-blur group-data-[kbd=1]:pb-3">
+            {footer}
           </div>
         )}
-        {children}
       </div>
     </div>
   );

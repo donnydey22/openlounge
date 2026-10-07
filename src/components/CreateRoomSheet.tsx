@@ -69,27 +69,60 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
     }
   }
 
+  const go = () => void startRoom();
   return (
-    <Sheet open={open} onClose={onClose} title="Start a room">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Start a room"
+      footer={
+        /* Clubhouse-style: ALWAYS emerald / tappable. Busy only shows a spinner — never greys out. */
+        <button
+          type="submit"
+          form="create-room-form"
+          data-letsgo-btn="1"
+          aria-busy={busy}
+          onClick={(e) => {
+            // Extra path for WebViews that mishandle form submit.
+            e.preventDefault();
+            go();
+          }}
+          className="flex h-14 w-full items-center justify-center gap-2 rounded-full bg-emerald-500 text-[17px] font-semibold text-on-accent shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 active:scale-[0.98]"
+        >
+          {busy && <Loader2 className="h-5 w-5 animate-spin" />} 🎉 Let&apos;s go
+        </button>
+      }
+    >
       <form
+        id="create-room-form"
         onSubmit={(e) => {
           e.preventDefault();
-          void startRoom();
+          go();
         }}
-        className="space-y-5"
+        className="space-y-6"
         data-letsgo="always-on"
       >
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-300">
-            Title <span className="font-normal text-zinc-600">(optional)</span>
+          <span className="mb-2 flex items-baseline justify-between gap-2 text-sm font-medium text-zinc-300">
+            <span>Title <span className="font-normal text-zinc-500">(optional)</span></span>
+            <span className="text-xs tabular-nums text-zinc-500">{title.length}/80</span>
           </span>
           <input
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={80}
+            enterKeyHint="next"
+            autoCapitalize="sentences"
+            autoComplete="off"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                document.getElementById("create-room-desc")?.focus();
+              }
+            }}
             placeholder="What do you want to talk about?"
-            className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
+            className="w-full min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-[16px] leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-500/70 focus:bg-white/[0.06] focus:ring-4 focus:ring-emerald-500/15 h-[52px]"
           />
         </label>
         <div>
@@ -100,11 +133,12 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
                 type="button"
                 key={t}
                 onClick={() => setTopic(t)}
+                aria-pressed={topic === t}
                 className={cn(
-                  "rounded-full border px-3 py-1.5 text-sm transition",
+                  "min-h-10 rounded-full border px-3.5 py-2 text-sm transition active:scale-95",
                   topic === t
-                    ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
-                    : "border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200",
+                    ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300"
+                    : "border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/20 hover:text-zinc-200",
                 )}
               >
                 {TOPIC_EMOJI[t]} {t}
@@ -113,32 +147,22 @@ export function CreateRoomSheet({ open, onClose }: { open: boolean; onClose: () 
           </div>
         </div>
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-300">
-            Description <span className="text-zinc-600">(optional)</span>
+          <span className="mb-2 flex items-baseline justify-between gap-2 text-sm font-medium text-zinc-300">
+            <span>Description <span className="font-normal text-zinc-500">(optional)</span></span>
+            <span className="text-xs tabular-nums text-zinc-500">{description.length}/300</span>
           </span>
           <textarea
+            id="create-room-desc"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             maxLength={300}
             rows={3}
+            enterKeyHint="go"
+            autoCapitalize="sentences"
             placeholder="Set the vibe, share the agenda, house rules…"
-            className="w-full resize-none rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
+            className="w-full min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] px-4 text-[16px] leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-emerald-500/70 focus:bg-white/[0.06] focus:ring-4 focus:ring-emerald-500/15 block min-h-[104px] resize-none break-words py-3"
           />
         </label>
-        {/* Clubhouse-style: ALWAYS emerald / tappable. Busy only shows a spinner — never greys out. */}
-        <button
-          type="submit"
-          data-letsgo-btn="1"
-          aria-busy={busy}
-          onClick={(e) => {
-            // Extra path for WebViews that mishandle form submit.
-            e.preventDefault();
-            void startRoom();
-          }}
-          className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 active:scale-[0.99]"
-        >
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />} 🎉 Let&apos;s go
-        </button>
       </form>
     </Sheet>
   );

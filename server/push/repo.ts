@@ -20,7 +20,8 @@ export interface PushRepo {
   getPrefs(userId: string): Promise<NotifPrefs>;
   setPrefs(userId: string, prefs: NotifPrefs): Promise<void>;
   /** replace the owner's stored (peppered) hashes */
-  replaceContactHashes(ownerId: string, hashes: string[]): Promise<void>;
+  /** append=true adds to the owner's current upload (batched matching); false replaces it */
+  replaceContactHashes(ownerId: string, hashes: string[], append?: boolean): Promise<void>;
   deleteContactHashes(ownerId: string): Promise<void>;
   /** owners (who uploaded within the TTL) that have `hash` */
   ownersOfHash(hash: string): Promise<string[]>;
@@ -50,8 +51,9 @@ export class MemoryPushRepo implements PushRepo {
   async setPrefs(userId: string, p: NotifPrefs) {
     this.prefs.set(userId, p);
   }
-  async replaceContactHashes(ownerId: string, hashes: string[]) {
-    this.hashes.set(ownerId, { set: new Set(hashes), at: Date.now() });
+  async replaceContactHashes(ownerId: string, hashes: string[], append = false) {
+    const prev = append ? this.hashes.get(ownerId)?.set : undefined;
+    this.hashes.set(ownerId, { set: new Set([...(prev ?? []), ...hashes]), at: Date.now() });
   }
   async deleteContactHashes(ownerId: string) {
     this.hashes.delete(ownerId);
@@ -105,11 +107,11 @@ export class PgPushRepo implements PushRepo {
       [userId, JSON.stringify(p)],
     );
   }
-  async replaceContactHashes(ownerId: string, hashes: string[]) {
+  async replaceContactHashes(ownerId: string, hashes: string[], append = false) {
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN");
-      await c.query("DELETE FROM contact_hashes WHERE owner_id = $1", [ownerId]);
+      if (!append) await c.query("DELETE FROM contact_hashes WHERE owner_id = $1", [ownerId]);
       if (hashes.length) await c.query("INSERT INTO contact_hashes (owner_id, hash) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING", [ownerId, hashes]);
       await c.query("COMMIT");
     } catch (e) {
