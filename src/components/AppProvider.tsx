@@ -1,5 +1,6 @@
 "use client";
 
+import { applyDeviceClass } from "@/lib/device";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
@@ -229,9 +230,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    applyDeviceClass();
     const s = new RealtimeClient();
     // Tell the server whether the app is in the foreground (Android WebView backgrounding, hidden tabs)
     const reportVisibility = () => {
+      // thermals: pause every CSS animation while hidden/backgrounded (html[data-hidden] in globals.css)
+      if (appVisible()) delete document.documentElement.dataset.hidden;
+      else document.documentElement.dataset.hidden = "";
       if (!tokenRef.current && !loadToken()) return;
       s.emit("presence:visible", { visible: appVisible() });
     };

@@ -10,6 +10,7 @@
 // - Speaking indicators + audio levels for humans come from LiveKit (ActiveSpeakers + audioLevel).
 // If the server has no LiveKit credentials, `status` is "unavailable" and the UI says so.
 
+import { meterHz } from "@/lib/device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Room,
@@ -200,19 +201,29 @@ export function useLiveKitAudio({
       env.set(id, v);
       return Math.round(v * 50) / 50;
     };
+    let lastLocal = -1;
+    let lastKey = "";
     const iv = setInterval(() => {
       const room = roomRef.current;
       if (!room) return;
+      if (document.visibilityState !== "visible") return; // no metering/re-render while backgrounded
       const next = new Map<string, number>();
       const local = smooth(room.localParticipant.identity, room.localParticipant.audioLevel ?? 0);
       next.set(room.localParticipant.identity, local);
-      setLocalLevel(isSpeaker && !muted ? Math.round(local * 20) / 20 : 0);
+      const ll = isSpeaker && !muted ? Math.round(local * 20) / 20 : 0;
+      if (ll !== lastLocal) setLocalLevel((lastLocal = ll));
       room.remoteParticipants.forEach((p) => {
         // muted (TrackMuted) => no level, so the speaking glow can't show
         next.set(p.identity, smooth(p.identity, p.isMicrophoneEnabled ? (p.audioLevel ?? 0) : 0));
       });
-      setLevels(next);
-    }, 80);
+      // only re-render the room when a level actually changed (silence = zero renders)
+      let key = "";
+      next.forEach((v, k) => (key += k + ":" + v + ";"));
+      if (key !== lastKey) {
+        lastKey = key;
+        setLevels(next);
+      }
+    }, Math.round(1000 / meterHz())); // ≤15 Hz (8 Hz on low-end devices)
     return () => clearInterval(iv);
   }, [status, isSpeaker, muted]);
 
