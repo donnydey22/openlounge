@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, ChevronRight, FileText, LifeBuoy, ShieldAlert, ShieldCheck, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus } from "lucide-react";
+import { Bell, ChevronRight, FileText, LifeBuoy, ShieldAlert, ShieldCheck, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus, Download } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -102,6 +102,10 @@ export default function SettingsPage() {
             <BlockedAccounts meId={me?.id} toast={toast} />
             <Link href="/invite" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
               <UserPlus className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Invite friends</span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </Link>
+            <Link href="/download" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
+              <Download className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Get the app</span>
               <ChevronRight className="h-4 w-4 text-zinc-500" />
             </Link>
             <Link href="/messages" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
