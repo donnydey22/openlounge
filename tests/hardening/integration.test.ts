@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { PgPersistence } from "../../server/pg";
 
 const DB = process.env.TEST_DATABASE_URL || "postgresql://openlounge:openlounge@localhost:5432/ol_hardening_test";
-const PORT = 3191;
+const PORT = Number(process.env.HARDENING_PORT || 3191);
 const BASE = `http://localhost:${PORT}`;
 let srv: ChildProcess | null = null;
 
