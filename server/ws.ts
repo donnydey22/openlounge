@@ -66,6 +66,9 @@ export class Conn {
     this.handlers.set(ev, fn);
   }
 
+  /** called before every dispatched event (presence "last seen" bump on any interaction) */
+  onAny: ((ev: string) => void) | null = null;
+
   onClose(fn: () => void) {
     this.closeHandlers.push(fn);
   }
@@ -150,6 +153,7 @@ export class Conn {
       return ack({ ok: false, error: "Invalid request", reason: "invalid", detail: invalid });
     }
     try {
+      this.onAny?.(msg.ev);
       await fn(msg.data ?? {}, ack);
     } catch (err) {
       metrics.inc("ws_handler_errors_total");

@@ -101,3 +101,21 @@ test("lastSeenAt never moves backwards and an activity (read receipt) bumps it",
   p.stop();
   q.stop();
 });
+
+test("generic interaction bump is throttled to one persist+broadcast per window; online is a no-op", async () => {
+  const { p, events, persisted } = make();
+  p.attach("c1", "u1", "tok");
+  const n0 = events.length;
+  p.activity("u1", Date.now(), 10_000);
+  assert.equal(events.length, n0, "online: nothing");
+  p.setVisible("c1", false);
+  await sleep(150);
+  const base = p.lastSeenAt("u1")!;
+  const n1 = persisted.length;
+  p.activity("u1", base + 5_000, 10_000);
+  assert.equal(p.lastSeenAt("u1"), base, "within window: throttled");
+  p.activity("u1", base + 10_001, 10_000);
+  assert.equal(p.lastSeenAt("u1"), base + 10_001);
+  assert.equal(persisted.length, n1 + 1);
+  p.stop();
+});

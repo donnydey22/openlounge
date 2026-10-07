@@ -30,6 +30,8 @@ export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 2_000);
 /** foreground → background: amber after this (short, so the dot follows the tab quickly but a quick app switch doesn't blink) */
 export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
 /** safety-net re-evaluation (cheap: only walks non-offline users) */
+/** generic ws interaction while away/offline: at most one persist+broadcast per user per this window */
+export const ACTIVITY_THROTTLE_MS = envMs("PRESENCE_ACTIVITY_THROTTLE_MS", 10_000);
 export const SWEEP_MS = envMs("PRESENCE_SWEEP_MS", 2_000);
 
 interface ConnState {
@@ -151,10 +153,10 @@ export class Presence {
    * backgrounded native app marking a message read), move "last seen" forward so it can never be older than a
    * read receipt / message they produced — the relative and absolute times stay congruent.
    */
-  activity(userId: string, at = Date.now()) {
+  activity(userId: string, at = Date.now(), throttleMs = 0) {
     if (this.isOnline(userId)) return;
     const prev = this.lastSeen.get(userId) ?? 0;
-    if (at <= prev) return;
+    if (at <= prev || at - prev < throttleMs) return;
     this.lastSeen.set(userId, at);
     const token = [...(this.byUser.get(userId) ?? [])].map((id) => this.conns.get(id)?.token).find(Boolean);
     if (token) this.persistLastSeen(token, at);

@@ -7,7 +7,7 @@
 //   towards it, so a phone clock that's minutes off still gets "just now" / "2m" / "Yesterday" right.
 // - Display: device's *current* timezone + locale (12/24 h) via Intl.DateTimeFormat. Formatters are cached
 //   per timezone and dropped when the zone changes (travel, DST rules); useClockTick() re-renders on a
-//   30 s tick, on return to the foreground and when the zone or the skew estimate changes.
+//   10 s tick, on return to the foreground and when the zone or the skew estimate changes.
 import { useSyncExternalStore } from "react";
 
 const DAY_MS = 86_400_000;
@@ -130,7 +130,7 @@ export function formatFull(ts: number) {
 }
 
 // ---------------- re-render tick ----------------
-export const TICK_MS = 30_000;
+export const TICK_MS = 10_000;
 let tick = 0;
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -141,7 +141,7 @@ function bump() {
 function schedule() {
   if (timer) clearTimeout(timer);
   if (!listeners.size) return;
-  // next 30 s boundary of the corrected clock (+50 ms so the label has flipped) — "Active 5m ago" ticks live
+  // next 10 s boundary of the corrected clock (+50 ms so the label has flipped) — "Active 5m ago" ticks live
   const n = serverNow();
   timer = setTimeout(() => {
     checkTimezone();
@@ -178,7 +178,7 @@ function subscribe(l: () => void) {
 export function bumpClock() {
   bump();
 }
-/** Re-render every 30 s, on every presence event, on foreground/focus, and when the timezone or clock-skew estimate changes. */
+/** Re-render every 10 s, on every presence event, on foreground/focus, and when the timezone or clock-skew estimate changes. */
 export function useClockTick() {
   return useSyncExternalStore(
     subscribe,

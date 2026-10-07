@@ -8,7 +8,7 @@ import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { dropTicket, getTicket, issueTicket } from "./authx/signup";
-import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
+import { ACTIVITY_THROTTLE_MS, PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
@@ -198,6 +198,12 @@ export function registerRealtime(io: WsHub) {
       const userId = me();
       if (!userId) return (ack ?? noop)({ ok: false, error: "Not signed in" });
       fn(userId);
+    };
+
+    // any authenticated interaction moves "last seen" forward (throttled; no-op while online)
+    socket.onAny = (ev) => {
+      const uid = me();
+      if (uid && ev !== "presence:visible") presence.activity(uid, Date.now(), ACTIVITY_THROTTLE_MS);
     };
 
     const signIn = (userId: string, sessionId: string) => {

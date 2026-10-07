@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAgo, formatClock, recordClockSample, serverNow, TICK_MS, bumpClock } from "../../src/lib/time";
 
-test("tick is 30 s and bumpClock exists", () => {
-  assert.equal(TICK_MS, 30_000);
+test("tick is 10 s and bumpClock exists", () => {
+  assert.equal(TICK_MS, 10_000);
   assert.equal(typeof bumpClock, "function");
 });
 

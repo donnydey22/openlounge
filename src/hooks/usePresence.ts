@@ -14,7 +14,7 @@ export function lastSeenAbsolute(ts: number | null | undefined): string | null {
 export function lastSeenLabel(ts: number | null | undefined): string | null {
   if (!ts) return null;
   const ago = timeAgo(ts);
-  return ago === "just now" ? "Active just now" : `Active ${ago} ago`;
+  return ago === "just now" ? "Active now" : `Active ${ago} ago`;
 }
 
 /**
