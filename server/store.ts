@@ -38,6 +38,10 @@ import {
   createPersistence,
   errText,
   readJsonDb,
+  MemoryOneTime,
+  type IdentityProvider,
+  type IdentityRecord,
+  type OneTimeBackend,
   type Persistence,
   type PersistedDb,
   type SessionRecord,
@@ -115,6 +119,13 @@ export function isInternalTestAccount(u: { id: string; phone?: string }) {
   return TEST_PHONES.has(p) || /^\+1\d{3}55501\d{2}$/.test(p) || /^\+(\d)\1{7,14}$/.test(p);
 }
 
+export const identityKey = (provider: IdentityProvider, subject: string) => `${provider}|${subject}`;
+/** Lower-cased, trimmed email, or null if it doesn't look like one. */
+export function normalizeEmail(raw: unknown): string | null {
+  const e = String(raw ?? "").trim().toLowerCase();
+  return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+}
+
 const clamp = (s: unknown, max: number) => String(s ?? "").trim().slice(0, max);
 const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)];
 
@@ -125,6 +136,8 @@ export class Store {
   dms = new Map<string, DirectMessage[]>(); // conversationId -> messages (oldest first)
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
+  /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
+  identities = new Map<string, IdentityRecord>();
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
   private awayTimers = new Map<string, NodeJS.Timeout>();
@@ -229,6 +242,9 @@ export class Store {
         // older demo users (pre phone-auth) get a generated handle
         this.users.set(u.id, { ...u, isBot: false, username: u.username || this.uniqueUsername(u.name) });
       }
+      for (const i of db.identities ?? []) if (this.users.has(i.userId)) this.identities.set(identityKey(i.provider, i.subject), { ...i });
+      // every phone number is a phone identity (db.json files and rows written by a pre-005 server have none yet)
+      for (const u of db.users ?? []) if (u.phone) this.ensurePhoneIdentity(u.id, u.phone, u.createdAt);
       const now0 = Date.now();
       const legacyOf = new Set((db.sessions ?? []).map((s) => s.legacyHash).filter((h): h is string => !!h));
       for (const s of db.sessions ?? []) {
@@ -324,6 +340,7 @@ export class Store {
       dms: [...this.dms.values()].flat(),
       dmReads: Object.fromEntries([...this.dmReads.entries()].map(([k, v]) => [k, Object.fromEntries(v)])),
       sessions: [...this.sessions.values()],
+      identities: [...this.identities.values()].filter((i) => this.users.has(i.userId) && !this.users.get(i.userId)!.isBot),
     };
   }
 
@@ -331,9 +348,110 @@ export class Store {
 
   // ----- accounts (phone auth) -----
 
+  /** Phone sign-in: the phone identity decides the account (users.phone is its mirror, kept as a fallback). */
   userByPhone(phone: string) {
+    const id = this.identities.get(identityKey("phone", phone));
+    if (id) {
+      const u = this.users.get(id.userId);
+      if (u) return u;
+    }
     for (const u of this.users.values()) if (u.phone === phone) return u;
     return null;
+  }
+
+  // ----- sign-in identities (unified accounts: phone / email / google / apple) -----
+
+  findIdentity(provider: IdentityProvider, subject: string): IdentityRecord | null {
+    return this.identities.get(identityKey(provider, subject)) ?? null;
+  }
+
+  identitiesOf(userId: string): IdentityRecord[] {
+    return [...this.identities.values()].filter((i) => i.userId === userId).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /**
+   * The one account that owns a VERIFIED identity with this email (any provider), for automatic linking.
+   * null when nobody does — or when two different accounts do (ambiguous: never guess).
+   */
+  userByVerifiedEmail(email: string | null | undefined): string | null {
+    const e = normalizeEmail(email);
+    if (!e) return null;
+    const owners = new Set<string>();
+    for (const i of this.identities.values()) if (i.verified && i.email === e && this.users.has(i.userId)) owners.add(i.userId);
+    return owners.size === 1 ? [...owners][0] : null;
+  }
+
+  private ensurePhoneIdentity(userId: string, phone: string, at = Date.now()) {
+    const k = identityKey("phone", phone);
+    if (this.identities.has(k)) return;
+    this.identities.set(k, { userId, provider: "phone", subject: phone, email: null, verified: true, createdAt: at, lastUsedAt: null });
+  }
+
+  /**
+   * Attach a sign-in method to an account. Fails if that (provider, subject) belongs to someone else.
+   * A phone identity also sets users.phone (one phone number per account).
+   */
+  addIdentity(userId: string, rec: { provider: IdentityProvider; subject: string; email?: string | null; verified: boolean }) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return { ok: false as const, code: "no_user" as const, error: "Account not found" };
+    const k = identityKey(rec.provider, rec.subject);
+    const existing = this.identities.get(k);
+    if (existing && existing.userId !== userId) return { ok: false as const, code: "taken" as const, error: "That sign-in method is already linked to another Open Lounge account." };
+    if (rec.provider === "phone") {
+      const other = this.userByPhone(rec.subject);
+      if (other && other.id !== userId) return { ok: false as const, code: "taken" as const, error: "That number is already linked to another Open Lounge account." };
+      if (u.phone && u.phone !== rec.subject) return { ok: false as const, code: "has_phone" as const, error: "Your account already has a phone number." };
+      u.phone = rec.subject;
+    }
+    const now = Date.now();
+    const email = normalizeEmail(rec.email);
+    if (existing) {
+      existing.email = email ?? existing.email;
+      existing.verified = existing.verified || rec.verified;
+    } else {
+      this.identities.set(k, { userId, provider: rec.provider, subject: rec.subject, email, verified: rec.verified, createdAt: now, lastUsedAt: null });
+    }
+    this.scheduleSave();
+    return { ok: true as const, identity: this.identities.get(k)! };
+  }
+
+  /** Detach a sign-in method. The last remaining method can't be removed (the account would be unreachable). */
+  removeIdentity(userId: string, provider: IdentityProvider, subject: string) {
+    const k = identityKey(provider, subject);
+    const i = this.identities.get(k);
+    if (!i || i.userId !== userId) return { ok: false as const, error: "That sign-in method isn't on your account." };
+    if (this.identitiesOf(userId).length <= 1) return { ok: false as const, error: "Add another way to sign in before removing this one." };
+    this.identities.delete(k);
+    const u = this.users.get(userId)!;
+    if (provider === "phone" && u.phone === subject) delete u.phone;
+    if (provider === "email" && !this.identitiesOf(userId).some((x) => x.provider === "email")) u.passwordHash = null;
+    this.scheduleSave();
+    return { ok: true as const };
+  }
+
+  touchIdentity(provider: IdentityProvider, subject: string, at = Date.now()) {
+    const i = this.identities.get(identityKey(provider, subject));
+    if (!i) return;
+    i.lastUsedAt = at;
+    this.scheduleSave();
+  }
+
+  passwordHashOf(userId: string) {
+    return this.users.get(userId)?.passwordHash ?? null;
+  }
+
+  setPasswordHash(userId: string, hash: string | null) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return false;
+    u.passwordHash = hash;
+    this.scheduleSave();
+    return true;
+  }
+
+  /** Short-lived single-use secrets (reset links, verification links, exchange codes). */
+  private memOneTime = new MemoryOneTime();
+  get oneTime(): OneTimeBackend {
+    return this.backend?.oneTime ?? this.memOneTime;
   }
 
   private uniqueUsername(name: string) {
@@ -362,11 +480,19 @@ export class Store {
     return { username, available: true, reason: null };
   }
 
+  /**
+   * New account. Phone signups pass the verified number (as before); email / Google / Apple signups pass
+   * phone = null plus the identity that proved who they are (and the password hash for email).
+   */
   createAccount(
-    phone: string,
+    phone: string | null,
     input: { firstName?: string; lastName?: string; username?: string; bio?: string; color?: string; interests?: unknown },
+    extra: { identity?: { provider: IdentityProvider; subject: string; email?: string | null; verified: boolean }; passwordHash?: string | null } = {},
   ) {
-    if (this.userByPhone(phone)) return { ok: false as const, error: "An account already exists for this number — sign in instead." };
+    if (phone && this.userByPhone(phone)) return { ok: false as const, error: "An account already exists for this number — sign in instead." };
+    if (extra.identity && this.findIdentity(extra.identity.provider, extra.identity.subject))
+      return { ok: false as const, error: "An account already exists for this sign-in — sign in instead." };
+    if (!phone && !extra.identity) return { ok: false as const, error: "Your verification expired — please start again." };
     const first = clamp(input.firstName, 24);
     const last = clamp(input.lastName, 24);
     if (first.length < 1) return { ok: false as const, error: "What's your first name?" };
@@ -382,11 +508,14 @@ export class Store {
       createdAt: Date.now(),
       baseFollowers: 0,
       baseFollowing: 0,
-      phone,
+      ...(phone ? { phone } : {}),
       interests: this.cleanInterests(input.interests),
       photoVersion: null,
+      passwordHash: extra.passwordHash ?? null,
     };
     this.users.set(user.id, user);
+    if (phone) this.ensurePhoneIdentity(user.id, phone, user.createdAt);
+    if (extra.identity) this.addIdentity(user.id, extra.identity);
     this.scheduleSave();
     return { ok: true as const, user };
   }
@@ -477,7 +606,10 @@ export class Store {
         console.log(`[auth] session ${found.session.id} refreshed from Postgres (updated by another instance)`);
         return found.session;
       }
-      if (found.user && !this.users.has(found.user.id)) this.users.set(found.user.id, found.user);
+      if (found.user && !this.users.has(found.user.id)) {
+        this.users.set(found.user.id, found.user);
+        if (found.user.phone) this.ensurePhoneIdentity(found.user.id, found.user.phone, found.user.createdAt);
+      }
       if (!this.users.has(found.session.userId)) return null;
       this.indexSession(found.session);
       console.log(`[auth] loaded session ${found.session.id} from Postgres (created by another instance)`);

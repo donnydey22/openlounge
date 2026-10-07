@@ -7,7 +7,7 @@ import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
-import { randomBytes } from "node:crypto";
+import { dropTicket, getTicket, issueTicket } from "./authx/signup";
 import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
@@ -38,8 +38,7 @@ export function registerRealtime(io: WsHub) {
   console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
   if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
     console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Set SMS_PROVIDER=twilio before sharing this URL publicly.");
-  /** phone verified but no account yet: ticket -> { phone, expiresAt } */
-  const signupTickets = new Map<string, { phone: string; expiresAt: number }>();
+  // phone verified but no account yet → a signup ticket (server/authx/signup.ts, shared with email/Google/Apple)
   /** per-socket OTP request budget */
   const otpBudget = new Map<string, number[]>();
   let listTimer: NodeJS.Timeout | null = null;
@@ -201,8 +200,7 @@ export function registerRealtime(io: WsHub) {
         const creds = store.createSession(existing.id, deviceLabel(device, ua));
         return ack({ ok: true, status: "existing", ...creds, ...signIn(existing.id, creds.sessionId) });
       }
-      const ticket = randomBytes(24).toString("base64url");
-      signupTickets.set(ticket, { phone: e164, expiresAt: Date.now() + 30 * 60_000 });
+      const ticket = issueTicket({ kind: "phone", phone: e164 });
       ack({ ok: true, status: "new", ticket });
     });
 
@@ -216,15 +214,36 @@ export function registerRealtime(io: WsHub) {
         input: { ticket: string; firstName: string; lastName: string; username: string; bio: string; color: string; interests: string[]; photo?: string | null; device?: string },
         ack: AckFn = noop,
       ) => {
-        const t = signupTickets.get(input?.ticket);
-        if (!t || t.expiresAt < Date.now()) return ack({ ok: false, error: "Your verification expired — please start again." });
-        const res = store.createAccount(t.phone, input);
+        // same ticket shape for every method: phone OTP, or an email / Google / Apple identity (+ password hash for email)
+        const t = getTicket(input?.ticket);
+        if (!t) return ack({ ok: false, error: "Your verification expired — please start again." });
+        const res =
+          t.kind === "phone"
+            ? store.createAccount(t.phone, input)
+            : store.createAccount(null, input, { identity: t.identity, passwordHash: t.passwordHash ?? null });
         if (!res.ok) return ack(res);
-        signupTickets.delete(input.ticket);
+        dropTicket(input.ticket);
         if (input.photo) store.setPhoto(res.user.id, input.photo);
         const creds = store.createSession(res.user.id, deviceLabel(input.device, ua));
         ack({ ok: true, ...creds, ...signIn(res.user.id, creds.sessionId) });
       },
+    );
+
+    // Settings → add a phone number to the signed-in account (code from auth:requestCode). The number becomes a
+    // phone identity on THIS account, so phone OTP login lands here afterwards.
+    socket.on("account:linkPhone", ({ phone, code }: { phone: string; code: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const e164 = normalizePhone(phone);
+        if (!e164) return ack({ ok: false, error: "Enter a valid phone number" });
+        const owner = store.userByPhone(e164);
+        if (owner && owner.id !== userId) return ack({ ok: false, error: "That number is already linked to another Open Lounge account." });
+        const v = otp.verify(e164, code);
+        if (!v.ok) return ack(v);
+        const r = store.addIdentity(userId, { provider: "phone", subject: e164, verified: true });
+        if (!r.ok) return ack({ ok: false, error: r.error });
+        io.to(`user:${userId}`).emit("me:update", { user: store.me(userId) });
+        ack({ ok: true, user: store.me(userId) });
+      }),
     );
 
     // Same validation as GET /auth/validate. Accepts an access token (v2) or, for older clients and bots,

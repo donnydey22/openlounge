@@ -65,7 +65,8 @@ interface AppCtx {
   setActiveDm(peerId: string | null): void;
   getActiveDm(): string | null;
   /** Called by the auth flow once the server has issued a session (refresh token + access token) */
-  completeLogin(token: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }): void;
+  /** `resumeSocket`: the session came over HTTP (email / Google / Apple) — authenticate the socket with it too */
+  completeLogin(token: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean; resumeSocket?: boolean }): void;
   finishOnboarding(): void;
   signOut(): Promise<void>;
   request<T = Record<string, unknown>>(event: string, payload?: unknown): Promise<T>;
@@ -404,11 +405,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const completeLogin = useCallback(
-    (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean }) => {
+    (t: string, session: SessionPayload & { access?: string; accessExpiresAt?: number }, opts?: { onboarding?: boolean; resumeSocket?: boolean }) => {
       saveCreds({ refresh: t, access: session.access ?? null, accessExp: session.accessExpiresAt ?? 0, uid: session.user?.id ?? null });
       setToken(t);
       applySession(session);
       setOnboarding(!!opts?.onboarding);
+      if (opts?.resumeSocket) void resumeRef.current?.().catch(() => {});
     },
     [applySession],
   );

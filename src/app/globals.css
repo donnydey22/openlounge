@@ -586,3 +586,57 @@ body:has([aria-modal]) {
 [data-theme="light"] .podium-label {
   color: oklch(55.5% 0.163 48.998); /* amber-700 */
 }
+/* Sign-in provider buttons. Apple: white button on dark backgrounds, black on light (Apple HIG);
+   Google: neutral dark / light themes from Google's branding guidelines. Same size + radius as our buttons. */
+/* ---- sign-in options: one family (phone / Apple / Google / email) ---- */
+.btn-auth {
+  display: flex;
+  width: 100%;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 24px;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 150ms, border-color 150ms, transform 150ms, opacity 150ms;
+}
+.btn-auth:active:not(:disabled) { transform: scale(0.98); }
+.btn-auth:disabled { opacity: 0.45; }
+.btn-auth:focus { outline: none; }
+.btn-auth:focus-visible { outline: 2px solid rgb(52 211 153 / 0.7); outline-offset: 2px; }
+.btn-auth-icon { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; flex: none; }
+.btn-auth-icon svg { width: 18px; height: 18px; }
+.btn-auth-icon svg.animate-spin { width: 20px; height: 20px; }
+
+/* primary: green filled pill (same as PrimaryButton) */
+.btn-auth-primary { background: #10b981; color: var(--color-on-accent); box-shadow: 0 10px 15px -3px rgb(16 185 129 / 0.2); }
+[data-theme="light"] .btn-auth-primary { background: oklch(56% 0.14 163.5); }
+
+/* Apple (HIG): white in dark mode, black in light mode */
+.btn-auth-apple { background: #ffffff; color: #000000; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+[data-theme="light"] .btn-auth-apple { background: #000000; color: #ffffff; }
+
+/* secondary (Google + email): surface fill, one border */
+.btn-auth-secondary { background: #18181b; color: #f4f4f5; border-color: #3f3f46; }
+[data-theme="light"] .btn-auth-secondary { background: #ffffff; color: #1f1f1f; border-color: #d4d3cc; }
+
+/* hover only on real pointers so touch never leaves a stuck state */
+@media (hover: hover) and (pointer: fine) {
+  .btn-auth-primary:hover:not(:disabled) { background: #34d399; }
+  [data-theme="light"] .btn-auth-primary:hover:not(:disabled) { background: oklch(59.6% 0.145 163.225); }
+  .btn-auth-apple:hover:not(:disabled) { background: #e8e8ea; }
+  [data-theme="light"] .btn-auth-apple:hover:not(:disabled) { background: #1c1c1e; }
+  .btn-auth-secondary:hover:not(:disabled) { background: #222226; }
+  [data-theme="light"] .btn-auth-secondary:hover:not(:disabled) { background: #f7f7f4; }
+}
+
+.auth-stack { display: flex; flex-direction: column; gap: 12px; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; font-size: 12px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: #71717a; }
+.auth-divider span { height: 1px; flex: 1; background: rgb(255 255 255 / 0.1); }
+[data-theme="light"] .auth-divider span { background: rgb(11 11 13 / 0.1); }
+.auth-alt-link { display: block; width: 100%; margin-top: 20px; text-align: center; font-size: 14px; font-weight: 600; }

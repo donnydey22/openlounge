@@ -6,7 +6,7 @@
 // Phone verification goes through the server's OtpService (demo SMS provider by default).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Camera, Check, Loader2 } from "lucide-react";
+import { ArrowRight, Camera, Check, Loader2, Phone } from "lucide-react";
 import { AVATAR_COLORS, USERNAME_RE, type PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { fileToAvatarDataUrl } from "@/lib/image";
@@ -14,12 +14,29 @@ import { Avatar } from "../Avatar";
 import { InterestChips } from "../profile/InterestChips";
 import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
+import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
+import { IconSlot, ProviderButtons } from "./ProviderButtons";
+import { AuthFormError, authPost, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
 
-type Step = "welcome" | "phone" | "code" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
+/** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
+function initialEntry(): { step: Step; pending: PendingSignup | null } {
+  if (typeof window === "undefined") return { step: "welcome", pending: null };
+  const pending = takePendingSignup();
+  if (pending) return { step: "name", pending };
+  return { step: new URLSearchParams(location.search).get("signin") === "email" ? "email" : "welcome", pending: null };
+}
+
+type Step = "welcome" | "phone" | "code" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
 export function AuthFlow() {
   const { request, completeLogin, finishOnboarding, onboarding, follow, updateMe, connected, toast } = useApp();
-  const [step, setStep] = useState<Step>(onboarding ? "interests" : "welcome");
+  const [entry] = useState(initialEntry);
+  const [step, setStep] = useState<Step>(onboarding ? "interests" : entry.step);
+  /** how this person proved who they are (phone OTP, or a ticket from email / Google / Apple) */
+  const [method, setMethod] = useState<"phone" | PendingSignup["method"]>(entry.pending?.method ?? "phone");
+  // email + password
+  const [email, setEmail] = useState(entry.pending?.email ?? "");
+  const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,11 +48,11 @@ export function AuthFlow() {
   const [code, setCode] = useState("");
   const [demoCode, setDemoCode] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
-  const [ticket, setTicket] = useState("");
+  const [ticket, setTicket] = useState(entry.pending?.ticket ?? "");
 
   // profile
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
+  const [firstName, setFirstName] = useState(entry.pending?.firstName ?? "");
+  const [lastName, setLastName] = useState(entry.pending?.lastName ?? "");
   const [username, setUsername] = useState("");
   const [usernameState, setUsernameState] = useState<{ checking: boolean; available: boolean | null; reason: string | null }>({
     checking: false,
@@ -105,6 +122,39 @@ export function AuthFlow() {
     }
   }
 
+  async function emailSignIn() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authPost<SessionResult>("/auth/email/login", { email, password });
+      completeLogin(res.token, res, { resumeSocket: true });
+      toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function emailSignUp() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await authPost("/auth/email/signup", { email, password });
+      setPassword("");
+      setMethod("email");
+      go("emailSent");
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
   // live username availability
   useEffect(() => {
     if (step !== "username") return;
@@ -142,7 +192,7 @@ export function AuthFlow() {
     } catch (e) {
       setError((e as Error).message);
       if (/username|taken/i.test((e as Error).message)) go("username");
-      if (/expired|start again/i.test((e as Error).message)) go("phone");
+      if (/expired|start again/i.test((e as Error).message)) go(method === "phone" ? "phone" : "welcome");
     } finally {
       setBusy(false);
     }
@@ -196,20 +246,26 @@ export function AuthFlow() {
           </div>
         </div>
         <Footer>
-          <PrimaryButton
+          <button
+            type="button"
             onClick={() => {
               setMode("signup");
               go("phone");
             }}
+            className="btn-auth btn-auth-primary"
           >
-            Get your username 👋
-          </PrimaryButton>
+            <IconSlot>
+              <Phone className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            </IconSlot>
+            Continue with phone
+          </button>
+          <ProviderButtons onEmail={() => go("email")} />
           <button
             onClick={() => {
               setMode("signin");
               go("phone");
             }}
-            className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline"
+            className="auth-alt-link text-sky-400 hover:underline"
           >
             Already have an account? Sign in →
           </button>
@@ -267,8 +323,98 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
               Next <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
+            <ProviderButtons onEmail={() => go("email")} />
+            {mode !== "signin" ? (
+              <button type="button" onClick={() => setMode("signin")} className="auth-alt-link text-sky-400 hover:underline">
+                Already have an account? Sign in →
+              </button>
+            ) : (
+              <button type="button" onClick={() => setMode("signup")} className="auth-alt-link text-sky-400 hover:underline">
+                New here? Create an account →
+              </button>
+            )}
           </Footer>
         </form>
+      </Shell>
+    );
+  }
+
+  if (step === "email") {
+    return (
+      <Shell stepKey={step} onBack={() => go("welcome")}>
+        <Title sub="Sign in with your email and password.">Welcome back!</Title>
+        <form
+          className="contents"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (emailOk && password) emailSignIn();
+          }}
+        >
+          <div className="mt-8 space-y-3">
+            <TextInput autoFocus type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} aria-label="Email" placeholder="you@example.com" value={email} onChange={setEmail} maxLength={254} />
+            <PasswordInput autoComplete="current-password" aria-label="Password" placeholder="Password" value={password} onChange={setPassword} />
+          </div>
+          <ErrorText>{error}</ErrorText>
+          <div className="mt-4 text-center">
+            <a href="/forgot-password" className="text-sm font-semibold text-sky-400 hover:underline">
+              Forgot password?
+            </a>
+          </div>
+          <Footer>
+            <PrimaryButton type="submit" disabled={!emailOk || !password} busy={busy}>
+              Sign in <ArrowRight className="h-4 w-4" />
+            </PrimaryButton>
+            <button type="button" onClick={() => go("emailSignup")} className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
+              New here? Create an account with email →
+            </button>
+          </Footer>
+        </form>
+      </Shell>
+    );
+  }
+
+  if (step === "emailSignup") {
+    return (
+      <Shell stepKey={step} onBack={() => go("email")}>
+        <Title sub="We'll email you a link to confirm it's you.">Sign up with email</Title>
+        <form
+          className="contents"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (emailOk && password.length >= 8) emailSignUp();
+          }}
+        >
+          <div className="mt-8 space-y-3">
+            <TextInput autoFocus type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} aria-label="Email" placeholder="you@example.com" value={email} onChange={setEmail} maxLength={254} />
+            <PasswordInput autoComplete="new-password" aria-label="Create a password" placeholder="Create a password" value={password} onChange={setPassword} />
+            <p className={cn("px-1 text-xs", password && password.length < 8 ? "text-amber-400" : "text-zinc-500")}>At least 8 characters.</p>
+          </div>
+          <ErrorText>{error}</ErrorText>
+          <Footer>
+            <PrimaryButton type="submit" disabled={!emailOk || password.length < 8} busy={busy}>
+              Create account <ArrowRight className="h-4 w-4" />
+            </PrimaryButton>
+            <p className="mt-4 text-center text-xs leading-relaxed text-zinc-500">By signing up, you agree to our Terms of Service and Privacy Policy.</p>
+          </Footer>
+        </form>
+      </Shell>
+    );
+  }
+
+  if (step === "emailSent") {
+    return (
+      <Shell stepKey={step} onBack={() => go("emailSignup")}>
+        <div className="flex flex-1 flex-col items-center justify-center text-center">
+          <div className="mb-6 text-6xl">📬</div>
+          <h1 className="text-[26px] leading-tight font-bold tracking-tight">Check your inbox</h1>
+          <p className="mt-3 max-w-xs text-[15px] leading-relaxed text-zinc-400">
+            We sent a link to <span className="font-semibold text-zinc-200">{email.trim()}</span>. Tap it to confirm your email and pick your username.
+          </p>
+          <p className="mt-6 text-xs text-zinc-500">No email after a few minutes? Check spam, or go back and try again.</p>
+        </div>
+        <Footer>
+          <PrimaryButton onClick={() => go("welcome")}>Done</PrimaryButton>
+        </Footer>
       </Shell>
     );
   }
@@ -540,81 +686,6 @@ export function AuthFlow() {
 }
 
 // ---------------- building blocks ----------------
-
-function Shell({ children, onBack, stepKey, welcome }: { children: React.ReactNode; onBack?: () => void; stepKey: string; welcome?: boolean }) {
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col px-6 pt-[max(1.25rem,env(safe-area-inset-top))]">
-      <div className="h-11">
-        {onBack && (
-          <button onClick={onBack} className="-ml-2 rounded-full p-2 text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100 active:scale-95" aria-label="Back">
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-        )}
-      </div>
-      <div key={stepKey} className={"flex flex-1 flex-col " + (welcome ? "auth-welcome-in" : "auth-step-in")}>
-        {children}
-      </div>
-    </main>
-  );
-}
-
-function Title({ children, sub }: { children: React.ReactNode; sub?: string }) {
-  return (
-    <div className="pt-6 text-center">
-      <h1 className="text-[26px] leading-tight font-bold tracking-tight">{children}</h1>
-      {sub && <p className="mt-2 text-[15px] text-zinc-400">{sub}</p>}
-    </div>
-  );
-}
-
-function Footer({ children }: { children: React.ReactNode }) {
-  return <div className="mt-auto pt-8 pb-[max(2rem,env(safe-area-inset-bottom))]">{children}</div>;
-}
-
-function PrimaryButton({
-  children,
-  onClick,
-  disabled,
-  busy,
-  type = "button",
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  disabled?: boolean;
-  busy?: boolean;
-  type?: "button" | "submit";
-}) {
-  return (
-    <button
-      type={type}
-      onClick={onClick}
-      disabled={disabled || busy}
-      className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-4 text-[17px] font-semibold text-on-accent shadow-lg shadow-emerald-500/20 transition duration-200 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-40 disabled:shadow-none"
-    >
-      {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : children}
-    </button>
-  );
-}
-
-function TextInput({
-  value,
-  onChange,
-  ...rest
-}: { value: string; onChange: (v: string) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
-  return (
-    <input
-      {...rest}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-2xl border border-white/10 bg-zinc-900 px-4 py-3.5 text-lg outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
-    />
-  );
-}
-
-function ErrorText({ children }: { children: React.ReactNode }) {
-  if (!children) return null;
-  return <p className="mt-3 text-center text-sm text-red-400">{children}</p>;
-}
 
 /** Six boxes backed by one hidden input (works with SMS autofill / paste). */
 function CodeInput({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
