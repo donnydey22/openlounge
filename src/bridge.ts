@@ -68,7 +68,11 @@ export type BridgeRequest =
   | { __ol: 1; method: 'theme'; value: 'dark' | 'light' }
   | { __ol: 1; method: 'ready'; value?: string }
   | { __ol: 1; method: 'haptic'; value: HapticKind }
-  | { __ol: 1; method: 'openExternal'; value: string };
+  | { __ol: 1; method: 'openExternal'; value: string }
+  | { __ol: 1; method: 'share'; value: { text: string; url: string } }
+  | { __ol: 1; method: 'requestContacts' }
+  | { __ol: 1; method: 'openAppSettings' }
+  | { __ol: 1; method: 'requestNotificationPermission' };
 
 export function parseBridgeMessage(data: string): BridgeRequest | null {
   try {
@@ -84,6 +88,16 @@ export function parseBridgeMessage(data: string): BridgeRequest | null {
         return typeof m.value === 'string' && HAPTICS.has(m.value) ? (m as BridgeRequest) : null;
       case 'openExternal':
         return typeof m.value === 'string' && m.value.length <= 4096 ? (m as BridgeRequest) : null;
+      case 'share': {
+        const v = m.value as { text?: unknown; url?: unknown } | null;
+        return v && typeof v.text === 'string' && typeof v.url === 'string' && v.text.length <= 1000 && v.url.length <= 2048
+          ? { __ol: 1, method: 'share', value: { text: v.text, url: v.url } }
+          : null;
+      }
+      case 'requestContacts':
+      case 'openAppSettings':
+      case 'requestNotificationPermission':
+        return { __ol: 1, method: m.method } as BridgeRequest;
     }
     if (typeof m.id !== 'string' || m.id.length > 64) return null;
     if (m.method === 'getSession' || m.method === 'clearSession') return m as BridgeRequest;
@@ -183,7 +197,16 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts']),
+      getPlatform: function () { return ${JSON.stringify(platform)}; },
+      // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
+      getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
+      share: function (text, url) { post({ __ol: 1, method: 'share', value: { text: String(text || ''), url: String(url || '') } }); },
+      // the page shows its explainer first; the result arrives via window.__olContacts(json)
+      requestContacts: function () { post({ __ol: 1, method: 'requestContacts' }); },
+      contactsPermission: function () { return 'prompt'; },
+      openAppSettings: function () { post({ __ol: 1, method: 'openAppSettings' }); },
+      requestNotificationPermission: function () { post({ __ol: 1, method: 'requestNotificationPermission' }); },
       getSession: function () {
         return call('getSession').then(function (v) { return typeof v === 'string' ? v : null; });
       },

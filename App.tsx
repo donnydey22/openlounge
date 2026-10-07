@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus, Keyboard, Linking, Platform, StyleSheet, View } from 'react-native';
+import { AppState, type AppStateStatus, Keyboard, Linking, Platform, Share, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
@@ -30,6 +30,8 @@ import {
   isAppUrl,
 } from './src/config';
 import { playHaptic } from './src/haptics';
+import { readContactsForPage } from './src/contacts';
+import { onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
 import { type LinkTarget, isNativeAuthStart, resolveIncomingLink } from './src/links';
 import * as Session from './src/sessionStore';
 import { type Theme, loadTheme, saveTheme } from './src/themeStore';
@@ -218,6 +220,21 @@ function Shell() {
     [openTarget],
   );
 
+  // ---------------- push ----------------
+  const pushToken = useRef('');
+  const deliverPushToken = useCallback(
+    (t: string) => {
+      if (!t) return;
+      pushToken.current = t;
+      const q = JSON.stringify(t);
+      inject(`window.__olExpoPushToken=${q};window.__olPushToken&&window.__olPushToken(${q});true;`);
+    },
+    [inject],
+  );
+  useEffect(() => onTokenRefresh(deliverPushToken), [deliverPushToken]);
+  // notification tap → open its deep link (/messages/<peer>, /room/<id>) in the WebView
+  useEffect(() => onNotificationOpen((path) => navigate(new URL(path, START_URL).toString())), [navigate]);
+
   // Deep links: cold start + while running.
   useEffect(() => {
     Linking.getInitialURL()
@@ -287,6 +304,21 @@ function Shell() {
           if (isAppUrl(msg.value)) navigate(msg.value);
           else openInSafariView(msg.value);
           return;
+        case 'share':
+          Share.share({ message: msg.value.text, url: msg.value.url }).catch(() => {});
+          return;
+        case 'requestContacts':
+          readContactsForPage()
+            .catch(() => JSON.stringify({ granted: false }))
+            .then((json) => inject(`window.__olContacts&&window.__olContacts(${JSON.stringify(json)});true;`));
+          return;
+        case 'openAppSettings':
+          Linking.openSettings().catch(() => {});
+          return;
+        case 'requestNotificationPermission':
+          // the page calls this after sign-in; iOS shows its prompt once
+          requestPushPermissionAndToken().then(deliverPushToken);
+          return;
         case 'openAuth':
           if (!isNativeAuthStart(msg.value)) {
             reply(msg.id, false, null, 'openAuth: unsupported URL');
@@ -304,7 +336,7 @@ function Shell() {
         reply(msg.id, false, null, err instanceof Error ? err.message : String(err));
       }
     },
-    [applyTheme, hideSplash, navigate, reply, runAuth],
+    [applyTheme, hideSplash, navigate, reply, runAuth, inject, deliverPushToken],
   );
 
   // ---------------- link policy ----------------
