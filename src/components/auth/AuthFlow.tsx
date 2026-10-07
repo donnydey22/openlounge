@@ -17,13 +17,8 @@ import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
-<<<<<<< HEAD
-import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
-import type { PhoneSession } from "@/lib/firebaseClient";
-=======
 import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult, type SignInResult } from "@/lib/authApi";
-import type { ConfirmationResult } from "firebase/auth";
->>>>>>> email-otp
+import type { PhoneSession } from "@/lib/firebaseClient";
 
 /** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
 function initialEntry(): { step: Step; pending: PendingSignup | null } {

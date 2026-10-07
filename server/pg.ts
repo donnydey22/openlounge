@@ -11,12 +11,8 @@ import pg from "pg";
 import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
-<<<<<<< HEAD
 import type { ReportRecord } from "./moderation";
-import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
-=======
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type EmailOtpBackend, type EmailOtpRow, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
->>>>>>> email-otp
 
 type SessionRow = {
   token_hash: string;
