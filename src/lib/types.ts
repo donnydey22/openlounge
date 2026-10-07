@@ -20,7 +20,12 @@ export interface PublicUser {
   online?: boolean;
   /** When the user was last active in the app (null while online / never seen) */
   lastSeenAt?: number | null;
+  /** Live app presence: "online" = app open in the foreground, "away" = connected but backgrounded, "offline" = gone */
+  presence?: PresenceStatus;
 }
+
+/** App-wide presence (presence:update / presence:snapshot): green / amber / no dot */
+export type PresenceStatus = "online" | "away" | "offline";
 
 export interface Participant {
   userId: string;
@@ -136,6 +141,10 @@ export interface DirectMessage {
   toId: string;
   text: string;
   createdAt: number;
+  /** Sender's photo (on pushed / catch-up messages; not stored) */
+  fromPhotoUrl?: string | null;
+  /** Sender-generated id echoed back so an optimistic bubble is replaced in place (no flicker / duplicate) */
+  clientId?: string;
 }
 
 export interface ConversationSummary {

@@ -15,10 +15,12 @@ export function lastSeenLabel(ts: number | null | undefined): string | null {
  * Live presence for one user: driven by the app-wide presence map that the server
  * pushes over the WebSocket (presence:snapshot / presence:update), so it updates
  * without refetching. `fallbackLastSeen` is the value from a fetched PublicUser.
+ * status: green "online" (foreground), amber "away" (connected, backgrounded), "offline" (no dot).
  */
 export function usePresence(userId: string | null | undefined, fallbackLastSeen?: number | null) {
-  const { isOnline, lastSeenAt } = useApp();
-  const online = userId ? isOnline(userId) : false;
+  const { presenceOf, lastSeenAt } = useApp();
+  const status = userId ? presenceOf(userId) : "offline";
+  const online = status === "online";
   const seen = userId && !online ? lastSeenAt(userId, fallbackLastSeen) : null;
   // re-render once a minute so "Active 5m ago" keeps counting
   const [, tick] = useState(0);
@@ -27,5 +29,12 @@ export function usePresence(userId: string | null | undefined, fallbackLastSeen?
     const t = setInterval(() => tick((n) => n + 1), 60_000);
     return () => clearInterval(t);
   }, [seen]);
-  return { online, lastSeenAt: seen, label: online ? "Online" : lastSeenLabel(seen) };
+  return {
+    online,
+    /** "online" | "away" | "offline" — pass `dot` straight to <Avatar presence> */
+    status,
+    dot: status === "offline" ? null : status,
+    lastSeenAt: seen,
+    label: online ? "Online" : status === "away" ? "Away" : lastSeenLabel(seen),
+  };
 }

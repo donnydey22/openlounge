@@ -285,7 +285,7 @@ export function Notifier({ children }: { children: React.ReactNode }) {
         return; // you're looking at that thread right now
       }
       // tap → the thread (opens scrolled to the newest message); inside a room it opens the DM drawer
-      banner({ title: msg.fromName, body: msg.text, avatar: { name: msg.fromName, color: msg.fromColor, userId: msg.fromId }, href: url, key: tag });
+      banner({ title: msg.fromName, body: msg.text, avatar: { name: msg.fromName, color: msg.fromColor, photo: msg.fromPhotoUrl ?? null, userId: msg.fromId }, href: url, key: tag });
     };
 
     socket.on("room:presence", onPresence);

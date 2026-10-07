@@ -1129,20 +1129,39 @@ export class Store {
     return { messages: older.slice(-limit), hasMore: older.length > limit };
   }
 
-  sendDm(fromId: string, toId: string, rawText: unknown) {
+  /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
+  dmsSince(userId: string, after: number, limit = 200) {
+    const out: DirectMessage[] = [];
+    for (const [key, list] of this.dms) {
+      const [a, b] = key.split("|");
+      if (a !== userId && b !== userId) continue;
+      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) out.push(list[i]);
+    }
+    out.sort((x, y) => x.createdAt - y.createdAt);
+    return { messages: out.slice(-limit), hasMore: out.length > limit };
+  }
+
+  sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
     const text = clamp(rawText, CHAT_MAX_LENGTH);
     if (!text) return { ok: false as const, error: "Message is empty" };
+    const cid = typeof clientId === "string" && /^[\w-]{1,64}$/.test(clientId) ? clientId : undefined;
+    if (cid) {
+      // retried send (ack lost on a dropped connection): return the stored message instead of a duplicate
+      const recent = this.dms.get(conversationId(fromId, toId)) ?? [];
+      for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--)
+        if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i] };
+    }
     if (this.rateLimited(fromId)) return { ok: false as const, error: "Slow down a little 🙂" };
-    const msg = this.appendDm(fromId, toId, text);
+    const msg = this.appendDm(fromId, toId, text, cid);
     // sending implies you've read everything before it
     this.markDmRead(fromId, toId);
     if (DEMO_SEED && this.isBot(toId)) this.scheduleBotDmReply(toId, fromId);
     return { ok: true as const, message: msg };
   }
 
-  private appendDm(fromId: string, toId: string, text: string) {
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -1154,6 +1173,7 @@ export class Store {
       toId,
       text,
       createdAt: Date.now(),
+      ...(clientId ? { clientId } : {}),
     };
     list.push(msg);
     if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);

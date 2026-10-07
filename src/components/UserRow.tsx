@@ -31,10 +31,10 @@ export function FollowButton({ userId, small }: { userId: string; small?: boolea
 
 export function UserRow({ user }: { user: PublicUser }) {
   // live presence (pushed over the WebSocket), not the snapshot captured when the list was fetched
-  const { online } = usePresence(user.id, user.lastSeenAt);
+  const { online, dot } = usePresence(user.id, user.lastSeenAt);
   return (
     <Link href={`/profile/${user.id}`} className="flex items-center gap-3 rounded-2xl p-2.5 transition hover:bg-white/5">
-      <Avatar name={user.name} color={user.color} photo={user.photoUrl} size="sm" online={online} />
+      <Avatar name={user.name} color={user.color} photo={user.photoUrl} size="sm" presence={user.isBot ? null : dot} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 truncate font-medium">
           <span className="truncate">{user.name}</span>

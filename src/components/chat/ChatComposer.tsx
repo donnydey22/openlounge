@@ -55,7 +55,8 @@ export function ChatComposer({
           autoFocus={autoFocus}
           maxLength={CHAT_MAX_LENGTH}
           disabled={disabled}
-          placeholder={disabled ? "Reconnecting…" : placeholder}
+          placeholder={placeholder}
+          enterKeyHint="send"
           onChange={(e) => {
             setText(e.target.value);
             onTyping?.();
@@ -83,6 +84,9 @@ export function ChatComposer({
       <button
         type="submit"
         disabled={!canSend}
+        // keep focus (and the mobile keyboard) in the textarea when tapping send
+        onPointerDown={(e) => e.preventDefault()}
+        onMouseDown={(e) => e.preventDefault()}
         aria-label="Send message"
         className={cn(
           "flex shrink-0 items-center justify-center rounded-full transition",

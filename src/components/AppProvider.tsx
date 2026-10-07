@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeClient } from "@/lib/realtime";
-import type { Me, RoomSummary } from "@/lib/types";
+import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
 import { clearToken, loadToken, saveToken } from "@/lib/session";
 
 type Status = "booting" | "signedOut" | "connecting" | "ready";
@@ -77,7 +77,14 @@ interface AppCtx {
   isOnline(userId: string): boolean;
   /** When an offline user was last active (null = online or unknown); `fallback` = value from a fetched PublicUser */
   lastSeenAt(userId: string, fallback?: number | null): number | null;
+  /** Live presence: "online" (green), "away" (amber: connected but backgrounded), "offline" (no dot) */
+  presenceOf(userId: string): PresenceStatus;
+  /** True only once the socket has been down for more than a few seconds (drives a subtle indicator) */
+  offline: boolean;
 }
+
+/** Disconnected longer than this → show the subtle offline indicator (shorter blips stay invisible). */
+const OFFLINE_HINT_MS = 5_000;
 
 const Ctx = createContext<AppCtx | null>(null);
 
@@ -100,6 +107,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [onboarding, setOnboarding] = useState(false);
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [lastSeen, setLastSeen] = useState<Map<string, number>>(new Map());
+  const [awayIds, setAwayIds] = useState<Set<string>>(new Set());
+  const [offline, setOffline] = useState(false);
   const activeDm = useRef<string | null>(null);
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
@@ -154,6 +163,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setUnreadDms(0);
     setOnboarding(false);
     setOnlineIds(new Set());
+    setAwayIds(new Set());
     setLastSeen(new Map());
   }, []);
 
@@ -169,6 +179,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!tokenRef.current && !loadToken()) return;
       s.emit("presence:visible", { visible: document.visibilityState !== "hidden" });
     };
+    // ---- DM catch-up: nothing is lost across a reconnect, nothing is shown twice ----
+    // syncedAt = server time up to which we know we received every pushed DM (last DM / heartbeat).
+    let syncedAt = 0;
+    const seenDms = new Set<string>();
+    const noteDm = (m: DirectMessage) => {
+      seenDms.add(m.id);
+      if (seenDms.size > 500) seenDms.delete(seenDms.values().next().value as string);
+      syncedAt = Math.max(syncedAt, m.createdAt);
+    };
+    s.on("dm:message", noteDm);
+    const markSynced = () =>
+      s.request<{ ok: boolean; now?: number }>("ping", {}, 5000)
+        .then((r) => r?.now && (syncedAt = Math.max(syncedAt, r.now)))
+        .catch(() => {});
+    const catchUp = async () => {
+      if (!syncedAt) return void markSynced(); // first session on this page: nothing to catch up on
+      const after = syncedAt - 2_000; // small overlap for clock/ordering jitter; dedup by id below
+      try {
+        const r = await s.request<{ ok: boolean; messages?: DirectMessage[] }>("dm:since", { after });
+        for (const m of r?.messages ?? []) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+      } catch {
+        /* dropped again — next reconnect retries from the same point */
+      }
+      void markSynced();
+    };
+    const syncTimer = setInterval(() => {
+      if (s.connected && meRef.current && document.visibilityState !== "hidden") void markSynced();
+    }, 60_000);
+    let offlineTimer: ReturnType<typeof setTimeout> | null = null;
     const resume = () => {
       const t = tokenRef.current ?? loadToken();
       if (!t) return;
@@ -177,41 +216,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (!res?.ok) return dropSession();
           applySession(res);
           if (document.visibilityState === "hidden") reportVisibility();
+          void catchUp();
         })
         .catch(() => {
           /* connection dropped mid-request; we'll resume on reconnect */
         });
     };
     s.on("connect", () => {
+      if (offlineTimer) clearTimeout(offlineTimer);
+      offlineTimer = null;
+      setOffline(false);
       setConnected(true);
       resume();
     });
-    s.on("disconnect", () => setConnected(false));
+    s.on("disconnect", () => {
+      setConnected(false);
+      if (!offlineTimer) offlineTimer = setTimeout(() => setOffline(true), OFFLINE_HINT_MS);
+    });
     s.on("rooms:update", (list: RoomSummary[]) => setRooms(list));
     // server-side system notices (new follower, host handover, raised hand…) → banner with the app icon
     s.on("toast", ({ message }: { message: string }) => banner({ title: message, avatar: "app" }));
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
     s.on("me:update", ({ user }: { user: Me }) => setMe(user));
     s.on("dm:unread", ({ count }: { count: number }) => setUnreadDms(count));
-    s.on("presence:snapshot", ({ onlineIds: ids, lastSeen: seen }: { onlineIds: string[]; lastSeen?: Record<string, number> }) => {
+    s.on("presence:snapshot", ({ onlineIds: ids, awayIds: away, lastSeen: seen }: { onlineIds: string[]; awayIds?: string[]; lastSeen?: Record<string, number> }) => {
       setOnlineIds(new Set(ids));
+      setAwayIds(new Set(away ?? []));
       if (seen) setLastSeen(new Map(Object.entries(seen)));
     });
-    s.on("presence:update", ({ userId, online, lastSeenAt }: { userId: string; online: boolean; lastSeenAt: number | null }) => {
-      setOnlineIds((prev) => {
-        if (prev.has(userId) === online) return prev;
-        const next = new Set(prev);
-        if (online) next.add(userId);
-        else next.delete(userId);
-        return next;
-      });
-      if (!online && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
+    const toggle = (set: Set<string>, id: string, on: boolean) => {
+      if (set.has(id) === on) return set;
+      const next = new Set(set);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    };
+    s.on("presence:update", ({ userId, online, status, lastSeenAt }: { userId: string; online: boolean; status?: PresenceStatus; lastSeenAt: number | null }) => {
+      const st: PresenceStatus = status ?? (online ? "online" : "offline");
+      setOnlineIds((prev) => toggle(prev, userId, st === "online"));
+      setAwayIds((prev) => toggle(prev, userId, st === "away"));
+      if (st !== "online" && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
     });
     document.addEventListener("visibilitychange", reportVisibility);
     // dm:message notifications (banner / OS notification) live in <Notifier/>
     s.connect();
     setSocket(s);
     return () => {
+      clearInterval(syncTimer);
+      if (offlineTimer) clearTimeout(offlineTimer);
       document.removeEventListener("visibilitychange", reportVisibility);
       s.removeAllListeners();
       s.close();
@@ -284,6 +336,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const isOnline = useCallback((userId: string) => onlineIds.has(userId) || (me?.id === userId && connected), [onlineIds, me?.id, connected]);
+  const presenceOf = useCallback(
+    (userId: string): PresenceStatus =>
+      onlineIds.has(userId) || (me?.id === userId && connected) ? "online" : awayIds.has(userId) ? "away" : "offline",
+    [onlineIds, awayIds, me?.id, connected],
+  );
   const lastSeenAt = useCallback(
     (userId: string, fallback?: number | null) => (onlineIds.has(userId) ? null : (lastSeen.get(userId) ?? fallback ?? null)),
     [onlineIds, lastSeen],
@@ -317,8 +374,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       onlineIds,
       isOnline,
       lastSeenAt,
+      presenceOf,
+      offline,
     }),
-    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, banner, dismissToast, onlineIds, isOnline, lastSeenAt],
+    [status, connected, socket, me, rooms, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

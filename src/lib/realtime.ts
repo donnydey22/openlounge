@@ -5,8 +5,8 @@
 // (Android WebView backgrounding, laptop sleep, Wi-Fi ↔ cellular switches).
 // Uses wss:// automatically when the page is served over https:// (production/TLS).
 
-const HEARTBEAT_MS = 15_000; // client → server "ping" while the page is visible
-const HEARTBEAT_TIMEOUT_MS = 8_000;
+const HEARTBEAT_MS = 20_000; // client → server "ping" while the page is visible
+const HEARTBEAT_TIMEOUT_MS = 10_000; // no "pong" in this long → socket is dead, reconnect
 const WAKE_PING_TIMEOUT_MS = 4_000; // quick health check when returning to the foreground
 const CONNECT_TIMEOUT_MS = 10_000; // a CONNECTING socket stuck this long is retried
 
@@ -104,7 +104,10 @@ export class RealtimeClient {
 
   private scheduleReconnect() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const delay = Math.min(5000, 400 * 2 ** this.retry++) + Math.random() * 300;
+    // jittered exponential backoff: ~0.2 s first retry, then 0.5, 1, 2, 4, 8 s … capped at 10 s
+    const n = this.retry++;
+    const base = n === 0 ? 200 : Math.min(10_000, 500 * 2 ** (n - 1));
+    const delay = base * (0.75 + Math.random() * 0.5);
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
@@ -195,6 +198,11 @@ export class RealtimeClient {
 
   removeAllListeners() {
     this.listeners.clear();
+  }
+
+  /** Deliver an event to local listeners as if the server had pushed it (reconnect catch-up). */
+  dispatch(ev: string, data: unknown) {
+    this.fire(ev, data);
   }
 
   private fire(ev: string, data: unknown) {

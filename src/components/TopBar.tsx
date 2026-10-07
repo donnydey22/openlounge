@@ -6,7 +6,7 @@ import { Avatar } from "./Avatar";
 import { useApp } from "./AppProvider";
 
 export function TopBar() {
-  const { me, connected, unreadDms } = useApp();
+  const { me, offline, unreadDms } = useApp();
   return (
     <header data-app-header className="sticky top-0 z-30 border-b border-white/5 bg-app/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4">
@@ -14,8 +14,9 @@ export function TopBar() {
           <span className="text-2xl">🎙️</span> Open Lounge
         </Link>
         <div className="flex items-center gap-1">
-          {!connected && (
-            <span title="Reconnecting…" className="animate-pulse p-2 text-amber-400">
+          {/* only after >5 s offline — short blips reconnect silently */}
+          {offline && (
+            <span title="Offline — reconnecting" className="fade-in p-2 text-zinc-500" data-testid="offline-hint">
               <WifiOff className="h-4 w-4" />
             </span>
           )}

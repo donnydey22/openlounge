@@ -1,15 +1,19 @@
-// Online presence: who has Open Lounge open right now.
+// Online presence: who has Open Lounge open right now — green / amber / no dot.
 //
-// A user is online while at least one of their authenticated WebSocket connections is
-//   • foreground (the client reports document.visibilityState via "presence:visible"), or
-//   • sitting in a live room (listening with the app backgrounded still counts).
+//   online  — at least one authenticated WebSocket connection is in the foreground (the client
+//             reports document.visibilityState via "presence:visible") or is seated in a live room
+//             (listening with the app backgrounded still counts as active).
+//   away    — still connected, but every connection is backgrounded / hidden (amber dot).
+//   offline — no connection left (no dot).
 // Multi-tab / multi-device aware: every connection is tracked individually, so closing one
 // tab or device never marks the user offline while another one is still active.
 //
-// Offline is debounced so a page refresh / quick reconnect doesn't flicker:
+// Changes are debounced so a page refresh / quick reconnect doesn't flicker:
 //   socket closed (or killed by the server heartbeat) → offline after CLOSE_GRACE_MS
-//   app backgrounded (visibilitychange → hidden)     → offline after HIDDEN_GRACE_MS
-// Changes are pushed to every signed-in socket as "presence:update" { userId, online, lastSeenAt }.
+//   app backgrounded (visibilitychange → hidden)     → away after AWAY_GRACE_MS
+// Changes are pushed to every signed-in socket as
+//   "presence:update" { userId, online, status, lastSeenAt }
+// (`online` stays the legacy boolean = status === "online"; `status` is additive.)
 // "Last seen" comes from sessions.last_seen_at (already persisted), so it survives restarts.
 
 import type { WsHub } from "./ws";
@@ -21,6 +25,8 @@ const envMs = (name: string, dflt: number) => {
 };
 export const CLOSE_GRACE_MS = envMs("PRESENCE_CLOSE_GRACE_MS", 4_000);
 export const HIDDEN_GRACE_MS = envMs("PRESENCE_HIDDEN_GRACE_MS", 30_000);
+/** foreground → background: amber after this (short, so the dot follows the tab quickly but a quick app switch doesn't blink) */
+export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
 const SWEEP_MS = 15_000;
 
 interface ConnState {
@@ -29,9 +35,13 @@ interface ConnState {
   visible: boolean;
 }
 
+export type PresenceStatus = "online" | "away" | "offline";
+
 export interface PresenceUpdate {
   userId: string;
+  /** legacy boolean (true only while "online") */
   online: boolean;
+  status: PresenceStatus;
   /** when the user was last active (null while online / never seen) */
   lastSeenAt: number | null;
 }
@@ -39,9 +49,10 @@ export interface PresenceUpdate {
 export class Presence {
   private conns = new Map<string, ConnState>(); // connId → state
   private byUser = new Map<string, Set<string>>(); // userId → connIds
-  private online = new Set<string>();
+  /** users with a non-offline status (online or away) */
+  private status = new Map<string, Exclude<PresenceStatus, "offline">>();
   private departed = new Map<string, { at: number; token: string }>();
-  private timers = new Map<string, { t: NodeJS.Timeout; at: number }>();
+  private timers = new Map<string, { t: NodeJS.Timeout; at: number; to: PresenceStatus }>();
 
   constructor(
     private io: WsHub,
@@ -53,16 +64,20 @@ export class Presence {
   ) {
     // Catch state changes that don't come with an explicit event (room ended while backgrounded, …)
     setInterval(() => {
-      for (const userId of [...this.online]) this.update(userId, HIDDEN_GRACE_MS);
+      for (const userId of [...this.status.keys()]) this.update(userId);
     }, SWEEP_MS).unref();
   }
 
   isOnline(userId: string) {
-    return this.online.has(userId);
+    return this.status.get(userId) === "online";
+  }
+
+  statusOf(userId: string): PresenceStatus {
+    return this.status.get(userId) ?? "offline";
   }
 
   lastSeenAt(userId: string): number | null {
-    return this.online.has(userId) ? null : (this.lastSeen.get(userId) ?? null);
+    return this.isOnline(userId) ? null : (this.lastSeen.get(userId) ?? null);
   }
 
   connectionCount(userId: string) {
@@ -70,7 +85,10 @@ export class Presence {
   }
 
   snapshot() {
-    return { onlineIds: [...this.online], lastSeen: Object.fromEntries(this.lastSeen) };
+    const onlineIds: string[] = [];
+    const awayIds: string[] = [];
+    for (const [id, st] of this.status) (st === "online" ? onlineIds : awayIds).push(id);
+    return { onlineIds, awayIds, lastSeen: Object.fromEntries(this.lastSeen) };
   }
 
   /** A connection authenticated as userId (login, signup or session resume). */
@@ -86,18 +104,19 @@ export class Presence {
       if (!set) this.byUser.set(userId, (set = new Set()));
       set.add(connId);
     }
-    this.update(userId, CLOSE_GRACE_MS);
+    this.update(userId);
   }
 
   /** Connection closed / logged out. */
   detach(connId: string, graceMs = CLOSE_GRACE_MS) {
     const c = this.conns.get(connId);
     if (!c) return;
+    const wasActive = c.visible || this.inRoom(connId);
     this.conns.delete(connId);
     const set = this.byUser.get(c.userId);
     set?.delete(connId);
     if (set && set.size === 0) this.byUser.delete(c.userId);
-    this.departed.set(c.userId, { at: Date.now(), token: c.token });
+    if (wasActive && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
     this.update(c.userId, graceMs);
   }
 
@@ -106,13 +125,13 @@ export class Presence {
     const c = this.conns.get(connId);
     if (!c || c.visible === visible) return;
     c.visible = visible;
-    if (!visible) this.departed.set(c.userId, { at: Date.now(), token: c.token });
-    this.update(c.userId, HIDDEN_GRACE_MS);
+    if (!visible && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
+    this.update(c.userId);
   }
 
   /** Re-evaluate after something that affects activity (room join/leave). */
   refresh(userId: string) {
-    this.update(userId, HIDDEN_GRACE_MS);
+    this.update(userId);
   }
 
   private active(userId: string) {
@@ -123,40 +142,65 @@ export class Presence {
     return false;
   }
 
-  private update(userId: string, graceMs: number) {
-    if (this.active(userId)) {
-      const pending = this.timers.get(userId);
+  private target(userId: string): PresenceStatus {
+    if (this.active(userId)) return "online";
+    return (this.byUser.get(userId)?.size ?? 0) > 0 ? "away" : "offline";
+  }
+
+  /**
+   * Move toward the status the connections imply. Becoming online is immediate; online → away waits
+   * AWAY_GRACE_MS; anything → offline waits `closeGraceMs` (page refresh / quick reconnect).
+   */
+  private update(userId: string, closeGraceMs = CLOSE_GRACE_MS) {
+    const to = this.target(userId);
+    const cur = this.statusOf(userId);
+    const pending = this.timers.get(userId);
+    if (to === cur) {
       if (pending) clearTimeout(pending.t);
       this.timers.delete(userId);
-      this.departed.delete(userId);
-      if (!this.online.has(userId)) {
-        this.online.add(userId);
-        this.broadcast({ userId, online: true, lastSeenAt: null });
-      }
+      if (to === "online") this.departed.delete(userId);
       return;
     }
-    if (!this.online.has(userId)) return;
+    if (to === "online" || (to === "away" && cur === "offline")) {
+      if (pending) clearTimeout(pending.t);
+      this.timers.delete(userId);
+      this.apply(userId, to);
+      return;
+    }
+    const graceMs = to === "away" ? AWAY_GRACE_MS : closeGraceMs;
     const at = Date.now() + graceMs;
-    const pending = this.timers.get(userId);
-    if (pending && pending.at <= at) return; // an earlier offline is already scheduled
+    if (pending && pending.to === to && pending.at <= at) return; // already scheduled sooner
     if (pending) clearTimeout(pending.t);
     const t = setTimeout(() => {
       this.timers.delete(userId);
-      if (!this.active(userId)) this.goOffline(userId);
+      const now = this.target(userId);
+      if (now !== this.statusOf(userId)) this.apply(userId, now);
     }, graceMs);
     t.unref();
-    this.timers.set(userId, { t, at });
+    this.timers.set(userId, { t, at, to });
   }
 
-  private goOffline(userId: string) {
-    if (!this.online.delete(userId)) return;
-    const d = this.departed.get(userId);
-    this.departed.delete(userId);
-    const at = d?.at ?? Date.now();
-    this.lastSeen.set(userId, at);
-    const token = d?.token ?? [...(this.byUser.get(userId) ?? [])].map((id) => this.conns.get(id)?.token).find(Boolean);
-    if (token) this.persistLastSeen(token, at);
-    this.broadcast({ userId, online: false, lastSeenAt: at });
+  private apply(userId: string, to: PresenceStatus) {
+    const was = this.statusOf(userId);
+    if (to === was) return;
+    if (to === "offline") this.status.delete(userId);
+    else this.status.set(userId, to);
+    let lastSeenAt: number | null = null;
+    if (to === "online") {
+      this.departed.delete(userId);
+    } else if (was === "online" || !this.lastSeen.has(userId)) {
+      // stopped being active: record "last seen"
+      const d = this.departed.get(userId);
+      const at = d?.at ?? Date.now();
+      this.lastSeen.set(userId, at);
+      const token = d?.token ?? [...(this.byUser.get(userId) ?? [])].map((id) => this.conns.get(id)?.token).find(Boolean);
+      if (token) this.persistLastSeen(token, at);
+      lastSeenAt = at;
+    } else {
+      lastSeenAt = this.lastSeen.get(userId) ?? null;
+    }
+    if (to === "offline") this.departed.delete(userId);
+    this.broadcast({ userId, online: to === "online", status: to, lastSeenAt });
   }
 
   private broadcast(u: PresenceUpdate) {

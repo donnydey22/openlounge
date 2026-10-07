@@ -2,13 +2,13 @@
 // Audio itself goes through LiveKit (see livekit.ts); this layer keeps LiveKit
 // publish permissions in sync with stage roles.
 
-import type { Ack, Role } from "../src/lib/types";
+import type { Ack, DirectMessage, Role } from "../src/lib/types";
 import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { randomBytes } from "node:crypto";
-import { PRESENCE_CHANNEL, Presence } from "./presence";
+import { PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
 
 type AckFn = (res: Ack<Record<string, unknown>>) => void;
 const noop: AckFn = () => {};
@@ -23,11 +23,14 @@ export function registerRealtime(io: WsHub) {
     (token, at) => store.touchSession(token, at),
     store.lastSeenByUser(),
   );
-  const withOnline = <T extends { id: string }>(u: T): T & { online: boolean; lastSeenAt: number | null } => ({
+  const withOnline = <T extends { id: string }>(u: T): T & { online: boolean; lastSeenAt: number | null; presence: PresenceStatus } => ({
     ...u,
     online: presence.isOnline(u.id),
     lastSeenAt: presence.lastSeenAt(u.id),
+    presence: presence.statusOf(u.id),
   });
+  /** pushed DMs carry the sender's current photo so banners / notifications can show it (additive field) */
+  const withSenderPhoto = (m: DirectMessage): DirectMessage => ({ ...m, fromPhotoUrl: store.publicUser(m.fromId)?.photoUrl ?? null });
   const otp = new OtpService();
   console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
   if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
@@ -109,7 +112,7 @@ export function registerRealtime(io: WsHub) {
     },
     dmMessage(msg) {
       // deliver to every tab of both participants (sender's other tabs stay in sync)
-      io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", msg);
+      io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
     },
     dmTyping(fromId, toId) {
@@ -137,7 +140,7 @@ export function registerRealtime(io: WsHub) {
       socket.emit("presence:snapshot", presence.snapshot());
       const user = store.me(userId);
       return {
-        user: user ? { ...user, online: true, lastSeenAt: null } : user,
+        user: user ? { ...user, online: true, lastSeenAt: null, presence: "online" as const } : user,
         following: store.followingIds(userId),
         unreadDms: store.unreadDmCount(userId),
       };
@@ -327,8 +330,17 @@ export function registerRealtime(io: WsHub) {
       }),
     );
 
-    socket.on("dm:send", ({ to, text }: { to: string; text: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.sendDm(userId, to, text))),
+    // clientId (optional) is echoed on the stored message so the sender's optimistic bubble is swapped in place
+    socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => ack(store.sendDm(userId, to, text, clientId))),
+    );
+
+    // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
+    socket.on("dm:since", ({ after }: { after?: number }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const r = store.dmsSince(userId, Number(after) || 0);
+        ack({ ok: true, messages: r.messages.map(withSenderPhoto), hasMore: r.hasMore });
+      }),
     );
 
     socket.on("dm:read", ({ peerId }: { peerId: string }, ack: AckFn = noop) =>
