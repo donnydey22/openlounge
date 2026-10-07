@@ -4,6 +4,8 @@
 // instant reconnect when the page comes back to the foreground / network returns
 // (Android WebView backgrounding, laptop sleep, Wi-Fi ↔ cellular switches).
 // Uses wss:// automatically when the page is served over https:// (production/TLS).
+// Every ping round trip also feeds the clock-skew estimate (lib/time.ts) from the server's clock in the ack.
+import { recordClockSample } from "./time";
 
 const HEARTBEAT_MS = 20_000; // client → server "ping" while the page is visible
 const HEARTBEAT_TIMEOUT_MS = 10_000; // no "pong" in this long → socket is dead, reconnect
@@ -61,6 +63,7 @@ export class RealtimeClient {
       this.connected = true;
       this.startHeartbeat();
       this.fire("connect", null);
+      void this.check(HEARTBEAT_TIMEOUT_MS); // first clock-skew sample right away
     };
     ws.onmessage = (e) => {
       let msg: { t: string; id?: number; ev?: string; data?: unknown };
@@ -146,7 +149,9 @@ export class RealtimeClient {
     if (!ws || ws.readyState !== WebSocket.OPEN || this.checking) return;
     this.checking = true;
     try {
-      await this.request("ping", {}, timeoutMs);
+      const t0 = Date.now();
+      const r = await this.request<{ now?: number }>("ping", {}, timeoutMs);
+      recordClockSample(t0, r?.now, Date.now());
     } catch {
       this.drop(ws);
     } finally {

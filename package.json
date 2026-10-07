@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
     "db:import": "tsx scripts/import-db-json.ts",
-    "smoke": "node scripts/smoke-ws.mjs"
+    "smoke": "node scripts/smoke-ws.mjs",
+    "test:time": "bash scripts/test-time.sh"
   },
   "engines": {
     "node": ">=20.9"

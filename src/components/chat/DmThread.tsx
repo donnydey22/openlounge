@@ -10,7 +10,7 @@ import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
-import { formatClock } from "./RoomChatPanel";
+import { dayDiff, formatClock, formatDaySeparator, formatFull, formatListTime, serverNow, useClockTick } from "@/lib/time";
 import { FollowButton } from "../UserRow";
 import { usePresence } from "@/hooks/usePresence";
 
@@ -33,16 +33,17 @@ const SEND_STALL_MS = 12_000;
 /** Stable React key: the client id survives the optimistic → confirmed swap, so the bubble never re-mounts. */
 const keyOf = (m: Item) => m.clientId ?? m.id;
 
-function timeLabel(ts: number) {
-  const d = new Date(ts);
-  const now = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(now.getDate() - 1);
-  const clock = formatClock(ts);
-  if (d.toDateString() === now.toDateString()) return clock;
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${clock}`;
-  const sameYear = d.getFullYear() === now.getFullYear();
-  return `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) })} · ${clock}`;
+/**
+ * Separator above a message (device timezone, locale 12/24 h): a new calendar day → "Today 9:24 PM",
+ * "Yesterday 8:10 PM", "Monday 3:02 PM", "September 4 1:00 PM"; a quiet gap within the same day → "9:24 PM".
+ */
+function separatorLabel(ts: number, newDay: boolean) {
+  return newDay ? `${formatDaySeparator(ts)} ${formatClock(ts)}` : formatClock(ts);
+}
+
+/** "Seen 9:24 PM" today; "Seen Yesterday" / "Seen Mon" / "Seen Sep 4" for older ones (same formatter as the inbox). */
+function seenLabel(readAt: number) {
+  return `Seen ${dayDiff(readAt) <= 0 ? formatClock(readAt) : formatListTime(readAt)}`;
 }
 
 /** 1–3 emoji and nothing else → shown big, without a bubble. */
@@ -97,7 +98,8 @@ function mergeMessages(list: Item[], incoming: DirectMessage[]): Item[] {
     next = next === list ? [...list] : next;
     // confirmed messages go before any still-pending ones of mine, in time order
     let at = next.length;
-    while (at > 0 && (next[at - 1].state || next[at - 1].createdAt > m.createdAt)) at--;
+    // ordered by server timestamp, then id (never by the device clock); optimistic ones stay last
+    while (at > 0 && (next[at - 1].state || next[at - 1].createdAt > m.createdAt || (next[at - 1].createdAt === m.createdAt && next[at - 1].id > m.id))) at--;
     next.splice(at, 0, m);
   }
   return next;
@@ -401,7 +403,7 @@ export function DmThread({
       fromColor: me.color,
       toId: peerId,
       text,
-      createdAt: Date.now(),
+      createdAt: serverNow(), // display only; the server stamps the real createdAt
       state: "sending",
     };
     stickToBottom.current = true;
@@ -441,18 +443,21 @@ export function DmThread({
     }
   };
 
+  // minute tick / foreground / timezone change → separators ("Today" → "Yesterday" at midnight) re-render
+  const clockTick = useClockTick();
   const rows = useMemo(() => {
     if (!messages) return [];
     return messages.map((m, i) => {
       const prev = messages[i - 1];
       const next = messages[i + 1];
-      const gap = !prev || m.createdAt - prev.createdAt > TIME_GAP_MS || new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
-      const nextGap = !next || next.createdAt - m.createdAt > TIME_GAP_MS || new Date(next.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
+      const newDay = !prev || dayDiff(prev.createdAt, m.createdAt) !== 0;
+      const gap = newDay || m.createdAt - prev.createdAt > TIME_GAP_MS;
+      const nextGap = !next || next.createdAt - m.createdAt > TIME_GAP_MS || dayDiff(m.createdAt, next.createdAt) !== 0;
       const first = gap || prev.fromId !== m.fromId || m.createdAt - prev.createdAt > GROUP_WINDOW_MS;
       const last = nextGap || next.fromId !== m.fromId || next.createdAt - m.createdAt > GROUP_WINDOW_MS;
-      return { m, gap, first, last };
+      return { m, sep: gap ? separatorLabel(m.createdAt, newDay) : null, newDay, first, last };
     });
-  }, [messages]);
+  }, [messages, clockTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastMineIdx = useMemo(() => {
     if (!messages || !me) return -1;
@@ -552,12 +557,14 @@ export function DmThread({
                   )}
                 </div>
               )}
-              {rows.map(({ m, gap, first, last }, i) => (
+              {rows.map(({ m, sep, newDay, first, last }, i) => (
                 <MessageRow
                   key={keyOf(m)}
                   m={m}
                   mine={m.fromId === me?.id}
-                  gap={gap}
+                  sep={sep}
+                  newDay={newDay}
+                  clockTick={clockTick}
                   first={first}
                   last={last}
                   peer={peer}
@@ -605,7 +612,9 @@ export function DmThread({
 const MessageRow = memo(function MessageRow({
   m,
   mine,
-  gap,
+  sep,
+  newDay,
+  clockTick,
   first,
   last,
   peer,
@@ -615,7 +624,10 @@ const MessageRow = memo(function MessageRow({
 }: {
   m: Item;
   mine: boolean;
-  gap: boolean;
+  sep: string | null;
+  newDay: boolean;
+  /** forces a re-render on the minute tick so relative labels ("Seen Yesterday") stay current */
+  clockTick: number;
   first: boolean;
   last: boolean;
   peer: PublicUser | null;
@@ -624,13 +636,50 @@ const MessageRow = memo(function MessageRow({
   onRetry: (m: Item) => void;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
+  void clockTick;
+  // long-press (touch) or right-click shows the full local date-time + UTC under the bubble for a few seconds
+  const [showFull, setShowFull] = useState(false);
+  const press = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hide = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (press.current) clearTimeout(press.current);
+    if (hide.current) clearTimeout(hide.current);
+  }, []);
+  const reveal = () => {
+    setShowFull(true);
+    if (hide.current) clearTimeout(hide.current);
+    hide.current = setTimeout(() => setShowFull(false), 4000);
+  };
+  const cancel = () => {
+    if (press.current) clearTimeout(press.current);
+    press.current = null;
+  };
+  const pressHandlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType === "mouse") return;
+      cancel();
+      press.current = setTimeout(reveal, 450);
+    },
+    onPointerUp: cancel,
+    onPointerLeave: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      cancel();
+      reveal();
+    },
+  };
   // grouped bubble corners: the "tail" side squares off between messages of the same group
   const shape = mine
     ? cn("rounded-[20px]", !first && "rounded-tr-md", !last && "rounded-br-md")
     : cn("rounded-[20px]", !first && "rounded-tl-md", !last && "rounded-bl-md");
   return (
     <div data-testid="dm-msg" data-mine={mine ? "1" : "0"}>
-      {gap && <div className="mt-4 mb-2 text-center text-[11px] font-medium text-zinc-500">{timeLabel(m.createdAt)}</div>}
+      {sep && (
+        <div className="mt-4 mb-2 text-center text-[11px] font-medium text-zinc-500" data-testid={newDay ? "dm-day" : "dm-gap"} title={formatFull(m.createdAt)}>
+          {sep}
+        </div>
+      )}
       <div className={cn("flex items-end gap-2", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]")}>
         {!mine && (
           <div className="w-7 shrink-0">
@@ -639,7 +688,10 @@ const MessageRow = memo(function MessageRow({
         )}
         {mine && <Receipt m={m} onRetry={onRetry} />}
         <div
-          title={formatClock(m.createdAt)}
+          title={formatFull(m.createdAt)}
+          data-testid="dm-bubble"
+          data-ts={m.createdAt}
+          {...pressHandlers}
           className={cn(
             "min-w-0 text-[15px] leading-[1.35] whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
             "msg-in",
@@ -653,6 +705,11 @@ const MessageRow = memo(function MessageRow({
           {m.text}
         </div>
       </div>
+      {showFull && (
+        <div className={cn("fade-in mt-[2px] text-[10.5px] leading-[13px] font-medium text-zinc-500", mine ? "pr-1 text-right" : "pl-9 text-left")} data-testid="dm-fulltime">
+          {formatFull(m.createdAt)}
+        </div>
+      )}
       {mine && showStatus && <StatusLine m={m} latest={latest} onRetry={onRetry} />}
     </div>
   );
@@ -674,7 +731,7 @@ const receiptState = (m: Item): ReceiptState => (m.state === "sending" ? "pendin
 function Receipt({ m, onRetry }: { m: Item; onRetry: (m: Item) => void }) {
   const state = receiptState(m);
   const born = useRef(state);
-  const label = state === "pending" ? "Sending" : state === "failed" ? "Not delivered. Retry" : state === "seen" ? `Seen ${formatClock(m.readAt!)}` : "Delivered";
+  const label = state === "pending" ? "Sending" : state === "failed" ? "Not delivered. Retry" : state === "seen" ? seenLabel(m.readAt!) : "Delivered";
   const drawFirst = born.current === "pending" || born.current === "failed";
   const drawSecond = born.current !== "seen";
   if (state === "failed") {
@@ -736,7 +793,7 @@ function StatusLabel({ d, m, onRetry, inert }: { d: StatusDesc; m: Item; onRetry
       </span>
     );
   if (d.state === "pending") return <span>Sending…</span>;
-  if (d.state === "seen" && d.readAt) return <span>Seen {formatClock(d.readAt)}</span>;
+  if (d.state === "seen" && d.readAt) return <span>{seenLabel(d.readAt)}</span>;
   return <span>Delivered</span>;
 }
 

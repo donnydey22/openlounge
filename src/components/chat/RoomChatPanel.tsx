@@ -4,18 +4,17 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
+import { formatClock, serverNow, useClockTick } from "@/lib/time";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
 
 const GROUP_WINDOW_MS = 2 * 60_000;
 
-export function formatClock(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
+export { formatClock };
 
 /** Soft, glanceable timestamps: "now", "4m", "1h". */
 export function softTime(ts: number) {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  const s = Math.max(0, Math.floor((serverNow() - ts) / 1000));
   if (s < 45) return "now";
   const m = Math.round(s / 60);
   if (m < 60) return `${m}m`;
@@ -50,6 +49,7 @@ export function RoomChatPanel({
   onClose?: () => void;
   className?: string;
 }) {
+  useClockTick(); // soft stamps ("now" → "4m") keep counting
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);

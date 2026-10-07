@@ -2,10 +2,12 @@ import Link from "next/link";
 import { MessageCircle, User } from "lucide-react";
 import type { RoomSummary } from "@/lib/types";
 import { TOPIC_EMOJI, timeAgo } from "@/lib/utils";
+import { formatFull, useClockTick } from "@/lib/time";
 import { Avatar } from "./Avatar";
 import { unlockAudio } from "@/lib/audioUnlock";
 
 export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: boolean }) {
+  useClockTick(); // "Live 5m" keeps counting
   return (
     <Link
       href={`/room/${room.id}`}
@@ -21,7 +23,7 @@ export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: b
         </span>
         <span className="text-zinc-700">•</span>
         <span className="flex items-center gap-1 text-emerald-400/90">
-          <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live {timeAgo(room.createdAt)}
+          <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> <span title={`Started ${formatFull(room.createdAt)}`}>Live {timeAgo(room.createdAt)}</span>
         </span>
       </div>
       <h3 className="mb-4 text-lg font-semibold leading-snug text-zinc-50 group-hover:text-white">{room.title}</h3>

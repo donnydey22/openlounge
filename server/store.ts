@@ -1408,7 +1408,9 @@ export class Store {
       fromColor: from?.color ?? "#64748B",
       toId,
       text,
-      createdAt: Date.now(),
+      // server clock is the source of truth; strictly increasing per conversation so (createdAt, id) order ==
+      // send order even if the host clock steps backwards (NTP) or two sends land in the same millisecond
+      createdAt: Math.max(Date.now(), (list[list.length - 1]?.createdAt ?? 0) + 1),
       readAt: null,
       ...(clientId ? { clientId } : {}),
     };

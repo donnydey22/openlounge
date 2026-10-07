@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useApp } from "@/components/AppProvider";
 import { timeAgo } from "@/lib/utils";
+import { useClockTick } from "@/lib/time";
 
 /** "Active 5m ago" style label for an offline user's last-seen timestamp. */
 export function lastSeenLabel(ts: number | null | undefined): string | null {
@@ -22,13 +22,8 @@ export function usePresence(userId: string | null | undefined, fallbackLastSeen?
   const status = userId ? presenceOf(userId) : "offline";
   const online = status === "online";
   const seen = userId && !online ? lastSeenAt(userId, fallbackLastSeen) : null;
-  // re-render once a minute so "Active 5m ago" keeps counting
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!seen) return;
-    const t = setInterval(() => tick((n) => n + 1), 60_000);
-    return () => clearInterval(t);
-  }, [seen]);
+  // re-render on the shared minute tick / foreground / timezone change so "Active 5m ago" keeps counting
+  useClockTick();
   return {
     online,
     /** "online" | "away" | "offline" — pass `dot` straight to <Avatar presence> */

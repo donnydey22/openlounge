@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, PenSquare, Search } from "lucide-react";
 import type { ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatListTime, useClockTick } from "@/lib/time";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -13,6 +14,7 @@ import { Sheet } from "@/components/Sheet";
 
 export default function MessagesPage() {
   const { socket, connected, request, me, setActiveDm, presenceOf } = useApp();
+  useClockTick(); // inbox stamps flip ("9:24 PM" → "Yesterday") on the minute tick / foreground / timezone change
   const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
   const [composing, setComposing] = useState(false);
   const [typing, setTyping] = useState<Set<string>>(new Set());
@@ -133,7 +135,7 @@ export default function MessagesPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className={cn("truncate text-[15px]", c.unread ? "font-bold text-zinc-50" : "font-semibold text-zinc-100")}>{c.peer.name}</span>
-                        <span className={cn("shrink-0 text-xs", c.unread ? "font-semibold text-sky-400" : "text-zinc-500")}>{softAgo(c.lastMessage.createdAt)}</span>
+                        <span className={cn("shrink-0 text-xs", c.unread ? "font-semibold text-sky-400" : "text-zinc-500")}>{formatListTime(c.lastMessage.createdAt)}</span>
                       </div>
                       <div className="mt-0.5 flex items-center gap-2">
                         <p className={cn("min-w-0 flex-1 truncate text-sm", c.unread ? "font-medium text-zinc-200" : "text-zinc-500")}>
@@ -163,16 +165,6 @@ export default function MessagesPage() {
       <NewMessageSheet open={composing} onClose={() => setComposing(false)} />
     </>
   );
-}
-
-/** "now", "5m", "3h", "Mon", "Sep 4" — glanceable like Clubhouse's inbox */
-function softAgo(ts: number) {
-  const s = (Date.now() - ts) / 1000;
-  if (s < 60) return "now";
-  const ago = timeAgo(ts);
-  if (s < 86_400) return ago;
-  if (s < 6 * 86_400) return new Date(ts).toLocaleDateString(undefined, { weekday: "short" });
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void }) {

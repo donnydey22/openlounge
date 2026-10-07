@@ -7,6 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ChevronDown, Hand, Link2, Loader2, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, Volume2 } from "lucide-react";
 import { ROOM_CHAT_HISTORY, type ChatMessage, type Participant, type RoomPresenceEvent, type RoomReaction, type RoomState } from "@/lib/types";
 import { TOPIC_EMOJI, cn, timeAgo } from "@/lib/utils";
+import { formatFull, serverNow, useClockTick } from "@/lib/time";
 import { useApp } from "@/components/AppProvider";
 import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
@@ -27,6 +28,7 @@ type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
 
 export default function RoomPage() {
   const { id: roomId } = useParams<{ id: string }>();
+  useClockTick(); // "Live · 12m" / "raised 2m ago" keep counting
   const router = useRouter();
   const { socket, connected, me, request, following, toast, reportError } = useApp();
   const [joinAttempt, setJoinAttempt] = useState(0);
@@ -389,7 +391,7 @@ export default function RoomPage() {
             </span>
             <span className="text-zinc-700">•</span>
             <span className="flex items-center gap-1 text-emerald-400/90">
-              <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live · {timeAgo(room.createdAt)}
+              <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> <span title={`Started ${formatFull(room.createdAt)}`}>Live · {timeAgo(room.createdAt)}</span>
             </span>
           </div>
           <h1 className="text-xl font-bold leading-snug">{room.title}</h1>
@@ -664,7 +666,7 @@ export default function RoomPage() {
                 <Avatar name={p.name} color={p.color} photo={p.photoUrl} size="sm" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{p.name}</div>
-                  <div className="text-xs text-zinc-500">raised {timeAgo(p.handRaisedAt ?? Date.now()).replace(/^(\d.*)$/, "$1 ago")}</div>
+                  <div className="text-xs text-zinc-500">raised {timeAgo(p.handRaisedAt ?? serverNow()).replace(/^(\d.*)$/, "$1 ago")}</div>
                 </div>
                 <button onClick={() => invite(p.userId)} className="flex items-center gap-1.5 rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-emerald-400">
                   <Mic className="h-4 w-4" /> Invite
