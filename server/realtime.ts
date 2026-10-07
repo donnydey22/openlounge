@@ -58,8 +58,9 @@ export function registerRealtime(io: WsHub) {
     for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
     return false;
   });
-  console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes ? " (demo — codes shown on screen, 000000 also works)" : ""}`);
-  if (otp.provider.revealsCodes && process.env.NODE_ENV === "production")
+  const demoOtpOn = demoOtpEnabled();
+  console.log(`[auth] SMS provider: ${otp.provider.name}${otp.provider.revealsCodes && demoOtpOn ? " (demo — codes shown on screen, 000000 also works)" : ""}${demoOtpOn ? "" : " (demo OTP disabled; phone sign-in via Firebase)"}`);
+  if (demoOtpOn && otp.provider.revealsCodes && process.env.NODE_ENV === "production")
     console.warn("[auth] ⚠️  Demo OTP in production: anyone can sign in as any phone number. Configure a real SMS/OTP provider before sharing this URL publicly.");
   // phone verified but no account yet → a signup ticket (server/authx/signup.ts, shared with email/Google/Apple)
   /** per-socket OTP request budget */

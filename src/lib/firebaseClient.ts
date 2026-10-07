@@ -54,11 +54,17 @@ export async function confirmPhoneCode(c: ConfirmationResult, code: string): Pro
 }
 
 function phoneError(e: unknown): string {
+  console.error(e);
   const code = (e as { code?: string })?.code ?? "";
+  if (code.includes("billing-not-enabled")) return "Phone sign-in is temporarily unavailable. Please try again soon.";
+  if (code.includes("unauthorized-domain")) return "Phone sign-in isn't enabled for this site yet. Please try again soon.";
+  if (code.includes("invalid-app-credential")) return "We couldn't verify this device. Refresh the page and try again.";
+  if (code.includes("operation-not-allowed")) return "Phone sign-in is currently disabled. Please try another sign-in method.";
+  if (code.includes("quota-exceeded")) return "We've hit our SMS limit for now. Please try again later.";
+  if (code.includes("too-many-requests")) return "Too many attempts. Please wait a bit and try again.";
   if (code.includes("invalid-phone-number")) return "Enter a valid phone number";
-  if (code.includes("too-many-requests") || code.includes("quota-exceeded")) return "Too many attempts. Try again later.";
   if (code.includes("invalid-verification-code")) return "That code doesn't match. Try again.";
   if (code.includes("code-expired")) return "That code expired. Request a new one.";
   if (code.includes("captcha")) return "Verification failed — please try again.";
-  return "We couldn't verify that number. Try again.";
+  return `We couldn't verify that number (${code || "unknown"}).`;
 }
