@@ -529,7 +529,7 @@ async function emailCodeStart(req: IncomingMessage, res: ServerResponse, body: R
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   if (linkUserId) await store.flush().catch(() => {}); // the row references users(id)
   await store.emailOtp.put({ key, email, purpose, userId: linkUserId, codeHash: otpHash(key, code), createdAt: now, expiresAt: now + EMAIL_CODE_TTL_MS });
-  await sendMail(emailCodeMail(email, code, !!linkUserId));
+  await sendMail(emailCodeMail(email, code, !!linkUserId, !linkUserId && !!store.findIdentity("email", email)?.verified));
   json(res, 200, { ok: true, sent: true, email, resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
 }
 
