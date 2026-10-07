@@ -486,7 +486,10 @@ export function registerRealtime(io: WsHub) {
 
     // clientId (optional) is echoed on the stored message so the sender's optimistic bubble is swapped in place
     socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.sendDm(userId, to, text, clientId))),
+      authed(ack, (userId) => {
+        presence.activity(userId);
+        ack(store.sendDm(userId, to, text, clientId));
+      }),
     );
 
     // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
@@ -503,6 +506,9 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => {
         if (typeof peerId !== "string" || !peerId) return ack({ ok: false, error: "User not found" });
         const r = store.markDmRead(userId, peerId, upToMessageId);
+        // a read receipt proves activity: "last seen" must never be older than the "Seen 10:49" it produced
+        const readAt = (r.receipt as { readAt?: number } | null | undefined)?.readAt;
+        presence.activity(userId, typeof readAt === "number" ? readAt : Date.now());
         if (r.changed) io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
         ack({ ok: true, receipt: r.receipt });
       }),

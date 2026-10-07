@@ -3,6 +3,7 @@
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { bumpClock } from "@/lib/time";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
 import { clearToken, hydrateFromNative, loadCreds, loadToken, saveCreds } from "@/lib/session";
@@ -340,7 +341,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     s.on("presence:snapshot", ({ onlineIds: ids, awayIds: away, lastSeen: seen }: { onlineIds: string[]; awayIds?: string[]; lastSeen?: Record<string, number> }) => {
       setOnlineIds(new Set(ids));
       setAwayIds(new Set(away ?? []));
-      if (seen) setLastSeen(new Map(Object.entries(seen)));
+      // replace wholesale on every (re)connect: the snapshot is authoritative, nothing stale survives
+      setLastSeen(new Map(Object.entries(seen ?? {})));
+      bumpClock();
     });
     const toggle = (set: Set<string>, id: string, on: boolean) => {
       if (set.has(id) === on) return set;
@@ -353,7 +356,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const st: PresenceStatus = status ?? (online ? "online" : "offline");
       setOnlineIds((prev) => toggle(prev, userId, st === "online"));
       setAwayIds((prev) => toggle(prev, userId, st === "away"));
-      if (st !== "online" && lastSeenAt) setLastSeen((prev) => new Map(prev).set(userId, lastSeenAt));
+      setLastSeen((prev) => {
+        const next = new Map(prev);
+        if (st !== "online" && lastSeenAt) next.set(userId, lastSeenAt);
+        else if (st === "online") next.delete(userId);
+        return next;
+      });
+      bumpClock();
     });
     document.addEventListener("visibilitychange", reportVisibility);
     window.addEventListener(NATIVE_VISIBILITY_EVENT, reportVisibility);

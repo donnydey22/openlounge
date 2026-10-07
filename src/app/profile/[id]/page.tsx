@@ -136,7 +136,11 @@ export default function ProfilePage() {
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Online
               </span>
             )}
-            {!online && !u.isBot && presence.label && <span className="text-[12px] text-zinc-500">{presence.label}</span>}
+            {!online && !u.isBot && presence.label && (
+              <span className="text-[12px] text-zinc-500" title={presence.seenTitle} data-last-seen={presence.lastSeenAt ?? undefined}>
+                {presence.label}
+              </span>
+            )}
             {u.isBot && <span className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-400">Demo</span>}
           </div>
         </div>

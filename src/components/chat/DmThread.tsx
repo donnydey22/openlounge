@@ -494,7 +494,13 @@ export function DmThread({
   ) : presence.status === "away" ? (
     <span className="text-amber-400">Away</span>
   ) : (
-    (presence.label ?? `@${peer?.username ?? ""}`)
+    presence.label ? (
+      <span title={presence.seenTitle} data-last-seen={presence.lastSeenAt ?? undefined} data-testid="dm-last-seen">
+        {presence.label}
+      </span>
+    ) : (
+      `@${peer?.username ?? ""}`
+    )
   );
 
   return (
