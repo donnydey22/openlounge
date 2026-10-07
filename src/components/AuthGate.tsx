@@ -12,7 +12,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
   if (PUBLIC_AUTH_PAGES.includes(pathname.replace(/\/+$/, ""))) return <>{children}</>;
   // public pages: shared profile links (/@handle → /u/handle), privacy notes and Terms of Use
-  if (/^\/(u\/|@|%40|privacy|terms)/.test(pathname)) return <>{children}</>;
+  if (/^\/(u\/|@|%40|privacy|terms|download)/.test(pathname)) return <>{children}</>;
   // AuthFlow stays mounted from "signedOut" straight into post-signup onboarding steps
   if (status === "signedOut" || (status === "ready" && onboarding)) return <AuthFlow />;
   if (status !== "ready") {

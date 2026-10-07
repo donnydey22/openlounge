@@ -13,3 +13,4 @@ npm-debug.log*
 *.tar.gz
 *.log
 /clubroom.apk
+!public/downloads/*.apk
