@@ -358,3 +358,24 @@ body {
     animation: none;
   }
 }
+
+/* Sign-in provider buttons. Apple: white button on dark backgrounds, black on light (Apple HIG);
+   Google: neutral dark / light themes from Google's branding guidelines. Same size + radius as our buttons. */
+.btn-apple {
+  background: #ffffff;
+  color: #000000;
+}
+[data-theme="light"] .btn-apple {
+  background: #000000;
+  color: #ffffff;
+}
+.btn-google {
+  background: #131314;
+  color: #e3e3e3;
+  box-shadow: inset 0 0 0 1px #8e918f;
+}
+[data-theme="light"] .btn-google {
+  background: #ffffff;
+  color: #1f1f1f;
+  box-shadow: inset 0 0 0 1px #747775;
+}

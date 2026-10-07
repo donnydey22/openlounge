@@ -56,6 +56,7 @@ Sessions are stored per tab (sessionStorage, with localStorage as the fallback f
 | `npm run build` / `npm start` | Production build / start (`NODE_ENV=production`) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run smoke` | Protocol smoke test against a running server: OTP sign-up, returning login, session resume, room chat, DMs, LiveKit token endpoint, end room |
+| `npm run test:auth` | Unified sign-in tests (phone/email/Google/Apple linking, reset tokens, rate limits, flags, migration 005, phone + `/auth/validate` regression) against a **local** Postgres (`TEST_DATABASE_URL`, default `postgresql://ua@127.0.0.1:55433/ua_test`; the schema is wiped) |
 | `npm run reset-data` | Delete `data/db.json` and uploaded avatars (JSON mode only; for Postgres drop/recreate the database) |
 | `npm run db:import -- [path/to/db.json]` | One-time merge-import of an old `db.json` into Postgres (`DATABASE_URL` required, server stopped) |
 

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
     "db:import": "tsx scripts/import-db-json.ts",
-    "smoke": "node scripts/smoke-ws.mjs"
+    "smoke": "node scripts/smoke-ws.mjs",
+    "test:auth": "node --import tsx --test --test-force-exit --test-concurrency=1 tests/unified-auth/*.test.ts"
   },
   "engines": {
     "node": ">=20.9"
@@ -21,6 +22,7 @@
     "livekit-server-sdk": "^2.19.1",
     "lucide-react": "^1.52.0",
     "next": "^16.3.8",
+    "nodemailer": "^7.0.13",
     "pg": "^8.23.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -30,6 +32,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",

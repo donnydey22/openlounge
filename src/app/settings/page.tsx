@@ -12,6 +12,7 @@ import { NotificationToggle } from "@/components/NotificationToggle";
 import { useTheme } from "@/components/ThemeProvider";
 import { Sheet } from "@/components/Sheet";
 import { InterestChips } from "@/components/profile/InterestChips";
+import { SignInMethods } from "@/components/settings/SignInMethods";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, toast, reportError } = useApp();
@@ -101,6 +102,8 @@ export default function SettingsPage() {
             </button>
           </div>
         </section>
+
+        <SignInMethods />
 
         <section>
           <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">About</h2>

@@ -37,6 +37,9 @@ function key() {
   return secret;
 }
 
+/** A purpose-specific 32-byte key derived from the auth secret (e.g. "oauth-state" cookie encryption). */
+export const deriveKey = (label: string) => createHmac("sha256", key()).update(`openlounge:${label}`).digest();
+
 const sign = (payload: string) => createHmac("sha256", key()).update(payload).digest("base64url");
 
 export function signAccessToken(sessionId: string, expiresAt: number) {
