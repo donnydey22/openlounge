@@ -52,7 +52,7 @@ check(r.status === 200 && b.ok && b.user.socialLinks.x === "https://x.com/jack" 
 await new Promise((res) => setTimeout(res, 300));
 check(A.c.events.some((e) => e.ev === "me:update" && e.data.user?.socialLinks?.x), "me:update pushed to own sockets");
 
-r = await post(A.token, { links: { website: "http://example.com", x: "bad handle!" } });
+r = await post(A.token, { links: { website: "ftp://example.com", x: "bad handle!" } });
 b = await r.json();
 check(r.status === 400 && b.errors?.website && b.errors?.x, "invalid → 400 with per-field errors", b);
 
