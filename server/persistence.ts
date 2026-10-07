@@ -97,6 +97,8 @@ export interface Persistence {
   findSession?(by: { hash?: string; id?: string }): Promise<{ session: SessionRecord; user: UserRecord | null } | null>;
   /** schema/migration status for /api/health */
   status?(): Promise<{ connected: boolean; migrations: string[] }>;
+  /** readiness probe (Postgres only) */
+  ping?(timeoutMs?: number): Promise<{ ok: boolean; ms: number; error?: string }>;
   /** record that a db.json import finished (Postgres only) */
   markImported?(source: string): Promise<void>;
   close(): Promise<void>;
