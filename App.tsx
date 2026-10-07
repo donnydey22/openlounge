@@ -1,3 +1,4 @@
+import { phoneAuthConfirm, phoneAuthStart } from './src/phoneAuth';
 import * as Network from 'expo-network';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -321,6 +322,13 @@ function Shell() {
           // the page calls this after sign-in; iOS shows its prompt once
           requestPushPermissionAndToken().then(deliverPushToken);
           return;
+        case 'phoneAuthStart':
+        case 'phoneAuthConfirm': {
+          const v = msg.value;
+          const run = msg.method === 'phoneAuthStart' ? phoneAuthStart(v.id, (v as { phone: string }).phone) : phoneAuthConfirm(v.id, (v as { code: string }).code);
+          run.then((r) => inject(`window.__olPhoneAuth&&window.__olPhoneAuth(${JSON.stringify(JSON.stringify(r))});true;`));
+          return;
+        }
         case 'openAuth':
           if (!isNativeAuthStart(msg.value)) {
             reply(msg.id, false, null, 'openAuth: unsupported URL');

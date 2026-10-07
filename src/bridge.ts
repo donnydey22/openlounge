@@ -72,7 +72,9 @@ export type BridgeRequest =
   | { __ol: 1; method: 'share'; value: { text: string; url: string } }
   | { __ol: 1; method: 'requestContacts' }
   | { __ol: 1; method: 'openAppSettings' }
-  | { __ol: 1; method: 'requestNotificationPermission' };
+  | { __ol: 1; method: 'requestNotificationPermission' }
+  | { __ol: 1; method: 'phoneAuthStart'; value: { id: string; phone: string } }
+  | { __ol: 1; method: 'phoneAuthConfirm'; value: { id: string; code: string } };
 
 export function parseBridgeMessage(data: string): BridgeRequest | null {
   try {
@@ -92,6 +94,18 @@ export function parseBridgeMessage(data: string): BridgeRequest | null {
         const v = m.value as { text?: unknown; url?: unknown } | null;
         return v && typeof v.text === 'string' && typeof v.url === 'string' && v.text.length <= 1000 && v.url.length <= 2048
           ? { __ol: 1, method: 'share', value: { text: v.text, url: v.url } }
+          : null;
+      }
+      case 'phoneAuthStart': {
+        const v = m.value as { id?: unknown; phone?: unknown } | null;
+        return v && typeof v.id === 'string' && v.id.length <= 100 && typeof v.phone === 'string' && /^\+[0-9]{6,16}$/.test(v.phone)
+          ? { __ol: 1, method: 'phoneAuthStart', value: { id: v.id, phone: v.phone } }
+          : null;
+      }
+      case 'phoneAuthConfirm': {
+        const v = m.value as { id?: unknown; code?: unknown } | null;
+        return v && typeof v.id === 'string' && v.id.length <= 100 && typeof v.code === 'string' && /^[0-9]{4,8}$/.test(v.code)
+          ? { __ol: 1, method: 'phoneAuthConfirm', value: { id: v.id, code: v.code } }
           : null;
       }
       case 'requestContacts':
@@ -197,7 +211,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts', 'phoneAuth']),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
       getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
@@ -218,7 +232,11 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       ready: function () { ready('page'); },
       haptic: function (kind) { post({ __ol: 1, method: 'haptic', value: String(kind || 'light') }); },
       openAuth: function (url) { return call('openAuth', absolute(url)).then(function () {}); },
-      openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); }
+      openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); },
+      // native Firebase phone verification (silent APNs, no web reCAPTCHA); results via window.__olPhoneAuth(json)
+      phoneAuthAvailable: function () { return true; },
+      phoneAuthStart: function (id, phone) { post({ __ol: 1, method: 'phoneAuthStart', value: { id: String(id), phone: String(phone) } }); },
+      phoneAuthConfirm: function (id, code) { post({ __ol: 1, method: 'phoneAuthConfirm', value: { id: String(id), code: String(code) } }); }
     };
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
