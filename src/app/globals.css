@@ -455,3 +455,134 @@ body {
     display: none;
   }
 }
+
+/* ───────────── native-feel polish ───────────── */
+:root {
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
+html {
+  overscroll-behavior-y: none; /* no rubber-band of the whole page behind fixed chrome */
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+@layer base {
+/* instant taps: no 300ms double-tap-zoom delay, no grey flash, no accidental text selection on chrome */
+a,
+button,
+[role="button"],
+label,
+summary,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+button,
+[role="button"],
+nav,
+header {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+button,
+[role="button"],
+a {
+  transition-property: transform, opacity, background-color, border-color, color;
+}
+button:not(:disabled):active,
+[role="button"]:active {
+  transform: scale(0.97);
+  transition-duration: 60ms;
+}
+}
+
+/* scroll panes: momentum + no scroll chaining to the page */
+.overflow-y-auto,
+.overflow-auto,
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+/* lock page scroll while a sheet/modal is open */
+body:has([aria-modal]) {
+  overflow: hidden;
+}
+
+/* long lists: skip rendering off-screen items */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
+
+/* skeleton loaders */
+.skeleton {
+  background: linear-gradient(90deg, rgb(127 127 127 / 0.08) 25%, rgb(127 127 127 / 0.16) 37%, rgb(127 127 127 / 0.08) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.3s ease infinite;
+}
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* route transitions (src/app/template.tsx) */
+@keyframes route-push {
+  from {
+    transform: translate3d(24px, 0, 0);
+    opacity: 0;
+  }
+}
+@keyframes route-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes route-sheet {
+  from {
+    transform: translate3d(0, 40px, 0);
+    opacity: 0.4;
+  }
+}
+.route-push {
+  animation: route-push 230ms var(--ease-ios);
+}
+.route-fade {
+  animation: route-fade 200ms ease-out;
+}
+.route-sheet {
+  animation: route-sheet 260ms var(--ease-ios);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-push,
+  .route-fade,
+  .route-sheet,
+  .skeleton {
+    animation: none;
+  }
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: none;
+  }
+  .speaking-glow,
+  .speaking-glow-bloom {
+    transition: none;
+  }
+}
+
+/* light theme: amber-300 text on cream is unreadable — deepen the Podium label */
+[data-theme="light"] .podium-label {
+  color: oklch(55.5% 0.163 48.998); /* amber-700 */
+}

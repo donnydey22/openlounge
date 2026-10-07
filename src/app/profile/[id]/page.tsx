@@ -69,9 +69,12 @@ export default function ProfilePage() {
     return (
       <>
         <TopBar />
-        <div className="flex justify-center py-20 text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin" />
-        </div>
+        <main className="mx-auto max-w-2xl px-4 pt-8" aria-busy="true">
+          <div className="skeleton h-24 w-24 rounded-[2rem]" />
+          <div className="skeleton mt-5 h-6 w-48 rounded-lg" />
+          <div className="skeleton mt-3 h-4 w-32 rounded-lg" />
+          <div className="skeleton mt-6 h-16 w-full rounded-2xl" />
+        </main>
       </>
     );
   }
@@ -122,9 +125,9 @@ export default function ProfilePage() {
         </div>
 
         <div className="mt-5">
-          <h1 className="text-[26px] leading-tight font-bold tracking-tight">{u.name}</h1>
+          <h1 className="line-clamp-3 text-[26px] leading-tight font-bold tracking-tight [overflow-wrap:anywhere]">{u.name}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[15px] text-zinc-400">
-            <span>@{u.username}</span>
+            <span className="max-w-full truncate">@{u.username}</span>
             {online && (
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide text-emerald-400 uppercase">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Online
@@ -146,7 +149,7 @@ export default function ProfilePage() {
           </button>
         </div>
 
-        <p className="mt-4 max-w-prose text-[15px] leading-relaxed whitespace-pre-wrap text-zinc-300">
+        <p className="mt-4 max-w-prose text-[15px] leading-relaxed whitespace-pre-wrap text-zinc-300 [overflow-wrap:anywhere]">
           {u.bio || (
             <span className="text-zinc-600">{isMe ? "Add a bio so people know who you are." : "No bio yet."}</span>
           )}
@@ -409,9 +412,11 @@ function EditProfileSheet({
           />
           <span className="mt-1 block text-right text-xs text-zinc-600">{bio.length}/280</span>
         </label>
-        <button disabled={name.trim().length < 2 || busy} className="w-full rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent hover:bg-emerald-400 disabled:opacity-40">
-          {busy ? "Saving…" : "Save"}
-        </button>
+        <div className="sticky -bottom-8 z-10 -mx-5 bg-gradient-to-t from-zinc-900 via-zinc-900 to-transparent px-5 pt-4 pb-2">
+          <button disabled={name.trim().length < 2 || busy} className="w-full rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent hover:bg-emerald-400 disabled:opacity-40">
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
       </form>
     </Sheet>
   );

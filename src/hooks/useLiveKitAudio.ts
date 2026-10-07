@@ -190,21 +190,49 @@ export function useLiveKitAudio({
       setLevels(new Map());
       return;
     }
+    // attack/release envelope so the speaking ring doesn't flicker on raw levels
+    const env = new Map<string, number>();
+    const smooth = (id: string, raw: number) => {
+      const prev = env.get(id) ?? 0;
+      const k = raw > prev ? 0.6 : 0.18; // fast attack, slow release
+      let v = prev + (raw - prev) * k;
+      if (v < 0.01) v = 0;
+      env.set(id, v);
+      return Math.round(v * 50) / 50;
+    };
     const iv = setInterval(() => {
       const room = roomRef.current;
       if (!room) return;
       const next = new Map<string, number>();
-      const local = room.localParticipant.audioLevel ?? 0;
+      const local = smooth(room.localParticipant.identity, room.localParticipant.audioLevel ?? 0);
       next.set(room.localParticipant.identity, local);
       setLocalLevel(isSpeaker && !muted ? Math.round(local * 20) / 20 : 0);
       room.remoteParticipants.forEach((p) => {
         // muted (TrackMuted) => no level, so the speaking glow can't show
-        next.set(p.identity, p.isMicrophoneEnabled ? (p.audioLevel ?? 0) : 0);
+        next.set(p.identity, smooth(p.identity, p.isMicrophoneEnabled ? (p.audioLevel ?? 0) : 0));
       });
       setLevels(next);
     }, 80);
     return () => clearInterval(iv);
   }, [status, isSpeaker, muted]);
+
+  // Returning to foreground (app switch / WebView resume): AudioContext and playback may be suspended.
+  useEffect(() => {
+    if (status !== "connected") return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      const room = roomRef.current;
+      if (!room) return;
+      unlockAudio();
+      void room.startAudio().catch(() => {}).then(() => setNeedsGesture(!room.canPlaybackAudio));
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pageshow", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pageshow", onVis);
+    };
+  }, [status]);
 
   const startAudio = useCallback(async () => {
     unlockAudio();
