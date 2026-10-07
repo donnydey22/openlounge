@@ -49,12 +49,6 @@ const CARDS: {
           <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
         </ul>
         <p className="mt-2">
-          Direct file:{" "}
-          <a className="underline" href="/downloads/openlounge-0.2.5-b14.ipa">
-            openlounge-0.2.5-b14.ipa
-          </a>
-        </p>
-        <p className="mt-2">
           SHA-256: <code className="break-all">942b794b5b3e618d9efdfcf47fd8faa31954624eec6a263bca058b9d312fbe3e</code>
         </p>
       </>
@@ -124,6 +118,14 @@ export function DownloadHub() {
               >
                 {c.button}
               </a>
+              {c.id === "ios" && (
+                <p className="mt-2 text-center text-xs text-zinc-400">
+                  Direct file:{" "}
+                  <a className="underline" href="/downloads/openlounge-0.2.5-b14.ipa" data-testid="download-ipa">
+                    openlounge-0.2.5-b14.ipa
+                  </a>
+                </p>
+              )}
               <details className="mt-3 text-xs text-zinc-500">
                 <summary className="cursor-pointer select-none">Details</summary>
                 <div className="mt-2">{c.details}</div>
