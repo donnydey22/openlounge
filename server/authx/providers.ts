@@ -65,8 +65,18 @@ export const appleConfig = () => {
 };
 
 export const smtpConfigured = () => !!(env("SMTP_HOST") && env("SMTP_FROM"));
-/** Email sign-in needs a way to deliver verification/reset links: SMTP, or (dev only) AUTH_EMAIL_DEV=1 = log links. */
-export const emailEnabled = () => smtpConfigured() || (!isProd() && /^(1|true|yes)$/i.test(env("AUTH_EMAIL_DEV")));
+export const gmailApiConfigured = () =>
+  !!(env("GMAIL_CLIENT_ID") && env("GMAIL_CLIENT_SECRET") && env("GMAIL_REFRESH_TOKEN") && /@/.test(env("GMAIL_SENDER")));
+/** Active mail transport. MAIL_TRANSPORT=gmail_api|smtp picks one explicitly; unset → Gmail API if configured, else SMTP. */
+export function mailTransport(): "gmail_api" | "smtp" | null {
+  const want = env("MAIL_TRANSPORT").toLowerCase();
+  if (want === "gmail_api" || want === "gmail") return gmailApiConfigured() ? "gmail_api" : null;
+  if (want === "smtp") return smtpConfigured() ? "smtp" : null;
+  return gmailApiConfigured() ? "gmail_api" : smtpConfigured() ? "smtp" : null;
+}
+export const mailConfigured = () => mailTransport() !== null;
+/** Email sign-in needs a way to deliver codes/links: Gmail API or SMTP, or (dev only) AUTH_EMAIL_DEV=1 = log them. */
+export const emailEnabled = () => mailConfigured() || (!isProd() && /^(1|true|yes)$/i.test(env("AUTH_EMAIL_DEV")));
 
 export function providerFlags() {
   return { phone: true, email: emailEnabled(), google: !!googleConfig(), apple: !!appleConfig() };
@@ -76,7 +86,7 @@ export function providerFlags() {
 export function logProviderStatus() {
   const f = providerFlags();
   const on = Object.entries(f).filter(([, v]) => v).map(([k]) => k);
-  console.log(`[auth] sign-in methods: ${on.join(", ")}${smtpConfigured() ? "" : f.email ? " (email links are logged — AUTH_EMAIL_DEV)" : ""}`);
+  console.log(`[auth] sign-in methods: ${on.join(", ")}${mailConfigured() ? ` (mail: ${mailTransport()})` : f.email ? " (email links are logged — AUTH_EMAIL_DEV)" : ""}`);
 }
 
 // ---------- public URL / redirect URIs ----------

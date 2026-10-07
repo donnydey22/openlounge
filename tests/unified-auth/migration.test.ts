@@ -47,8 +47,8 @@ after(async () => app?.close());
 
 test("005 applied, phone numbers backfilled as verified phone identities, nothing else touched", async () => {
   const mig = await sql<{ version: string }>("SELECT version FROM schema_migrations ORDER BY version", [], DB);
-  // later migrations (010+, e.g. 011_ugc_safety) may follow; the first nine must be exactly these
-  assert.deepEqual(mig.map((m) => m.version).slice(0, 9), ["001_init.sql", "002_rename_meta.sql", "003_sessions_v2.sql", "004_dm_read_receipts.sql", "005_utc_timestamps.sql", "006_social_links.sql", "007_push_notifications.sql", "008_hardening.sql", "009_unified_auth.sql"]);
+  // later migrations (011_ugc_safety, ...) may follow; the first ten must be exactly these
+  assert.deepEqual(mig.map((m) => m.version).slice(0, 10), ["001_init.sql", "002_rename_meta.sql", "003_sessions_v2.sql", "004_dm_read_receipts.sql", "005_utc_timestamps.sql", "006_social_links.sql", "007_push_notifications.sql", "008_hardening.sql", "009_unified_auth.sql", "010_email_otp.sql"]);
   const ids = await sql("SELECT user_id, provider, provider_subject, verified FROM auth_identities ORDER BY user_id", [], DB);
   assert.deepEqual(ids, [
     { user_id: "u_lee", provider: "phone", provider_subject: "+14155550143", verified: true },

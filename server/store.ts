@@ -41,6 +41,8 @@ import {
   errText,
   readJsonDb,
   MemoryOneTime,
+  MemoryEmailOtp,
+  type EmailOtpBackend,
   type IdentityProvider,
   type IdentityRecord,
   type OneTimeBackend,
@@ -483,6 +485,10 @@ export class Store {
   private memOneTime = new MemoryOneTime();
   get oneTime(): OneTimeBackend {
     return this.backend?.oneTime ?? this.memOneTime;
+  }
+  private memEmailOtp = new MemoryEmailOtp();
+  get emailOtp(): EmailOtpBackend {
+    return this.backend?.emailOtp ?? this.memEmailOtp;
   }
 
   private uniqueUsername(name: string) {

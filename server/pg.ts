@@ -11,8 +11,12 @@ import pg from "pg";
 import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
+<<<<<<< HEAD
 import type { ReportRecord } from "./moderation";
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
+=======
+import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type EmailOtpBackend, type EmailOtpRow, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
+>>>>>>> email-otp
 
 type SessionRow = {
   token_hash: string;
@@ -583,6 +587,35 @@ export class PgPersistence implements Persistence {
     },
   };
 
+  /** hashed 6-digit email codes (migration 010) */
+  emailOtp: EmailOtpBackend = {
+    get: async (key) => {
+      const r = await this.pool.query<OtpDbRow>("SELECT * FROM email_otp_codes WHERE otp_key = $1", [key]);
+      return r.rows[0] ? otpRow(r.rows[0]) : null;
+    },
+    put: async (r) => {
+      if (Math.random() < 0.05) await this.pool.query("DELETE FROM email_otp_codes WHERE expires_at < $1", [Date.now() - 86_400_000]).catch(() => {});
+      await this.pool.query(
+        `INSERT INTO email_otp_codes (otp_key, email, purpose, user_id, code_hash, attempts, created_at, expires_at, used_at)
+         VALUES ($1, $2, $3, $4, $5, 0, $6, $7, NULL)
+         ON CONFLICT (otp_key) DO UPDATE SET email = EXCLUDED.email, purpose = EXCLUDED.purpose, user_id = EXCLUDED.user_id,
+           code_hash = EXCLUDED.code_hash, attempts = 0, created_at = EXCLUDED.created_at, expires_at = EXCLUDED.expires_at, used_at = NULL`,
+        [r.key, r.email, r.purpose, r.userId, r.codeHash, r.createdAt, r.expiresAt],
+      );
+    },
+    attempt: async (key, max, now) => {
+      const r = await this.pool.query<OtpDbRow>(
+        "UPDATE email_otp_codes SET attempts = attempts + 1 WHERE otp_key = $1 AND used_at IS NULL AND expires_at > $2 AND attempts < $3 RETURNING *",
+        [key, now, max],
+      );
+      return r.rows[0] ? otpRow(r.rows[0]) : null;
+    },
+    markUsed: async (key, codeHash, now) => {
+      const r = await this.pool.query("UPDATE email_otp_codes SET used_at = $3 WHERE otp_key = $1 AND code_hash = $2 AND used_at IS NULL", [key, codeHash, now]);
+      return (r.rowCount ?? 0) > 0;
+    },
+  };
+
   /** The key persisted in the DB (created on first boot). Returned even when AUTH_SECRET is set: it stays a verification key. */
   async authSecret() {
     const fresh = randomBytes(32).toString("hex");
@@ -656,3 +689,26 @@ export class PgPersistence implements Persistence {
     await this.pool.end().catch(() => {});
   }
 }
+
+interface OtpDbRow {
+  otp_key: string;
+  email: string;
+  purpose: "signin" | "link";
+  user_id: string | null;
+  code_hash: string;
+  attempts: number;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+}
+const otpRow = (r: OtpDbRow): EmailOtpRow => ({
+  key: r.otp_key,
+  email: r.email,
+  purpose: r.purpose,
+  userId: r.user_id,
+  codeHash: r.code_hash,
+  attempts: Number(r.attempts),
+  createdAt: Number(r.created_at),
+  expiresAt: Number(r.expires_at),
+  usedAt: r.used_at === null ? null : Number(r.used_at),
+});

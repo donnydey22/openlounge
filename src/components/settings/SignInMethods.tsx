@@ -22,7 +22,7 @@ interface Identity {
   createdAt: number;
 }
 
-const NAMES = { phone: "Phone", email: "Email & password", google: "Google", apple: "Apple" } as const;
+const NAMES = { phone: "Phone", email: "Email", google: "Google", apple: "Apple" } as const;
 
 function MethodIcon({ provider }: { provider: Identity["provider"] }) {
   const cls = "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800";
@@ -145,7 +145,7 @@ export function SignInMethods() {
         )}
         {items && flags?.email && !has("email") && (
           <button className={row} onClick={() => setSheet("email")}>
-            <Plus className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Add email & password</span> <ChevronRight className="h-4 w-4 text-zinc-500" />
+            <Plus className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Add email</span> <ChevronRight className="h-4 w-4 text-zinc-500" />
           </button>
         )}
         {items && flags?.apple && showAppleHere() && oauth && !has("apple") && (
@@ -172,8 +172,14 @@ export function SignInMethods() {
           }}
         />
       </Sheet>
-      <Sheet open={sheet === "email"} onClose={() => setSheet(null)} title="Add email & password">
-        <AddEmail />
+      <Sheet open={sheet === "email"} onClose={() => setSheet(null)} title="Add email">
+        <AddEmailCode
+          onDone={() => {
+            setSheet(null);
+            void load();
+            toast("✅ Email added — you can sign in with it now");
+          }}
+        />
       </Sheet>
     </section>
   );
@@ -314,5 +320,84 @@ function AddEmail() {
         {busy && <Loader2 className="h-4 w-4 animate-spin" />} Send confirmation link
       </button>
     </form>
+  );
+}
+
+/** Settings → Add email: 6-digit code to that inbox, then it's a verified sign-in method on THIS account. */
+function AddEmailCode({ onDone }: { onDone: () => void }) {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resendIn, setResendIn] = useState(0);
+  const [usePassword, setUsePassword] = useState(false);
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const input = "w-full rounded-2xl border border-white/10 bg-zinc-900 px-4 py-3.5 text-lg outline-none placeholder:text-zinc-600 focus:border-emerald-500/60";
+  if (usePassword) return <AddEmail />;
+
+  async function send() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await authPost<{ resendIn: number }>("/auth/email/code/link/start", { email: email.trim() }, { auth: true });
+      setSent(true);
+      setCode("");
+      setResendIn(r.resendIn ?? 60);
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function verify() {
+    setBusy(true);
+    setError(null);
+    try {
+      await authPost("/auth/email/code/link/verify", { email: email.trim(), code }, { auth: true });
+      onDone();
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+      setCode("");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div>
+      {!sent ? (
+        <>
+          <p className="mb-4 text-sm text-zinc-400">We&apos;ll email you a 6-digit code. Afterwards you can sign in with this email too — it&apos;s still this same account.</p>
+          <input type="email" inputMode="email" autoComplete="email" autoCapitalize="none" aria-label="Email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={input} />
+        </>
+      ) : (
+        <>
+          <p className="mb-4 text-sm text-zinc-400">Enter the code we sent to <span className="font-semibold text-zinc-200">{email.trim()}</span>.</p>
+          <input inputMode="numeric" autoComplete="one-time-code" aria-label="Verification code" placeholder="123456" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} className={input + " text-center font-mono tracking-[0.4em]"} />
+          <div className="mt-3 text-center text-sm text-zinc-500">
+            {resendIn > 0 ? <span>Resend in {resendIn}s</span> : <button onClick={send} className="font-semibold text-sky-400 hover:underline">Resend code</button>}
+          </div>
+        </>
+      )}
+      {error && <p className="mt-3 text-center text-sm text-red-400">{error}</p>}
+      <button
+        disabled={busy || (!sent ? !emailOk : code.length !== 6)}
+        onClick={() => (sent ? verify() : send())}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-emerald-500 py-3.5 font-semibold text-on-accent hover:bg-emerald-400 disabled:opacity-40"
+      >
+        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+        {sent ? "Verify & add" : "Send code"}
+      </button>
+      {!sent && (
+        <button type="button" onClick={() => setUsePassword(true)} className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
+          Add email & password instead →
+        </button>
+      )}
+    </div>
   );
 }
