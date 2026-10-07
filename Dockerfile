@@ -37,7 +37,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Starts as root only long enough to chown the (root-mounted) volume at $DATA_DIR, then drops to `node`.
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown -R node:node /data /app
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 # Same as `npm start` (NODE_ENV=production is set above) without npm in the signal path
 CMD ["/app/node_modules/.bin/tsx", "server/index.ts"]

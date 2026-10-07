@@ -11,7 +11,11 @@
     "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
     "db:import": "tsx scripts/import-db-json.ts",
     "smoke": "node scripts/smoke-ws.mjs",
-    "test:time": "bash scripts/test-time.sh"
+    "test:time": "bash scripts/test-time.sh",
+    "test:hardening:unit": "node --import tsx --test tests/hardening/unit.test.ts",
+    "test:hardening": "node --import tsx --test --test-timeout=120000 tests/hardening/unit.test.ts tests/hardening/integration.test.ts",
+    "loadtest:ws": "node --import tsx scripts/loadtest-ws.ts",
+    "db:backup": "bash scripts/pg-backup.sh"
   },
   "engines": {
     "node": ">=20.9"
