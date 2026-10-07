@@ -15,6 +15,7 @@ import { InterestChips } from "@/components/profile/InterestChips";
 import { SocialLinksForm } from "@/components/profile/SocialLinksForm";
 import { SignInMethods } from "@/components/settings/SignInMethods";
 import { DeleteAccount } from "@/components/settings/DeleteAccount";
+import { AppLockToggle } from "@/components/settings/AppLockToggle";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
@@ -58,6 +59,7 @@ export default function SettingsPage() {
             </span>
           </button>
           <NotificationToggle />
+          <AppLockToggle />
         </section>
 
         <section className="mb-8">
