@@ -10,8 +10,10 @@ export const PUBLIC_AUTH_PAGES = ["/forgot-password", "/reset-password", "/verif
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { status, onboarding } = useApp();
-  const pathname = usePathname();
-  if (pathname && PUBLIC_AUTH_PAGES.includes(pathname.replace(/\/+$/, ""))) return <>{children}</>;
+  const pathname = usePathname() ?? "";
+  if (PUBLIC_AUTH_PAGES.includes(pathname.replace(/\/+$/, ""))) return <>{children}</>;
+  // public pages: shared profile links (/@handle → /u/handle) and privacy notes
+  if (/^\/(u\/|@|%40|privacy)/.test(pathname)) return <>{children}</>;
   // AuthFlow stays mounted from "signedOut" straight into post-signup onboarding steps
   if (status === "signedOut" || (status === "ready" && onboarding)) return <AuthFlow />;
   if (status !== "ready") {

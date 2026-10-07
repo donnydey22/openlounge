@@ -1,6 +1,7 @@
 "use client";
 
 import { SocialLinkChips } from "@/components/profile/SocialLinks";
+import { ShareProfileButton } from "@/components/ShareProfileButton";
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -94,6 +95,7 @@ export default function ProfilePage() {
         <div className="flex items-start justify-between gap-4">
           <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="profile" presence={u.isBot ? null : presence.dot} />
           <div className="flex flex-wrap justify-end gap-2 pt-1">
+            {!u.isBot && <ShareProfileButton iconOnly username={u.username} name={u.name} isMe={isMe} onCopied={() => toast("Profile link copied")} />}
             {isMe ? (
               <>
                 <button

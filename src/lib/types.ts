@@ -234,3 +234,17 @@ export interface RoomPresenceEvent {
   photoUrl: string | null;
   at: number;
 }
+
+/** Per-user push notification settings (server: server/push/prefs.ts) */
+export interface NotifPrefsClient {
+  dm: boolean;
+  roomInvite: boolean;
+  followedRoom: boolean;
+  trendingRoom: boolean;
+  scheduledRoom: boolean;
+  recentRoom: boolean;
+  newFollower: boolean;
+  contactJoined: boolean;
+  contactsOptIn: boolean;
+  quietHours: { start: string; end: string; tz: string } | null;
+}

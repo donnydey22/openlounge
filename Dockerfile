@@ -33,6 +33,7 @@ COPY --from=build /app/server ./server
 COPY --from=build /app/src/lib ./src/lib
 COPY --from=build /app/next.config.ts /app/tsconfig.json ./
 COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/docs ./docs
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Starts as root only long enough to chown the (root-mounted) volume at $DATA_DIR, then drops to `node`.
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown -R node:node /data /app

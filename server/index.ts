@@ -9,6 +9,8 @@ import fs from "node:fs";
 import { originAllowed } from "./auth";
 import { api, isApiRequest, json } from "./http";
 import { logProviderStatus } from "./authx/providers";
+import { initPush } from "./push";
+import { demoOtpEnabled, firebaseConfigured } from "./firebase";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
@@ -18,6 +20,8 @@ async function main() {
   // Durable storage first (Postgres via DATABASE_URL, else db.json) — fail fast before serving anything
   await store.init();
   logProviderStatus();
+  initPush();
+  console.log(`[auth] Firebase phone auth: ${firebaseConfigured() ? "on" : "off (FIREBASE_SERVICE_ACCOUNT_JSON not set)"}; demo OTP: ${demoOtpEnabled() ? "on" : "off"}`);
 
   const app = next({ dev, hostname: "localhost", port });
   const handle = app.getRequestHandler();
