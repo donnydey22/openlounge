@@ -1,0 +1,188 @@
+name: iOS ad-hoc build
+
+# Manual only: macOS runner minutes are billed at 10x on private repos.
+on:
+  # TEMPORARY: workflow_dispatch only works once this file is on the default branch (main).
+  # Until then, pushes to ios-build that touch iOS files run it. Remove before merging.
+  push:
+    branches: [ios-build]
+    paths: ["ios/**", ".github/workflows/ios-adhoc.yml"]
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: "Extra tester devices (signed mode), e.g. '00008110-000A1B2C3D4E801E Donny iPhone; 00008030-... Alice'. Merged with ios/devices.txt."
+        required: false
+        default: ""
+      upload_to_diawi:
+        description: "Upload the signed IPA to Diawi (needs DIAWI_TOKEN secret)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ios-adhoc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: ios/OpenLounge.xcodeproj
+  SCHEME: OpenLounge
+  FASTLANE_SKIP_UPDATE_CHECK: "1"
+  FASTLANE_HIDE_CHANGELOG: "1"
+  FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "120"
+  FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "4"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Detect signing mode
+        id: mode
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DIAWI_TOKEN: ${{ secrets.DIAWI_TOKEN }}
+        run: |
+          missing=()
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets found -> signed ad-hoc build"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Missing secrets (${missing[*]}) -> UNSIGNED build only (compile check, not installable)"
+          fi
+          [ -n "$DIAWI_TOKEN" ] && echo "diawi=true" >> "$GITHUB_OUTPUT" || echo "diawi=false" >> "$GITHUB_OUTPUT"
+          xcodebuild -version
+
+      # ---------------------------------------------------------------- unsigned (no Apple creds)
+      - name: Unsigned build (generic iOS device)
+        if: steps.mode.outputs.signed != 'true'
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ios/build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | if command -v xcbeautify >/dev/null; then xcbeautify --renderer github-actions; else cat; fi
+
+      - name: Verify unsigned app bundle
+        if: steps.mode.outputs.signed != 'true'
+        run: |
+          APP=ios/build/DerivedData/Build/Products/Release-iphoneos/OpenLounge.app
+          test -d "$APP"
+          plist="$APP/Info.plist"
+          get() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist"; }
+          echo "Bundle ID:     $(get CFBundleIdentifier)"
+          echo "Display name:  $(get CFBundleDisplayName)"
+          echo "Version:       $(get CFBundleShortVersionString) ($(get CFBundleVersion))"
+          echo "Min iOS:       $(get MinimumOSVersion)"
+          echo "Start URL:     $(get OpenLoungeStartURL)"
+          echo "Mic usage:     $(get NSMicrophoneUsageDescription)"
+          echo "Background:    $(get UIBackgroundModes:0)"
+          echo "Icon:          $(get CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName)"
+          [ "$(get CFBundleIdentifier)" = "com.donnydey.openlounge" ]
+          [ "$(get CFBundleDisplayName)" = "Open Lounge" ]
+          [ "$(get CFBundleShortVersionString)" = "0.2.2" ]
+          [ "$(get CFBundleVersion)" = "5" ]
+          [ "$(get MinimumOSVersion)" = "15.0" ]
+          [ "$(get OpenLoungeStartURL)" = "https://openlounge-production.up.railway.app" ]
+          [ "$(get UIBackgroundModes:0)" = "audio" ]
+          test -f "$APP/Assets.car"
+          lipo -info "$APP/OpenLounge"
+          mkdir -p ios/build/unsigned/Payload
+          cp -R "$APP" ios/build/unsigned/Payload/
+          (cd ios/build/unsigned && zip -qry OpenLounge-unsigned.ipa Payload)
+          ls -la ios/build/unsigned/OpenLounge-unsigned.ipa
+
+      - name: Upload unsigned IPA (not installable)
+        if: steps.mode.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenLounge-unsigned
+          path: ios/build/unsigned/OpenLounge-unsigned.ipa
+          retention-days: 3
+
+      # ---------------------------------------------------------------- signed ad-hoc
+      - name: Signed ad-hoc build (fastlane + App Store Connect API key)
+        if: steps.mode.outputs.signed == 'true'
+        working-directory: ios
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_P12_PASSWORD: ${{ secrets.DIST_CERT_P12_PASSWORD }}
+          EXTRA_DEVICES: ${{ inputs.devices }}
+          IOS_DIR: ${{ github.workspace }}/ios
+          OUTPUT_DIR: ${{ github.workspace }}/ios/build/adhoc
+        run: |
+          if ! command -v fastlane >/dev/null; then brew install fastlane; fi
+          fastlane --version | tail -1
+          fastlane ios adhoc
+
+      - name: Upload signed IPA
+        if: steps.mode.outputs.signed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenLounge-adhoc-ipa
+          path: ios/build/adhoc/OpenLounge.ipa
+          retention-days: 14
+
+      - name: Upload newly created distribution certificate (encrypted .p12)
+        if: steps.mode.outputs.signed == 'true' && hashFiles('ios/build/new-dist-cert/dist-cert.p12') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-dist-cert
+          path: ios/build/new-dist-cert/dist-cert.p12
+          retention-days: 1
+
+      - name: Upload to Diawi
+        if: steps.mode.outputs.signed == 'true' && steps.mode.outputs.diawi == 'true' && inputs.upload_to_diawi
+        continue-on-error: true  # the IPA artifact above is the source of truth
+        env:
+          DIAWI_TOKEN: ${{ secrets.DIAWI_TOKEN }}
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS --http1.1 --fail-with-body https://upload.diawi.com/ \
+            -F "token=$DIAWI_TOKEN" \
+            -F "file=@ios/build/adhoc/OpenLounge.ipa" \
+            -F "find_by_udid=0" -F "wall_of_apps=0" \
+            -F "comment=Open Lounge ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER})")
+          job=$(echo "$resp" | jq -r '.job // empty')
+          [ -n "$job" ] || { echo "Diawi upload failed: $resp"; exit 1; }
+          for i in $(seq 1 40); do
+            sleep 3
+            st=$(curl -sS "https://upload.diawi.com/status?token=${DIAWI_TOKEN}&job=${job}")
+            code=$(echo "$st" | jq -r '.status')
+            if [ "$code" = "2000" ]; then
+              link=$(echo "$st" | jq -r '.link')
+              echo "::notice title=Diawi install link::$link"
+              echo "### Diawi install link: $link" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            elif [ "$code" != "2001" ]; then
+              echo "Diawi processing failed: $(echo "$st" | jq -r '.message')"; exit 1
+            fi
+          done
+          echo "Timed out waiting for Diawi"; exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Open Lounge iOS"
+            echo "- Mode: $([ '${{ steps.mode.outputs.signed }}' = 'true' ] && echo 'signed ad-hoc' || echo 'UNSIGNED compile check (add ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8, APPLE_TEAM_ID secrets for an installable IPA)')"
+            echo "- $(xcodebuild -version | tr '\n' ' ')"
+          } >> "$GITHUB_STEP_SUMMARY"
