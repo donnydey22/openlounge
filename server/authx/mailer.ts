@@ -44,6 +44,8 @@ export interface Mail {
   html: string;
   /** the action link (logged in dev when SMTP is off) */
   link?: string;
+  /** a 6-digit sign-in code (logged in dev when SMTP is off; never in production) */
+  code?: string;
 }
 
 /** Sent mails are recorded here when NODE_ENV=test (assertions in tests). */
@@ -53,7 +55,7 @@ export async function sendMail(mail: Mail): Promise<boolean> {
   if (process.env.NODE_ENV === "test") outbox.push(mail);
   const t = getTransport();
   if (!t) {
-    if (process.env.NODE_ENV !== "production") console.log(`[mail:dev] SMTP not configured — to ${mail.to}: "${mail.subject}"${mail.link ? `\n[mail:dev] link: ${mail.link}` : ""}`);
+    if (process.env.NODE_ENV !== "production") console.log(`[mail:dev] SMTP not configured — to ${mail.to}: "${mail.subject}"${mail.link ? `\n[mail:dev] link: ${mail.link}` : ""}${mail.code ? `\n[mail:dev] code: ${mail.code}` : ""}`);
     else console.warn(`[mail] SMTP not configured — dropped "${mail.subject}" to ${maskEmail(mail.to)}`);
     return false;
   }
@@ -71,7 +73,7 @@ export async function sendMail(mail: Mail): Promise<boolean> {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-function layout(o: { title: string; intro: string; button?: { label: string; url: string }; outro: string }) {
+function layout(o: { title: string; intro: string; code?: string; button?: { label: string; url: string }; outro: string }) {
   const btn = o.button
     ? `<tr><td align="center" style="padding:8px 0 24px"><a href="${esc(o.button.url)}" style="display:inline-block;background:#10b981;color:#06281d;font-weight:600;font-size:16px;text-decoration:none;padding:14px 28px;border-radius:999px">${esc(o.button.label)}</a></td></tr>
 <tr><td style="font-size:13px;color:#71717a;padding-bottom:20px;word-break:break-all">Or paste this link into your browser:<br><a href="${esc(o.button.url)}" style="color:#0ea5e9">${esc(o.button.url)}</a></td></tr>`
@@ -84,12 +86,13 @@ function layout(o: { title: string; intro: string; button?: { label: string; url
 <tr><td align="center" style="font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#10b981;padding-bottom:16px">Open Lounge</td></tr>
 <tr><td style="font-size:22px;font-weight:700;padding-bottom:12px">${esc(o.title)}</td></tr>
 <tr><td style="font-size:15px;line-height:1.55;color:#3f3f46;padding-bottom:24px">${o.intro}</td></tr>
+${o.code ? `<tr><td align="center" style="padding:0 0 24px"><span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:.3em;background:#f4f4f5;border-radius:16px;padding:14px 22px;color:#18181b">${esc(o.code)}</span></td></tr>` : ""}
 ${btn}
 <tr><td style="font-size:13px;line-height:1.5;color:#71717a">${o.outro}</td></tr>
 </table>
 <p style="font-size:12px;color:#a1a1aa;margin:16px 0 0">Open Lounge · live audio rooms</p>
 </td></tr></table></body></html>`;
-  const text = [`Open Lounge — ${o.title}`, "", o.intro.replace(/<[^>]+>/g, ""), "", o.button ? `${o.button.label}: ${o.button.url}` : "", "", o.outro.replace(/<[^>]+>/g, "")]
+  const text = [`Open Lounge — ${o.title}`, "", o.intro.replace(/<[^>]+>/g, ""), "", o.code ? `Your code: ${o.code}` : "", o.button ? `${o.button.label}: ${o.button.url}` : "", "", o.outro.replace(/<[^>]+>/g, "")]
     .filter((l, i, a) => l || a[i - 1])
     .join("\n");
   return { html, text };
@@ -127,4 +130,16 @@ export function resetPasswordMail(to: string, url: string, hasPassword: boolean)
     outro: "This link expires in 30 minutes and works once. Changing your password signs you out on every device. If you didn't ask for this, ignore this email.",
   });
   return { to, subject: hasPassword ? "Reset your Open Lounge password" : "Set your Open Lounge password", html, text, link: url };
+}
+
+export function emailCodeMail(to: string, code: string, linking: boolean): Mail {
+  const { html, text } = layout({
+    title: linking ? "Confirm your email" : "Your sign-in code",
+    intro: linking
+      ? "Enter this code in Open Lounge Settings to add this email to your account."
+      : "Enter this code in Open Lounge to sign in with this email.",
+    code,
+    outro: "The code expires in 10 minutes. Never share it — Open Lounge will never ask you for it. If you didn't ask for this, ignore this email.",
+  });
+  return { to, subject: linking ? "Confirm your email for Open Lounge" : "Your Open Lounge sign-in code", html, text, code };
 }

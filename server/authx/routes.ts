@@ -19,6 +19,10 @@
 //   POST /auth/identities/remove {id}    (Bearer) detach one (never the last)
 //   POST /auth/link/start {provider,app?}(Bearer) → {url} to start Google/Apple in "link to my account" mode
 //   POST /auth/email/link {email,password}(Bearer) add email+password (after clicking the emailed link)
+//   POST /auth/email/code/start {email}          6-digit code by email (always {ok:true,cooldown}; 429 while cooling down)
+//   POST /auth/email/code/verify {email,code}    → session | signup ticket + linkCode (same rules as a verified email)
+//   POST /auth/email/code/link/start {email}  (Bearer) code to add/verify an email on MY account (Settings)
+//   POST /auth/email/code/link/verify {email,code} (Bearer) → email identity (verified) on my account
 //   POST /auth/link/phone {linkCode,idToken}     "Already have an account?": Firebase phone proof → attach the pending
 //                                                Google/Apple/email identity to that phone account → session
 //
@@ -27,7 +31,7 @@
 // person proves a phone number that already has an account. Never links by name or unverified data.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { store, normalizeEmail } from "../store";
 import { deriveKey, deviceLabel, sha256 } from "../auth";
 import type { IdentityProvider } from "../persistence";
@@ -40,7 +44,7 @@ import { dropTicket, issueTicket } from "./signup";
 import { verifyPhoneIdToken } from "../firebase";
 import { normalizePhone } from "../otp";
 import { bg, push } from "../push";
-import { alreadyRegisteredMail, resetPasswordMail, sendMail, verifyEmailMail } from "./mailer";
+import { alreadyRegisteredMail, emailCodeMail, resetPasswordMail, sendMail, verifyEmailMail } from "./mailer";
 
 type OAuthProvider = "google" | "apple";
 const isProd = () => process.env.NODE_ENV === "production";
@@ -53,6 +57,9 @@ const EXCHANGE_TTL_MS = 5 * 60_000;
 const INTENT_TTL_MS = 10 * 60_000;
 const PENDING_LINK_TTL_MS = 15 * 60_000;
 const STATE_TTL_MS = 10 * 60_000;
+export const EMAIL_CODE_TTL_MS = 10 * 60_000;
+export const EMAIL_CODE_MAX_ATTEMPTS = 5;
+export const EMAIL_CODE_COOLDOWN_MS = 60_000;
 
 // ---------- small HTTP helpers ----------
 
@@ -493,11 +500,101 @@ async function resetPassword(req: IncomingMessage, res: ServerResponse, body: Re
   json(res, 200, { ok: true, email: row.email });
 }
 
+// ---------- email: 6-digit code (sign in, or add an email from Settings) ----------
+
+type CodePurpose = "signin" | "link";
+const otpKey = (purpose: CodePurpose, userId: string | null, email: string) => `${purpose}:${userId ?? ""}:${email}`;
+/** 6 digits are guessable offline: keyed hash, bound to the row key */
+const otpHash = (key: string, code: string) => createHmac("sha256", deriveKey("email-otp")).update(`${key}\n${code}`).digest("hex");
+const BAD_CODE = "That code isn't right. Check the email and try again.";
+const DEAD_CODE = "That code has expired. Request a new one.";
+
+async function emailCodeStart(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>, linkUserId: string | null) {
+  if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
+  const email = normalizeEmail(body.email);
+  if (!email) return json(res, 400, { ok: false, error: "Enter a valid email address." });
+  if (linkUserId) {
+    const existing = store.findIdentity("email", email);
+    if (existing?.userId === linkUserId && existing.verified) return json(res, 400, { ok: false, error: "That email is already on your account." });
+  }
+  const purpose: CodePurpose = linkUserId ? "link" : "signin";
+  const key = otpKey(purpose, linkUserId, email);
+  const now = Date.now();
+  const prev = await store.emailOtp.get(key);
+  if (prev && prev.usedAt === null && now - prev.createdAt < EMAIL_CODE_COOLDOWN_MS) {
+    const wait = Math.ceil((EMAIL_CODE_COOLDOWN_MS - (now - prev.createdAt)) / 1000);
+    return json(res, 429, { ok: false, error: `Please wait ${wait}s before requesting another code.`, resendIn: wait });
+  }
+  if (!allow(`emailcode:ip:${clientIp(req)}`, LIMITS.emailCodeIp) || !allow(`emailcode:email:${email}`, LIMITS.emailCodeEmail)) return tooMany(res);
+  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  if (linkUserId) await store.flush().catch(() => {}); // the row references users(id)
+  await store.emailOtp.put({ key, email, purpose, userId: linkUserId, codeHash: otpHash(key, code), createdAt: now, expiresAt: now + EMAIL_CODE_TTL_MS });
+  await sendMail(emailCodeMail(email, code, !!linkUserId));
+  json(res, 200, { ok: true, sent: true, email, resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
+}
+
+/** Checks the code (one attempt). ok → the code is spent. */
+async function checkEmailCode(req: IncomingMessage, body: Record<string, unknown>, linkUserId: string | null): Promise<{ ok: true; email: string } | { ok: false; status: number; error: string; attemptsLeft?: number }> {
+  if (!allow(`emailverify:ip:${clientIp(req)}`, LIMITS.emailVerifyIp)) return { ok: false, status: 429, error: "Too many attempts. Please wait a few minutes and try again." };
+  const email = normalizeEmail(body.email);
+  const code = str(body.code, 20).replace(/\s/g, "");
+  if (!email) return { ok: false, status: 400, error: "Enter a valid email address." };
+  if (!/^\d{6}$/.test(code)) return { ok: false, status: 400, error: "Enter the 6-digit code." };
+  const key = otpKey(linkUserId ? "link" : "signin", linkUserId, email);
+  const now = Date.now();
+  const row = await store.emailOtp.attempt(key, EMAIL_CODE_MAX_ATTEMPTS, now);
+  if (!row) {
+    const cur = await store.emailOtp.get(key);
+    if (cur && cur.usedAt === null && cur.expiresAt > now && cur.attempts >= EMAIL_CODE_MAX_ATTEMPTS)
+      return { ok: false, status: 429, error: "Too many wrong codes. Request a new one.", attemptsLeft: 0 };
+    return { ok: false, status: 400, error: DEAD_CODE };
+  }
+  const hash = otpHash(key, code);
+  if (!safeEqual(hash, row.codeHash)) {
+    const left = EMAIL_CODE_MAX_ATTEMPTS - row.attempts;
+    return left > 0 ? { ok: false, status: 400, error: BAD_CODE, attemptsLeft: left } : { ok: false, status: 429, error: "Too many wrong codes. Request a new one.", attemptsLeft: 0 };
+  }
+  if (!(await store.emailOtp.markUsed(key, hash, now))) return { ok: false, status: 400, error: DEAD_CODE };
+  return { ok: true, email };
+}
+
+async function emailCodeVerify(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
+  const c = await checkEmailCode(req, body, null);
+  if (!c.ok) return json(res, c.status, { ok: false, error: c.error, ...(c.attemptsLeft !== undefined ? { attemptsLeft: c.attemptsLeft } : {}) });
+  // the code proved the inbox → a verified email; same linking rules as Google/Apple and the email link
+  const r = resolveSignIn(store, { provider: "email", subject: c.email, email: c.email, emailVerified: true });
+  if (r.kind === "existing") {
+    await store.flush().catch(() => {});
+    return json(res, 200, { ...sessionBody(r.userId, req, body.device), provider: "email" });
+  }
+  const choice = await newAccountChoice(r.identity);
+  json(res, 200, { ok: true, status: "new", ...choice, provider: "email", profile: { firstName: "", lastName: "", email: c.email } });
+}
+
+async function emailCodeLinkVerify(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>, userId: string) {
+  if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
+  const c = await checkEmailCode(req, body, userId);
+  if (!c.ok) return json(res, c.status, { ok: false, error: c.error, ...(c.attemptsLeft !== undefined ? { attemptsLeft: c.attemptsLeft } : {}) });
+  const ext: ExternalIdentity = { provider: "email", subject: c.email, email: c.email, emailVerified: true };
+  let r: { ok: true } | { ok: false; code: string; error: string } = linkToUser(store, userId, ext);
+  if (r.ok) store.addIdentity(userId, { provider: "email", subject: c.email, email: c.email, verified: true }); // (re)mark verified
+  // taken: a signed-in phone account may absorb an EMPTY duplicate that only had this email (same rule as Google/Apple)
+  if (!r.ok && r.code === "taken" && store.identitiesOf(userId).some((i) => i.provider === "phone" && i.verified)) {
+    const m = linkToPhoneAccount(store, userId, ext);
+    if (m.ok && m.removedDuplicate) await cleanupDuplicate(m.removedDuplicate);
+    r = m;
+  }
+  if (!r.ok) return json(res, 409, { ok: false, error: r.code === "taken" ? "That email is already on another Open Lounge account." : r.error });
+  await store.flush().catch(() => {});
+  json(res, 200, { ok: true, status: "linked", provider: "email", email: c.email, identities: describeIdentities(store, userId) });
+}
+
 // ---------- router ----------
 
 /** Paths handled here (both /auth/* and /api/auth/*). */
 export const UNIFIED_AUTH_PATH =
-  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link)|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
+  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link|code\/(?:start|verify|link\/(?:start|verify)))|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
 
 /** Top-level browser navigations (redirect responses; not subject to the CORS check — Apple posts from appleid.apple.com). */
 export function isNavigationRoute(path: string) {
@@ -563,6 +660,17 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
       const userId = await authed(req);
       if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
       return await emailSignup(req, res, body, userId), true;
+    }
+    case "/auth/email/code/start":
+      return await emailCodeStart(req, res, body, null), true;
+    case "/auth/email/code/verify":
+      return await emailCodeVerify(req, res, body), true;
+    case "/auth/email/code/link/start":
+    case "/auth/email/code/link/verify": {
+      const userId = await authed(req);
+      if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
+      if (route.endsWith("/start")) return await emailCodeStart(req, res, body, userId), true;
+      return await emailCodeLinkVerify(req, res, body, userId), true;
     }
     case "/auth/link/phone":
       return await linkPhone(req, res, body), true;

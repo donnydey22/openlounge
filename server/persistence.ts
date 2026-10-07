@@ -110,6 +110,53 @@ export interface OneTimeBackend {
   supersedeResets(userId: string, now: number): Promise<void>;
 }
 
+export interface EmailOtpRow {
+  key: string;
+  email: string;
+  purpose: "signin" | "link";
+  userId: string | null;
+  codeHash: string;
+  attempts: number;
+  createdAt: number;
+  expiresAt: number;
+  usedAt: number | null;
+}
+
+/** Hashed 6-digit email codes (migration 010). */
+export interface EmailOtpBackend {
+  get(key: string): Promise<EmailOtpRow | null>;
+  /** insert or replace (a resend): attempts back to 0 */
+  put(row: Omit<EmailOtpRow, "attempts" | "usedAt">): Promise<void>;
+  /** atomically count one attempt on a live code (unused, unexpired, attempts < max); null if none qualifies */
+  attempt(key: string, max: number, now: number): Promise<EmailOtpRow | null>;
+  /** single use: true only for the caller that marked it */
+  markUsed(key: string, codeHash: string, now: number): Promise<boolean>;
+}
+
+export class MemoryEmailOtp implements EmailOtpBackend {
+  private rows = new Map<string, EmailOtpRow>();
+  async get(key: string) {
+    const r = this.rows.get(key);
+    return r ? { ...r } : null;
+  }
+  async put(row: Omit<EmailOtpRow, "attempts" | "usedAt">) {
+    for (const [k, v] of this.rows) if (v.expiresAt < row.createdAt - 86_400_000) this.rows.delete(k);
+    this.rows.set(row.key, { ...row, attempts: 0, usedAt: null });
+  }
+  async attempt(key: string, max: number, now: number) {
+    const r = this.rows.get(key);
+    if (!r || r.usedAt !== null || r.expiresAt <= now || r.attempts >= max) return null;
+    r.attempts++;
+    return { ...r };
+  }
+  async markUsed(key: string, codeHash: string, now: number) {
+    const r = this.rows.get(key);
+    if (!r || r.usedAt !== null || r.codeHash !== codeHash) return false;
+    r.usedAt = now;
+    return true;
+  }
+}
+
 /** In-memory OneTimeBackend (JSON backend / tests without Postgres). */
 export class MemoryOneTime implements OneTimeBackend {
   private rows = new Map<string, { purpose: string; userId?: string; email?: string; payload?: unknown; expiresAt: number; usedAt: number | null }>();
@@ -157,6 +204,8 @@ export interface Persistence {
    * so a token works exactly once even across instances. JSON backend: kept in memory (dev only).
    */
   oneTime?: OneTimeBackend;
+  /** hashed 6-digit email codes (Postgres: email_otp_codes; JSON backend: in memory) */
+  emailOtp?: EmailOtpBackend;
   /** readiness probe (Postgres only) */
   ping?(timeoutMs?: number): Promise<{ ok: boolean; ms: number; error?: string }>;
   /** record that a db.json import finished (Postgres only) */
@@ -184,6 +233,7 @@ export function readJsonDb(file: string): PersistedDb | null {
 export class JsonPersistence implements Persistence {
   kind = "json" as const;
   oneTime = new MemoryOneTime();
+  emailOtp = new MemoryEmailOtp();
   constructor(readonly where: string = DATA_FILE) {}
 
   async load(): Promise<LoadResult> {

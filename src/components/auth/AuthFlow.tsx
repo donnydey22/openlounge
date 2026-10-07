@@ -16,7 +16,7 @@ import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
-import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
+import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult, type SignInResult } from "@/lib/authApi";
 import type { ConfirmationResult } from "firebase/auth";
 
 /** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
@@ -27,7 +27,7 @@ function initialEntry(): { step: Step; pending: PendingSignup | null } {
   return { step: new URLSearchParams(location.search).get("signin") === "email" ? "email" : "welcome", pending: null };
 }
 
-type Step = "linkChoice" | "welcome" | "phone" | "code" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
+type Step = "linkChoice" | "welcome" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
 export function AuthFlow() {
   const { request, completeLogin, finishOnboarding, onboarding, follow, updateMe, connected, toast } = useApp();
@@ -162,6 +162,45 @@ export function AuthFlow() {
       }
     } catch (e) {
       setError((e as Error).message);
+      setCode("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendEmailCode() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await authPost<{ email: string; resendIn: number }>("/auth/email/code/start", { email: email.trim() });
+      setResendIn(r.resendIn ?? 60);
+      setCode("");
+      go("emailOtp");
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyEmailCode(value: string) {
+    if (value.length !== 6 || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authPost<SignInResult>("/auth/email/code/verify", { email: email.trim(), code: value });
+      if (res.status === "existing") {
+        completeLogin(res.token, res, { resumeSocket: true });
+        toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
+      } else if (res.status === "new") {
+        setMethod("email");
+        setTicket(res.ticket);
+        setLinkCode(res.linkCode ?? "");
+        go(res.linkCode ? "linkChoice" : "name");
+      } else throw new AuthFormError("Something went wrong. Please try again.");
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
       setCode("");
     } finally {
       setBusy(false);
@@ -338,7 +377,7 @@ export function AuthFlow() {
             </IconSlot>
             Continue with phone
           </button>
-          <ProviderButtons onEmail={() => go("email")} />
+          <ProviderButtons onEmail={() => go("emailCode")} />
           <button
             onClick={() => {
               setMode("signin");
@@ -402,7 +441,7 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
               Next <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
-            {!linking && <ProviderButtons onEmail={() => go("email")} />}
+            {!linking && <ProviderButtons onEmail={() => go("emailCode")} />}
             {linking ? null : mode !== "signin" ? (
               <button type="button" onClick={() => setMode("signin")} className="auth-alt-link text-sky-400 hover:underline">
                 Already have an account? Sign in →
@@ -414,6 +453,67 @@ export function AuthFlow() {
             )}
           </Footer>
         </form>
+      </Shell>
+    );
+  }
+
+  if (step === "emailCode") {
+    return (
+      <Shell stepKey={step} onBack={() => go("welcome")}>
+        <Title sub="We'll email you a 6-digit code. New here? We'll set up your account.">What&apos;s your email?</Title>
+        <form
+          className="contents"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (emailOk) sendEmailCode();
+          }}
+        >
+          <div className="mt-8">
+            <TextInput autoFocus type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} aria-label="Email" placeholder="you@example.com" value={email} onChange={setEmail} maxLength={254} />
+          </div>
+          <ErrorText>{error}</ErrorText>
+          <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">By continuing, you agree to our Terms of Service and Privacy Policy.</p>
+          <Footer>
+            <PrimaryButton type="submit" disabled={!emailOk} busy={busy}>
+              Send code <ArrowRight className="h-4 w-4" />
+            </PrimaryButton>
+            <button type="button" onClick={() => go("email")} className="auth-alt-link text-sky-400 hover:underline">
+              Use a password instead →
+            </button>
+          </Footer>
+        </form>
+      </Shell>
+    );
+  }
+
+  if (step === "emailOtp") {
+    return (
+      <Shell stepKey={step} onBack={() => go("emailCode")}>
+        <Title sub={`Sent to ${email.trim()}`}>Enter the code we just emailed you</Title>
+        <CodeInput
+          value={code}
+          disabled={busy}
+          onChange={(v) => {
+            setCode(v);
+            if (v.length === 6) verifyEmailCode(v);
+          }}
+        />
+        <ErrorText>{error}</ErrorText>
+        <div className="mt-6 text-center text-sm text-zinc-500">
+          Didn&apos;t get it? Check spam, or{" "}
+          {resendIn > 0 ? (
+            <span>resend in {resendIn}s</span>
+          ) : (
+            <button onClick={sendEmailCode} className="font-semibold text-sky-400 hover:underline">
+              tap to resend
+            </button>
+          )}
+        </div>
+        <Footer>
+          <PrimaryButton onClick={() => verifyEmailCode(code)} disabled={code.length !== 6} busy={busy}>
+            Verify <ArrowRight className="h-4 w-4" />
+          </PrimaryButton>
+        </Footer>
       </Shell>
     );
   }
@@ -445,6 +545,9 @@ export function AuthFlow() {
             </PrimaryButton>
             <button type="button" onClick={() => go("emailSignup")} className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
               New here? Create an account with email →
+            </button>
+            <button type="button" onClick={() => go("emailCode")} className="mt-3 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
+              Email me a sign-in code instead →
             </button>
           </Footer>
         </form>

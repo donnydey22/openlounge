@@ -18,6 +18,9 @@ export const LIMITS = {
   signupIp: { max: 10, windowMs: 60 * 60_000 },
   signupEmail: { max: 3, windowMs: 60 * 60_000 },
   exchangeIp: { max: 30, windowMs: 10 * 60_000 },
+  emailCodeIp: { max: 20, windowMs: 60 * 60_000 },
+  emailCodeEmail: { max: 5, windowMs: 60 * 60_000 },
+  emailVerifyIp: { max: 40, windowMs: 15 * 60_000 },
   oauthStartIp: { max: 30, windowMs: 10 * 60_000 },
 } satisfies Record<string, Limit>;
 
