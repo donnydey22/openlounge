@@ -12,15 +12,13 @@
 
 import { meterHz } from "@/lib/device";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Room,
-  RoomEvent,
-  Track,
-  createLocalAudioTrack,
-  type LocalAudioTrack,
-  type Participant as LkParticipant,
-  type RemoteTrack,
-} from "livekit-client";
+import type { LocalAudioTrack, Participant as LkParticipant, RemoteTrack, Room } from "livekit-client";
+
+// livekit-client (~half of the room route's JS) is loaded only when a room actually connects audio,
+// in parallel with the token request — not on hallway/DM/profile, and not on the room page's first paint.
+type LiveKit = typeof import("livekit-client");
+let lk: LiveKit | null = null;
+const loadLiveKit = () => (lk ? Promise.resolve(lk) : import("livekit-client").then((m) => (lk = m)));
 import { authFetch } from "@/lib/auth";
 import { setActiveAudioRoom, unlockAudio } from "@/lib/audioUnlock";
 
@@ -66,11 +64,14 @@ export function useLiveKitAudio({
       return;
     }
     let cancelled = false;
-    const room = new Room({ adaptiveStream: true, dynacast: true });
-    roomRef.current = room;
+    let room: Room | null = null;
     const attached = new Map<string, HTMLMediaElement[]>();
-
-    room
+    const setup = (LK: LiveKit) => {
+    const { RoomEvent, Track } = LK;
+    const r = new LK.Room({ adaptiveStream: true, dynacast: true });
+    room = r;
+    roomRef.current = r;
+    r
       .on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
         if (track.kind !== Track.Kind.Audio) return;
         const el = track.attach();
@@ -79,7 +80,7 @@ export function useLiveKitAudio({
         el.autoplay = true;
         document.body.appendChild(el);
         attached.set(track.sid ?? String(Math.random()), [el]);
-        setNeedsGesture(!room.canPlaybackAudio);
+        setNeedsGesture(!r.canPlaybackAudio);
       })
       .on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         track.detach().forEach((el) => el.remove());
@@ -87,16 +88,19 @@ export function useLiveKitAudio({
       .on(RoomEvent.ActiveSpeakersChanged, (speakers: LkParticipant[]) => {
         setSpeaking(new Set(speakers.map((s) => s.identity)));
       })
-      .on(RoomEvent.AudioPlaybackStatusChanged, () => setNeedsGesture(!room.canPlaybackAudio))
+      .on(RoomEvent.AudioPlaybackStatusChanged, () => setNeedsGesture(!r.canPlaybackAudio))
       .on(RoomEvent.ParticipantPermissionsChanged, () => setPermVersion((v) => v + 1))
       .on(RoomEvent.Reconnecting, () => setStatus("connecting"))
       .on(RoomEvent.Reconnected, () => setStatus("connected"))
       .on(RoomEvent.Disconnected, () => !cancelled && setStatus("off"));
+    return r;
+    };
 
     (async () => {
       setStatus("connecting");
       setError(null);
       try {
+        const lkLoad = loadLiveKit();
         // access token attached; a 401 refreshes silently and retries once
         const res = await authFetch("/api/livekit/token", {
           method: "POST",
@@ -110,6 +114,9 @@ export function useLiveKitAudio({
           return;
         }
         if (!body.ok || !body.url || !body.token) throw new Error("audio token");
+        const LK = await lkLoad;
+        if (cancelled) return;
+        const room = setup(LK);
         // Railway has no inbound UDP — self-hosted LiveKit is force_tcp. Prefer TCP ICE
         // candidates and give signalling/ICE more time so a slow proxy doesn't fail the room.
         await room.connect(body.url, body.token, {
@@ -137,8 +144,9 @@ export function useLiveKitAudio({
     return () => {
       cancelled = true;
       setActiveAudioRoom(null);
-      room.removeAllListeners();
-      room.disconnect();
+      const r = room as Room | null;
+      r?.removeAllListeners();
+      void r?.disconnect();
       document.querySelectorAll("[data-lk-audio]").forEach((el) => el.remove());
       roomRef.current = null;
       setSpeaking(new Set());
@@ -155,6 +163,7 @@ export function useLiveKitAudio({
       if (roomRef.current !== room || room.state !== "connected") return;
       const { isSpeaker: speaker, muted: mute } = want.current;
       const lp = room.localParticipant;
+      const { Track, createLocalAudioTrack } = lk!;
       let pub = lp.getTrackPublication(Track.Source.Microphone);
       if (!speaker) {
         if (pub?.track) await lp.unpublishTrack(pub.track, true); // releases the mic (OS indicator off)
