@@ -8,10 +8,10 @@ in `react-native-webview`, with a Keychain-backed session bridge. Native `ios/` 
 |---|---|
 | Bundle id | `com.donnydey.openlounge` (same as the Swift wrapper on branch `ios-build`) |
 | Display name | Open Lounge |
-| Version | 0.2.3 (build 6) — Swift wrapper was 0.2.2 (5), so this installs over it |
+| Version | 0.2.3 — build number is managed by EAS (`appVersionSource: remote`, `autoIncrement` on preview + production); the first remote build is initialised from `ios.buildNumber` 6, so it is ≥ 6 and installs over the Swift wrapper's 0.2.2 (5) |
 | Min iOS | 16.4 (Expo SDK 57) |
-| Info.plist | NSMicrophoneUsageDescription, NSCamera/PhotoLibrary usage, UIBackgroundModes=[audio], ITSAppUsesNonExemptEncryption=false, no Face ID key |
-| Entitlements | none (no push, no associated domains, no app groups) |
+| Info.plist | NSMicrophoneUsageDescription, NSCamera/PhotoLibrary usage, UIBackgroundModes=[audio], ITSAppUsesNonExemptEncryption=false, no Face ID key, URL scheme `openlounge://` |
+| Entitlements | none by default (no push, no app groups). Associated Domains (`applinks:openlounge.app`) only when built with `OPENLOUNGE_UNIVERSAL_LINKS=1` — see IOS_PARITY.md before turning it on |
 | EAS profiles | `preview` = internal (ad hoc, Release); `production` = store (Release) |
 
 ## Native bridge contract
@@ -21,8 +21,15 @@ window.OpenLoungeNative = {
   getSession(): Promise<string | null>
   setSession(json: string): Promise<void>
   clearSession(): Promise<void>
-}  // plus read-only __expo: true, platform: 'ios', version: '0.2.3'
+  // iOS-only extras (feature-detect: the Android wrapper has only the three above)
+  ready(): void                    // fade out the native splash (auto-detected if the page never calls it)
+  haptic(kind: string): void       // 'raiseHand' | 'joinStage' | 'sendDm' | 'light' | 'success' | …
+  openAuth(url: string): Promise<void>   // /auth/{google,apple}/start?app=1&cc=… → ASWebAuthenticationSession
+  openExternal(url: string): void  // SFSafariViewController
+}  // plus read-only __expo: true, platform: 'ios', version: '0.2.3', capabilities: string[]
 ```
+
+Full contract, events and the parity checklist: `src/bridge.ts` and `IOS_PARITY.md`.
 
 * Defined by `injectedJavaScriptBeforeContentLoaded` (main frame only) before any page script runs;
   the property is non-writable/frozen.

@@ -1,36 +1,93 @@
-// Native bridge injected into the Open Lounge page.
-//
-// Contract (consumed by the web app's src/lib/session.ts when present):
+// Native bridge for the Open Lounge web app inside the iOS (Expo) wrapper.
+// Superset of the Android wrapper's session store (src/lib/session.ts in the web repo):
 //
 //   window.OpenLoungeNative = {
-//     getSession():              Promise<string | null>
+//     getSession():              Promise<string | null>     Keychain-backed durable session store
 //     setSession(json: string):  Promise<void>
 //     clearSession():            Promise<void>
+//     ready():                   void   page painted / session check done → native splash fades out
+//     haptic(kind: string):      void   'raiseHand' | 'joinStage' | 'sendDm' | 'light' | 'medium' | 'heavy'
+//                                       | 'soft' | 'rigid' | 'selection' | 'success' | 'warning' | 'error'
+//     openAuth(url: string):     Promise<void>   Google/Apple start URL → ASWebAuthenticationSession
+//     openExternal(url: string): void   https URL → SFSafariViewController
+//     __expo: true, platform: 'ios', version: '0.2.3', capabilities: string[]
 //   }
 //
-// Transport: injectedJavaScriptBeforeContentLoaded defines the object before any page script runs.
-// Each call posts {"__ol":1,"id":"<request id>","method":"getSession|setSession|clearSession","value"?:string}
-// through window.ReactNativeWebView.postMessage. The app answers by calling
-// window.__openLoungeNativeResolve(id, ok, result, error) via injectJavaScript. Calls time out after 10 s
-// (rejected), unknown ids are ignored. Only pages on the app's own https hosts get answers.
+// Feature-detect optional methods (the Android wrapper only has the three session methods):
+//   window.OpenLoungeNative?.haptic?.('raiseHand')
 //
-// Extra (optional) message from the page: {"__ol":1,"method":"theme","value":"dark"|"light"} — sent
-// automatically by the injected script when <html data-theme> changes; drives the status bar style.
+// Transport: injectedJavaScriptBeforeContentLoaded defines the (frozen) object before any page script runs.
+// Calls that return a value post {"__ol":1,"id":"<request id>","method":…,"value"?:string} through
+// window.ReactNativeWebView.postMessage; the app answers with window.__openLoungeNativeResolve(id, ok, result, error)
+// via injectJavaScript (10 s timeout → reject). Fire-and-forget calls post {"__ol":1,"method":…,"value"?:…}.
+// Only pages on the app's own https hosts get answers / have their messages honoured.
+//
+// Events the app dispatches on window (CustomEvent, detail shown):
+//   openlounge:native-visibility    {visible: boolean}            app foreground/background (same as Android)
+//   openlounge:native-audio-resume  {reason: string, kicked: n}   after a phone call / Siri / backgrounding the app
+//                                                                 resumed suspended AudioContexts and paused
+//                                                                 MediaStream <audio>; LiveKit pages can also call
+//                                                                 room.startAudio() here
+//   openlounge:native-keyboard      {visible, height, duration}   keyboard frame (also CSS var --ol-keyboard-height)
+// Automatic page → app message: {"__ol":1,"method":"theme","value":"dark"|"light"} from <html data-theme>.
+
+export type HapticKind =
+  | 'raiseHand'
+  | 'joinStage'
+  | 'sendDm'
+  | 'light'
+  | 'medium'
+  | 'heavy'
+  | 'soft'
+  | 'rigid'
+  | 'selection'
+  | 'success'
+  | 'warning'
+  | 'error';
+
+const HAPTICS = new Set<string>([
+  'raiseHand',
+  'joinStage',
+  'sendDm',
+  'light',
+  'medium',
+  'heavy',
+  'soft',
+  'rigid',
+  'selection',
+  'success',
+  'warning',
+  'error',
+]);
 
 export type BridgeRequest =
   | { __ol: 1; id: string; method: 'getSession' }
   | { __ol: 1; id: string; method: 'setSession'; value: string }
   | { __ol: 1; id: string; method: 'clearSession' }
-  | { __ol: 1; method: 'theme'; value: 'dark' | 'light' };
+  | { __ol: 1; id: string; method: 'openAuth'; value: string }
+  | { __ol: 1; method: 'theme'; value: 'dark' | 'light' }
+  | { __ol: 1; method: 'ready'; value?: string }
+  | { __ol: 1; method: 'haptic'; value: HapticKind }
+  | { __ol: 1; method: 'openExternal'; value: string };
 
 export function parseBridgeMessage(data: string): BridgeRequest | null {
   try {
+    if (typeof data !== 'string' || data.length > 200_000) return null;
     const m = JSON.parse(data) as Record<string, unknown>;
     if (!m || m.__ol !== 1 || typeof m.method !== 'string') return null;
-    if (m.method === 'theme') return m.value === 'light' || m.value === 'dark' ? (m as BridgeRequest) : null;
+    switch (m.method) {
+      case 'theme':
+        return m.value === 'light' || m.value === 'dark' ? (m as BridgeRequest) : null;
+      case 'ready':
+        return { __ol: 1, method: 'ready' };
+      case 'haptic':
+        return typeof m.value === 'string' && HAPTICS.has(m.value) ? (m as BridgeRequest) : null;
+      case 'openExternal':
+        return typeof m.value === 'string' && m.value.length <= 4096 ? (m as BridgeRequest) : null;
+    }
     if (typeof m.id !== 'string' || m.id.length > 64) return null;
     if (m.method === 'getSession' || m.method === 'clearSession') return m as BridgeRequest;
-    if (m.method === 'setSession' && typeof m.value === 'string') return m as BridgeRequest;
+    if ((m.method === 'setSession' || m.method === 'openAuth') && typeof m.value === 'string') return m as BridgeRequest;
     return null;
   } catch {
     return null;
@@ -43,12 +100,51 @@ export function resolveScript(id: string, ok: boolean, result: unknown, error?: 
   return `window.__openLoungeNativeResolve&&window.__openLoungeNativeResolve(${args.join(',')});true;`;
 }
 
+/** JS that dispatches `new CustomEvent(name, {detail})` on window. */
+export function nativeEventScript(name: string, detail: unknown): string {
+  return `(function(){try{window.dispatchEvent(new CustomEvent(${JSON.stringify(name)},{detail:${JSON.stringify(
+    detail ?? null,
+  )}}));}catch(e){}})();true;`;
+}
+
+/** Keyboard frame → CSS var + event (for the chat composer). */
+export function keyboardScript(visible: boolean, height: number, duration: number): string {
+  const h = Math.max(0, Math.round(visible ? height : 0));
+  return `(function(){try{document.documentElement.style.setProperty('--ol-keyboard-height','${h}px');}catch(e){}})();${nativeEventScript(
+    'openlounge:native-keyboard',
+    { visible, height: h, duration: Math.round(duration) },
+  )}`;
+}
+
+/**
+ * Bring audio back after an interruption (phone call, Siri, alarm) or after the app was backgrounded:
+ * resume AudioContexts iOS suspended/interrupted, restart paused MediaStream <audio>/<video> elements (remote
+ * LiveKit tracks), then tell the page so it can do anything LiveKit-specific (room.startAudio()).
+ */
+export function audioResumeScript(reason: string): string {
+  return `(function(){try{
+  var n=0;
+  var list=window.__olAudioContexts||[];
+  for(var i=0;i<list.length;i++){var c=list[i];
+    if(c&&(c.state==='suspended'||c.state==='interrupted')){try{var r=c.resume();if(r&&r.catch)r.catch(function(){});n++;}catch(e){}}}
+  var els=document.querySelectorAll('audio,video');
+  for(var j=0;j<els.length;j++){var el=els[j];
+    if(el.srcObject&&el.paused&&!el.ended&&!el.muted&&el.autoplay){try{var p=el.play();if(p&&p.catch)p.catch(function(){});n++;}catch(e){}}}
+  window.dispatchEvent(new CustomEvent('openlounge:native-audio-resume',{detail:{reason:${JSON.stringify(reason)},kicked:n}}));
+}catch(e){}})();true;`;
+}
+
 export function injectedBeforeContentLoaded(platform: string, appVersion: string): string {
   return `(function(){
   try {
     if (window.OpenLoungeNative && window.OpenLoungeNative.__expo) return;
     var pending = {};
     var seq = 0;
+    function post(msg) {
+      var bridge = window.ReactNativeWebView;
+      if (!bridge || typeof bridge.postMessage !== 'function') return false;
+      try { bridge.postMessage(JSON.stringify(msg)); return true; } catch (e) { return false; }
+    }
     function call(method, value) {
       return new Promise(function (resolve, reject) {
         var bridge = window.ReactNativeWebView;
@@ -64,6 +160,9 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
         catch (e) { clearTimeout(timer); delete pending[id]; reject(e); }
       });
     }
+    function absolute(url) {
+      try { return new URL(String(url), location.href).toString(); } catch (e) { return String(url); }
+    }
     Object.defineProperty(window, '__openLoungeNativeResolve', {
       configurable: false, enumerable: false, writable: false,
       value: function (id, ok, result, error) {
@@ -74,10 +173,17 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
         if (ok) p.resolve(result); else p.reject(new Error(error || 'OpenLoungeNative error'));
       }
     });
+    var readySent = false;
+    function ready(source) {
+      if (readySent) return;
+      readySent = true;
+      post({ __ol: 1, method: 'ready', value: source || 'page' });
+    }
     var api = {
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal']),
       getSession: function () {
         return call('getSession').then(function (v) { return typeof v === 'string' ? v : null; });
       },
@@ -85,17 +191,62 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
         if (typeof json !== 'string') return Promise.reject(new TypeError('setSession expects a string'));
         return call('setSession', json).then(function () {});
       },
-      clearSession: function () { return call('clearSession').then(function () {}); }
+      clearSession: function () { return call('clearSession').then(function () {}); },
+      ready: function () { ready('page'); },
+      haptic: function (kind) { post({ __ol: 1, method: 'haptic', value: String(kind || 'light') }); },
+      openAuth: function (url) { return call('openAuth', absolute(url)).then(function () {}); },
+      openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); }
     };
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
-    // Report the web app's theme (<html data-theme="dark|light">) so the status bar matches.
+    // Remember AudioContexts so audio can be resumed after an interruption (see audioResumeScript).
+    // A Proxy construct trap keeps instanceof, statics and subclassing intact.
+    try {
+      var ctxs = window.__olAudioContexts = [];
+      ['AudioContext', 'webkitAudioContext'].forEach(function (k) {
+        var C = window[k];
+        if (typeof C !== 'function' || typeof Proxy !== 'function' || typeof Reflect === 'undefined') return;
+        var P = new Proxy(C, { construct: function (t, args, nt) {
+          var c = Reflect.construct(t, args, nt);
+          ctxs.push(c); if (ctxs.length > 16) ctxs.shift();
+          return c;
+        } });
+        Object.defineProperty(window, k, { value: P, configurable: true, writable: true, enumerable: false });
+      });
+    } catch (e) {}
+
+    // Native feel: no pinch / double-tap / input-focus zoom, no rubber band on the page, no long-press link
+    // previews or selection callouts on UI chrome (inputs and [data-selectable] stay selectable).
+    var CSS = 'html{touch-action:manipulation;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}'
+      + 'body{overscroll-behavior:none}'
+      + 'a,img,svg,video,button,[role=button],[role=tab],[role=menuitem],[role=link],nav,header,label'
+      + '{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}'
+      + 'input,textarea,select,[contenteditable],[contenteditable] *,[data-selectable],[data-selectable] *'
+      + '{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}';
+    function lockViewport() {
+      var head = document.head || document.getElementsByTagName('head')[0];
+      if (!head) return;
+      var m = document.querySelector('meta[name="viewport"]');
+      if (!m) { m = document.createElement('meta'); m.setAttribute('name', 'viewport'); head.appendChild(m); }
+      var c = m.getAttribute('content') || 'width=device-width, initial-scale=1, viewport-fit=cover';
+      if (!/maximum-scale/.test(c)) c += ', maximum-scale=1';
+      if (!/user-scalable/.test(c)) c += ', user-scalable=no';
+      if (m.getAttribute('content') !== c) m.setAttribute('content', c);
+      if (!document.getElementById('ol-native-css')) {
+        var s = document.createElement('style');
+        s.id = 'ol-native-css';
+        s.textContent = CSS;
+        head.appendChild(s);
+      }
+    }
+    document.addEventListener('gesturestart', function (e) { e.preventDefault(); }, { passive: false });
+
+    // Report the web app's theme (<html data-theme="dark|light">) so the status bar and launch colour match.
     var lastTheme = null;
     function sendTheme() {
       var t = document.documentElement && document.documentElement.getAttribute('data-theme');
-      if ((t === 'dark' || t === 'light') && t !== lastTheme && window.ReactNativeWebView) {
-        lastTheme = t;
-        window.ReactNativeWebView.postMessage(JSON.stringify({ __ol: 1, method: 'theme', value: t }));
+      if ((t === 'dark' || t === 'light') && t !== lastTheme) {
+        if (post({ __ol: 1, method: 'theme', value: t })) lastTheme = t;
       }
     }
     function watchTheme() {
@@ -103,7 +254,25 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       sendTheme();
       new MutationObserver(sendTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     }
+
+    // Splash hand-off: the page can call OpenLoungeNative.ready(); otherwise report ready once the web app's own
+    // loading screen (AuthGate, data-testid="splash") is gone and a frame has been painted.
+    function autoReady() {
+      var tries = 0;
+      (function check() {
+        if (readySent) return;
+        var body = document.body;
+        if (body && body.childElementCount > 0 && !document.querySelector('[data-testid="splash"]')) {
+          requestAnimationFrame(function () { requestAnimationFrame(function () { ready('auto'); }); });
+          return;
+        }
+        if (++tries < 120) setTimeout(check, 100);
+      })();
+    }
+
+    function onDom() { lockViewport(); autoReady(); }
     if (document.documentElement) watchTheme(); else document.addEventListener('DOMContentLoaded', watchTheme);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onDom); else onDom();
     window.addEventListener('pageshow', function () { lastTheme = null; sendTheme(); });
   } catch (e) {}
 })();

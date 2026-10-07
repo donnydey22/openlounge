@@ -1,12 +1,17 @@
 {
   "cli": {
     "version": ">= 24.11.0",
-    "appVersionSource": "local",
+    "appVersionSource": "remote",
     "promptToConfigurePushNotifications": false
   },
   "build": {
     "preview": {
       "distribution": "internal",
+      "developmentClient": false,
+      "autoIncrement": true,
+      "env": {
+        "EXPO_NO_TELEMETRY": "1"
+      },
       "ios": {
         "buildConfiguration": "Release",
         "enterpriseProvisioning": "adhoc"
@@ -14,6 +19,11 @@
     },
     "production": {
       "distribution": "store",
+      "developmentClient": false,
+      "autoIncrement": true,
+      "env": {
+        "EXPO_NO_TELEMETRY": "1"
+      },
       "ios": {
         "buildConfiguration": "Release"
       }
