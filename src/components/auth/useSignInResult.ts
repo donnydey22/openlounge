@@ -17,7 +17,7 @@ export function useSignInResult() {
         router.replace("/");
       } else if (res.status === "new") {
         // continue in the normal onboarding screens (name → username → photo → bio)
-        savePendingSignup({ ticket: res.ticket, firstName: res.profile?.firstName, lastName: res.profile?.lastName, email: res.profile?.email, method });
+        savePendingSignup({ ticket: res.ticket, linkCode: res.linkCode, firstName: res.profile?.firstName, lastName: res.profile?.lastName, email: res.profile?.email, method });
         router.replace("/");
       } else if (res.status === "linked") {
         router.replace(`/settings?linked=${encodeURIComponent(res.provider)}`);

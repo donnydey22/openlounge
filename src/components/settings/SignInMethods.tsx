@@ -5,13 +5,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConfirmationResult } from "firebase/auth";
-import { ChevronRight, Loader2, Mail, Phone, Plus } from "lucide-react";
+import { ChevronRight, Loader2, Mail, Phone, Plus, X } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { Sheet } from "@/components/Sheet";
 import { AppleLogo, GoogleLogo, useProviders } from "@/components/auth/ProviderButtons";
 import { COUNTRIES, formatNational } from "@/components/auth/countries";
 import { PasswordInput } from "@/components/auth/ui";
-import { AuthFormError, authGet, authPost, canUseOAuth, startLink, type OAuthProvider } from "@/lib/authApi";
+import { AuthFormError, SUGGEST_LINK_KEY, authGet, authPost, canUseOAuth, startLink, type OAuthProvider } from "@/lib/authApi";
 
 interface Identity {
   id: string;
@@ -56,6 +56,26 @@ export function SignInMethods() {
   const has = (p: Identity["provider"]) => !!items?.some((i) => i.provider === p);
   const oauth = canUseOAuth();
 
+  // gentle prompt after a phone sign-in: "Add Google or Apple to sign in faster" (until dismissed or done)
+  const [suggest, setSuggest] = useState(false);
+  useEffect(() => {
+    try {
+      setSuggest(localStorage.getItem(SUGGEST_LINK_KEY) === "1");
+    } catch {
+      /* storage disabled */
+    }
+  }, []);
+  const dismissSuggest = () => {
+    setSuggest(false);
+    try {
+      localStorage.setItem(SUGGEST_LINK_KEY, "dismissed");
+    } catch {
+      /* storage disabled */
+    }
+  };
+  const canSuggest = !!items && oauth && ((flags?.google && !has("google")) || (flags?.apple && !has("apple")));
+  const showSuggest = suggest && canSuggest && !has("google") && !has("apple");
+
   async function remove(i: Identity) {
     if (!confirm(`Remove ${NAMES[i.provider]} (${i.label}) as a way to sign in?`)) return;
     setBusy(i.id);
@@ -73,6 +93,7 @@ export function SignInMethods() {
   async function connect(p: OAuthProvider) {
     setBusy(p);
     try {
+      dismissSuggest();
       await startLink(p);
     } catch (e) {
       toast(e instanceof AuthFormError ? e.message : "Couldn't start that right now");
@@ -86,6 +107,17 @@ export function SignInMethods() {
     <section className="mb-8" data-testid="signin-methods">
       <h2 className="mb-1 text-xs font-semibold tracking-wide text-zinc-500 uppercase">Linked sign-in methods</h2>
       <p className="mb-3 text-sm text-zinc-400">All of these open this same account — your profile, follows and messages.</p>
+      {showSuggest && (
+        <div className="mb-3 flex items-start gap-3 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm" data-testid="suggest-link">
+          <div className="flex-1">
+            <div className="font-semibold text-zinc-100">Add Google or Apple to sign in faster</div>
+            <div className="mt-0.5 text-zinc-400">Skip the text code next time. It&apos;s still this same account.</div>
+          </div>
+          <button onClick={dismissSuggest} aria-label="Not now" className="rounded-full p-1 text-zinc-400 hover:bg-white/5">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       <div className="overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/70">
         {items === null && (
           <div className="flex items-center justify-center px-4 py-4">

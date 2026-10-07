@@ -17,18 +17,18 @@ import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
-import { AuthFormError, authPost, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
+import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult } from "@/lib/authApi";
 import type { ConfirmationResult } from "firebase/auth";
 
 /** A signup handed over by /auth/complete (Google/Apple) or /verify-email, or ?signin=email from an email link. */
 function initialEntry(): { step: Step; pending: PendingSignup | null } {
   if (typeof window === "undefined") return { step: "welcome", pending: null };
   const pending = takePendingSignup();
-  if (pending) return { step: "name", pending };
+  if (pending) return { step: pending.linkCode ? "linkChoice" : "name", pending };
   return { step: new URLSearchParams(location.search).get("signin") === "email" ? "email" : "welcome", pending: null };
 }
 
-type Step = "welcome" | "phone" | "code" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
+type Step = "linkChoice" | "welcome" | "phone" | "code" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
 export function AuthFlow() {
   const { request, completeLogin, finishOnboarding, onboarding, follow, updateMe, connected, toast } = useApp();
@@ -51,6 +51,10 @@ export function AuthFlow() {
   const [demoCode, setDemoCode] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
   const [ticket, setTicket] = useState(entry.pending?.ticket ?? "");
+  // "Already have an account?": the pending Google/Apple/email identity waiting for phone proof
+  const [linkCode, setLinkCode] = useState(entry.pending?.linkCode ?? "");
+  const [linking, setLinking] = useState(false);
+  const providerName = method === "apple" ? "Apple" : method === "email" ? "your email" : "Google";
   // Firebase Phone Auth when the server has it on; demo OTP (auth:requestCode) otherwise
   const [authCfg, setAuthCfg] = useState<{ firebase: boolean; demoOtp: boolean } | null>(null);
   const confirmation = useRef<ConfirmationResult | null>(null);
@@ -127,6 +131,21 @@ export function AuthFlow() {
     try {
       type VerifyRes = ({ status: "existing"; token: string } & SessionPayload) | { status: "new"; ticket: string };
       let res: VerifyRes;
+      if (linking) {
+        // link mode: only a real Firebase phone verification can prove the number (never demo codes)
+        if (!authCfg?.firebase || !confirmation.current) throw new Error("Phone verification isn't available right now. Go back and create a new account, or try again later.");
+        const { confirmPhoneCode } = await import("@/lib/firebaseClient");
+        const idToken = await confirmPhoneCode(confirmation.current, value);
+        const r = await linkPendingToPhone(linkCode, idToken);
+        if (!r.ok) {
+          if (r.linkCode) setLinkCode(r.linkCode);
+          else setLinking(false);
+          throw new Error(r.error);
+        }
+        completeLogin(r.res.token, r.res, { resumeSocket: true });
+        toast(`✅ ${providerName === "your email" ? "Email" : providerName} is now linked. Welcome back, ${r.res.user.name.split(" ")[0]}!`);
+        return;
+      }
       if (authCfg?.firebase && confirmation.current) {
         const { confirmPhoneCode } = await import("@/lib/firebaseClient");
         const idToken = await confirmPhoneCode(confirmation.current, value);
@@ -135,6 +154,7 @@ export function AuthFlow() {
         res = await request<VerifyRes>("auth:verifyCode", { phone: phoneE164, code: value });
       }
       if (res.status === "existing") {
+        markSuggestLink();
         completeLogin(res.token, res);
         toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
       } else {
@@ -257,6 +277,36 @@ export function AuthFlow() {
 
   // ---------------- screens ----------------
 
+  if (step === "linkChoice") {
+    return (
+      <Shell stepKey={step}>
+        <Title sub={`Verify your phone number to link ${providerName} to it. Your profile, follows and messages stay the same.`}>Already have an Open Lounge account?</Title>
+        <ErrorText>{error}</ErrorText>
+        <Footer>
+          <PrimaryButton
+            onClick={() => {
+              setLinking(true);
+              setMode("signin");
+              go("phone");
+            }}
+          >
+            <Phone className="h-4 w-4" /> Verify my phone number
+          </PrimaryButton>
+          <button
+            type="button"
+            onClick={() => {
+              setLinking(false);
+              go("name");
+            }}
+            className="auth-alt-link text-sky-400 hover:underline"
+          >
+            I&apos;m new — create a new account →
+          </button>
+        </Footer>
+      </Shell>
+    );
+  }
+
   if (step === "welcome") {
     return (
       <Shell welcome stepKey={step}>
@@ -303,9 +353,9 @@ export function AuthFlow() {
 
   if (step === "phone") {
     return (
-      <Shell stepKey={step} onBack={() => go("welcome")}>
-        <Title sub={mode === "signin" ? "We'll text you a code to sign back in." : undefined}>
-          {mode === "signin" ? "Welcome back! What's your phone #?" : "Enter your phone #"}
+      <Shell stepKey={step} onBack={() => go(linking ? "linkChoice" : "welcome")}>
+        <Title sub={linking ? `We'll text you a code, then link ${providerName} to that account.` : mode === "signin" ? "We'll text you a code to sign back in." : undefined}>
+          {linking ? "What's the phone # on your account?" : mode === "signin" ? "Welcome back! What's your phone #?" : "Enter your phone #"}
         </Title>
         <form
           className="contents"
@@ -350,8 +400,8 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
               Next <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
-            <ProviderButtons onEmail={() => go("email")} />
-            {mode !== "signin" ? (
+            {!linking && <ProviderButtons onEmail={() => go("email")} />}
+            {linking ? null : mode !== "signin" ? (
               <button type="button" onClick={() => setMode("signin")} className="auth-alt-link text-sky-400 hover:underline">
                 Already have an account? Sign in →
               </button>

@@ -22,7 +22,7 @@ export interface SessionResult {
 }
 export type SignInResult =
   | SessionResult
-  | { ok: true; status: "new"; ticket: string; profile?: { firstName?: string; lastName?: string; email?: string | null } }
+  | { ok: true; status: "new"; ticket: string; linkCode?: string; profile?: { firstName?: string; lastName?: string; email?: string | null } }
   | { ok: true; status: "linked"; provider: string }
   | { ok: true; status: "exists"; email?: string };
 
@@ -138,6 +138,8 @@ export interface PendingSignup {
   lastName?: string;
   email?: string | null;
   method: "email" | "google" | "apple";
+  /** "Already have an account?": single-use code to link this identity to a phone account instead */
+  linkCode?: string;
 }
 export function savePendingSignup(p: PendingSignup) {
   try {
@@ -158,10 +160,35 @@ export function takePendingSignup(): PendingSignup | null {
   }
 }
 
+/**
+ * "Already have an account?": prove the phone number (Firebase ID token) and attach the pending Google/Apple/email
+ * identity to that account. On a recoverable error the server hands back a fresh linkCode.
+ */
+export async function linkPendingToPhone(linkCode: string, idToken: string, device?: string): Promise<{ ok: true; res: SessionResult & { linked: string } } | { ok: false; error: string; linkCode?: string }> {
+  try {
+    const r = await fetch("/api/auth/link/phone", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ linkCode, idToken, device }), cache: "no-store" });
+    const data = (await r.json().catch(() => null)) as (SessionResult & { linked: string; ok: boolean; error?: string; linkCode?: string }) | null;
+    if (r.ok && data?.ok) return { ok: true, res: data };
+    return { ok: false, error: data?.error || "Something went wrong. Please try again.", linkCode: data?.linkCode };
+  } catch {
+    return { ok: false, error: NETWORK };
+  }
+}
+
+/** Set after a phone sign-in; Settings shows a gentle "add Google or Apple" prompt until dismissed or done. */
+export const SUGGEST_LINK_KEY = "openlounge:suggest-link";
+export function markSuggestLink() {
+  try {
+    if (localStorage.getItem(SUGGEST_LINK_KEY) !== "dismissed") localStorage.setItem(SUGGEST_LINK_KEY, "1");
+  } catch {
+    /* storage disabled */
+  }
+}
+
 export const OAUTH_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled. You can try again anytime.",
   expired: "That sign-in took too long. Please try again.",
-  taken: "That account is already linked to a different Open Lounge account.",
+  taken: "That account is already linked to a different Open Lounge account with its own messages, rooms or follows, so it can't be moved automatically.",
   unavailable: "That sign-in option isn't available right now.",
   busy: "Too many attempts. Please wait a few minutes and try again.",
   failed: "We couldn't sign you in with that account. Please try again.",
