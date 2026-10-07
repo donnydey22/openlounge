@@ -198,7 +198,11 @@
       ]
     ],
     "extra": {
-      "startUrl": "https://openlounge.app"
-    }
+      "startUrl": "https://openlounge.app",
+      "eas": {
+        "projectId": "f753053a-9047-4cd5-b232-7f0aa067dfb7"
+      }
+    },
+    "owner": "donnydey"
   }
 }
