@@ -266,7 +266,6 @@ function AddPhone({ request, onDone }: { request: <T>(ev: string, payload?: unkn
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
         {phone ? "Verify & add" : "Send code"}
       </button>
-      <div id="recaptcha-link-phone" />
     </div>
   );
 }

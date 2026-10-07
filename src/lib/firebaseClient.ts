@@ -26,18 +26,28 @@ async function auth() {
 export async function sendPhoneCode(e164: string, containerId: string): Promise<ConfirmationResult> {
   const a = await auth();
   const { RecaptchaVerifier, signInWithPhoneNumber } = await import("firebase/auth");
-  if (!document.getElementById(containerId)) {
-    const el = document.createElement("div");
-    el.id = containerId;
-    document.body.appendChild(el); // lives outside React so step changes don't unmount it
+  // The invisible reCAPTCHA container (and Google's challenge popup) must live directly under <body>, outside any
+  // transformed / overflow-hidden / modal layer, or the image challenge renders clipped or behind app overlays.
+  const hostId = `ol-recaptcha-${containerId}`;
+  let host = document.getElementById(hostId);
+  if (!host || host.parentElement !== document.body) {
+    host?.remove();
+    host = document.createElement("div");
+    host.id = hostId;
+    host.className = "ol-recaptcha-host";
+    document.body.appendChild(host); // lives outside React so step changes don't unmount it
   }
-  if (!verifier) verifier = new RecaptchaVerifier(a, containerId, { size: "invisible" });
+  if (!verifier) verifier = new RecaptchaVerifier(a, hostId, { size: "invisible" });
+  // unlock page scroll (modal scroll-lock) while a challenge may be shown
+  document.documentElement.classList.add("ol-recaptcha-active");
   try {
     return await signInWithPhoneNumber(a, e164, verifier);
   } catch (e) {
     verifier.clear();
     verifier = null;
     throw new Error(phoneError(e));
+  } finally {
+    document.documentElement.classList.remove("ol-recaptcha-active");
   }
 }
 
