@@ -199,7 +199,8 @@
             "networkInspector": false
           }
         }
-      ]
+      ],
+      "./plugins/withRNFirebaseDisableSPM.js"
     ],
     "extra": {
       "startUrl": "https://openlounge.app",
