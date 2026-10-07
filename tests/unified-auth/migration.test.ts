@@ -61,8 +61,8 @@ test("005 applied, phone numbers backfilled as verified phone identities, nothin
   assert.equal((await sql("SELECT * FROM follows", [], DB)).length, 1);
 });
 
-test("005 is idempotent (re-running it changes nothing)", async () => {
-  await sql(fs.readFileSync(path.join(MIG, "005_unified_auth.sql"), "utf8"), [], DB);
+test("009 (unified auth) is idempotent (re-running it changes nothing)", async () => {
+  await sql(fs.readFileSync(path.join(MIG, "009_unified_auth.sql"), "utf8"), [], DB);
   assert.equal((await sql("SELECT * FROM auth_identities", [], DB)).length, 2);
 });
 
