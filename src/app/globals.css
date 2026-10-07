@@ -358,3 +358,100 @@ body {
     animation: none;
   }
 }
+
+/* DM delivery receipts (DmThread Receipt / StatusLine): pure SVG + CSS so they behave the same in browsers,
+   Android WebView and WKWebView. Only live transitions animate; reduced motion → instant, static. */
+.rcpt {
+  transition:
+    color 0.25s ease-out,
+    opacity 0.25s ease-out;
+}
+.rcpt-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: rcpt-draw 0.24s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+}
+.rcpt-draw-late {
+  animation-delay: 0.05s;
+}
+@keyframes rcpt-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+/* the clock only shows if the ack is slow (> 300 ms), so normal sends go straight to ✓ without a flash */
+.rcpt-clock {
+  animation: rcpt-fade 0.18s ease-out 0.3s both;
+}
+.rcpt-hand {
+  transform-box: view-box;
+  transform-origin: 10px 5px;
+  animation: rcpt-spin 1.2s linear infinite;
+}
+.rcpt-pop {
+  animation: rcpt-fade 0.18s ease-out both;
+}
+@keyframes rcpt-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes rcpt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* the outgoing label clears quickly and the new one rises in just behind it (~180 ms total, no overlap mush) */
+.status-in {
+  animation: status-in 0.14s ease-out 0.07s both;
+}
+.status-in-late {
+  animation-delay: 0.3s;
+}
+.status-out {
+  animation: status-out 0.07s ease-out both;
+}
+@keyframes status-in {
+  from {
+    opacity: 0;
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes status-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rcpt {
+    transition: none;
+  }
+  .rcpt-draw,
+  .rcpt-pop,
+  .rcpt-hand,
+  .status-in {
+    animation: none;
+  }
+  .rcpt-clock {
+    animation: rcpt-fade 0s linear 0.3s both; /* still skip the flash for fast acks, but no motion */
+  }
+  .status-in-late {
+    animation: rcpt-fade 0s linear 0.3s both;
+  }
+  .status-out {
+    display: none;
+  }
+}

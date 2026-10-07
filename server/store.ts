@@ -1319,8 +1319,9 @@ export class Store {
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
     let target = list.length - 1;
     if (typeof upToMessageId === "string" && upToMessageId) {
-      const i = list.findIndex((m) => m.id === upToMessageId);
-      if (i >= 0) target = i;
+      // unknown / foreign id (stale client, other thread) → nothing is stamped: receipts never run ahead of what was shown
+      target = list.findIndex((m) => m.id === upToMessageId);
+      if (target < 0) return { changed: false, receipt: null };
     }
     const now = Date.now();
     let receipt: DmReadReceipt | null = null;

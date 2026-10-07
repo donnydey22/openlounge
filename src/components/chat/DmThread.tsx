@@ -3,7 +3,7 @@
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Check, CheckCheck, ChevronLeft, Loader2, RotateCcw, X } from "lucide-react";
+import { ArrowDown, ChevronLeft, Loader2, X } from "lucide-react";
 import type { DirectMessage, DmReadReceipt, PublicUser } from "@/lib/types";
 import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
@@ -21,7 +21,14 @@ const TIME_GAP_MS = 15 * 60_000;
 const NEAR_BOTTOM_PX = 80;
 
 /** A message on screen: confirmed by the server, or an optimistic one still in flight / failed. */
-type Item = DirectMessage & { state?: "sending" | "failed" };
+type Item = DirectMessage & {
+  state?: "sending" | "failed";
+  /** failed because it stalled offline / timed out (not rejected): re-sent automatically on reconnect too */
+  autoRetry?: boolean;
+};
+
+/** A send still unacknowledged after this long shows the quiet retry affordance instead of "Sending…". */
+const SEND_STALL_MS = 12_000;
 
 /** Stable React key: the client id survives the optimistic → confirmed swap, so the bubble never re-mounts. */
 const keyOf = (m: Item) => m.clientId ?? m.id;
@@ -51,8 +58,17 @@ function newClientId() {
 
 /** Apply a read receipt: messages from `fromId` to `toId` up to `upToMessageId` were seen at `readAt`. */
 function applyReceipt(list: Item[], fromId: string, toId: string, upToMessageId: string, readAt: number): Item[] {
-  const idx = list.findIndex((m) => m.id === upToMessageId);
-  const limit = idx >= 0 ? list[idx].createdAt : readAt;
+  return applySeen(list, fromId, toId, receiptLimit(list, upToMessageId, readAt), readAt);
+}
+
+/** Newest createdAt a receipt covers: the target message's time if we have it, else "anything sent before readAt". */
+function receiptLimit(list: Item[], upToMessageId: string, readAt: number) {
+  const m = list.find((x) => x.id === upToMessageId);
+  return m ? m.createdAt : readAt;
+}
+
+/** Idempotent + monotonic: only confirmed messages without a readAt are stamped; an existing readAt never changes. */
+function applySeen(list: Item[], fromId: string, toId: string, limit: number, readAt: number): Item[] {
   let changed = false;
   const next = list.map((m) => {
     if (m.state || m.readAt || m.fromId !== fromId || m.toId !== toId || m.createdAt > limit) return m;
@@ -150,9 +166,28 @@ export function DmThread({
     if (messages?.length) markRead();
   }, [messages, markRead]);
 
+  // Peer's "seen up to" high-water mark (from dm:read-receipt). Re-applied when messages are confirmed later,
+  // so a receipt that arrived before the ack/echo still ends at ✓✓. Never moves backwards.
+  const peerSeen = useRef<{ limit: number; readAt: number } | null>(null);
+  const pendingSeen = useRef<DmReadReceipt | null>(null);
+  useEffect(() => {
+    const p = pendingSeen.current;
+    const target = p && messages?.find((x) => x.id === p.upToMessageId);
+    if (p && target) {
+      pendingSeen.current = null;
+      if (!peerSeen.current || target.createdAt > peerSeen.current.limit) peerSeen.current = { limit: target.createdAt, readAt: p.readAt };
+    }
+    const mark = peerSeen.current;
+    if (!messages || !mark || !me) return;
+    if (!messages.some((m) => !m.state && !m.readAt && m.fromId === me.id && m.toId === peerId && m.createdAt <= mark.limit)) return;
+    setMessages((list) => (list ? applySeen(list, me.id, peerId, mark.limit, mark.readAt) : list));
+  }, [messages, me, peerId]);
+
   // reset when switching threads (drawer reuse)
   useEffect(() => {
     loadedFor.current = null;
+    peerSeen.current = null;
+    pendingSeen.current = null;
     setPeer(null);
     setMessages(null);
     setError(null);
@@ -204,8 +239,17 @@ export function DmThread({
     };
     const onReceipt = (r: DmReadReceipt) => {
       if (!me) return;
+      if (r.readerId === peerId && r.peerId === me.id) {
+        // remember the high-water mark: the receipt can overtake the ack/echo of the very message it covers
+        // (both threads open → seen fires immediately); it's re-applied once that message is confirmed
+        const target = (messagesRef.current ?? []).find((x) => x.id === r.upToMessageId);
+        const cur = peerSeen.current;
+        if (!target) pendingSeen.current = r; // resolved once that message shows up (ack / echo / refetch)
+        else if (!cur || target.createdAt > cur.limit) peerSeen.current = { limit: target.createdAt, readAt: r.readAt };
+      }
       // peer saw my messages → ✓✓ ; I saw theirs on another device → keep local state in sync
-      if (r.readerId === peerId && r.peerId === me.id) setMessages((list) => (list ? applyReceipt(list, me.id, peerId, r.upToMessageId, r.readAt) : list));
+      if (r.readerId === peerId && r.peerId === me.id)
+        setMessages((list) => (list && list.some((x) => x.id === r.upToMessageId) ? applyReceipt(list, me.id, peerId, r.upToMessageId, r.readAt) : list));
       else if (r.readerId === me.id && r.peerId === peerId) setMessages((list) => (list ? applyReceipt(list, peerId, me.id, r.upToMessageId, r.readAt) : list));
     };
     const onTyping = ({ from }: { from: string }) => {
@@ -301,15 +345,46 @@ export function DmThread({
   };
 
   // ---- optimistic send: bubble appears instantly, swaps in place when the server confirms ----
+  // A send that hasn't been acked after SEND_STALL_MS turns into a quiet "Not delivered · Retry" (never a
+  // banner); it is still re-sent automatically when the socket comes back (the server dedupes by clientId).
+  const stallTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const armStall = useCallback((clientId: string) => {
+    const timers = stallTimers.current;
+    const old = timers.get(clientId);
+    if (old) clearTimeout(old);
+    timers.set(
+      clientId,
+      setTimeout(() => {
+        timers.delete(clientId);
+        setMessages((list) => (list ?? []).map((x) => (x.clientId === clientId && x.state === "sending" ? { ...x, state: "failed", autoRetry: true } : x)));
+      }, SEND_STALL_MS),
+    );
+  }, []);
+  useEffect(() => {
+    const timers = stallTimers.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
   const deliver = useCallback(
     async (item: Item) => {
       try {
         const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId });
+        if (item.clientId) {
+          clearTimeout(stallTimers.current.get(item.clientId));
+          stallTimers.current.delete(item.clientId);
+        }
         setMessages((list) => mergeMessages(list ?? [], [{ ...r.message, clientId: item.clientId }]));
       } catch (e) {
         // dropped connection: stays "sending" and is re-sent on reconnect; real errors → failed (tap to retry)
         const transient = isTransient(e);
-        setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId && x.state ? { ...x, state: transient ? "sending" : "failed" } : x)));
+        if (!transient && item.clientId) {
+          clearTimeout(stallTimers.current.get(item.clientId));
+          stallTimers.current.delete(item.clientId);
+        }
+        setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId && x.state === "sending" && !transient ? { ...x, state: "failed", autoRetry: false } : x)));
       }
     },
     [request, peerId],
@@ -333,12 +408,14 @@ export function DmThread({
     smoothNext.current = true;
     setUnseenBelow(0);
     setMessages((list) => [...(list ?? []), item]);
+    armStall(clientId);
     if (connected) void deliver(item);
     return true; // composer clears immediately
   };
 
   const retry = (m: Item) => {
-    setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId ? { ...x, state: "sending" } : x)));
+    setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId && x.state === "failed" ? { ...x, state: "sending", autoRetry: undefined } : x)));
+    if (m.clientId) armStall(m.clientId);
     if (connected) void deliver({ ...m, state: "sending" });
   };
 
@@ -346,8 +423,15 @@ export function DmThread({
   // (a send whose ack was lost isn't stored twice) and the clientId swap keeps the bubble in place
   useEffect(() => {
     if (!connected) return;
-    for (const m of messagesRef.current ?? []) if (m.state === "sending") void deliver(m);
-  }, [connected, deliver]);
+    const queued = (messagesRef.current ?? []).filter((m) => m.state === "sending" || (m.state === "failed" && m.autoRetry));
+    if (!queued.length) return;
+    const ids = new Set(queued.map((m) => m.clientId));
+    setMessages((list) => (list ?? []).map((x) => (ids.has(x.clientId) && x.state === "failed" ? { ...x, state: "sending", autoRetry: undefined } : x)));
+    for (const m of queued) {
+      if (m.clientId) armStall(m.clientId);
+      void deliver({ ...m, state: "sending" });
+    }
+  }, [connected, deliver, armStall]);
 
   const onTyping = () => {
     const now = Date.now();
@@ -477,7 +561,8 @@ export function DmThread({
                   first={first}
                   last={last}
                   peer={peer}
-                  showStatus={i === lastMineIdx || !!m.state}
+                  showStatus={i === lastMineIdx || m.state === "failed"}
+                  latest={i === lastMineIdx}
                   onRetry={retry}
                 />
               ))}
@@ -525,6 +610,7 @@ const MessageRow = memo(function MessageRow({
   last,
   peer,
   showStatus,
+  latest,
   onRetry,
 }: {
   m: Item;
@@ -534,6 +620,7 @@ const MessageRow = memo(function MessageRow({
   last: boolean;
   peer: PublicUser | null;
   showStatus: boolean;
+  latest: boolean;
   onRetry: (m: Item) => void;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
@@ -550,7 +637,7 @@ const MessageRow = memo(function MessageRow({
             {last && peer && <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />}
           </div>
         )}
-        {mine && m.state !== "failed" && <Receipt m={m} />}
+        {mine && <Receipt m={m} onRetry={onRetry} />}
         <div
           title={formatClock(m.createdAt)}
           className={cn(
@@ -566,46 +653,128 @@ const MessageRow = memo(function MessageRow({
           {m.text}
         </div>
       </div>
-      {mine && showStatus && (
-        <div className="mt-1 pr-1 text-right text-[11px] text-zinc-500" data-testid="dm-status-line">
-          {m.state === "failed" ? (
-            <button onClick={() => onRetry(m)} className="inline-flex items-center gap-1 text-red-400 hover:underline">
-              <RotateCcw className="h-3 w-3" /> Not sent · Tap to retry
-            </button>
-          ) : m.state === "sending" ? (
-            "Sending…"
-          ) : m.readAt ? (
-            <span>Seen {formatClock(m.readAt)}</span>
-          ) : (
-            "Sent"
-          )}
-        </div>
-      )}
+      {mine && showStatus && <StatusLine m={m} latest={latest} onRetry={onRetry} />}
     </div>
   );
 });
 
+/** Delivery state of one of my messages. Only ever moves forward: sending → sent (server ack, "Delivered") → seen. */
+type ReceiptState = "pending" | "failed" | "sent" | "seen";
+const receiptState = (m: Item): ReceiptState => (m.state === "sending" ? "pending" : m.state === "failed" ? "failed" : m.readAt ? "seen" : "sent");
+
 /**
- * iMessage-style delivery ticks next to my bubble: faint ✓ while the server hasn't acked yet, muted ✓ once
- * stored (sent), ✓✓ in the accent colour once the recipient has seen it.
+ * iMessage-style ticks next to my bubble, pure SVG + CSS (globals.css `.rcpt*`):
+ *  - pending: a tiny clock whose hand turns (only appears if the ack takes > 300 ms, so fast sends don't flicker)
+ *  - sent:    a single thin check that draws itself in (~240 ms)
+ *  - seen:    the second check draws in beside it and the pair shifts to the accent colour
+ *  - failed:  a small retry arrow in the same slot (tap to resend) — never an error banner
+ * States present when the bubble first renders (history) are shown static; only live transitions animate.
+ * Fixed-size slot → no layout shift. prefers-reduced-motion → no motion, instant state changes.
  */
-function Receipt({ m }: { m: Item }) {
-  const state = m.state === "sending" ? "pending" : m.readAt ? "seen" : "sent";
-  const label = state === "pending" ? "Sending" : state === "seen" ? `Seen ${formatClock(m.readAt!)}` : "Sent";
+function Receipt({ m, onRetry }: { m: Item; onRetry: (m: Item) => void }) {
+  const state = receiptState(m);
+  const born = useRef(state);
+  const label = state === "pending" ? "Sending" : state === "failed" ? "Not delivered. Retry" : state === "seen" ? `Seen ${formatClock(m.readAt!)}` : "Delivered";
+  const drawFirst = born.current === "pending" || born.current === "failed";
+  const drawSecond = born.current !== "seen";
+  if (state === "failed") {
+    return (
+      <button
+        type="button"
+        onClick={() => onRetry(m)}
+        className="rcpt rcpt-retry relative mb-[3px] inline-flex h-2.5 w-[15px] shrink-0 items-center justify-end self-end text-zinc-400 after:absolute after:-inset-2.5 after:content-[''] hover:text-zinc-200"
+        data-receipt="failed"
+        title={label}
+        aria-label={label}
+      >
+        <svg viewBox="0 0 16 10" width="15" height="10" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="rcpt-pop">
+          <path d="M12.2 3.1A3.9 3.9 0 1 0 12.5 6.6" />
+          <path d="M12.6 1.1v2.3h-2.3" />
+        </svg>
+      </button>
+    );
+  }
   return (
     <span
       className={cn(
-        "mb-0.5 inline-flex h-3.5 w-4 shrink-0 items-center justify-end self-end transition-colors duration-300",
-        state === "pending" && "text-zinc-500 opacity-40",
-        state === "sent" && "text-zinc-500",
-        state === "seen" && "text-emerald-400",
+        "rcpt mb-[3px] inline-flex h-2.5 w-[15px] shrink-0 items-center justify-end self-end",
+        state === "seen" ? "text-emerald-400 opacity-100" : "text-zinc-500 opacity-60",
       )}
       data-receipt={state}
       title={label}
       aria-label={label}
       role="img"
     >
-      {state === "seen" ? <CheckCheck className="h-3.5 w-3.5" strokeWidth={2.5} /> : <Check className="h-3.5 w-3.5" strokeWidth={2.5} />}
+      <svg viewBox="0 0 16 10" width="15" height="10" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {state === "pending" ? (
+          <g className="rcpt-clock">
+            <circle cx="10" cy="5" r="3.9" />
+            <path d="M10 5h1.6" />
+            <path className="rcpt-hand" d="M10 5V2.6" />
+          </g>
+        ) : (
+          <>
+            <path className={cn(drawFirst && "rcpt-draw")} pathLength={1} d="M1.2 5.4l2.9 2.9 5.7-6.6" />
+            {state === "seen" && <path className={cn(drawSecond && "rcpt-draw rcpt-draw-late")} pathLength={1} d="M6.7 7l1.3 1.3 5.7-6.6" />}
+          </>
+        )}
+      </svg>
     </span>
+  );
+}
+
+type StatusDesc = { key: string; state: ReceiptState; readAt: number | null };
+
+function StatusLabel({ d, m, onRetry, inert }: { d: StatusDesc; m: Item; onRetry: (m: Item) => void; inert?: boolean }) {
+  if (d.state === "failed")
+    return (
+      <span>
+        Not delivered ·{" "}
+        <button type="button" tabIndex={inert ? -1 : 0} onClick={() => onRetry(m)} className="font-semibold text-zinc-300 hover:text-zinc-100">
+          Retry
+        </button>
+      </span>
+    );
+  if (d.state === "pending") return <span>Sending…</span>;
+  if (d.state === "seen" && d.readAt) return <span>Seen {formatClock(d.readAt)}</span>;
+  return <span>Delivered</span>;
+}
+
+/**
+ * One quiet line under my most recent message (and under any failed one): "Sending…" → "Delivered" →
+ * "Seen 9:24 PM". The line height is reserved (no layout shift) and labels crossfade (~180 ms, ease-out).
+ * "Sending…" waits 300 ms before fading in, so a normal fast ack goes straight to "Delivered" without flicker.
+ */
+function StatusLine({ m, latest, onRetry }: { m: Item; latest: boolean; onRetry: (m: Item) => void }) {
+  const state = receiptState(m);
+  const desc: StatusDesc = { key: state === "seen" ? `seen-${m.readAt}` : state, state, readAt: m.readAt ?? null };
+  const shown = useRef(desc);
+  const [prev, setPrev] = useState<StatusDesc | null>(null);
+  const changed = useRef(false);
+  useEffect(() => {
+    if (shown.current.key === desc.key) return;
+    setPrev(shown.current);
+    shown.current = desc;
+    changed.current = true;
+    const t = setTimeout(() => setPrev(null), 200);
+    return () => clearTimeout(t);
+  }, [desc.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const inClass = changed.current || prev ? (state === "pending" ? "status-in status-in-late" : "status-in") : state === "pending" ? "status-in status-in-late" : "";
+  return (
+    <div
+      className="mt-[2px] grid h-[13px] justify-items-end pr-1 text-[10.5px] leading-[13px] font-medium tracking-[0.01em] text-zinc-500"
+      data-testid="dm-status-line"
+      data-state={state}
+      aria-live={latest ? "polite" : undefined}
+    >
+      {prev && prev.key !== desc.key && (
+        <div className="status-out pointer-events-none [grid-area:1/1] whitespace-nowrap" aria-hidden>
+          <StatusLabel d={prev} m={m} onRetry={onRetry} inert />
+        </div>
+      )}
+      <div key={desc.key} className={cn("[grid-area:1/1] whitespace-nowrap", inClass)}>
+        <StatusLabel d={desc} m={m} onRetry={onRetry} />
+      </div>
+    </div>
   );
 }
