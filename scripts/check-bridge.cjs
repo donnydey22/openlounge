@@ -62,6 +62,16 @@ t(B.parseBridgeMessage('{"__ol":1,"method":"haptic","value":"raiseHand"}'), { __
 t(B.parseBridgeMessage('{"__ol":1,"method":"haptic","value":"boom"}'), null, 'unknown haptic');
 t(B.parseBridgeMessage('{"__ol":1,"method":"ready"}'), { __ol: 1, method: 'ready' }, 'ready');
 t(B.parseBridgeMessage('{"__ol":1,"method":"setSession"}'), null, 'setSession without id');
+t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioSetEnabled","value":true}'), { __ol: 1, id: 'a', method: 'bioSetEnabled', value: true }, 'bio set');
+t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioSetEnabled","value":"yes"}'), null, 'bio set non-bool');
+t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioGetEnabled"}'), { __ol: 1, id: 'a', method: 'bioGetEnabled' }, 'bio get');
+{
+  const { shouldLock } = require(path.join(root, 'src/lockPolicy.ts'));
+  t(shouldLock(false, 0, 1e6), false, 'lock off');
+  t(shouldLock(true, 0, 5), true, 'cold start locks');
+  t(shouldLock(true, 1000, 61000), false, '60s exactly no lock');
+  t(shouldLock(true, 1000, 61001), true, '>60s locks');
+}
 for (const js of [B.injectedBeforeContentLoaded('ios', '0.2.3'), B.audioResumeScript('x'), B.keyboardScript(true, 300, 250), B.nativeEventScript('a', { b: 1 })]) {
   new Function(js); // syntax check
 }

@@ -32,7 +32,8 @@
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": false,
         "NSContactsUsageDescription": "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -173,7 +174,7 @@
       [
         "expo-secure-store",
         {
-          "faceIDPermission": false
+          "faceIDPermission": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
         }
       ],
       [
@@ -218,7 +219,13 @@
           }
         }
       ],
-      "./plugins/withRNFirebaseDisableSPM.js"
+      "./plugins/withRNFirebaseDisableSPM.js",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
+        }
+      ]
     ],
     "extra": {
       "startUrl": "https://openlounge.app",

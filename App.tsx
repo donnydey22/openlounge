@@ -10,6 +10,8 @@ import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { LaunchOverlay } from './src/LaunchOverlay';
+import { LockScreen } from './src/LockScreen';
+import * as BioLock from './src/biometricLock';
 import { OfflineScreen } from './src/OfflineScreen';
 import {
   audioResumeScript,
@@ -93,6 +95,69 @@ function Shell() {
   const appState = useRef<AppStateStatus>(AppState.currentState);
 
   const inject = useCallback((js: string) => webRef.current?.injectJavaScript(js), []);
+
+  // ---------------- opt-in biometric app lock (src/biometricLock.ts) ----------------
+  // 'checking' (cold start, until the stored setting is read) and 'locked' both cover the WebView.
+  const [lock, setLock] = useState<'checking' | 'locked' | 'unlocked'>('checking');
+  const [lockActions, setLockActions] = useState(false);
+  const [lockFailed, setLockFailed] = useState(false);
+  const [privacy, setPrivacy] = useState(false); // app switcher snapshot cover while the lock is on
+  const lockEnabled = useRef(false);
+  const lockRef = useRef(lock);
+  lockRef.current = lock;
+  const prompting = useRef(false);
+  const backgroundedAt = useRef(0);
+
+  const promptUnlock = useCallback(async (otherWay: boolean) => {
+    if (prompting.current) return;
+    prompting.current = true;
+    setLockActions(false);
+    // LocalAuthentication with device fallback: Face ID / Touch ID, "Use Passcode" in the sheet; "Use another
+    // way" re-opens it with a passcode-first message (iOS offers the passcode after a biometric miss).
+    const status = await BioLock.authenticate(otherWay ? 'Enter your iPhone passcode to unlock' : 'Unlock Open Lounge');
+    prompting.current = false;
+    if (status === 'success') {
+      setLock('unlocked');
+      setLockFailed(false);
+    } else if (status === 'unavailable' && !(await BioLock.isAvailable())) {
+      // passcode removed: never lock the user out of their own app
+      await BioLock.setEnabledFlag(false).catch(() => {});
+      lockEnabled.current = false;
+      setLock('unlocked');
+    } else {
+      setLockFailed(status === 'failed');
+      setLockActions(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    BioLock.getEnabled().then((on) => {
+      lockEnabled.current = on;
+      if (BioLock.shouldLock(on, 0, Date.now())) {
+        setLock('locked');
+        promptUnlock(false);
+      } else setLock('unlocked');
+    });
+  }, [promptUnlock]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (prompting.current) return; // the Face ID / passcode sheet itself makes the app 'inactive'
+      if (next === 'background') backgroundedAt.current = Date.now();
+      if (next !== 'active') {
+        if (lockEnabled.current) setPrivacy(true);
+        return;
+      }
+      setPrivacy(false);
+      const since = backgroundedAt.current;
+      backgroundedAt.current = 0;
+      if (since > 0 && lockRef.current === 'unlocked' && BioLock.shouldLock(lockEnabled.current, since, Date.now())) {
+        setLock('locked');
+        promptUnlock(false);
+      }
+    });
+    return () => sub.remove();
+  }, [promptUnlock]);
 
   // ---------------- splash ----------------
   const hideSplash = useCallback(() => {
@@ -331,6 +396,19 @@ function Shell() {
           return;
       }
       try {
+        if (msg.method === 'bioIsAvailable') return void reply(msg.id, true, await BioLock.isAvailable());
+        if (msg.method === 'bioGetEnabled') return void reply(msg.id, true, await BioLock.getEnabled());
+        if (msg.method === 'bioSetEnabled') {
+          prompting.current = true;
+          let on = false;
+          try {
+            on = await BioLock.setEnabled(msg.value);
+          } finally {
+            prompting.current = false;
+          }
+          lockEnabled.current = on;
+          return void reply(msg.id, true, on);
+        }
         if (msg.method === 'getSession') reply(msg.id, true, await Session.getSession());
         else if (msg.method === 'setSession') reply(msg.id, true, await Session.setSession(msg.value));
         else if (msg.method === 'clearSession') reply(msg.id, true, await Session.clearSession());
@@ -463,6 +541,14 @@ function Shell() {
 
       <LaunchOverlay ready={launchReady} theme={theme} onShown={() => SplashScreen.hideAsync().catch(() => {})} />
       {offline && <OfflineScreen theme={theme} onRetryNow={retryNow} insets={insets} />}
+      {(lock !== 'unlocked' || privacy) && (
+        <LockScreen
+          showActions={lock === 'locked' && lockActions}
+          failed={lockFailed}
+          onRetry={() => promptUnlock(false)}
+          onOtherWay={() => promptUnlock(true)}
+        />
+      )}
     </View>
   );
 }
