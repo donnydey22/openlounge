@@ -34,6 +34,7 @@ async function main() {
   let inFlight = 0;
   let draining = false;
   metrics.gauge("http_in_flight", () => inFlight);
+  metrics.gauge("process_heap_used_bytes", () => process.memoryUsage().heapUsed);
 
   const server = createServer((req, res) => {
     const rid = requestId(req);

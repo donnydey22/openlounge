@@ -187,7 +187,8 @@ export class Store {
 
   attach(events: StoreEvents) {
     this.events = events;
-    setInterval(() => this.tick(), 1500);
+    // unref: the simulation tick must never keep the process alive on shutdown (and tests exit cleanly)
+    setInterval(() => this.tick(), 1500).unref();
   }
 
   // ---------- seeding & persistence ----------
