@@ -14,6 +14,7 @@ import { Sheet } from "@/components/Sheet";
 import { InterestChips } from "@/components/profile/InterestChips";
 import { SocialLinksForm } from "@/components/profile/SocialLinksForm";
 import { SignInMethods } from "@/components/settings/SignInMethods";
+import { DeleteAccount } from "@/components/settings/DeleteAccount";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
@@ -114,6 +115,7 @@ export default function SettingsPage() {
 
         <SocialLinksForm me={me} onSaved={setMeLocal} toast={toast} />
         <SignInMethods />
+        <DeleteAccount onDeleted={() => signOut()} toast={toast} />
 
         <section>
           <h2 className="mb-3 text-xs font-semibold tracking-wide text-zinc-500 uppercase">About</h2>

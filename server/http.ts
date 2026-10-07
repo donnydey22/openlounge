@@ -183,6 +183,20 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     return json(res, 404, { ok: false, error: "Not found" });
   }
 
+  // Account deletion: Authorization: Bearer <access token>, body { confirm: "DELETE" }. Irreversible.
+  if (url === "/api/me/delete" && (req.method === "POST" || req.method === "DELETE")) {
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>);
+    if (body?.confirm !== "DELETE") return json(res, 400, { ok: false, error: 'Confirmation required: send { "confirm": "DELETE" }' });
+    const n = push();
+    if (n) await n.deleteUserData(auth.userId);
+    const r = store.deleteAccount(auth.userId);
+    if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+    await store.flush().catch(() => {});
+    return json(res, 200, { ok: true });
+  }
+
   // Social links: Authorization: Bearer <access token>, body { links: { instagram?: string|null, ... } }
   if (url === "/api/me/social-links" && (req.method === "POST" || req.method === "PUT")) {
     const auth = await store.authenticate(bearer(req));

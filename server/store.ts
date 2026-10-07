@@ -104,6 +104,9 @@ const EMPTY_ROOM_TTL_MS = 5 * 60_000; // user rooms with no humans end after 5 m
 const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
+export const DELETED_USER_ID = "u_deleted";
+const DELETED_NAME = "Deleted account";
+const DELETED_COLOR = "#64748B";
 
 export { conversationId };
 
@@ -776,6 +779,42 @@ export class Store {
     let active = 0;
     for (const s of this.sessions.values()) if (!s.revokedAt) active++;
     return { ...st, sessions: active };
+  }
+
+  // ----- account deletion (App Store 5.1.1(v)) -----
+
+  /**
+   * Permanently delete a member: sessions (tokens), sign-in identities, follows (both directions), read markers,
+   * interests, avatar and the user row. DMs they sent are kept for the other person but anonymised
+   * ("Deleted account"); rooms they hosted are ended and re-attributed to a placeholder host.
+   * Device tokens, notification prefs and contact hashes live in the push repo and are removed by the caller.
+   */
+  deleteAccount(userId: string) {
+    const u = this.users.get(userId);
+    if (!u || u.isBot) return { ok: false as const, status: 404, error: "Account not found" };
+    const revoked = this.revokeSession(undefined, { allForUser: userId });
+    for (const s of [...this.sessions.values()]) if (s.userId === userId) this.dropSession(s);
+    for (const [k, idn] of [...this.identities]) if (idn.userId === userId) this.identities.delete(k);
+    this.follows.delete(userId);
+    for (const set of this.follows.values()) set.delete(userId);
+    this.dmReads.delete(userId);
+    for (const m of this.dmReads.values()) m.delete(userId);
+    for (const list of this.dms.values())
+      for (const m of list)
+        if (m.fromId === userId) {
+          m.fromName = DELETED_NAME;
+          m.fromColor = DELETED_COLOR;
+        }
+    for (const r of this.rooms.values())
+      if (r.hostId === userId) {
+        r.hostId = DELETED_USER_ID;
+        r.ended = true;
+      }
+    fs.rmSync(path.join(AVATAR_DIR, `${userId}.img`), { force: true });
+    fs.rmSync(path.join(AVATAR_DIR, `${userId}.type`), { force: true });
+    this.users.delete(userId);
+    this.scheduleSave();
+    return { ok: true as const, revokedSessions: revoked.length };
   }
 
   // ----- profile -----

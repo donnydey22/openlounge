@@ -25,6 +25,8 @@ export interface PushRepo {
   /** owners (who uploaded within the TTL) that have `hash` */
   ownersOfHash(hash: string): Promise<string[]>;
   purgeExpiredHashes(now?: number): Promise<number>;
+  /** account deletion: device tokens, notification prefs and contact hashes owned by the user */
+  deleteUserData(userId: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -62,6 +64,11 @@ export class MemoryPushRepo implements PushRepo {
     let n = 0;
     for (const [k, v] of this.hashes) if (now - v.at >= UNMATCHED_HASH_TTL_MS) (this.hashes.delete(k), n++);
     return n;
+  }
+  async deleteUserData(userId: string) {
+    for (const [k, t] of this.tokens) if (t.userId === userId) this.tokens.delete(k);
+    this.prefs.delete(userId);
+    this.hashes.delete(userId);
   }
   async close() {}
 }
@@ -125,6 +132,21 @@ export class PgPushRepo implements PushRepo {
   async purgeExpiredHashes(now = Date.now()) {
     const r = await this.pool.query("DELETE FROM contact_hashes WHERE created_at <= to_timestamp($1::double precision / 1000)", [now - UNMATCHED_HASH_TTL_MS]);
     return r.rowCount ?? 0;
+  }
+  async deleteUserData(userId: string) {
+    const c = await this.pool.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query("DELETE FROM device_tokens WHERE user_id = $1", [userId]);
+      await c.query("DELETE FROM notification_prefs WHERE user_id = $1", [userId]);
+      await c.query("DELETE FROM contact_hashes WHERE owner_id = $1", [userId]);
+      await c.query("COMMIT");
+    } catch (e) {
+      await c.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      c.release();
+    }
   }
   async close() {
     await this.pool.end().catch(() => {});

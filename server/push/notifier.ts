@@ -54,6 +54,9 @@ export class Notifier {
     if (typeof token === "string") await this.d.repo.removeToken(token, userId);
     return { ok: true as const };
   }
+  deleteUserData(userId: string) {
+    return this.d.repo.deleteUserData(userId);
+  }
   getPrefs(userId: string) {
     return this.d.repo.getPrefs(userId);
   }
