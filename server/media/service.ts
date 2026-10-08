@@ -10,7 +10,7 @@
 //   GET  /api/media/f/:id/:variant     → file (Range support; access re-checked on every request)
 // Expiry: the sweeper deletes the file + media row at expiresAt (recipient online or not), leaves a tombstone so the
 // bubble becomes "Photo expired", and pushes "media:update" to both sides. Reconnecting clients reconcile.
-import { isGroupId } from "../conversation";
+import { conversationId as convKey, isGroupId } from "../conversation";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -193,7 +193,7 @@ export class MediaService {
     const members = this.members(r.conversationId);
     if (!members.includes(viewerId)) return false;
     if (viewerId !== r.ownerId && store.isBlockedEither(viewerId, r.ownerId)) return false;
-    if (r.conversationId && r.conversationId.includes("|") && !store.findDm(r.conversationId, r.messageId)) return false;
+    if (r.conversationId && (r.conversationId.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId, r.messageId)) return false;
     return true;
   }
 
@@ -603,8 +603,9 @@ export class MediaService {
     if (rows.some((r) => !r || r.ownerId !== fromId)) throw new MediaError("Attachment not found. Try attaching it again.", 404);
     const items = rows as MediaRow[];
     const to = String(body.to ?? "");
-    // groups keep their own send path (server/groups); attachments there need its fan-out — not wired yet
-    if (isGroupId(to)) throw new MediaError("Photos and files in groups are coming soon", 400);
+    // groups: same attachments, sent through the group fan-out (store.sendMediaDm → groups.sendMedia); view once is 1:1 only
+    const inGroup = isGroupId(to);
+    if (inGroup && body.viewOnce === true) throw new MediaError("View once is only for 1:1 chats", 400);
     const already = items.find((r) => r.messageId);
     if (already) {
       // retried send (lost ack) → same message
@@ -638,7 +639,7 @@ export class MediaService {
       for (const r of items) Object.assign(r, { ttlSeconds: null, viewOnce: false, expiresAt: null, position: 0 });
       return res;
     }
-    const conversationId = [fromId, to].sort().join("|");
+    const conversationId = inGroup ? convKey(fromId, to) : [fromId, to].sort().join("|");
     for (const r of items) {
       r.messageId = res.message.id;
       r.conversationId = conversationId;

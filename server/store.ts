@@ -2167,6 +2167,7 @@ export class Store {
   /** Send a DM carrying an attachment. `text` is the caption or the auto label; server/media validated the media. */
   sendMediaDm(fromId: string, toId: string, text: string, clientId: unknown, media: MediaAttachment, attachments?: MediaAttachment[]) {
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
+    if (isGroupId(toId)) return this.groups ? this.groups.sendMedia(fromId, toId, text, clientId, media, attachments) : { ok: false as const, error: "Group not found" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
     if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't message this account." };

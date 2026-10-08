@@ -12,6 +12,8 @@ import { VoiceRecordButton, type Recorded } from "./VoiceRecorder";
 export interface MediaSendCtx {
   peerId: string;
   peerName?: string;
+  /** a group chat: no view-once option */
+  group?: boolean;
   me: { id: string; name: string; color: string } | null;
   newClientId: () => string;
   /** add the optimistic message to the thread (and scroll to it) */
@@ -111,6 +113,7 @@ export function MediaAttach({ ctx, disabled, pasted, onPastedConsumed }: { ctx: 
           asFile={picked.asFile}
           source={picked.source}
           peerName={ctx.peerName}
+          allowViewOnce={!ctx.group}
           onClose={() => setPicked(null)}
           onSend={(s) => {
             setPicked(null);

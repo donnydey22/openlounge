@@ -98,6 +98,7 @@ export function AttachPreview({
   onSend,
   peerName,
   source = "gallery",
+  allowViewOnce = true,
 }: {
   files: File[];
   asFile: boolean;
@@ -105,6 +106,8 @@ export function AttachPreview({
   onSend: (s: AttachSend) => void;
   peerName?: string;
   source?: PickSource;
+  /** false in groups (view once is 1:1 only; timers still work) */
+  allowViewOnce?: boolean;
 }) {
   const [tray, setTray] = useState<TrayItem[]>(() => toTray(files));
   const list = useMemo(() => tray.map((t) => t.file), [tray]);
@@ -311,7 +314,7 @@ export function AttachPreview({
             <Chip on={customOpen} onClick={() => setCustomOpen(true)}>
               Custom
             </Chip>
-            {visual && !asFile && !album && (
+            {allowViewOnce && visual && !asFile && !album && (
               <Chip
                 on={viewOnce}
                 onClick={() => {

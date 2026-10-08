@@ -669,10 +669,10 @@ export function DmThread({
     setMessages((list) => [...(list ?? []), item]);
   }, []);
   const mediaCtx = useMemo<MediaSendCtx>(
-    () => ({ peerId, peerName: peer ? firstName(peer.name) : undefined, me: me ? { id: me.id, name: me.name, color: me.color } : null, newClientId, onQueued: onMediaQueued, callbacks: mediaCallbacks }),
+    () => ({ peerId, peerName: peer ? firstName(peer.name) : undefined, group: isGroupId(peerId), me: me ? { id: me.id, name: me.name, color: me.color } : null, newClientId, onQueued: onMediaQueued, callbacks: mediaCallbacks }),
     [peerId, peer, me, onMediaQueued, mediaCallbacks],
   );
-  const canAttach = !!peer && !peer.isBot && !isGroup;
+  const canAttach = !!peer && !peer.isBot && (!isGroup || (!!group && !gone)); // groups: members only (photos, files, voice, albums)
   const [pastedFiles, setPastedFiles] = useState<File[] | null>(null);
   const clearPasted = useCallback(() => setPastedFiles(null), []);
 

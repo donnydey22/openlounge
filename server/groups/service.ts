@@ -678,6 +678,22 @@ export class GroupService {
     return { ok: true, message: this.decorate(msg) };
   }
 
+  /** A photo / video / file / voice note / album into a group (server/media builds the attachments; same fan-out). */
+  sendMedia(fromId: string, gid: string, text: string, clientId: unknown, media: NonNullable<DirectMessage["media"]>, attachments?: DirectMessage["attachments"]): { ok: true; message: DirectMessage; duplicate: boolean } | { ok: false; error: string } {
+    const conv = this.convs.get(gid);
+    const me = this.member(gid, fromId);
+    if (!conv || !me) return { ok: false, error: "You're not a member of this group" };
+    const cid = typeof clientId === "string" && /^[\w-]{1,64}$/.test(clientId) ? clientId : undefined;
+    const list = this.store.dms.get(gid) ?? [];
+    if (cid) for (let i = list.length - 1; i >= Math.max(0, list.length - 50); i--) if (list[i].clientId === cid && list[i].fromId === fromId) return { ok: true, message: this.decorate(list[i]), duplicate: true };
+    // no per-message limit (albums are one message; uploads are rate limited in server/media)
+    const msg: DirectMessage = { ...this.buildMessage(gid, fromId, text.slice(0, CHAT_MAX_LENGTH), cid), media, ...(attachments?.length ? { attachments } : {}) };
+    this.store.pushConversationMessage(gid, msg);
+    me.lastReadAt = msg.createdAt;
+    this.repo.upsertMember(me);
+    return { ok: true, message: this.decorate(msg), duplicate: false };
+  }
+
   /** store.events.dmMessage for a group message → every member's devices + pushes (mentions, mute aware). */
   fanout(msg: DirectMessage) {
     const gid = msg.toId;

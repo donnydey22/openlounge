@@ -9,6 +9,7 @@ import { isGroupId } from "../conversation";
 import { push, bg } from "../push";
 import { createGroupsRepo } from "./repo";
 import { GroupService } from "./service";
+import { media } from "../media/service";
 
 export const groups = new GroupService(store, createGroupsRepo());
 
@@ -26,6 +27,8 @@ export function wireGroups(io: WsHub, withOnline: WithOnline) {
   hub = io;
   withOnlineRef = withOnline;
   store.groups = groups;
+  // photos / files in groups: media access + media:update fan-out follow current membership
+  media.setConversationResolver((cid) => (isGroupId(cid) ? groups.memberIds(cid) : null));
   // account deletion hook (present once the store-compliance deletion work is in; members of deleted accounts are
   // filtered out of every view regardless, because memberIds() only returns existing users)
   (store as unknown as { onAccountDeleted?: (fn: (id: string) => void) => void }).onAccountDeleted?.((userId) => groups.accountDeleted(userId));
