@@ -1,6 +1,7 @@
 // Clubhouse-style push notifications: who gets what, with per-user toggles, quiet hours, dedupe/collapse and caps.
 import { inQuietHours, mergePrefs, type NotifPrefs, type NotifType } from "./prefs";
 import type { PushRepo, Platform } from "./repo";
+import { voipService } from "../calls/voip";
 import type { PushMessage, PushSender } from "./sender";
 import { cleanHashes, pepperHash, clientHash } from "./contacts";
 
@@ -74,8 +75,9 @@ export class Notifier {
     if (typeof token === "string") await this.d.repo.removeToken(token, userId);
     return { ok: true as const };
   }
-  deleteUserData(userId: string) {
-    return this.d.repo.deleteUserData(userId);
+  async deleteUserData(userId: string) {
+    await this.d.repo.deleteUserData(userId);
+    await voipService()?.store.deleteUser(userId); // PushKit tokens (server/calls/voip.ts)
   }
   getPrefs(userId: string) {
     return this.d.repo.getPrefs(userId);
@@ -98,8 +100,9 @@ export class Notifier {
   /**
    * opts.live: also send the in-app copy (notify:activity) to the user's open connections, and skip the device push
    * while one of them is visible (same rule as DMs: the in-app banner already showed it). Same gates either way.
+   * opts.skipPlatforms: leave those devices out (calls: the iPhone already rings through CallKit).
    */
-  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; live?: { actorId?: string; roomId?: string } } = {}): Promise<Outcome> {
+  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; live?: { actorId?: string; roomId?: string }; skipPlatforms?: Platform[] } = {}): Promise<Outcome> {
     if (this.d.isBot?.(userId)) return "skip:bot";
     const now = this.now();
     const prefs: NotifPrefs = await this.d.repo.getPrefs(userId);
@@ -118,7 +121,7 @@ export class Notifier {
     const recent = this.pruneWindow(this.hourly.get(capKey) ?? [], now);
     if (recent.length >= (type === "dm" ? DM_HOURLY_CAP : HOURLY_CAP)) return "skip:cap";
 
-    const tokens = await this.d.repo.tokensFor(userId);
+    const tokens = (await this.d.repo.tokensFor(userId)).filter((t) => !opts.skipPlatforms?.includes(t.platform));
     const live = opts.live && this.d.inApp ? opts.live : null;
     const foreground = live ? this.d.isForeground(userId) : false;
     // count it before the network round-trip so bursts can't race past the gates
@@ -171,7 +174,8 @@ export class Notifier {
   // ---------- 1:1 calls ----------
   /** Ringing while the app is closed/backgrounded: data message (wrappers build a full-screen call UI from it; see
    *  /workspace/calls/NATIVE_SPEC.md) + a visible "Incoming call" alert on iOS / web. Same tag as the missed call so it's replaced. */
-  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }) {
+  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean } = {}) {
+    // skipIos: the iPhone already rings through CallKit (VoIP push, server/calls/voip.ts) → no duplicate "Incoming call" alert
     return this.deliver(calleeId, "dm", {
       type: "call_incoming",
       title: call.caller.name,
@@ -180,7 +184,7 @@ export class Notifier {
       tag: `call:${call.id}`,
       url: `/call/${call.id}`,
       data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId },
-    });
+    }, opts.skipIos ? { skipPlatforms: ["ios"] } : {});
   }
 
   /** stop the native ring UI (caller hung up / answered elsewhere / timeout) */

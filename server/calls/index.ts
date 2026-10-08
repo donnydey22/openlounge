@@ -5,6 +5,7 @@ import { closeLiveKitRoom, createJoinToken, livekit } from "../livekit";
 import { bg, push } from "../push";
 import { log, metrics } from "../log";
 import { CallService } from "./service";
+import { initVoip, voipService } from "./voip";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -15,8 +16,23 @@ export const calls = () => svc;
 /** room id passed to createJoinToken / closeLiveKitRoom → LiveKit room "openlounge-call-<id>" */
 const mediaRoom = (callId: string) => `call-${callId}`;
 
+/** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */
+function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }) {
+  return {
+    type: "call_incoming",
+    callId: call.id,
+    callerId: call.callerId,
+    callerName: call.caller.name,
+    callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "",
+    video: call.video ? "1" : "0",
+    expiresAt: String(call.expiresAt),
+    url: `/call/${call.id}`,
+  };
+}
+
 export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) {
   svc?.dispose();
+  if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
   svc = new CallService({
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
     isConnected: (userId) => {
@@ -35,7 +51,14 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     mediaUrl: () => (livekit.enabled ? livekit.url : null),
     closeMedia: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     push: {
-      incoming: (calleeId, call) => bg(push()?.callIncoming(calleeId, call)),
+      // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
+      incoming: (calleeId, call) =>
+        bg(
+          (async () => {
+            const rang = await (voipService()?.ring(calleeId, voipPayload(call), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
+            await push()?.callIncoming(calleeId, call, { skipIos: rang > 0 });
+          })(),
+        ),
       cancel: (calleeId, callId, reason) => bg(push()?.callCancel(calleeId, callId, reason)),
     },
     log: (msg, extra) => log.info(`[calls] ${msg}`, extra),

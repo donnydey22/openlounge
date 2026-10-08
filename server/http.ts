@@ -1,5 +1,6 @@
 // HTTP API (everything under /api/* and /auth/*), shared by server/index.ts and the in-process tests.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { handleCallsHttp, isCallsHttpPath } from "./calls/api";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
 import { handleGroupsApi } from "./groups";
@@ -193,6 +194,13 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     if (!pub) return json(res, 404, { ok: false, error: "Not found" });
     const { id, name, username, color, photoUrl, bio, followers, following } = pub;
     return json(res, 200, { ok: true, user: { id, name, username, color, photoUrl, bio, followers, following } });
+  }
+
+  // ---- native call ring UIs: decline / status / PushKit token (server/calls/api.ts) ----
+  if (isCallsHttpPath(url)) {
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    return handleCallsHttp(req, res, url, auth.userId, json, readJson);
   }
 
   // ---- push / notification settings / contacts (Authorization: Bearer <access token>) ----

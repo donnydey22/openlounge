@@ -43,6 +43,25 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("pagehide", onHide);
   }, [socket]);
 
+  // Native wrappers (CallKit / Android call notification, NATIVE_SPEC.md §5) drive the call from outside the page:
+  //   window.dispatchEvent(new CustomEvent("openlounge:native-call", { detail: { type: "call:hangup" } }))
+  // types: call:hangup | call:accept | call:decline | call:mute {muted}. CustomEvents can only come from code running in
+  // this page (the wrapper's injectJavaScript), never from other origins/iframes.
+  useEffect(() => {
+    const onNative = (e: Event) => {
+      const d = (e as CustomEvent<{ type?: string; muted?: boolean }>).detail;
+      const e_ = callEngine;
+      if (!d || !e_) return;
+      const st = e_.snapshot();
+      if (d.type === "call:hangup") void (st.ui === "incoming" ? e_.decline() : e_.hangup());
+      else if (d.type === "call:accept" && st.ui === "incoming") void e_.accept(st.call?.video ?? false);
+      else if (d.type === "call:decline" && st.ui === "incoming") void e_.decline();
+      else if (d.type === "call:mute" && typeof d.muted === "boolean" && d.muted !== st.muted) void e_.toggleMute();
+    };
+    window.addEventListener("openlounge:native-call", onNative);
+    return () => window.removeEventListener("openlounge:native-call", onNative);
+  }, []);
+
   return (
     <>
       {children}
