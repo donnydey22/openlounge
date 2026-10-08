@@ -31,7 +31,8 @@
     "test:groups": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/groups/*.test.ts",
     "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts",
     "test:stickers": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/stickers/*.test.ts",
-    "test:monet": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/monet/*.test.ts"
+    "test:monet": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/monet/*.test.ts",
+    "test:media": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=120000 tests/media/*.test.ts"
   },
   "engines": {
     "node": ">=20.9"
@@ -49,6 +50,7 @@
     "pg": "^8.23.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "ws": "^8.22.0"
   },

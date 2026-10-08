@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Copy, Flag, Loader2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -39,6 +39,12 @@ import { startCall } from "../calls/CallProvider";
 import { DropInBanner } from "../rooms/DropInBanner";
 import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
 import { MentionPicker, MentionText, PinnedBar, ServiceRow, jumpToMessage, memberLine, senderPeer, useGroupInfo } from "../groups/GroupBits";
+import { MediaBubble, mediaActions } from "../media/MediaBubble";
+import { openViewer } from "../media/viewerStore";
+import { mediaGone } from "@/lib/media/types";
+import { MediaLayer } from "../media/MediaLayer";
+import { MediaAttach, MediaVoiceButton, type MediaSendCtx } from "../media/MediaComposer";
+import { retryMedia, type QueueCallbacks } from "@/lib/media/outbox";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -626,6 +632,7 @@ export function DmThread({
 
   const deliver = useCallback(
     async (item: Item) => {
+      if (item.media) return; // attachments upload + send through the media outbox (resumable, own retries)
       try {
         const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId });
         if (item.clientId) {
@@ -645,6 +652,29 @@ export function DmThread({
     },
     [request, peerId],
   );
+
+  // ---- attachments (photos, videos, files, voice notes): optimistic bubble → resumable upload → send ----
+  const mediaCallbacks = useMemo<QueueCallbacks>(
+    () => ({
+      onDone: (cid, msg) => setMessages((list) => mergeMessages(list ?? [], [{ ...msg, clientId: cid }])),
+      onFail: (cid) => setMessages((list) => (list ?? []).map((x) => (x.clientId === cid ? { ...x, state: "failed", autoRetry: false } : x))),
+      onCancel: (cid) => setMessages((list) => (list ?? []).filter((x) => x.clientId !== cid)),
+    }),
+    [],
+  );
+  const onMediaQueued = useCallback((item: Item) => {
+    stickToBottom.current = true;
+    smoothNext.current = true;
+    setUnseenBelow(0);
+    setMessages((list) => [...(list ?? []), item]);
+  }, []);
+  const mediaCtx = useMemo<MediaSendCtx>(
+    () => ({ peerId, peerName: peer ? firstName(peer.name) : undefined, me: me ? { id: me.id, name: me.name, color: me.color } : null, newClientId, onQueued: onMediaQueued, callbacks: mediaCallbacks }),
+    [peerId, peer, me, onMediaQueued, mediaCallbacks],
+  );
+  const canAttach = !!peer && !peer.isBot && !isGroup;
+  const [pastedFiles, setPastedFiles] = useState<File[] | null>(null);
+  const clearPasted = useCallback(() => setPastedFiles(null), []);
 
   const send = async (text: string) => {
     if (!me) return false;
@@ -676,6 +706,10 @@ export function DmThread({
   };
 
   const retry = (m: Item) => {
+    if (m.media) {
+      if (m.clientId && retryMedia(m.clientId, mediaCallbacks)) setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId ? { ...x, state: "sending", autoRetry: undefined } : x)));
+      return;
+    }
     setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId && x.state === "failed" ? { ...x, state: "sending", autoRetry: undefined } : x)));
     if (m.clientId) armStall(m.clientId);
     if (connected) void deliver({ ...m, state: "sending" });
@@ -796,16 +830,23 @@ export function DmThread({
   const overlayActions = useMemo<MessageAction[]>(() => {
     if (!overlay) return [];
     const m = overlay.m;
-    const out: MessageAction[] = [
-      {
-        key: "copy",
-        label: "Copy",
-        icon: <Copy className="h-[18px] w-[18px]" />,
-        onSelect: () => {
-          void copyText(m.text).then((ok) => toast(ok ? "Copied" : "Couldn't copy"));
-        },
-      },
-    ];
+    // attachments: Copy copies the caption only (never an auto label like "📷 Photo"); Open → the viewer (save/share/delete)
+    const ma = mediaActions(m, me?.id);
+    const copy = ma ? ma.copyText : m.text;
+    const out: MessageAction[] = copy
+      ? [
+          {
+            key: "copy",
+            label: "Copy",
+            icon: <Copy className="h-[18px] w-[18px]" />,
+            onSelect: () => {
+              void copyText(copy).then((ok) => toast(ok ? "Copied" : "Couldn't copy"));
+            },
+          },
+        ]
+      : [];
+    if (ma && m.media && !m.state && m.media.kind !== "voice" && m.media.kind !== "document" && !mediaGone(m.media, serverNow()) && !m.media.viewOnce)
+      out.unshift({ key: "open", label: ma.count > 1 ? "Open album" : "Open", icon: <Maximize2 className="h-[18px] w-[18px]" />, onSelect: () => openViewer({ message: m, from: overlay.target.el.getBoundingClientRect(), mode: "visual", index: 0 }) });
     if (groupRow && !m.state && groupRow.amAdmin) {
       const pinned = groupRow.pinned.has(m.id);
       out.push({ key: "pin", label: pinned ? "Unpin" : "Pin", icon: <Pin className="h-[18px] w-[18px]" />, onSelect: () => groupRow.onPin(m, !pinned) });
@@ -1055,6 +1096,7 @@ export function DmThread({
         />
       )}
       {latestDropIn && !hiddenPeer && <DropInBanner card={roomCards.get(latestDropIn) ?? null} meId={me?.id} peerId={peerId} />}
+      <MediaLayer socket={socket} connected={connected} messages={messages} setMessages={setMessages} me={me} peer={peer} />
       <div className="relative min-h-0 flex-1">
         <div
           ref={listRef}
@@ -1221,9 +1263,12 @@ export function DmThread({
         </div>
         <div className="flex items-end gap-2">
         {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} />}
+        {canAttach && <MediaAttach ctx={mediaCtx} disabled={messages === null} pasted={pastedFiles} onPastedConsumed={clearPasted} />}
         <div className="min-w-0 flex-1">
         <ChatComposer
           onSend={send}
+          idleAction={canAttach ? <MediaVoiceButton ctx={mediaCtx} disabled={messages === null} /> : undefined}
+          onPasteFiles={canAttach ? setPastedFiles : undefined}
           onTyping={onTyping}
           onTypingStop={onTypingStop}
           disabled={messages === null}
@@ -1411,6 +1456,11 @@ const MessageRow = memo(function MessageRow({
         )}
         {mine && <Receipt m={m} onRetry={onRetry} />}
         {mine && !m.state && <ReactButton onClick={open} />}
+        {m.media ? (
+          <div ref={bubble} title={formatFull(m.createdAt)} data-testid="dm-bubble" data-ts={m.createdAt} data-mid-bubble={m.id} {...pressHandlers} className="msg-in flex min-w-0 max-w-full">
+            <MediaBubble m={m} mine={mine} shape={shape} onRetry={onRetry} />
+          </div>
+        ) : (
         <div
           ref={bubble}
           title={formatFull(m.createdAt)}
@@ -1438,6 +1488,7 @@ const MessageRow = memo(function MessageRow({
             group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text
           )}
         </div>
+        )}
         {!mine && !m.state && <ReactButton onClick={open} />}
       </div>
       {hasReactions && (

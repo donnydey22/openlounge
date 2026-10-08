@@ -19,6 +19,11 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
+# Media pipeline (server/media): ffmpeg/ffprobe for video posters, remux/transcode and voice-note → AAC;
+# heif-convert (libheif-examples) for iPhone HEIC photos (sharp's prebuilt libvips has no HEVC decoder).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg libheif-examples \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \

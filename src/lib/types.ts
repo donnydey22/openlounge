@@ -1,3 +1,4 @@
+import type { MediaAttachment } from "./media/types";
 // Shared types between the WebSocket server (server/) and the Next.js client (src/).
 
 export type Role = "host" | "speaker" | "listener";
@@ -165,6 +166,13 @@ export interface DirectMessage {
   call?: CallMeta;
   /** Emoji reactions, oldest first (one per person per message, Telegram-style). Absent = none. */
   reactions?: DmReaction[];
+  /** Photo / video / document / voice note (server/media). `text` is then the caption, or a label like "📷 Photo". */
+  media?: MediaAttachment;
+  /**
+   * Album (2–10 photos/videos in one message), in order. `media` then mirrors the first live item so older clients,
+   * reply quotes and previews still show a cover. Absent for single attachments.
+   */
+  attachments?: MediaAttachment[];
 }
 
 /** Outcome of a 1:1 call as recorded in the DM ("Outgoing call · 3:12", "Missed call", …). */

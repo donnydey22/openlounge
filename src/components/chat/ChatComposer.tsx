@@ -23,6 +23,8 @@ export function ChatComposer({
   emojiPanel,
   panelHost,
   above,
+  idleAction,
+  onPasteFiles,
 }: {
   onSend: (text: string) => Promise<boolean>;
   onTyping?: () => void;
@@ -39,6 +41,10 @@ export function ChatComposer({
   emojiPanel?: boolean;
   /** where the emoji panel renders (a full-width slot below the composer row); default: inside the composer */
   panelHost?: HTMLElement | null;
+  /** shown instead of the send button while the field is empty (DMs: the voice-note mic, Telegram style) */
+  idleAction?: React.ReactNode;
+  /** files pasted into the field (screenshots, copied images) */
+  onPasteFiles?: (files: File[]) => void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -104,6 +110,13 @@ export function ChatComposer({
           onBlur={() => onTypingStop?.()}
           onFocus={() => panel && setPanel(false)}
           data-testid="composer-input"
+          onPaste={(e) => {
+            const files = onPasteFiles ? [...(e.clipboardData?.files ?? [])] : [];
+            if (files.length) {
+              e.preventDefault();
+              onPasteFiles!(files);
+            }
+          }}
           onChange={(e) => {
             setText(e.target.value);
             if (e.target.value.trim()) onTyping?.();
@@ -151,6 +164,9 @@ export function ChatComposer({
           </span>
         )}
       </div>
+      {idleAction && !text.trim() && !disabled ? (
+        idleAction
+      ) : (
       <button
         type="submit"
         disabled={!canSend}
@@ -166,6 +182,7 @@ export function ChatComposer({
       >
         <SendHorizontal className="h-[18px] w-[18px]" />
       </button>
+      )}
     </form>
     {emojiPanel && panel && (() => {
       const el = (

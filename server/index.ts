@@ -16,6 +16,8 @@ import { log, metrics, requestContext } from "./log";
 import { BadJson, BodyTooLarge, RateLimiter, clientIp, requestId, securityHeaders, sendJson, wwwRedirect } from "./httpsec";
 import { isTransientPgError } from "./pg";
 import { handleStickerRoute, initStickers, isStickerRoute } from "./stickers/api";
+import { media } from "./media/service";
+import { isMediaFileRequest } from "./media/http";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
@@ -24,6 +26,8 @@ const hostname = process.env.HOST || "0.0.0.0";
 async function main() {
   // Durable storage first (Postgres via DATABASE_URL, else db.json) — fail fast before serving anything
   await store.init();
+  // media metadata + expiry timers attach to the loaded DMs (files on the volume at UPLOAD_DIR)
+  await media.ready();
   logProviderStatus();
   initPush();
   // sticker library (catalog + PayPal); non-fatal: chat works without it
@@ -114,7 +118,8 @@ async function main() {
     if (isApiRequest(req.url ?? "")) {
       // per-IP HTTP rate limits (hardening) in front of every API / auth route except the health check
       const u = (req.url ?? "").split("?")[0];
-      if (u !== "/api/health" && limited(req, res, u.includes("/auth/") ? "auth" : u === "/api/livekit/token" ? "livekit" : "api")) return;
+      // signed media file URLs (images in a scrolling chat, video range requests) are exempt; uploads get their own bucket
+      if (u !== "/api/health" && !isMediaFileRequest(u) && limited(req, res, u.includes("/auth/") ? "auth" : u === "/api/livekit/token" ? "livekit" : u.startsWith("/api/media/") ? "media" : "api")) return;
       void api(req, res).catch((err) => {
         if (err instanceof BodyTooLarge || err instanceof BadJson) return json(res, err.status, { ok: false, error: err.message });
         const transient = isTransientPgError(err);
@@ -158,6 +163,7 @@ async function main() {
   // Raw WebSocket endpoint at /ws (other upgrade requests, e.g. Next HMR, pass through)
   const hub = new WsHub(server, "/ws", (req) => originAllowed(req.headers.origin, req.headers.host));
   registerRealtime(hub);
+  media.attachHub(hub);
 
   server.listen(port, hostname, () => {
     log.info("ready", {
@@ -234,6 +240,7 @@ const limits = {
   auth: new RateLimiter(Number(process.env.RL_AUTH_PER_MIN || 30), 60_000),
   livekit: new RateLimiter(Number(process.env.RL_LIVEKIT_PER_MIN || 60), 60_000),
   api: new RateLimiter(Number(process.env.RL_API_PER_MIN || 300), 60_000),
+  media: new RateLimiter(Number(process.env.RL_MEDIA_PER_MIN || 1200), 60_000),
 };
 function limited(req: IncomingMessage, res: ServerResponse, bucket: keyof typeof limits) {
   const ip = clientIp(req);

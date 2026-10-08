@@ -24,6 +24,7 @@ import type {
 } from "../src/lib/types";
 import type { CallMeta, DmKind, MessageKind, RoomCard } from "../src/lib/types";
 import { DM_REACTION_MAX_EMOJI } from "../src/lib/types";
+import type { MediaAttachment } from "../src/lib/media/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -2076,7 +2077,7 @@ export class Store {
     return { ok: true as const, message: msg };
   }
 
-  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind: MessageKind; roomId: string; call?: CallMeta; read?: boolean }) {
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind?: MessageKind; roomId?: string; call?: CallMeta; read?: boolean; media?: MediaAttachment; attachments?: MediaAttachment[] }) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -2092,8 +2093,10 @@ export class Store {
       createdAt: Math.max(Date.now(), (list[list.length - 1]?.createdAt ?? 0) + 1),
       readAt: null,
       ...(clientId ? { clientId } : {}),
-      ...(extra ? { kind: extra.kind, roomId: extra.roomId } : {}),
+      ...(extra?.kind ? { kind: extra.kind, roomId: extra.roomId } : {}),
       ...(extra?.call ? { call: extra.call } : {}),
+      ...(extra?.media ? { media: extra.media } : {}),
+      ...(extra?.attachments?.length ? { attachments: extra.attachments } : {}),
     };
     if (extra?.read) msg.readAt = msg.createdAt; // answered / declined calls never count as unread
     list.push(msg);
@@ -2157,6 +2160,48 @@ export class Store {
     }
     out.sort((x, y) => y.createdAt - x.createdAt);
     return { calls: out.slice(0, limit), hasMore: out.length > limit };
+  }
+
+  // ---------- media messages (photos, videos, documents, voice notes — server/media owns the attachment) ----------
+
+  /** Send a DM carrying an attachment. `text` is the caption or the auto label; server/media validated the media. */
+  sendMediaDm(fromId: string, toId: string, text: string, clientId: unknown, media: MediaAttachment, attachments?: MediaAttachment[]) {
+    if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
+    if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
+    if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
+    if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't message this account." };
+    const cid = typeof clientId === "string" && /^[\w-]{1,64}$/.test(clientId) ? clientId : undefined;
+    if (cid) {
+      const recent = this.dms.get(conversationId(fromId, toId)) ?? [];
+      for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--)
+        if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i], duplicate: true };
+    }
+    // no per-message chat limit here: albums send several at once, and uploads are rate limited in server/media
+    const msg = this.appendDm(fromId, toId, text.slice(0, CHAT_MAX_LENGTH), cid, { media, attachments });
+    this.markDmRead(fromId, toId);
+    return { ok: true as const, message: msg, duplicate: false };
+  }
+
+  /** A stored DM by id within a conversation (server/media: expiry, processing updates). */
+  findDm(convId: string, messageId: string): DirectMessage | null {
+    const list = this.dms.get(convId);
+    if (!list) return null;
+    for (let i = list.length - 1; i >= 0; i--) if (list[i].id === messageId) return list[i];
+    return null;
+  }
+
+  /** server/media changed a message's attachment(s) (and maybe its text, e.g. a self-destructed caption): persist it. */
+  patchDmMedia(convId: string, messageId: string, media: MediaAttachment | undefined, text?: string, attachments?: MediaAttachment[] | null) {
+    const m = this.findDm(convId, messageId);
+    if (!m) return null;
+    if (media) m.media = media;
+    if (attachments === null) delete m.attachments;
+    else if (attachments) m.attachments = attachments;
+    if (text !== undefined && text !== m.text) {
+      m.text = text;
+      this.scheduleSave();
+    }
+    return m;
   }
 
   // ---------- audio rooms in DMs: invite cards + drop-in audio chats ----------

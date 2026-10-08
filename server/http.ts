@@ -14,6 +14,7 @@ import { allowMatch } from "./push/contacts";
 import { clearRefreshCookie, deviceLabel, originAllowed, readRefreshCookie, refreshCookie } from "./auth";
 import { UNIFIED_AUTH_PATH, handleAuthApi, handleNavigation, isNavigationRoute } from "./authx/routes";
 import { handleLiveKitWebhook } from "./livekitWebhook";
+import { handleMediaApi } from "./media/http";
 
 /** Requests answered by api() instead of Next.js. */
 export function isApiRequest(url: string) {
@@ -78,6 +79,8 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   if (url === "/api/livekit/webhook" && req.method === "POST") return handleLiveKitWebhook(req, res);
   if (!cors(req, res)) return;
   if (url.startsWith("/api/groups/") && (await handleGroupsApi(req, res, url))) return;
+  // photos / videos / documents / voice notes: uploads, signed file URLs, view once, delete now (server/media)
+  if (url.startsWith("/api/media/")) return handleMediaApi(req, res, url);
   if (url === "/api/health") {
     const db = await Promise.race([store.storageStatus(), new Promise<null>((r) => setTimeout(() => r(null), 2000))]).catch(() => null);
     return json(res, 200, {
