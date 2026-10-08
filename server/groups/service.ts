@@ -677,19 +677,23 @@ export class GroupService {
     const conv = this.convs.get(gid);
     if (!conv) return;
     const ids = this.memberIds(gid);
-    const out = this.decorate(msg);
-    this.emitTo(ids, "dm:message", out);
+    const out = { ...this.decorate(msg), conversationTitle: conv.title };
     const svc = this.service.get(msg.id);
     const handles = svc ? [] : mentionHandles(msg.text);
     for (const uid of ids) {
-      if (uid === msg.fromId) continue;
-      this.emitTo([uid], "dm:unread", { count: this.store.unreadDmCount(uid) });
+      if (uid === msg.fromId) {
+        this.emitTo([uid], "dm:message", out);
+        continue;
+      }
       const mem = this.member(gid, uid)!;
       const u = this.store.users.get(uid);
       const mentioned = !!u && handles.includes(u.username.toLowerCase());
-      if (svc && !(svc.targetIds ?? []).includes(uid)) continue; // service pushes only for "you were added" etc.
-      if (mem.muted && !mentioned) continue;
-      if (this.store.isBlocked(uid, msg.fromId)) continue;
+      const blocked = this.store.isBlocked(uid, msg.fromId);
+      // per-member flags for the in-app banner (old clients ignore unknown fields): muted groups stay quiet unless @mentioned
+      const notify = !blocked && (svc ? (svc.targetIds ?? []).includes(uid) : !mem.muted || mentioned);
+      this.emitTo([uid], "dm:message", { ...out, notify, ...(mentioned ? { mentioned: true } : {}) });
+      this.emitTo([uid], "dm:unread", { count: this.store.unreadDmCount(uid) });
+      if (!notify) continue; // service pushes only for "you were added" etc.; muted → mentions only; never from blocked senders
       if (this.emitter?.isForeground(uid)) continue;
       const body = svc ? msg.text : `${mentioned ? "@ " : ""}${msg.fromName.split(" ")[0]}: ${msg.text}`;
       this.emitter?.push(uid, {
@@ -746,6 +750,8 @@ export class GroupService {
       me.lastReadAt = cursor;
       this.repo.upsertMember(me);
       this.emitter?.clearPush?.(userId, gid);
+      // the reader's other devices / inbox clear this group's badge (new event: old clients ignore it)
+      this.emitTo([userId], "conv:read", { conversationId: gid, upTo: cursor });
     }
     if (bySender.size) this.store.saveSoon(); // persist the readAt stamps with the next snapshot
     for (const [senderId, mid] of bySender) this.emitTo([senderId], "dm:read-receipt", { peerId: senderId, readerId: gid, upToMessageId: mid, readAt: now } satisfies DmReadReceipt);

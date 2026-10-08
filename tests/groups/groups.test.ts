@@ -258,3 +258,36 @@ test("group photo upload is served from /api/groups/<id>/photo", async () => {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "image/png");
 });
+
+test("in-app banner flags (notify / mention / title), conv:read on the reader's devices, group drop-in audio chat", async () => {
+  const r = await A.client.req("group:create", { title: "Banner test", memberIds: [id(B), id(C)] });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const g2 = r.group.id;
+  assert.equal((await C.client.req("group:mute", { id: g2, muted: true })).ok, true);
+  const plain = await B.client.req("dm:send", { to: g2, text: "hello all" });
+  const ment = await B.client.req("dm:send", { to: g2, text: `ping @${C.res.user.username}` });
+  await sleep(200);
+  const at = (k: string, mid: string) => ev[k].find((e) => e.ev === "dm:message" && e.data.id === mid)?.data;
+  assert.equal(at("A", plain.message.id).notify, true);
+  assert.equal(at("A", plain.message.id).conversationTitle, "Banner test");
+  assert.equal(at("C", plain.message.id).notify, false, "muted member: no banner");
+  assert.equal(at("C", ment.message.id).notify, true, "muted member still alerted on @mention");
+  assert.equal(at("C", ment.message.id).mentioned, true);
+  assert.equal(at("B", plain.message.id).notify, undefined, "sender's own echo carries no banner flag");
+  // reading on one device tells the reader's other devices (inbox badge clears)
+  assert.equal((await C.client.req("dm:read", { peerId: g2 })).ok, true);
+  await sleep(150);
+  assert.ok(ev.C.some((e) => e.ev === "conv:read" && e.data.conversationId === g2));
+  // drop-in audio chat inside the group: one live room per group, every member may join, card posted in the group
+  const d1 = await A.client.req("dropin:start", { peerId: g2 });
+  assert.equal(d1.ok, true, JSON.stringify(d1));
+  await sleep(150);
+  const card = ev.C.find((e) => e.ev === "dm:message" && e.data.toId === g2 && e.data.kind === "dropin")?.data;
+  assert.equal(card?.roomId, d1.roomId);
+  const d2 = await B.client.req("dropin:start", { peerId: g2 });
+  assert.equal(d2.ok, true);
+  assert.equal(d2.roomId, d1.roomId);
+  assert.equal(d2.reused, true);
+  const outsider = await D.client.req("dropin:start", { peerId: g2 });
+  assert.equal(outsider.ok, false);
+});

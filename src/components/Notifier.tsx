@@ -265,6 +265,7 @@ export function Notifier({ children }: { children: React.ReactNode }) {
     };
 
     const onDm = (msg: DirectMessage) => {
+      if (msg.toId.startsWith("g_")) return onGroupMsg(msg as DirectMessage & { conversationTitle?: string; notify?: boolean; service?: unknown });
       if (!meIdRef.current || msg.toId !== meIdRef.current || msg.fromId === meIdRef.current) return;
       const url = `/messages/${msg.fromId}`;
       const tag = `dm:${msg.fromId}`;
@@ -286,6 +287,25 @@ export function Notifier({ children }: { children: React.ReactNode }) {
       }
       // tap → the thread (opens scrolled to the newest message); inside a room it opens the DM drawer
       banner({ title: msg.fromName, body: msg.text, avatar: { name: msg.fromName, color: msg.fromColor, photo: msg.fromPhotoUrl ?? null, userId: msg.fromId }, href: url, key: tag });
+    };
+
+    // group messages: the server marks per member whether this one should alert (muted → @mentions only)
+    const onGroupMsg = (msg: DirectMessage & { conversationTitle?: string; notify?: boolean; service?: unknown }) => {
+      if (!meIdRef.current || msg.fromId === meIdRef.current || !msg.notify) return;
+      const url = `/messages/${msg.toId}`;
+      const tag = `dm:${msg.toId}`;
+      const title = msg.conversationTitle || "Group";
+      const body = msg.service ? msg.text : `${firstName(msg.fromName)}: ${msg.text}`;
+      if (pageHidden()) {
+        if (osEnabled()) {
+          const n = bump(tag);
+          void showOsNotification({ title: n > 1 ? `${title} · ${n} new messages` : title, body, tag, url, renotify: realert(tag) });
+          return;
+        }
+      } else if (getActiveDm() === msg.toId) {
+        return;
+      }
+      banner({ title, body, avatar: { name: msg.fromName, color: msg.fromColor, photo: msg.fromPhotoUrl ?? null, userId: msg.fromId }, href: url, key: tag });
     };
 
     socket.on("room:presence", onPresence);

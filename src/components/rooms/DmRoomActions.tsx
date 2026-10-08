@@ -70,7 +70,7 @@ export function DmRoomActions({
         const r = await request<{ card: RoomCard; results: { ok: boolean; messageId?: string }[] }>("room:inviteDm", { roomId, to: [peerId] });
         primeRoomCard(r.card);
         setOpen(false);
-        toast(`🎙️ Invite sent to ${firstName(peerName)}`);
+        toast(`🎙️ Invite sent to ${peerId.startsWith("g_") ? peerName : firstName(peerName)}`);
       } catch (e) {
         reportError(e);
       } finally {
@@ -105,7 +105,7 @@ export function DmRoomActions({
             {busy === "dropin" ? <Loader2 className="h-5 w-5 animate-spin" /> : <AudioLines className="h-5 w-5" />}
             <span className="min-w-0 flex-1">
               <span className="block">Start a drop-in audio chat</span>
-              <span className="block text-xs font-normal opacity-80">Private: only you and {firstName(peerName)} can join</span>
+              <span className="block text-xs font-normal opacity-80">{peerId.startsWith("g_") ? `Everyone in ${peerName} can join` : `Private: only you and ${firstName(peerName)} can join`}</span>
             </span>
           </button>
           {current && (

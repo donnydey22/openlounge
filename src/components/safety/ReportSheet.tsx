@@ -6,7 +6,7 @@ import { Sheet } from "../Sheet";
 import { SUPPORT_MAILTO } from "@/lib/support";
 import { REPORT_REASONS, sendReport, type ReportTarget } from "@/lib/safety";
 
-const TITLES: Record<ReportTarget["type"], string> = { user: "Report account", room: "Report room", message: "Report message", dm: "Report message" };
+const TITLES: Record<ReportTarget["type"], string> = { user: "Report account", room: "Report room", message: "Report message", dm: "Report message", group: "Report group" };
 
 /** Reason picker + optional note → POST /api/reports. */
 export function ReportSheet({ target, onClose, onBlock }: { target: ReportTarget | null; onClose: () => void; onBlock?: () => void }) {

@@ -2047,9 +2047,10 @@ export class Store {
     if (fromId === toId) return { ok: false as const, error: "You can't invite yourself" };
     const from = this.users.get(fromId);
     if (!from || from.isBot) return { ok: false as const, error: "Not signed in" };
-    if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
-    if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to invite them." };
-    if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't invite this account." };
+    const inGroup = isGroupId(toId);
+    if (inGroup ? !this.groups?.canAccess(fromId, toId) : !this.users.has(toId)) return { ok: false as const, error: inGroup ? "Group not found" : "User not found" };
+    if (!inGroup && this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to invite them." };
+    if (!inGroup && this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't invite this account." };
     const room = this.rooms.get(roomId);
     if (!room || room.ended) return { ok: false as const, error: "This room has ended" };
     if (room.private && !room.participants.has(fromId) && room.hostId !== fromId) return { ok: false as const, error: "Join the audio chat to invite people" };
@@ -2058,17 +2059,22 @@ export class Store {
     for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--) {
       const m = recent[i];
       if (m.roomId === roomId && m.fromId === fromId && m.kind) {
-        room.allowed?.add(toId);
+        for (const id of this.inviteesOf(toId)) room.allowed?.add(id);
         return { ok: true as const, message: m, duplicate: true };
       }
     }
     if (this.slidingLimit(this.inviteRate, fromId, 10 * 60_000, INVITE_MAX_PER_10MIN)) return { ok: false as const, error: "Slow down a little 🙂" };
-    room.allowed?.add(toId);
+    for (const id of this.inviteesOf(toId)) room.allowed?.add(id);
     const text = kind === "dropin" ? "🎙️ Started a drop-in audio chat. Tap to join" : `🎙️ Join me in “${room.title}”`;
     const msg = this.appendDm(fromId, toId, text, undefined, { kind, roomId });
     this.markDmRead(fromId, toId);
     this.events?.roomChanged(roomId); // card watchers refresh
     return { ok: true as const, message: msg, duplicate: false };
+  }
+
+  /** Who an invite to `toId` admits: that person, or every member of a group (plus the group id as a marker). */
+  private inviteesOf(toId: string): string[] {
+    return isGroupId(toId) ? [toId, ...(this.groups?.audience(toId) ?? [])] : [toId];
   }
 
   /** An active drop-in between exactly these two people (to reuse instead of starting a second one). */
@@ -2084,6 +2090,7 @@ export class Store {
   startDropIn(fromId: string, peerId: string) {
     if (fromId === peerId) return { ok: false as const, error: "You can't start a chat with yourself" };
     const from = this.users.get(fromId);
+    if (isGroupId(peerId)) return this.startGroupDropIn(fromId, peerId);
     const peer = this.users.get(peerId);
     if (!from || from.isBot) return { ok: false as const, error: "Not signed in" };
     if (!peer) return { ok: false as const, error: "User not found" };
@@ -2099,6 +2106,31 @@ export class Store {
     const created = this.createRoom(fromId, { title: `${first(from.name)} & ${first(peer.name)}`, topic: "Other", description: "Drop-in audio chat" }, { dropin: true, allowed: [peerId] });
     if (!created.ok) return created;
     const sent = this.sendRoomInvite(fromId, peerId, created.roomId, "dropin");
+    if (!sent.ok) {
+      const r = this.rooms.get(created.roomId);
+      if (r) this.finish(r);
+      return sent;
+    }
+    return { ok: true as const, roomId: created.roomId, message: sent.message, reused: false };
+  }
+
+  /** Group drop-in: one live audio chat per group (reused while it runs); every member may join. */
+  private startGroupDropIn(fromId: string, gid: string) {
+    const from = this.users.get(fromId);
+    if (!from || from.isBot) return { ok: false as const, error: "Not signed in" };
+    const conv = this.groups?.convs.get(gid);
+    if (!conv || !this.groups?.canAccess(fromId, gid)) return { ok: false as const, error: "Group not found" };
+    for (const r of this.rooms.values()) {
+      if (r.dropin && !r.ended && r.allowed?.has(gid)) {
+        r.allowed.add(fromId);
+        const m = [...(this.dms.get(gid) ?? [])].reverse().find((x) => x.roomId === r.id && x.kind === "dropin") ?? null;
+        return { ok: true as const, roomId: r.id, message: m, reused: true };
+      }
+    }
+    if (this.slidingLimit(this.dropinRate, fromId, 10 * 60_000, DROPIN_MAX_PER_10MIN)) return { ok: false as const, error: "Slow down a little 🙂 Try again in a few minutes." };
+    const created = this.createRoom(fromId, { title: conv.title.slice(0, 60), topic: "Other", description: "Group audio chat" }, { dropin: true, allowed: this.inviteesOf(gid) });
+    if (!created.ok) return created;
+    const sent = this.sendRoomInvite(fromId, gid, created.roomId, "dropin");
     if (!sent.ok) {
       const r = this.rooms.get(created.roomId);
       if (r) this.finish(r);

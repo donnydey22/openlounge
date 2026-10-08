@@ -26,6 +26,8 @@ import { roomIdsInText } from "@/lib/roomLinks";
 import { RoomCardRow, RoomLinkCards } from "../rooms/RoomJoinCard";
 import { DmRoomActions } from "../rooms/DmRoomActions";
 import { DropInBanner } from "../rooms/DropInBanner";
+import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
+import { MentionPicker, MentionText, PinnedBar, ServiceRow, jumpToMessage, memberLine, senderPeer, useGroupInfo } from "../groups/GroupBits";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -172,6 +174,50 @@ export function DmThread({
   const isSelf = me?.id === peerId;
   const presence = usePresence(peerId, peer?.lastSeenAt);
 
+  // ---- group mode: peerId is a "g_…" conversation id. Same pipeline (dm:history / dm:send / dm:read / typing);
+  // a few group-only extras: sender names + avatars, service rows, pinned bar, @mentions, admin pin/delete.
+  const isGroup = isGroupId(peerId);
+  const { presenceOf } = useApp();
+  const { group, setGroup, gone } = useGroupInfo(isGroup ? peerId : null, false);
+  const memberMap = useMemo(() => new Map((group?.members ?? []).map((x) => [x.id, x])), [group]);
+  const amAdmin = canAdmin(group?.myRole);
+  const [typers, setTypers] = useState<{ id: string; name: string; color: string; photoUrl: string | null }[]>([]);
+  const typerTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // one stable "peer" object per sender so memoized rows don't re-render on every update
+  const senderOf = useMemo(() => {
+    const cache = new Map<string, PublicUser>();
+    return (m: DirectMessage) => {
+      let p = cache.get(m.fromId);
+      if (!p) cache.set(m.fromId, (p = senderPeer(m, memberMap)));
+      return p;
+    };
+  }, [memberMap]);
+  const typingPeer: PublicUser | null = isGroup
+    ? typers[0]
+      ? senderOf({ id: "", fromId: typers[0].id, fromName: typers[0].name, fromColor: typers[0].color, fromPhotoUrl: typers[0].photoUrl, toId: peerId, text: "", createdAt: 0 })
+      : null
+    : peer;
+  const typingNames = !isGroup || !typers.length ? null : typers.length === 1 ? firstName(typers[0].name) : typers.length === 2 ? `${firstName(typers[0].name)} and ${firstName(typers[1].name)}` : `${firstName(typers[0].name)} and ${typers.length - 1} others`;
+  const groupRow = useMemo<GroupRowCtx | undefined>(
+    () =>
+      isGroup
+        ? {
+            meUsername: me?.username,
+            amAdmin,
+            pinned: new Set((group?.pins ?? []).map((p) => p.messageId)),
+            onPin: (m, pinned) =>
+              void request("group:pin", { id: peerId, messageId: m.id, pinned })
+                .then(() => toast(pinned ? "Message pinned" : "Message unpinned"))
+                .catch((e: Error) => toast(friendlyMessage(e, "Couldn't pin that message"))),
+            onDelete: (m) =>
+              void request("group:deleteMessage", { id: peerId, messageId: m.id })
+                .then(() => setMessages((list) => (list ? list.filter((x) => x.id !== m.id) : list)))
+                .catch((e: Error) => toast(friendlyMessage(e, "Couldn't delete that message"))),
+          }
+        : undefined,
+    [isGroup, me?.username, amAdmin, group?.pins, request, peerId, toast],
+  );
+
   // Read receipts: tell the server only when the thread is really on screen (page/app visible, thread open)
   // and there is something from the peer we haven't marked seen yet.
   const markRead = useCallback(() => {
@@ -179,18 +225,19 @@ export function DmThread({
     const list = messagesRef.current ?? [];
     let upTo: Item | null = null;
     for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].fromId === peerId && !list[i].state) {
+      if ((isGroup ? list[i].fromId !== me?.id : list[i].fromId === peerId) && !list[i].state) {
         upTo = list[i];
         break;
       }
     }
     if (!upTo) return;
-    if (list.every((m) => m.fromId !== peerId || !!m.readAt)) return;
+    // groups: readAt means "seen by someone", so only the cursor (last marked id) tells us we are done
+    if (isGroup ? lastMarked.current.id === upTo.id : list.every((m) => m.fromId !== peerId || !!m.readAt)) return;
     const now = Date.now();
     if (lastMarked.current.id === upTo.id && now - lastMarked.current.at < 4_000) return; // receipt on its way
     lastMarked.current = { id: upTo.id, at: now };
     socket.emit("dm:read", { peerId, upToMessageId: upTo.id });
-  }, [socket, peerId]);
+  }, [socket, peerId, isGroup, me?.id]);
   const lastMarked = useRef<{ id: string; at: number }>({ id: "", at: 0 });
 
   // whenever the visible list changes (history loaded, new message, reconnect refresh) → maybe mark seen
@@ -231,9 +278,10 @@ export function DmThread({
   useEffect(() => {
     if (!connected || isSelf || loadedFor.current === peerId) return;
     loadedFor.current = peerId;
-    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId })
+    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
       .then((r) => {
         setPeer(r.peer);
+        if (r.group) setGroup(r.group);
         // keep anything that arrived live / was sent while the fetch was in flight
         setMessages((list) => mergeMessages(r.messages, list ?? []));
         setHasMore(r.hasMore);
@@ -254,7 +302,7 @@ export function DmThread({
   useEffect(() => {
     if (!socket) return;
     const onMsg = (m: DirectMessage) => {
-      const inThread = (m.fromId === peerId && m.toId === me?.id) || (m.fromId === me?.id && m.toId === peerId);
+      const inThread = isGroupId(peerId) ? m.toId === peerId : (m.fromId === peerId && m.toId === me?.id) || (m.fromId === me?.id && m.toId === peerId);
       if (!inThread) return;
       const el = listRef.current;
       const nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
@@ -317,6 +365,50 @@ export function DmThread({
     };
   }, [socket, peerId, me, markRead]);
 
+  // group: who's typing (conv:typing — a separate event so older clients never show it in a 1:1) and deletions
+  useEffect(() => {
+    if (!socket || !isGroup) return;
+    const timers = typerTimers.current;
+    const drop = (id: string) => {
+      clearTimeout(timers.get(id));
+      timers.delete(id);
+      setTypers((t) => (t.some((x) => x.id === id) ? t.filter((x) => x.id !== id) : t));
+    };
+    const onConvTyping = (d: { conversationId: string; from: string; name?: string; color?: string; photoUrl?: string | null }) => {
+      if (d.conversationId !== peerId || d.from === me?.id) return;
+      const el = listRef.current;
+      if (el && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX) stickToBottom.current = true;
+      setTypers((t) => (t.some((x) => x.id === d.from) ? t : [...t, { id: d.from, name: d.name ?? "Someone", color: d.color ?? "#64748B", photoUrl: d.photoUrl ?? null }]));
+      clearTimeout(timers.get(d.from));
+      timers.set(d.from, setTimeout(() => drop(d.from), TYPING_SHOW_MS));
+    };
+    const onConvStop = (d: { conversationId: string; from: string }) => d.conversationId === peerId && drop(d.from);
+    const onGroupMsg = (m: DirectMessage) => m.toId === peerId && drop(m.fromId);
+    const onDeleted = (d: { conversationId: string; messageId: string }) =>
+      d.conversationId === peerId && setMessages((list) => (list ? list.filter((x) => x.id !== d.messageId) : list));
+    socket.on("conv:typing", onConvTyping);
+    socket.on("conv:typing_stop", onConvStop);
+    socket.on("dm:message", onGroupMsg);
+    socket.on("conv:deleted", onDeleted);
+    return () => {
+      socket.off("conv:typing", onConvTyping);
+      socket.off("conv:typing_stop", onConvStop);
+      socket.off("dm:message", onGroupMsg);
+      socket.off("conv:deleted", onDeleted);
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+      setTypers([]);
+    };
+  }, [socket, isGroup, peerId, me?.id]);
+  useEffect(() => {
+    if (isGroup) setPeerTyping(typers.length > 0);
+  }, [isGroup, typers.length]);
+  // renamed / new photo (group:update) → header follows
+  useEffect(() => {
+    if (!isGroup || !group) return;
+    setPeer((p) => (p && (p.name !== group.title || p.photoUrl !== group.photoUrl || p.color !== group.color) ? { ...p, name: group.title, photoUrl: group.photoUrl, color: group.color, bio: group.description } : p));
+  }, [isGroup, group]);
+
   // Back online with the thread already loaded: refresh the latest page so receipts (and anything the
   // catch-up didn't replay) that happened while we were away show up — state survives reconnects.
   // socket dropped → the peer's typing state is unknown: hide it
@@ -329,8 +421,9 @@ export function DmThread({
     const was = wasConnected.current;
     wasConnected.current = connected;
     if (!connected || was || loadedFor.current !== peerId) return;
-    request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId })
+    request<{ messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
       .then((r) => {
+        if (r.group) setGroup(r.group);
         setMessages((list) => mergeMessages(list ?? [], r.messages));
       })
       .catch(() => {
@@ -569,7 +662,9 @@ export function DmThread({
   const status = offline ? (
     <span className="text-zinc-500">Offline · will send when you&apos;re back</span>
   ) : peerTyping ? (
-    <span className="text-emerald-400">typing…</span>
+    <span className="text-emerald-400">{typingNames ? `${typingNames} ${typers.length > 1 ? "are" : "is"} typing…` : "typing…"}</span>
+  ) : isGroup ? (
+    <span data-testid="group-members-line">{memberLine(group, presenceOf)}</span>
   ) : peer?.isBot ? (
     "Demo user · replies automatically"
   ) : presence.status === "online" ? (
@@ -593,8 +688,8 @@ export function DmThread({
           {backStyle === "close" ? <X className="h-5 w-5" /> : <ChevronLeft className="h-6 w-6" />}
         </button>
         {peer ? (
-          <Link href={`/profile/${peer.id}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl p-1 hover:bg-white/5">
-            <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="sm" presence={peer.isBot ? null : presence.dot} />
+          <Link href={isGroup ? `/groups/${peer.id}` : `/profile/${peer.id}`} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl p-1 hover:bg-white/5" data-testid={isGroup ? "group-header" : undefined}>
+            <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="sm" presence={peer.isBot || isGroup ? null : presence.dot} />
             <div className="min-w-0">
               <div className="truncate text-[15px] leading-tight font-semibold">{peer.name}</div>
               <div className="truncate text-xs leading-tight text-zinc-500" data-testid="dm-status">
@@ -608,12 +703,12 @@ export function DmThread({
             <div className="h-3 w-28 animate-pulse rounded-full bg-zinc-800" />
           </div>
         )}
-        {peer && !hiddenPeer && !peer.deleted && (
+        {peer && !isGroup && !hiddenPeer && !peer.deleted && (
           <div className="pr-1">
             <FollowButton userId={peer.id} small />
           </div>
         )}
-        {peer && !peer.isBot && (
+        {peer && !peer.isBot && !isGroup && (
           <button onClick={() => setMoreOpen(true)} className="mr-1 rounded-full p-2 text-zinc-400 hover:bg-white/5 hover:text-zinc-100" aria-label="More options">
             <MoreHorizontal className="h-5 w-5" />
           </button>
@@ -672,6 +767,17 @@ export function DmThread({
         </>
       )}
 
+      {isGroup && group && group.pins.length > 0 && (
+        <PinnedBar
+          pins={group.pins}
+          canUnpin={amAdmin}
+          onJump={(id) => {
+            stickToBottom.current = false;
+            if (!jumpToMessage(listRef.current, id)) toast(hasMore ? "Scroll up to load that message" : "That message is no longer available");
+          }}
+          onUnpin={(id) => groupRow?.onPin({ id } as Item, false)}
+        />
+      )}
       {latestDropIn && !hiddenPeer && <DropInBanner card={roomCards.get(latestDropIn) ?? null} meId={me?.id} peerId={peerId} />}
       <div className="relative min-h-0 flex-1">
         <div
@@ -702,7 +808,7 @@ export function DmThread({
               )}
               {peer && !hasMore && (
                 <div className="flex flex-col items-center gap-2 pt-6 pb-8 text-center">
-                  <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="lg" presence={peer.isBot ? null : presence.dot} />
+                  <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="lg" presence={peer.isBot || isGroup ? null : presence.dot} />
                   <div className="mt-1 text-[17px] font-semibold">{peer.name}</div>
                   <div className="text-xs text-zinc-500">@{peer.username}</div>
                   {messages.length === 0 && (
@@ -726,12 +832,14 @@ export function DmThread({
                   sepTitle={formatFull(m.createdAt)}
                   first={first}
                   last={last}
-                  peer={peer}
+                  peer={isGroup ? senderOf(m) : peer}
                   fromName={m.fromName}
                   pending={!!m.state}
                 />
+              ) : (m as ConvMessage).service ? (
+                <ServiceRow key={keyOf(m)} m={m as ConvMessage} meId={me?.id} members={memberMap} />
               ) : (
-                <div key={keyOf(m)}>
+                <div key={keyOf(m)} data-mid={m.id}>
                 <MessageRow
                   key={keyOf(m)}
                   m={m}
@@ -741,7 +849,8 @@ export function DmThread({
                   clockTick={clockTick}
                   first={first}
                   last={last}
-                  peer={peer}
+                  peer={isGroup ? senderOf(m) : peer}
+                  group={groupRow}
                   showStatus={i === lastMineIdx || m.state === "failed"}
                   latest={i === lastMineIdx}
                   onRetry={retry}
@@ -750,10 +859,10 @@ export function DmThread({
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
               ); })}
-              {peerTyping && peer && (
+              {peerTyping && typingPeer && (
                 <div className="msg-in mt-2 flex items-end gap-2" data-testid="dm-typing">
-                  <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />
-                  <div className="dm-theirs flex items-center gap-1 rounded-[20px] rounded-bl-md bg-zinc-800 px-4 py-3" aria-label={`${firstName(peer.name)} is typing`}>
+                  <Avatar name={typingPeer.name} color={typingPeer.color} photo={typingPeer.photoUrl} size="xs" />
+                  <div className="dm-theirs flex items-center gap-1 rounded-[20px] rounded-bl-md bg-zinc-800 px-4 py-3" aria-label={`${typingNames ?? firstName(typingPeer.name)} is typing`}>
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400" />
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400 [animation-delay:150ms]" />
                     <span className="typing-dot h-1.5 w-1.5 rounded-full bg-zinc-400 [animation-delay:300ms]" />
@@ -774,7 +883,11 @@ export function DmThread({
       </div>
 
       <div className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        {peer?.deleted ? (
+        {isGroup && gone ? (
+          <div className="flex items-center justify-center gap-2 py-3 text-center text-sm text-zinc-400" data-testid="group-gone">
+            {gone === "left" ? "You left this group." : gone === "removed" ? "You were removed from this group." : "This group is no longer available."}
+          </div>
+        ) : peer?.deleted ? (
           <div className="flex items-center justify-center gap-2 py-3 text-sm text-zinc-400" data-testid="dm-deleted">
             {DELETED_COMPOSER_TEXT}
           </div>
@@ -793,9 +906,9 @@ export function DmThread({
         ) : (
         <>
         <div className={cn("overflow-hidden px-1 text-[13px] transition-[height,opacity] duration-200 motion-reduce:transition-none", peerTyping && peer ? "h-6 opacity-100" : "h-0 opacity-0")} aria-live="polite">
-          {peerTyping && peer && (
+          {peerTyping && typingPeer && (
             <span className="flex h-6 items-center gap-1.5 text-zinc-400">
-              <span className="font-medium text-zinc-300">{firstName(peer.name)}</span>
+              <span className="truncate font-medium text-zinc-300">{typingNames ?? firstName(typingPeer.name)}</span>
               <TypingLabel testId="dm-typing-strip" />
             </span>
           )}
@@ -808,7 +921,8 @@ export function DmThread({
           onTyping={onTyping}
           onTypingStop={onTypingStop}
           disabled={messages === null}
-          placeholder={peer ? `Message ${firstName(peer.name)}…` : "Message…"}
+          placeholder={peer && !isGroup ? `Message ${firstName(peer.name)}…` : "Message…"}
+          above={isGroup && group ? (t, set) => <MentionPicker text={t} members={group.members} meId={me?.id} onPick={set} /> : undefined}
           autoFocus
         />
         </div>
@@ -833,6 +947,7 @@ const MessageRow = memo(function MessageRow({
   latest,
   onRetry,
   onReport,
+  group,
 }: {
   m: Item;
   mine: boolean;
@@ -847,8 +962,11 @@ const MessageRow = memo(function MessageRow({
   latest: boolean;
   onRetry: (m: Item) => void;
   onReport?: (m: Item) => void;
+  /** group conversations only: sender names, @mention highlight, admin pin / delete */
+  group?: GroupRowCtx;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const sticker = parseSticker(m.text); // sticker message: large, no bubble
   void clockTick;
   // long-press (touch) or right-click shows the full local date-time + UTC under the bubble for a few seconds
@@ -894,6 +1012,11 @@ const MessageRow = memo(function MessageRow({
           {sep}
         </div>
       )}
+      {group && !mine && first && peer && (
+        <div className="mt-2 -mb-1.5 truncate pl-9 text-[12px] leading-4 font-semibold" style={{ color: peer.color }} data-testid="group-sender">
+          {peer.name}
+        </div>
+      )}
       <div className={cn("flex items-end gap-2", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]")}>
         {!mine && (
           <div className="w-7 shrink-0">
@@ -918,7 +1041,7 @@ const MessageRow = memo(function MessageRow({
             m.state === "failed" && "opacity-60",
           )}
         >
-          {sticker ? <StickerMessage sticker={sticker} pending={m.state === "sending"} /> : m.text}
+          {sticker ? <StickerMessage sticker={sticker} pending={m.state === "sending"} /> : group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text}
         </div>
       </div>
       {showFull && (
@@ -934,12 +1057,36 @@ const MessageRow = memo(function MessageRow({
               <Flag className="h-3 w-3" /> Report
             </button>
           )}
+          {group && !m.state && group.amAdmin && (
+            <button type="button" onClick={() => group.onPin(m, !group.pinned.has(m.id))} className="ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-zinc-300 hover:bg-white/5" data-testid="group-pin">
+              {group.pinned.has(m.id) ? "Unpin" : "Pin"}
+            </button>
+          )}
+          {group && !m.state && (mine || group.amAdmin) && (
+            <button
+              type="button"
+              onClick={() => (confirmDelete ? group.onDelete(m) : setConfirmDelete(true))}
+              className="ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-red-400 hover:bg-red-500/10"
+              data-testid="group-delete"
+            >
+              {confirmDelete ? "Delete for everyone?" : "Delete"}
+            </button>
+          )}
         </div>
       )}
       {mine && showStatus && <StatusLine m={m} latest={latest} onRetry={onRetry} />}
     </div>
   );
 });
+
+/** Group-only context for message rows (one memoized object per thread). */
+type GroupRowCtx = {
+  meUsername?: string;
+  amAdmin: boolean;
+  pinned: Set<string>;
+  onPin: (m: Item, pinned: boolean) => void;
+  onDelete: (m: Item) => void;
+};
 
 /** Delivery state of one of my messages. Only ever moves forward: sending → sent (server ack, "Delivered") → seen. */
 type ReceiptState = "pending" | "failed" | "sent" | "seen";

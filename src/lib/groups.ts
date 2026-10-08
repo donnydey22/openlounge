@@ -99,7 +99,7 @@ export function serviceText(ev: ServiceEvent, nameOf: (id: string) => string, me
   const who = (id: string) => (id === meId ? "You" : nameOf(id));
   const list = (ids: string[] = []) => {
     const names = ids.map((id) => (id === meId ? "you" : nameOf(id)));
-    return names.length <= 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    return names.length <= 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   };
   const a = who(ev.actorId);
   switch (ev.type) {

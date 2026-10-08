@@ -15,6 +15,7 @@ export function ChatComposer({
   disabled,
   autoFocus,
   compact,
+  above,
 }: {
   onSend: (text: string) => Promise<boolean>;
   onTyping?: () => void;
@@ -25,6 +26,8 @@ export function ChatComposer({
   autoFocus?: boolean;
   /** Pill-shaped, smaller variant used for in-room chat */
   compact?: boolean;
+  /** rendered right above the field (e.g. group @mention suggestions); gets the draft and a setter */
+  above?: (text: string, setText: (t: string) => void) => React.ReactNode;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -55,6 +58,14 @@ export function ChatComposer({
       {/* stickers (Telegram-style panel above the composer); sent through the same onSend path */}
       <StickerButton onSend={onSend} disabled={disabled} compact={compact} />
       <div className="relative flex-1">
+        {above && (
+          <div className="absolute inset-x-0 bottom-full z-20">
+            {above(text, (t) => {
+              setText(t);
+              ref.current?.focus();
+            })}
+          </div>
+        )}
         <textarea
           ref={ref}
           rows={1}

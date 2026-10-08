@@ -5,7 +5,7 @@ import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, PenSquare, Search } from "lucide-react";
+import { Loader2, PenSquare, Search, Users } from "lucide-react";
 import type { ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
@@ -13,6 +13,7 @@ import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
+import { GroupInboxRow, mergeInbox, useGroupInbox } from "@/components/groups/GroupBits";
 
 export default function MessagesPage() {
   useDeletedIds(); // re-render when someone deletes their account (live ghost)
@@ -23,6 +24,7 @@ export default function MessagesPage() {
   const [typing, setTyping] = useState<Set<string>>(new Set());
   const typingTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const meId = me?.id;
+  const groupInbox = useGroupInbox(); // group rows (conv:list), merged by recency below
 
   // one-shot fetch on open and after a reconnect; everything else is applied from pushed events
   const load = useCallback(() => {
@@ -45,6 +47,7 @@ export default function MessagesPage() {
   useEffect(() => {
     if (!socket || !meId) return;
     const onMsg = (m: DirectMessage) => {
+      if (m.toId.startsWith("g_")) return; // group messages: useGroupInbox
       if (m.fromId !== meId && m.toId !== meId) return;
       const peerId = m.fromId === meId ? m.toId : m.fromId;
       setTyping((t) => (t.has(peerId) ? new Set([...t].filter((x) => x !== peerId)) : t));
@@ -123,7 +126,7 @@ export default function MessagesPage() {
               </li>
             ))}
           </ul>
-        ) : conversations.length === 0 ? (
+        ) : conversations.length === 0 && !groupInbox.rows?.length ? (
           <div className="mx-2 rounded-3xl border border-dashed border-white/10 p-10 text-center text-zinc-500">
             <div className="mb-2 text-3xl">✉️</div>
             No conversations yet.
@@ -132,7 +135,8 @@ export default function MessagesPage() {
           </div>
         ) : (
           <ul data-testid="dm-conversations">
-            {conversations.map((c0) => {
+            {mergeInbox(conversations, groupInbox.rows).map((c0) => {
+              if ("group" in c0) return <GroupInboxRow key={c0.id} r={c0} meId={me?.id} typingName={groupInbox.typing[c0.id]} onOpen={groupInbox.markOpened} />;
               const c = { ...c0, peer: displayUser(c0.peer) };
               const mine = c.lastMessage.fromId === me?.id;
               const st = c.peer.isBot ? "offline" : presenceOf(c.peer.id);
@@ -208,6 +212,20 @@ function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <Sheet open={open} onClose={onClose} title="New message">
+      <button
+        type="button"
+        onClick={() => {
+          onClose();
+          router.push("/groups/new");
+        }}
+        className="mb-2 flex w-full items-center gap-3 rounded-2xl p-2.5 text-left hover:bg-white/5"
+        data-testid="new-group"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+          <Users className="h-5 w-5" />
+        </span>
+        <span className="font-semibold">New group</span>
+      </button>
       <div className="relative mb-3">
         <Search className="pointer-events-none absolute top-1/2 left-4 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <input

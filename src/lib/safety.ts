@@ -19,7 +19,7 @@ export const REPORT_REASONS: { id: string; label: string }[] = [
   { id: "other", label: "Something else" },
 ];
 
-export type ReportTarget = { type: "user" | "room" | "message" | "dm"; id: string; roomId?: string; label?: string };
+export type ReportTarget = { type: "user" | "room" | "message" | "dm" | "group"; id: string; roomId?: string; label?: string };
 
 type State = { loaded: boolean; owner: string | null; blocked: PublicUser[]; hidden: Set<string>; admin?: boolean };
 let state: State = { loaded: false, owner: null, blocked: [], hidden: new Set() };
