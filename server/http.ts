@@ -11,6 +11,7 @@ import { push } from "./push";
 import { allowMatch } from "./push/contacts";
 import { clearRefreshCookie, deviceLabel, originAllowed, readRefreshCookie, refreshCookie } from "./auth";
 import { UNIFIED_AUTH_PATH, handleAuthApi, handleNavigation, isNavigationRoute } from "./authx/routes";
+import { handleLiveKitWebhook } from "./livekitWebhook";
 
 /** Requests answered by api() instead of Next.js. */
 export function isApiRequest(url: string) {
@@ -71,6 +72,8 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   // OAuth start/callback are top-level browser navigations (Apple's form_post comes from appleid.apple.com):
   // they answer with redirects and are protected by the sealed state cookie, not by CORS.
   if (isNavigationRoute(url)) return handleNavigation(req, res, url, new URLSearchParams((req.url ?? "").split("?")[1] ?? ""));
+  // LiveKit server → us (server-to-server, signed JWT over the body; no browser CORS involved)
+  if (url === "/api/livekit/webhook" && req.method === "POST") return handleLiveKitWebhook(req, res);
   if (!cors(req, res)) return;
   if (url.startsWith("/api/groups/") && (await handleGroupsApi(req, res, url))) return;
   if (url === "/api/health") {
