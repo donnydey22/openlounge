@@ -552,7 +552,8 @@ export class CallEngine {
         return room;
       } catch (e) {
         console.warn("[call] media connect failed", e);
-        if (this.busy) {
+        // while rejoining, a failed attempt just means "try again" (the rejoin loop owns the retries / give-up)
+        if (this.busy && !this.rejoining) {
           this.set({ error: "Couldn't connect the call" });
           void this.hangup();
         }
@@ -627,6 +628,7 @@ export class CallEngine {
       .on(RoomEvent.ParticipantDisconnected, () => this.busy && this.s.ui === "active" && this.set({ peerReconnecting: true }))
       .on(RoomEvent.ParticipantConnected, () => this.set({ peerReconnecting: false }))
       .on(RoomEvent.AudioPlaybackStatusChanged, () => this.set({ needsGesture: !room.canPlaybackAudio }))
+      .on(RoomEvent.Connected, () => this.watchStall(room))
       .on(RoomEvent.Disconnected, () => {
         if (this.room !== room || !this.busy) return;
         // LiveKit's own resume (ICE restart) and full-reconnect attempts are exhausted: rejoin ourselves with a fresh
@@ -722,6 +724,55 @@ export class CallEngine {
     } finally {
       this.rejoining = false;
     }
+  }
+
+  private stallTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Silent loss (tunnel, dead Wi-Fi that still looks "online"): ICE only notices after its consent timeout, so watch
+   * the bytes. The other side's audio (Opus+DTX keeps sending during silence) stopping for 3 s while they're not muted
+   * means the media path is gone: say so right away — "Reconnecting…" when our own signal is also stale, "<name> is
+   * reconnecting…" when LiveKit still tells us their link is lost — and clear it as soon as bytes flow again.
+   */
+  private watchStall(room: Room) {
+    if (this.stallTimer) clearInterval(this.stallTimer);
+    let last = -1;
+    let still = 0;
+    let soft = false;
+    this.stallTimer = setInterval(async () => {
+      if (this.room !== room || !this.busy) {
+        if (this.stallTimer) clearInterval(this.stallTimer);
+        this.stallTimer = null;
+        return;
+      }
+      if (this.s.ui !== "active" || this.rejoining) return;
+      let track: RemoteTrack | undefined;
+      let peerQ: unknown;
+      room.remoteParticipants.forEach((rp) => {
+        peerQ = rp.connectionQuality;
+        rp.audioTrackPublications.forEach((pub) => (track = !pub.isMuted && pub.track ? (pub.track as RemoteTrack) : track));
+      });
+      if (!track) return void (last = -1);
+      let bytes = 0;
+      try {
+        (await track.getRTCStatsReport())?.forEach((r: { type?: string; bytesReceived?: number }) => r.type === "inbound-rtp" && (bytes += r.bytesReceived ?? 0));
+      } catch {
+        return;
+      }
+      if (bytes === last) still++;
+      else still = 0;
+      last = bytes;
+      if (still >= 3 && !soft) {
+        soft = true;
+        const peerLost = String(peerQ) === "lost";
+        this.netLog("media-stall", { peerLost });
+        if (peerLost) this.set({ peerReconnecting: true });
+        else this.set({ reconnecting: true });
+      } else if (still === 0 && soft) {
+        soft = false;
+        this.netLog("media-flowing");
+        this.set({ reconnecting: room.state !== "connected", peerReconnecting: false });
+      }
+    }, 1000);
   }
 
   private onPeer = (d: { callId: string; userId: string; online: boolean }) => {
@@ -826,6 +877,8 @@ export class CallEngine {
     this.acceptT0 = 0;
     this.metricSent = false;
     if (this.weakTimer) clearTimeout(this.weakTimer);
+    if (this.stallTimer) clearInterval(this.stallTimer);
+    this.stallTimer = null;
   }
 
   // ---------- controls ----------
