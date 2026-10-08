@@ -1,4 +1,4 @@
-// Telegram-style delete in 1:1 chats (029): for me vs for everyone, ownership, broadcast, archive, history/inbox.
+// Telegram-style delete in 1:1 chats (030): for me vs for everyone, ownership, broadcast, archive, history/inbox.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

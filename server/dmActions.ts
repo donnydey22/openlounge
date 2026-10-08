@@ -1,5 +1,5 @@
 // Message actions for 1:1 chats: "Delete for me" (per-viewer hidden ids) and the short-lived archive behind
-// "Delete for everyone" (soft delete, migration 029_dm_deletes). Write-through like chatPrefs: Postgres when
+// "Delete for everyone" (soft delete, migration 030_dm_deletes). Write-through like chatPrefs: Postgres when
 // DATABASE_URL is set, else DATA_DIR/dm-actions.json (local dev), memory-only in tests (DM_ACTIONS_MEMORY=1).
 import fs from "node:fs";
 import path from "node:path";

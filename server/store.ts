@@ -206,7 +206,7 @@ export class Store {
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
   /** per-user inbox state for 1:1 chats (pinned, "Delete chat for me"): server/chatPrefs.ts */
   chatPrefs = new ChatPrefs();
-  /** "Delete for me" hidden ids + the "Delete for everyone" archive (029): server/dmActions.ts */
+  /** "Delete for me" hidden ids + the "Delete for everyone" archive (030): server/dmActions.ts */
   dmActions = new DmActions();
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
   /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */

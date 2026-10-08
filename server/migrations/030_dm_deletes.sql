@@ -1,4 +1,4 @@
--- 029: Telegram-style message deletion for 1:1 chats (additive, idempotent).
+-- 030: Telegram-style message deletion for 1:1 chats (additive, idempotent).
 --  * dm_hidden   — "Delete for me": per-viewer hidden message ids. No FK to dms on purpose (dms rows are written by the
 --                  debounced snapshot, a hide can arrive first); orphans are pruned on boot.
 --  * dm_deleted  — "Delete for everyone" keeps a short-lived archive (the soft delete) so a report filed just before
