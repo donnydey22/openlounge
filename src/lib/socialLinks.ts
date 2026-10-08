@@ -23,14 +23,14 @@ const first = (parts: string[]) => parts[0] ?? null;
 const at = (s: string | null) => (s && s.startsWith("@") ? s.slice(1) : null);
 
 export const SOCIAL_SPECS: Record<Exclude<SocialKey, "website">, Spec> = {
-  instagram: { label: "Instagram", placeholder: "@handle or instagram.com/handle", hosts: ["instagram.com"], re: /^(?!.*\.\.)(?!\.)[A-Za-z0-9._]{1,30}(?<!\.)$/, fromPath: first, url: (h) => `https://instagram.com/${h}` },
+  instagram: { label: "Instagram", placeholder: "@handle or instagram.com/handle", hosts: ["instagram.com"], re: /^(?!.*\.\.)(?!\.)(?!.*\.$)[A-Za-z0-9._]{1,30}$/, fromPath: first, url: (h) => `https://instagram.com/${h}` },
   x: { label: "X (Twitter)", placeholder: "@handle or x.com/handle", hosts: ["x.com", "twitter.com"], re: /^[A-Za-z0-9_]{1,15}$/, fromPath: first, url: (h) => `https://x.com/${h}` },
   tiktok: { label: "TikTok", placeholder: "@handle or tiktok.com/@handle", hosts: ["tiktok.com"], re: /^(?!.*\.$)[A-Za-z0-9._]{2,24}$/, fromPath: (p) => at(first(p)) ?? first(p), url: (h) => `https://www.tiktok.com/@${h}` },
   youtube: { label: "YouTube", placeholder: "@handle or youtube.com/@handle", hosts: ["youtube.com"], re: /^[A-Za-z0-9._-]{3,30}$/, fromPath: (p) => at(first(p)), url: (h) => `https://www.youtube.com/@${h}` },
   linkedin: { label: "LinkedIn", placeholder: "handle or linkedin.com/in/handle", hosts: ["linkedin.com"], re: /^[A-Za-z0-9-]{3,100}$/, fromPath: (p) => (p[0] === "in" ? p[1] ?? null : null), url: (h) => `https://www.linkedin.com/in/${h}` },
   snapchat: { label: "Snapchat", placeholder: "username or snapchat.com/add/username", hosts: ["snapchat.com"], re: /^[A-Za-z][A-Za-z0-9._-]{1,14}$/, fromPath: (p) => (p[0] === "add" ? p[1] ?? null : null), url: (h) => `https://snapchat.com/add/${h}` },
   telegram: { label: "Telegram", placeholder: "@username or t.me/username", hosts: ["t.me", "telegram.me"], re: /^[A-Za-z][A-Za-z0-9_]{4,31}$/, fromPath: first, url: (h) => `https://t.me/${h}` },
-  threads: { label: "Threads", placeholder: "@handle or threads.net/@handle", hosts: ["threads.net", "threads.com"], re: /^(?!.*\.\.)(?!\.)[A-Za-z0-9._]{1,30}(?<!\.)$/, fromPath: (p) => at(first(p)), url: (h) => `https://www.threads.net/@${h}` },
+  threads: { label: "Threads", placeholder: "@handle or threads.net/@handle", hosts: ["threads.net", "threads.com"], re: /^(?!.*\.\.)(?!\.)(?!.*\.$)[A-Za-z0-9._]{1,30}$/, fromPath: (p) => at(first(p)), url: (h) => `https://www.threads.net/@${h}` },
 };
 
 export const SOCIAL_LABELS: Record<SocialKey, string> = {

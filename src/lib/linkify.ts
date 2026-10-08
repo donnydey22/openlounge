@@ -29,10 +29,33 @@ export type HashtagToken = { type: "hashtag"; text: string; tag: string };
 export type MentionToken = { type: "mention"; text: string; handle: string };
 export type Token = TextToken | LinkToken | HashtagToken | MentionToken;
 
-const MENTION_RE = /(?<![\p{L}\p{N}\p{M}_@&/#.])@([A-Za-z0-9_]{3,20})(?![A-Za-z0-9_@])/gu;
+// No lookbehind anywhere in this file: Safari < 16.4 (iOS 15 / 16.0–16.3) can't even parse a lookbehind regex literal,
+// which kills the whole chunk (this module is in the root layout bundle). The "not glued to …" rules are checked on the
+// previous character in code instead (matchAllNoLB), with the same results.
+const MENTION_RE = /@([A-Za-z0-9_]{3,20})(?![A-Za-z0-9_@])/gu;
+const MENTION_BEFORE = /[\p{L}\p{N}\p{M}_@&/#.]/u;
 
 // #tag: Unicode letters/digits/underscore (+ combining marks), >=1 letter, <=64 chars; not glued to a word, "&#" or "/#"
-const HASHTAG_RE = /(?<![\p{L}\p{N}\p{M}_&/#])#([\p{L}\p{N}\p{M}_]{1,64})(?![\p{L}\p{N}\p{M}_])/gu;
+const HASHTAG_RE = /#([\p{L}\p{N}\p{M}_]{1,64})(?![\p{L}\p{N}\p{M}_])/gu;
+const HASHTAG_BEFORE = /[\p{L}\p{N}\p{M}_&/#]/u;
+
+/**
+ * Like text.matchAll(re), minus matches whose previous character fits `before(m)` (a negative lookbehind). A rejected
+ * match restarts the search one position later, exactly like the regex engine would.
+ */
+function* matchAllNoLB(text: string, re: RegExp, before: (m: RegExpExecArray) => RegExp): Generator<RegExpExecArray> {
+  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  let m: RegExpExecArray | null;
+  while ((m = r.exec(text))) {
+    const start = m.index;
+    if (start > 0 && before(m).test(text[start - 1])) {
+      r.lastIndex = start + 1;
+      continue;
+    }
+    if (m[0] === "") r.lastIndex++;
+    yield m;
+  }
+}
 const HAS_LETTER = /\p{L}/u;
 export const normalizeTag = (t: string) => t.replace(/^#/, "").normalize("NFKC").toLowerCase();
 export const isValidTag = (t: string) => /^[\p{L}\p{N}\p{M}_]{1,64}$/u.test(t) && HAS_LETTER.test(t);
@@ -52,7 +75,7 @@ export function splitHashtags(text: string): InlineToken[] {
       continue;
     }
     let pos = 0;
-    for (const m of part.matchAll(INLINE_RE)) {
+    for (const m of matchAllNoLB(part, INLINE_RE, (x) => (x[1] !== undefined ? HASHTAG_BEFORE : MENTION_BEFORE))) {
       if (m[1] !== undefined && !HAS_LETTER.test(m[1])) continue;
       const start = m.index ?? 0;
       buf += part.slice(pos, start);
@@ -97,7 +120,8 @@ const URL_RE = new RegExp(
   "giu",
 );
 const EMAIL_RE = /\b(?:mailto:)?[a-z0-9._%+-]{1,64}@(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}\b/giu;
-const PHONE_RE = /(?<![\w+])(?:tel:)?\+\d[\d ()-]{6,18}\d(?!\w)/gu;
+const PHONE_RE = /(?:tel:)?\+\d[\d ()-]{6,18}\d(?!\w)/gu;
+const PHONE_BEFORE = /[\w+]/u;
 
 const TRAILING = /[.,!?;:'"’”)\]}>*_~]/u;
 
@@ -282,7 +306,7 @@ export function linkify(input: string): Token[] {
     }
     matches.push({ start, end: start + t.length, token: { type: "link", text: t, href: `mailto:${addr}`, kind: "mailto", host: domain, warnings } });
   }
-  for (const m of text.matchAll(PHONE_RE)) {
+  for (const m of matchAllNoLB(text, PHONE_RE, () => PHONE_BEFORE)) {
     const start = m.index ?? 0;
     const t = m[0];
     if (overlaps(start, start + t.length)) continue;
