@@ -36,17 +36,25 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /** Ask before leaving the app for a link someone sent (one sheet for the whole app, see LinkConfirmHost). */
-type NativeBridge = { openUrl?: (url: string, opts?: Record<string, unknown>) => unknown };
-/** Native wrapper bridge (window.OpenLoungeNative.openUrl, see /workspace/native/BROWSER_BRIDGE.md). Only http(s). */
+type NativeBridge = { openBrowser?: (url: string) => boolean | void; openExternal?: (url: string) => unknown };
+/**
+ * Phone apps' in-app browser (/workspace/native/BROWSER_BRIDGE.md): Custom Tabs / SFSafariViewController over the app.
+ * openBrowser (Android 0.3.0+, iPhone b17+), then the older iOS openExternal; false → caller lets target=_blank happen
+ * (browsers, and old Android 0.2.x apps which hand that to the external browser). Only http(s), ≤ 4096 chars.
+ */
 export function openInNativeBrowser(href: string): boolean {
   const n = (window as unknown as { OpenLoungeNative?: NativeBridge }).OpenLoungeNative;
-  if (typeof n?.openUrl !== "function" || !/^https?:\/\//i.test(href)) return false;
+  if (!n || !/^https?:\/\//i.test(href) || href.length > 4096) return false;
   try {
-    n.openUrl(href, { reader: false });
-    return true;
+    if (typeof n.openBrowser === "function") return n.openBrowser(href) !== false;
+    if (typeof n.openExternal === "function") {
+      n.openExternal(href);
+      return true;
+    }
   } catch {
-    return false;
+    /* fall through to the normal link */
   }
+  return false;
 }
 
 export function openLinkConfirm(t: LinkToken, opts: { menu?: boolean } = {}) {
