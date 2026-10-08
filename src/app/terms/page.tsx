@@ -199,6 +199,14 @@ export default function Terms() {
       <p>
         Questions, appeals or urgent safety concerns: <Mail /> · Global Network LLC, operator of Open Lounge · openlounge.app
       </p>
+      <H id="credits">Credits</H>
+      <p>
+        Animated emoji by Google — Noto Animated Emoji, licensed under{" "}
+        <a className="underline" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">
+          CC BY 4.0
+        </a>{" "}
+        (resized and re-encoded). Animated emoji artwork © Telegram (telegram.org), via the Telegram-Animated-Emojis collection.
+      </p>
       <LegalFooter className="mt-10 border-t border-white/5 pt-6" />
     </main>
   );

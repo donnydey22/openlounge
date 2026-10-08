@@ -4,12 +4,20 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, Phone, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Copy, Flag, Loader2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
 import { useSafety, type ReportTarget } from "@/lib/safety";
-import type { DirectMessage, DmReadReceipt, PublicUser } from "@/lib/types";
+import type { DirectMessage, DmReaction, DmReactionEvent, DmReadReceipt, PublicUser } from "@/lib/types";
+import "./emoji/chat-fx.css";
+import { bigEmoji, preloadQuickReactions } from "@/lib/emoji/assets";
+import { BigEmoji, bigEmojiSize } from "./emoji/BigEmoji";
+import { ReactionChips } from "./emoji/ReactionChips";
+import { MessageActionOverlay, type MessageAction, type OverlayTarget } from "./emoji/MessageActionOverlay";
+import { ReactionFlight, type Flight } from "./emoji/ReactionFlight";
+import { burst } from "./emoji/effects";
+import { animate, haptic } from "./emoji/motion";
 import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
@@ -69,8 +77,66 @@ function seenLabel(readAt: number) {
   return `Seen ${dayDiff(readAt) <= 0 ? formatClock(readAt) : formatListTime(readAt)}`;
 }
 
-/** 1–3 emoji and nothing else → shown big, without a bubble. */
-const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic}|\p{Emoji_Modifier})*\s*){1,3}$/u;
+/** Long-press threshold (Telegram ≈ 350 ms) and how far a finger may drift before it counts as a scroll. */
+const LONG_PRESS_MS = 350;
+const PRESS_SLOP_PX = 10;
+const QUICK_REACTION = "❤️";
+
+const sameReactions = (a?: DmReaction[], b?: DmReaction[]) =>
+  (a?.length ?? 0) === (b?.length ?? 0) && (a ?? []).every((r, i) => r.emoji === b![i].emoji && r.userId === b![i].userId);
+
+/** Apply a reaction add/remove (idempotent; one reaction per person, like the server). */
+function applyReactionEvent(list: Item[], ev: Pick<DmReactionEvent, "messageId" | "userId" | "emoji" | "at">, on: boolean): Item[] {
+  const i = list.findIndex((m) => m.id === ev.messageId);
+  if (i < 0) return list;
+  const cur = list[i].reactions ?? [];
+  let next: DmReaction[];
+  if (on) {
+    if (cur.some((r) => r.userId === ev.userId && r.emoji === ev.emoji)) return list;
+    next = [...cur.filter((r) => r.userId !== ev.userId), { emoji: ev.emoji, userId: ev.userId, at: ev.at }];
+  } else {
+    next = cur.filter((r) => !(r.userId === ev.userId && r.emoji === ev.emoji));
+    if (next.length === cur.length) return list;
+  }
+  const out = [...list];
+  out[i] = { ...list[i], reactions: next.length ? next : undefined };
+  return out;
+}
+function setReactions(list: Item[], id: string, reactions: DmReaction[] | undefined): Item[] {
+  const i = list.findIndex((m) => m.id === id);
+  if (i < 0 || sameReactions(list[i].reactions, reactions)) return list;
+  const out = [...list];
+  out[i] = { ...list[i], reactions: reactions?.length ? reactions : undefined };
+  return out;
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+const inViewport = (el: Element | null) => {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.bottom > 0 && r.top < window.innerHeight && r.width > 0;
+};
 
 function newClientId() {
   try {
@@ -114,7 +180,10 @@ function mergeMessages(list: Item[], incoming: DirectMessage[]): Item[] {
         next[i] = { ...m, clientId: next[i].clientId ?? m.clientId, readAt: m.readAt ?? next[i].readAt ?? null };
       } else if (m.readAt && !next[i].readAt) {
         next = next === list ? [...list] : next;
-        next[i] = { ...next[i], readAt: m.readAt }; // seen while we were away (history refetch after reconnect)
+        next[i] = { ...next[i], readAt: m.readAt, reactions: m.reactions }; // seen while we were away (history refetch after reconnect)
+      } else if (!sameReactions(m.reactions, next[i].reactions)) {
+        next = next === list ? [...list] : next;
+        next[i] = { ...next[i], reactions: m.reactions }; // reactions changed while we were away
       }
       continue;
     }
@@ -221,6 +290,18 @@ export function DmThread({
         : undefined,
     [isGroup, me?.username, amAdmin, group?.pins, request, peerId, toast],
   );
+  // ---- emoji reactions / big emoji / interactions ----
+  const [overlay, setOverlay] = useState<{ m: Item; target: OverlayTarget } | null>(null);
+  const [flights, setFlights] = useState<Flight[]>([]);
+  const [arriving, setArriving] = useState<Record<string, string>>({}); // messageId → emoji whose flight is in the air
+  const [chipPlay, setChipPlay] = useState<Record<string, string>>({}); // messageId → "emoji|nonce" (replay chip)
+  const [interact, setInteract] = useState<Record<string, number>>({}); // messageId → replay nonce (peer tapped it)
+  const flightSeq = useRef(0);
+  const flyFrom = useRef(new Map<string, DOMRect>());
+  const [panelHost, setPanelHost] = useState<HTMLDivElement | null>(null);
+  const meRef = useRef(me);
+  meRef.current = me;
+  useEffect(() => preloadQuickReactions(), []);
 
   // Read receipts: tell the server only when the thread is really on screen (page/app visible, thread open)
   // and there is something from the peer we haven't marked seen yet.
@@ -351,6 +432,36 @@ export function DmThread({
       if (typingTimer.current) clearTimeout(typingTimer.current);
       setPeerTyping(false);
     };
+    const inThreadEv = (ev: DmReactionEvent) => (ev.fromId === peerId && ev.toId === me?.id) || (ev.fromId === me?.id && ev.toId === peerId);
+    const onReactAdd = (ev: DmReactionEvent) => {
+      if (!inThreadEv(ev)) return;
+      setMessages((list) => (list ? applyReactionEvent(list, ev, true) : list));
+      if (ev.userId === peerId) {
+        // their reaction lands while I'm looking: chip pops + a burst around it (Telegram plays the effect too)
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const chip = document.querySelector<HTMLElement>(`[data-chip="${CSS.escape(ev.emoji)}"][data-mid="${CSS.escape(ev.messageId)}"]`);
+            if (!chip || !inViewport(chip) || !appVisible()) return;
+            const r = chip.getBoundingClientRect();
+            burst(r.left + 14, r.top + r.height / 2, ev.emoji, false);
+            setChipPlay((p) => ({ ...p, [ev.messageId]: `${ev.emoji}|${Date.now()}` }));
+          }),
+        );
+      }
+    };
+    const onReactRemove = (ev: DmReactionEvent) => inThreadEv(ev) && setMessages((list) => (list ? applyReactionEvent(list, ev, false) : list));
+    const onInteract = ({ from, messageId, emoji }: { from: string; messageId: string; emoji: string }) => {
+      if (from !== peerId || !appVisible()) return;
+      const el = document.querySelector<HTMLElement>(`[data-mid-bubble="${CSS.escape(messageId)}"] [data-big-emoji]`);
+      if (!el || !inViewport(el)) return;
+      const r = el.getBoundingClientRect();
+      setInteract((s) => ({ ...s, [messageId]: (s[messageId] ?? 0) + 1 }));
+      burst(r.left + r.width / 2, r.top + r.height / 2, emoji, true);
+      haptic("light");
+    };
+    socket.on("dm:reaction_add", onReactAdd);
+    socket.on("dm:reaction_remove", onReactRemove);
+    socket.on("dm:emoji_interaction", onInteract);
     socket.on("dm:typing", onTyping);
     socket.on("dm:typing_stop", onTypingStopIn);
     socket.on("dm:read-receipt", onReceipt);
@@ -359,6 +470,9 @@ export function DmThread({
     window.addEventListener("focus", onVisible);
     return () => {
       socket.off("dm:message", onMsg);
+      socket.off("dm:reaction_add", onReactAdd);
+      socket.off("dm:reaction_remove", onReactRemove);
+      socket.off("dm:emoji_interaction", onInteract);
       socket.off("dm:typing", onTyping);
       socket.off("dm:typing_stop", onTypingStopIn);
       socket.off("dm:read-receipt", onReceipt);
@@ -546,7 +660,13 @@ export function DmThread({
       state: "sending",
     };
     stickToBottom.current = true;
-    smoothNext.current = true;
+    const big = bigEmoji(text);
+    // emoji-only: it flies from the composer into place, so jump the list (no smooth scroll under the flight)
+    smoothNext.current = !big;
+    if (big) {
+      const box = document.querySelector('[data-testid="composer-input"]')?.getBoundingClientRect();
+      if (box) flyFrom.current.set(clientId, box);
+    }
     setUnseenBelow(0);
     setMessages((list) => [...(list ?? []), item]);
     armStall(clientId);
@@ -597,6 +717,113 @@ export function DmThread({
     typingIdle.current = setTimeout(onTypingStop, TYPING_IDLE_MS);
   };
   useEffect(() => onTypingStop, [onTypingStop]);
+
+  // ---- reactions: optimistic, reconciled with the server's authoritative list in the background ----
+  const react = useCallback(
+    (msgId: string, emoji: string, from: { x: number; y: number } | null) => {
+      const meNow = meRef.current;
+      const m = (messagesRef.current ?? []).find((x) => x.id === msgId);
+      if (!meNow || !m || m.state) return;
+      const prev = m.reactions;
+      const removing = prev?.some((r) => r.userId === meNow.id && r.emoji === emoji) ?? false;
+      setMessages((list) => (list ? applyReactionEvent(list, { messageId: m.id, userId: meNow.id, emoji, at: serverNow() }, !removing) : list));
+      if (!removing) {
+        setArriving((a) => ({ ...a, [m.id]: emoji }));
+        setFlights((f) => [...f, { id: ++flightSeq.current, emoji, messageId: m.id, from }]);
+      } else haptic("light");
+      request<{ reactions: DmReaction[] }>(removing ? "dm:reaction_remove" : "dm:reaction_add", { peerId, messageId: m.id, emoji })
+        .then((r) => setMessages((list) => (list ? setReactions(list, m.id, r.reactions) : list)))
+        .catch((e: Error) => {
+          setMessages((list) => (list ? setReactions(list, m.id, prev) : list));
+          toast(friendlyMessage(e, "Couldn't add that reaction"));
+        });
+    },
+    [peerId, request, toast],
+  );
+  const onLand = useCallback((f: Flight) => {
+    setFlights((list) => list.filter((x) => x.id !== f.id));
+    setArriving((a) => {
+      if (a[f.messageId] !== f.emoji) return a;
+      const rest = { ...a };
+      delete rest[f.messageId];
+      return rest;
+    });
+    setChipPlay((p) => ({ ...p, [f.messageId]: `${f.emoji}|${f.id}` }));
+  }, []);
+  const onChipToggle = useCallback(
+    (m: Item, emoji: string, el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      react(m.id, emoji, { x: r.left + 14, y: r.top + r.height / 2 });
+    },
+    [react],
+  );
+  const onQuickReact = useCallback(
+    (m: Item, el: HTMLElement) => {
+      if (isGroup) return;
+      const r = el.getBoundingClientRect();
+      haptic("medium");
+      react(m.id, QUICK_REACTION, { x: r.left + r.width / 2, y: r.top });
+    },
+    [react, isGroup],
+  );
+  const onBigTap = useCallback(
+    (m: Item, emoji: string, at: { x: number; y: number }) => {
+      burst(at.x, at.y, emoji, true);
+      haptic("light");
+      if (!m.state && !isGroup) socket?.emit("dm:emoji_interaction", { to: peerId, messageId: m.id, emoji });
+    },
+    [socket, peerId, isGroup],
+  );
+  const openActions = useCallback((m: Item, el: HTMLElement) => {
+    const meNow = meRef.current;
+    setOverlay({
+      m,
+      target: {
+        el,
+        mine: m.fromId === meNow?.id,
+        myReaction: m.reactions?.find((r) => r.userId === meNow?.id)?.emoji ?? null,
+        meta: `${formatDaySeparator(m.createdAt)} ${formatClock(m.createdAt)}`,
+        // reactions are DM-only for now (groups: menu only)
+        canReact: !m.state && !isGroup,
+      },
+    });
+  }, [isGroup]);
+  const takeFlyFrom = useCallback((clientId: string) => {
+    const r = flyFrom.current.get(clientId);
+    flyFrom.current.delete(clientId);
+    return r;
+  }, []);
+  const overlayActions = useMemo<MessageAction[]>(() => {
+    if (!overlay) return [];
+    const m = overlay.m;
+    const out: MessageAction[] = [
+      {
+        key: "copy",
+        label: "Copy",
+        icon: <Copy className="h-[18px] w-[18px]" />,
+        onSelect: () => {
+          void copyText(m.text).then((ok) => toast(ok ? "Copied" : "Couldn't copy"));
+        },
+      },
+    ];
+    if (groupRow && !m.state && groupRow.amAdmin) {
+      const pinned = groupRow.pinned.has(m.id);
+      out.push({ key: "pin", label: pinned ? "Unpin" : "Pin", icon: <Pin className="h-[18px] w-[18px]" />, onSelect: () => groupRow.onPin(m, !pinned) });
+    }
+    if (m.fromId !== me?.id && !m.state && !peer?.isBot)
+      out.push({ key: "report", label: "Report", danger: true, icon: <Flag className="h-[18px] w-[18px]" />, onSelect: () => onReportMessage(m) });
+    if (groupRow && !m.state && (m.fromId === me?.id || groupRow.amAdmin))
+      out.push({
+        key: "delete",
+        label: "Delete for everyone",
+        danger: true,
+        icon: <Trash2 className="h-[18px] w-[18px]" />,
+        onSelect: () => {
+          if (window.confirm("Delete this message for everyone?")) groupRow.onDelete(m);
+        },
+      });
+    return out;
+  }, [overlay, me?.id, peer?.isBot, toast, onReportMessage, groupRow]);
 
   // minute tick / foreground / timezone change → separators ("Today" → "Yesterday" at midnight) re-render
   const clockTick = useClockTick();
@@ -917,7 +1144,15 @@ export function DmThread({
                   showStatus={i === lastMineIdx || m.state === "failed"}
                   latest={i === lastMineIdx}
                   onRetry={retry}
-                  onReport={onReportMessage}
+                  meId={me?.id}
+                  onActions={openActions}
+                  onChipToggle={onChipToggle}
+                  onQuickReact={onQuickReact}
+                  onBigTap={onBigTap}
+                  arriving={arriving[m.id] ?? null}
+                  chipPlay={chipPlay[m.id] ?? null}
+                  interactNonce={interact[m.id] ?? 0}
+                  takeFlyFrom={takeFlyFrom}
                 />
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
@@ -995,12 +1230,26 @@ export function DmThread({
           placeholder={peer && !isGroup ? `Message ${firstName(peer.name)}…` : "Message…"}
           above={isGroup && group ? (t, set) => <MentionPicker text={t} members={group.members} meId={me?.id} onPick={set} /> : undefined}
           autoFocus
+          emojiPanel
+          panelHost={panelHost}
         />
         </div>
         </div>
+        <div ref={setPanelHost} />
         </>
         )}
       </div>
+      {overlay && (
+        <MessageActionOverlay
+          target={overlay.target}
+          actions={overlayActions}
+          onReact={(emoji, from) => react(overlay.m.id, emoji, from)}
+          onClose={() => setOverlay(null)}
+        />
+      )}
+      {flights.map((f) => (
+        <ReactionFlight key={f.id} f={f} onLand={onLand} />
+      ))}
     </div>
   );
 }
@@ -1019,6 +1268,15 @@ const MessageRow = memo(function MessageRow({
   onRetry,
   onReport,
   group,
+  meId,
+  onActions,
+  onChipToggle,
+  onQuickReact,
+  onBigTap,
+  arriving,
+  chipPlay,
+  interactNonce,
+  takeFlyFrom,
 }: {
   m: Item;
   mine: boolean;
@@ -1035,49 +1293,106 @@ const MessageRow = memo(function MessageRow({
   onReport?: (m: Item) => void;
   /** group conversations only: sender names, @mention highlight, admin pin / delete */
   group?: GroupRowCtx;
+  meId?: string;
+  /** long-press / right-click / hover button → reaction bar + action menu */
+  onActions: (m: Item, el: HTMLElement) => void;
+  onChipToggle: (m: Item, emoji: string, el: HTMLElement) => void;
+  /** double-tap (touch) → quick ❤️ */
+  onQuickReact: (m: Item, el: HTMLElement) => void;
+  onBigTap: (m: Item, emoji: string, at: { x: number; y: number }) => void;
+  arriving: string | null;
+  chipPlay: string | null;
+  interactNonce: number;
+  takeFlyFrom: (clientId: string) => DOMRect | undefined;
 }) {
-  const emoji = EMOJI_ONLY.test(m.text.trim());
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const sticker = parseSticker(m.text); // sticker message: large, no bubble
+  const sticker = useMemo(() => parseSticker(m.text), [m.text]); // sticker message: large, no bubble
+  const parts = useMemo(() => (sticker ? null : bigEmoji(m.text)), [m.text, sticker]);
   void clockTick;
-  // long-press (touch) or right-click shows the full local date-time + UTC under the bubble for a few seconds
-  const [showFull, setShowFull] = useState(false);
-  const press = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hide = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bubble = useRef<HTMLDivElement>(null);
+
+  // ---- gestures: long-press (touch/pen) opens the actions; movement beyond the slop = scrolling, cancel ----
+  const press = useRef<{ t: ReturnType<typeof setTimeout> | null; x: number; y: number; fired: boolean }>({ t: null, x: 0, y: 0, fired: false });
+  const lastTap = useRef(0);
   useEffect(() => () => {
-    if (press.current) clearTimeout(press.current);
-    if (hide.current) clearTimeout(hide.current);
+    if (press.current.t) clearTimeout(press.current.t);
   }, []);
-  const reveal = () => {
-    setShowFull(true);
-    if (hide.current) clearTimeout(hide.current);
-    hide.current = setTimeout(() => setShowFull(false), 4000);
-  };
   const cancel = () => {
-    if (press.current) clearTimeout(press.current);
-    press.current = null;
+    if (press.current.t) clearTimeout(press.current.t);
+    press.current.t = null;
   };
+  const open = () => bubble.current && onActions(m, bubble.current);
   const pressHandlers = {
     onPointerDown: (e: React.PointerEvent) => {
-      if (e.pointerType === "mouse") return;
+      if (e.pointerType === "mouse" || !e.isPrimary) return;
       cancel();
-      press.current = setTimeout(reveal, 450);
+      press.current = {
+        x: e.clientX,
+        y: e.clientY,
+        fired: false,
+        t: setTimeout(() => {
+          press.current.fired = true;
+          press.current.t = null;
+          open();
+        }, LONG_PRESS_MS),
+      };
     },
-    onPointerUp: cancel,
-    onPointerLeave: cancel,
+    onPointerMove: (e: React.PointerEvent) => {
+      if (!press.current.t) return;
+      if (Math.abs(e.clientX - press.current.x) > PRESS_SLOP_PX || Math.abs(e.clientY - press.current.y) > PRESS_SLOP_PX) cancel();
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const wasLong = press.current.fired;
+      cancel();
+      if (e.pointerType === "mouse" || wasLong || parts || m.state) return;
+      // double-tap → quick reaction (Telegram)
+      const now = e.timeStamp;
+      if (now - lastTap.current < 300) {
+        lastTap.current = 0;
+        if (bubble.current) onQuickReact(m, bubble.current);
+      } else lastTap.current = now;
+    },
     onPointerCancel: cancel,
+    onPointerLeave: cancel,
+    onClickCapture: (e: React.MouseEvent) => {
+      // the click that ends a long-press must not also trigger a big-emoji tap / link
+      if (press.current.fired) {
+        e.stopPropagation();
+        e.preventDefault();
+        press.current.fired = false;
+      }
+    },
     onContextMenu: (e: React.MouseEvent) => {
       e.preventDefault();
       cancel();
-      reveal();
+      press.current.fired = false;
+      open();
     },
   };
+
+  // emoji-only send: fly from the composer into place with a spring
+  useLayoutEffect(() => {
+    if (!mine || !parts || !m.clientId || !bubble.current) return;
+    const from = takeFlyFrom(m.clientId);
+    if (!from) return;
+    const to = bubble.current.getBoundingClientRect();
+    const size = bigEmojiSize(parts.length) * parts.length;
+    const s = Math.max(0.14, Math.min(0.5, 26 / size));
+    const fx = from.left + 16 + (size * s) / 2;
+    const fy = from.top + from.height / 2;
+    const dx = fx - (to.left + to.width / 2);
+    const dy = fy - (to.top + to.height / 2);
+    animate(bubble.current, [{ transform: `translate3d(${dx}px, ${dy}px, 0) scale(${s})`, opacity: 0.6 }, { transform: "none", opacity: 1 }], {
+      spring: { stiffness: 260, damping: 19 },
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // grouped bubble corners: the "tail" side squares off between messages of the same group
   const shape = mine
     ? cn("rounded-[20px]", !first && "rounded-tr-md", !last && "rounded-br-md")
     : cn("rounded-[20px]", !first && "rounded-tl-md", !last && "rounded-bl-md");
+  const hasReactions = !!m.reactions?.length;
   return (
-    <div data-testid="dm-msg" data-mine={mine ? "1" : "0"}>
+    <div data-testid="dm-msg" data-mine={mine ? "1" : "0"} data-mid={m.id}>
       {sep && (
         <div className="mt-4 mb-2 text-center text-[11px] font-medium text-zinc-500" data-testid={newDay ? "dm-day" : "dm-gap"} title={formatFull(m.createdAt)}>
           {sep}
@@ -1088,62 +1403,53 @@ const MessageRow = memo(function MessageRow({
           {peer.name}
         </div>
       )}
-      <div className={cn("flex items-end gap-2", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]")}>
+      <div className={cn("flex items-end gap-2", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]", hasReactions && "mb-0")}>
         {!mine && (
           <div className="w-7 shrink-0">
             {last && peer && <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />}
           </div>
         )}
         {mine && <Receipt m={m} onRetry={onRetry} />}
+        {mine && !m.state && <ReactButton onClick={open} />}
         <div
+          ref={bubble}
           title={formatFull(m.createdAt)}
           data-testid="dm-bubble"
           data-ts={m.createdAt}
+          data-mid-bubble={m.id}
           {...pressHandlers}
           className={cn(
             "min-w-0 text-[15px] leading-[1.35] whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
-            "msg-in",
+            !parts && "msg-in",
             sticker
               ? "px-0"
-              : emoji
-              ? "px-1 text-[40px] leading-tight"
+              : parts
+              ? "origin-center"
               : cn("px-3.5 py-2", shape, mine ? "bg-emerald-500 text-on-accent" : "dm-theirs bg-zinc-800 text-zinc-100"),
             m.state === "sending" && "opacity-70",
             m.state === "failed" && "opacity-60",
           )}
         >
-          {sticker ? <StickerMessage sticker={sticker} pending={m.state === "sending"} /> : group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text}
+          {sticker ? (
+            <StickerMessage sticker={sticker} pending={m.state === "sending"} />
+          ) : parts ? (
+            <BigEmoji parts={parts} replay={interactNonce} onTap={(e, at) => onBigTap(m, e, at)} />
+          ) : (
+            group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text
+          )}
         </div>
+        {!mine && !m.state && <ReactButton onClick={open} />}
       </div>
-      {showFull && (
-        <div className={cn("fade-in mt-[2px] text-[10.5px] leading-[13px] font-medium text-zinc-500", mine ? "pr-1 text-right" : "pl-9 text-left")} data-testid="dm-fulltime">
-          {formatFull(m.createdAt)}
-          {!mine && onReport && !m.state && !peer?.isBot && (
-            <button
-              type="button"
-              onClick={() => onReport(m)}
-              className="ml-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-red-400 hover:bg-red-500/10"
-              data-testid="dm-report"
-            >
-              <Flag className="h-3 w-3" /> Report
-            </button>
-          )}
-          {group && !m.state && group.amAdmin && (
-            <button type="button" onClick={() => group.onPin(m, !group.pinned.has(m.id))} className="ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-zinc-300 hover:bg-white/5" data-testid="group-pin">
-              {group.pinned.has(m.id) ? "Unpin" : "Pin"}
-            </button>
-          )}
-          {group && !m.state && (mine || group.amAdmin) && (
-            <button
-              type="button"
-              onClick={() => (confirmDelete ? group.onDelete(m) : setConfirmDelete(true))}
-              className="ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-red-400 hover:bg-red-500/10"
-              data-testid="group-delete"
-            >
-              {confirmDelete ? "Delete for everyone?" : "Delete"}
-            </button>
-          )}
-        </div>
+      {hasReactions && (
+        <ReactionChips
+          reactions={m.reactions}
+          meId={meId}
+          messageId={m.id}
+          mine={mine}
+          arriving={arriving}
+          playKey={chipPlay}
+          onToggle={(emoji, el) => onChipToggle(m, emoji, el)}
+        />
       )}
       {mine && showStatus && <StatusLine m={m} latest={latest} onRetry={onRetry} />}
     </div>
@@ -1158,6 +1464,21 @@ type GroupRowCtx = {
   onPin: (m: Item, pinned: boolean) => void;
   onDelete: (m: Item) => void;
 };
+
+/** Desktop: a small "react" button beside the bubble on hover (touch uses long-press / double-tap instead). */
+function ReactButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="React or more actions"
+      className="msg-react-btn mb-1 hidden h-7 w-7 shrink-0 items-center justify-center self-center rounded-full text-zinc-500 hover:bg-white/5 hover:text-zinc-200 [@media(hover:hover)_and_(pointer:fine)]:flex"
+      data-testid="dm-react-btn"
+    >
+      <Smile className="h-[18px] w-[18px]" />
+    </button>
+  );
+}
 
 /** Delivery state of one of my messages. Only ever moves forward: sending → sent (server ack, "Delivered") → seen. */
 type ReceiptState = "pending" | "failed" | "sent" | "seen";

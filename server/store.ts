@@ -12,6 +12,8 @@ import type {
   ConversationSummary,
   DirectMessage,
   DmReadReceipt,
+  DmReaction,
+  DmReactionEvent,
   Participant,
   PublicUser,
   RoomPresenceEvent,
@@ -21,6 +23,7 @@ import type {
   UserProfile,
 } from "../src/lib/types";
 import type { CallMeta, DmKind, MessageKind, RoomCard } from "../src/lib/types";
+import { DM_REACTION_MAX_EMOJI } from "../src/lib/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -102,6 +105,8 @@ export interface StoreEvents {
   dmTyping(fromId: string, toId: string): void;
   /** someone saw messages in a DM conversation (read receipt for the sender) */
   dmRead?(receipt: DmReadReceipt): void;
+  /** a reaction was added (on) or removed (!on) on a DM: push to both participants */
+  dmReaction?(ev: DmReactionEvent, on: boolean): void;
   roomPresence(ev: RoomPresenceEvent): void;
   roomReaction(reaction: RoomReaction): void;
   /** a session was revoked (logout, logout-all, refresh-token reuse): sign its sockets out */
@@ -166,6 +171,19 @@ function clean(s: unknown, max: number): { text: string; error?: undefined } | {
   const r = filterText(text);
   return r.ok ? { text: r.text } : { text: null, error: r.error };
 }
+/**
+ * A single emoji (incl. ZWJ sequences, skin tones, flags, keycaps), max 32 UTF-16 units. Anything else → null.
+ * The text-presentation selector is dropped and FE0F kept where the client sent it, so "❤️" and "❤" are one key.
+ */
+const REACTION_EMOJI_RE =
+  /^(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?(?:\u200D\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?)*)$/u;
+export function normalizeReactionEmoji(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const e = raw.trim().replace(/\uFE0E/g, "");
+  if (!e || e.length > 32 || !REACTION_EMOJI_RE.test(e)) return null;
+  // canonical: FE0F after a bare text-default pictograph (❤ → ❤️) so both spellings are one reaction
+  return /^\p{Extended_Pictographic}$/u.test(e) && !/^\p{Emoji_Presentation}$/u.test(e) ? `${e}\uFE0F` : e;
+}
 const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)];
 
 export class Store {
@@ -192,6 +210,7 @@ export class Store {
   reports: ReportRecord[] = [];
   private reportRate = new Map<string, number[]>();
   private blockRate = new Map<string, number[]>();
+  private dmReactRate = new Map<string, number[]>(); // userId -> recent DM reaction changes
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
   private inviteRate = new Map<string, number[]>(); // userId -> recent room-invite card sends
@@ -920,11 +939,16 @@ export class Store {
     this.blocks.delete(userId);
     for (const m of this.blocks.values()) m.delete(userId);
     for (const list of this.dms.values())
-      for (const m of list)
+      for (const m of list) {
         if (m.fromId === userId) {
           m.fromName = DELETED_NAME;
           m.fromColor = DELETED_COLOR;
         }
+        if (m.reactions?.some((r) => r.userId === userId)) {
+          m.reactions = m.reactions.filter((r) => r.userId !== userId);
+          if (!m.reactions.length) delete m.reactions;
+        }
+      }
     for (const r of this.rooms.values())
       for (const m of r.chat)
         if (m.authorId === userId) {
@@ -2274,6 +2298,44 @@ export class Store {
       return sent;
     }
     return { ok: true as const, roomId: created.roomId, message: sent.message, reused: false };
+  }
+
+  /**
+   * React to a DM (Telegram-style: one reaction per person per message — picking another replaces it).
+   * Only the two participants may react; blocked either way → refused. 40 changes / 10 s per user.
+   * `on` false removes that emoji (no-op if it isn't there). Returns the events that were broadcast.
+   */
+  reactDm(userId: string, peerId: string, messageId: string, rawEmoji: unknown, on: boolean) {
+    const emoji = normalizeReactionEmoji(rawEmoji);
+    if (!emoji) return { ok: false as const, error: "Pick an emoji" };
+    if (!this.users.has(userId) || !this.users.has(peerId) || userId === peerId) return { ok: false as const, error: "Message not found" };
+    if (this.isBlockedEither(userId, peerId)) return { ok: false as const, blocked: true, error: "You can't react in this conversation." };
+    const m = (this.dms.get(conversationId(userId, peerId)) ?? []).find((x) => x.id === messageId);
+    if (!m) return { ok: false as const, error: "Message not found" };
+    if (this.slidingLimit(this.dmReactRate, userId, 10_000, 40)) return { ok: false as const, error: "Slow down a little 🙂" };
+    const list: DmReaction[] = m.reactions ?? [];
+    const ev = (r: DmReaction): DmReactionEvent => ({ messageId: m.id, fromId: m.fromId, toId: m.toId, userId: r.userId, emoji: r.emoji, at: r.at });
+    const removed: DmReactionEvent[] = [];
+    let added: DmReactionEvent | null = null;
+    if (on) {
+      if (list.some((r) => r.userId === userId && r.emoji === emoji)) return { ok: true as const, reactions: list, added: null, removed };
+      const distinct = new Set(list.map((r) => r.emoji));
+      if (!distinct.has(emoji) && distinct.size >= DM_REACTION_MAX_EMOJI) return { ok: false as const, error: "That message has plenty of reactions already" };
+      for (const r of list.filter((x) => x.userId === userId)) removed.push(ev(r));
+      const mine: DmReaction = { emoji, userId, at: Date.now() };
+      m.reactions = [...list.filter((x) => x.userId !== userId), mine];
+      added = ev(mine);
+    } else {
+      const hit = list.find((r) => r.userId === userId && r.emoji === emoji);
+      if (!hit) return { ok: true as const, reactions: list, added: null, removed };
+      removed.push(ev(hit));
+      m.reactions = list.filter((r) => r !== hit);
+    }
+    if (!m.reactions?.length) delete m.reactions;
+    this.scheduleSave();
+    for (const r of removed) this.events?.dmReaction?.(r, false);
+    if (added) this.events?.dmReaction?.(added, true);
+    return { ok: true as const, reactions: m.reactions ?? [], added, removed };
   }
 
   private botReplyPending = new Set<string>();

@@ -171,7 +171,11 @@ export default function SettingsPage() {
             <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300">
               CC BY 4.0
             </a>
-            .
+            .{" "}
+            Animated emoji artwork © Telegram.{" "}
+            <Link href="/terms#credits" className="underline hover:text-zinc-300">
+              Credits
+            </Link>
           </p>
         </section>
       </main>

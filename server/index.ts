@@ -135,6 +135,7 @@ async function main() {
     const looksLikeDoc =
       !urlPath.startsWith("/_next/") &&
       !urlPath.startsWith("/avatars/") &&
+      !urlPath.startsWith("/emoji/") && // animated emoji: immutable (next.config headers), versioned folder
       !urlPath.startsWith("/api/") &&
       !/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?|map)$/i.test(urlPath);
     if (looksLikeDoc) {

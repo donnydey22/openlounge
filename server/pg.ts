@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
 import type { ReportRecord } from "./moderation";
 import type { CallMeta, MessageKind } from "../src/lib/types";
+import type { DmReaction } from "../src/lib/types";
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type EmailOtpBackend, type EmailOtpRow, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
 
 type SessionRow = {
@@ -92,9 +93,9 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: { attempts?: numb
 const t = (s: unknown) => String(s ?? "").replace(/\u0000/g, "");
 const tn = (s: unknown) => (s === undefined || s === null ? null : t(s));
 
-type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads" | "identities" | "blocks" | "reports", Map<string, unknown[]>>;
+type Rows = Record<"users" | "follows" | "rooms" | "dms" | "sessions" | "dmReads" | "identities" | "blocks" | "reports" | "reactions", Map<string, unknown[]>>;
 type Snapshot = Record<keyof Rows, Map<string, string>>;
-const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads", "identities", "blocks", "reports"];
+const TABLES: (keyof Rows)[] = ["users", "follows", "rooms", "dms", "sessions", "dmReads", "identities", "blocks", "reports", "reactions"];
 const SEP = "\u0001";
 
 function migrationsDir() {
@@ -167,7 +168,7 @@ export class PgPersistence implements Persistence {
   /** whether the live connection is actually TLS (from pg_stat_ssl), null if unknown */
   tlsActive: boolean | null = null;
   private pool: pg.Pool;
-  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map() };
+  private written: Snapshot = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map(), reactions: new Map() };
 
   constructor(url: string) {
     this.where = redactUrl(url);
@@ -252,7 +253,7 @@ export class PgPersistence implements Persistence {
     const q = <R extends pg.QueryResultRow>(sql: string, params?: unknown[]) => this.pool.query<R>(sql, params).then((r) => r.rows);
     // expired sessions would have been dropped from db.json on the next write; drop them here
     await q("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
-    const [users, interests, follows, rooms, dms, sessions, reads, meta, identities, blocks, reports] = await Promise.all([
+    const [users, interests, follows, rooms, dms, sessions, reads, meta, identities, blocks, reports, reactions] = await Promise.all([
       q<{ id: string; name: string; username: string; color: string; bio: string; phone: string | null; created_at: number; base_followers: number; base_following: number; photo_version: number | null; password_hash: string | null; social_links: Record<string, string> | null; deleted_at?: number | string | null }>(
         "SELECT * FROM users ORDER BY created_at, id",
       ),
@@ -272,7 +273,11 @@ export class PgPersistence implements Persistence {
       q<{ id: string; reporter_id: string; target_type: string; target_id: string; target_user_id: string | null; room_id: string | null; reason: string; note: string; snapshot: string; status: string; created_at: number }>(
         "SELECT * FROM content_reports ORDER BY created_at, id",
       ),
+      q<{ message_id: string; user_id: string; emoji: string; created_at: number }>("SELECT * FROM dm_reactions ORDER BY created_at, user_id"),
     ]);
+    const reactionsOf = new Map<string, DmReaction[]>();
+    for (const r of reactions)
+      (reactionsOf.get(r.message_id) ?? reactionsOf.set(r.message_id, []).get(r.message_id)!).push({ emoji: r.emoji, userId: r.user_id, at: Number(r.created_at) });
 
     const interestsOf = new Map<string, string[]>();
     for (const r of interests) (interestsOf.get(r.user_id) ?? interestsOf.set(r.user_id, []).get(r.user_id)!).push(r.interest);
@@ -297,7 +302,7 @@ export class PgPersistence implements Persistence {
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
-      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}), ...(m.kind && m.room_id ? { kind: m.kind as MessageKind, roomId: m.room_id } : {}), ...(m.call ? { call: m.call } : {}) })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}), ...(m.kind && m.room_id ? { kind: m.kind as MessageKind, roomId: m.room_id } : {}), ...(m.call ? { call: m.call } : {}), ...(reactionsOf.has(m.id) ? { reactions: reactionsOf.get(m.id) } : {}) })),
       sessions: sessions.map(sessionFromRow),
       dmReads: {},
       identities: identities.map((i) => ({
@@ -335,7 +340,7 @@ export class PgPersistence implements Persistence {
 
   /** PersistedDb → table rows keyed by primary key. Rows owned by an unknown user are skipped (FK safety). */
   private rows(db: PersistedDb): Rows {
-    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map() };
+    const out: Rows = { users: new Map(), follows: new Map(), rooms: new Map(), dms: new Map(), sessions: new Map(), dmReads: new Map(), identities: new Map(), blocks: new Map(), reports: new Map(), reactions: new Map() };
     const humans = new Set<string>();
     for (const u of db.users ?? []) {
       humans.add(u.id);
@@ -363,6 +368,8 @@ export class PgPersistence implements Persistence {
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
       out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId), tn(m.kind), tn(m.roomId), m.call ? JSON.stringify(m.call) : null]);
+    for (const m of db.dms ?? [])
+      for (const r of m.reactions ?? []) out.reactions.set(`${m.id}${SEP}${r.userId}${SEP}${r.emoji}`, [m.id, t(r.userId), t(r.emoji), r.at]);
     for (const s of db.sessions ?? [])
       if (humans.has(s.userId))
         out.sessions.set(s.tokenHash, [
@@ -473,6 +480,22 @@ export class PgPersistence implements Persistence {
            ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color,
              read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id)`,
           [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => col(up.dms, i)),
+        );
+      // DM reactions (014), after dms (FK; trimmed / deleted messages cascade)
+      if (del.reactions.length) {
+        const k = del.reactions.map((x) => x.split(SEP));
+        await client.query(
+          "DELETE FROM dm_reactions r USING unnest($1::text[], $2::text[], $3::text[]) AS d(m, u, e) WHERE r.message_id = d.m AND r.user_id = d.u AND r.emoji = d.e",
+          [k.map((x) => x[0]), k.map((x) => x[1]), k.map((x) => x[2])],
+        );
+      }
+      if (up.reactions.length)
+        await client.query(
+          `INSERT INTO dm_reactions (message_id, user_id, emoji, created_at)
+           SELECT d.m, d.u, d.e, d.c FROM unnest($1::text[], $2::text[], $3::text[], $4::bigint[]) AS d(m, u, e, c)
+           WHERE EXISTS (SELECT 1 FROM dms WHERE dms.id = d.m)
+           ON CONFLICT (message_id, user_id, emoji) DO UPDATE SET created_at = EXCLUDED.created_at`,
+          [0, 1, 2, 3].map((i) => col(up.reactions, i)),
         );
       // sessions
       if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);

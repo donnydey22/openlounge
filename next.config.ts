@@ -29,6 +29,11 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }],
       },
       {
+        // animated emoji (versioned folder: a re-encode ships as /emoji/v2/…) — cache forever
+        source: "/emoji/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+      },
+      {
         source: "/downloads/:file*.apk",
         headers: [
           { key: "Content-Type", value: "application/vnd.android.package-archive" },
@@ -51,7 +56,7 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: "/((?!_next/static|icons|brand|downloads/|lp/img/|sp/img/).*)", // lp/sp images: versioned/content-keyed URLs set their own immutable caching
+        source: "/((?!_next/static|icons|brand|emoji/|downloads/|lp/img/|sp/img/).*)", // lp/sp images: versioned/content-keyed URLs set their own immutable caching
         headers: [
           {
             key: "Cache-Control",

@@ -1,0 +1,29 @@
+/* Chat emoji / reactions motion (imported by DmThread). transform + opacity only. */
+@keyframes emoji-panel-in {
+  from { transform: translate3d(0, 24px, 0); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.emoji-panel-in { animation: emoji-panel-in 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* bubbles: no iOS callout / text-selection on long-press (Copy lives in the menu); desktop keeps selection */
+@media (pointer: coarse) {
+  [data-mid-bubble] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
+[data-mid-bubble] { touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
+
+/* desktop hover: the quick "react" button beside a bubble */
+.msg-react-btn { opacity: 0; transform: scale(0.8); transition: opacity 0.12s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@media (hover: hover) and (pointer: fine) {
+  [data-testid="dm-msg"]:hover .msg-react-btn, .msg-react-btn:focus-visible { opacity: 1; transform: none; }
+}
+
+/* message highlight (jump to a replied message) */
+@keyframes msg-flash {
+  0%, 30% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .emoji-panel-in { animation: fade-in 0.15s ease-out; }
+  .msg-react-btn { transition: opacity 0.12s ease; transform: none; }
+}

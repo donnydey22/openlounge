@@ -163,6 +163,8 @@ export interface DirectMessage {
   roomId?: string;
   /** call service message details (kind = "call") */
   call?: CallMeta;
+  /** Emoji reactions, oldest first (one per person per message, Telegram-style). Absent = none. */
+  reactions?: DmReaction[];
 }
 
 /** Outcome of a 1:1 call as recorded in the DM ("Outgoing call · 3:12", "Missed call", …). */
@@ -228,6 +230,27 @@ export interface RoomCard {
   speakerCount: number;
   listenerCount: number;
 }
+
+/** One person's reaction on a DM ("dm:reaction_add" / "dm:reaction_remove"; table dm_reactions). */
+export interface DmReaction {
+  emoji: string;
+  userId: string;
+  at: number;
+}
+
+/** Pushed to both participants when a reaction is added or removed. */
+export interface DmReactionEvent {
+  messageId: string;
+  /** the two participants of the conversation */
+  fromId: string;
+  toId: string;
+  userId: string;
+  emoji: string;
+  at: number;
+}
+
+/** Most distinct emoji one message can collect (keeps the chip row sane). */
+export const DM_REACTION_MAX_EMOJI = 12;
 
 export interface ConversationSummary {
   peer: PublicUser;

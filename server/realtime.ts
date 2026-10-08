@@ -5,7 +5,7 @@
 import type { Ack, DirectMessage, Role } from "../src/lib/types";
 import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, createJoinToken, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
-import { store } from "./store";
+import { normalizeReactionEmoji, store } from "./store";
 import { stickers } from "./stickers/service";
 import { isGroupId } from "./conversation";
 import { attachGroupHandlers, groupHistory, groupMessage, groupTyping, groups, wireGroups } from "./groups";
@@ -227,6 +227,10 @@ export function registerRealtime(io: WsHub) {
     chatStateChanged(userId, state) {
       // new event (old clients ignore it): my other devices pin / drop the row
       io.to(`user:${userId}`).emit("dm:chat-state", state);
+    },
+    dmReaction(ev, on) {
+      // every tab of both participants (the reactor's other devices stay in sync too)
+      io.to(`user:${ev.fromId}`).to(`user:${ev.toId}`).emit(on ? "dm:reaction_add" : "dm:reaction_remove", ev);
     },
   });
 
@@ -641,6 +645,34 @@ export function registerRealtime(io: WsHub) {
       if (lastTypingTo.size > 50) lastTypingTo.clear();
       io.to(`user:${to}`).emit(ev, { from: userId });
     };
+    // ----- DM reactions (persisted; broadcast via events.dmReaction) -----
+    const react = (on: boolean) => ({ peerId, messageId, emoji }: { peerId: string; messageId: string; emoji: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        presence.activity(userId);
+        ack(store.reactDm(userId, peerId, messageId, emoji, on));
+      });
+    socket.on("dm:reaction_add", react(true));
+    socket.on("dm:reaction_remove", react(false));
+
+    // Emoji interactions (tap a big animated emoji → full-screen effect, mirrored to the peer if their thread is
+    // open). Ephemeral relay like typing: never stored, block-aware, 1 / 400 ms per socket, 30 / 10 s.
+    const interactWindow: number[] = [];
+    let lastInteract = 0;
+    socket.on("dm:emoji_interaction", (d: { to: string; messageId: string; emoji: string }) => {
+      const userId = me();
+      const to = d?.to;
+      if (!userId || typeof to !== "string" || !to || to === userId) return;
+      const emoji = normalizeReactionEmoji(d?.emoji);
+      if (!emoji || typeof d?.messageId !== "string") return;
+      const now = Date.now();
+      while (interactWindow.length && now - interactWindow[0] > 10_000) interactWindow.shift();
+      if (interactWindow.length >= 30 || now - lastInteract < 400) return;
+      if (!store.publicUser(to) || store.isBlockedEither(userId, to)) return;
+      interactWindow.push(now);
+      lastInteract = now;
+      io.to(`user:${to}`).emit("dm:emoji_interaction", { from: userId, messageId: d.messageId, emoji });
+    });
+
     socket.on("dm:typing", (d: { to: string }) => relayTyping(d?.to, "dm:typing"));
     socket.on("dm:typing_stop", (d: { to: string }) => relayTyping(d?.to, "dm:typing_stop"));
 
