@@ -5,6 +5,7 @@ import { TOPIC_EMOJI, timeAgo } from "@/lib/utils";
 import { formatFull, useClockTick } from "@/lib/time";
 import { Avatar } from "./Avatar";
 import { unlockAudio } from "@/lib/audioUnlock";
+import { LinkifiedText } from "@/components/chat/LinkifiedText";
 
 export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: boolean }) {
   useClockTick(); // "Live 5m" keeps counting
@@ -26,7 +27,9 @@ export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: b
           <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> <span title={`Started ${formatFull(room.createdAt)}`}>Live {timeAgo(room.createdAt)}</span>
         </span>
       </div>
-      <h3 className="mb-4 text-lg font-semibold leading-snug [overflow-wrap:anywhere] text-zinc-50 group-hover:text-white">{room.title}</h3>
+      <h3 className="mb-4 text-lg font-semibold leading-snug [overflow-wrap:anywhere] text-zinc-50 group-hover:text-white">
+        <LinkifiedText text={room.title} links={false} />
+      </h3>
       <div className="flex items-center gap-4">
         <div className="relative h-[66px] w-[66px] shrink-0">
           {room.speakers.slice(0, 2).map((s, i) => (

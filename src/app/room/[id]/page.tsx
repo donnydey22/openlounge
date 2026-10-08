@@ -30,6 +30,7 @@ import { InviteToRoomSheet } from "@/components/rooms/InviteToRoomSheet";
 import { DropInStatus } from "@/components/rooms/DropInStatus";
 import { markAudio } from "@/hooks/useLiveKitAudio";
 import { useScrollLock } from "@/lib/scrollLock";
+import { LinkifiedText } from "@/components/chat/LinkifiedText";
 
 type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
 
@@ -414,7 +415,9 @@ export default function RoomPage() {
               <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> <span title={`Started ${formatFull(room.createdAt)}`}>Live · {timeAgo(room.createdAt)}</span>
             </span>
           </div>
-          <h1 className="text-xl font-bold leading-snug [overflow-wrap:anywhere]">{room.title}</h1>
+          <h1 className="text-xl font-bold leading-snug [overflow-wrap:anywhere]">
+            <LinkifiedText text={room.title} />
+          </h1>
           {room.private && (
             <div className="mt-1 flex items-center gap-1 text-xs text-zinc-500" data-testid="room-private">
               <Lock className="h-3 w-3" /> {room.dropin ? "Private drop-in audio chat" : "Invite only"}
@@ -423,7 +426,7 @@ export default function RoomPage() {
           {room.dropin && <DropInStatus room={room} meId={me?.id} audio={audio.status} />}
           {room.description && (
             <button onClick={() => setShowDesc((v) => !v)} className={cn("mt-2 block w-full max-w-full text-left text-sm text-zinc-400 [overflow-wrap:anywhere]", !showDesc && "line-clamp-2")}>
-              {room.description}
+              <LinkifiedText text={room.description} links={false} />
             </button>
           )}
 

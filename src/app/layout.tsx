@@ -9,6 +9,7 @@ import { THEME_COLORS, themeInitScript } from "@/lib/theme";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
 import { AppShell } from "@/components/AppShell";
 import { LinkConfirmHost } from "@/components/chat/LinkConfirm";
+import { ChatSearchHost } from "@/components/search/ChatSearch";
 
 // Inside the Android/iPhone apps the page is an app screen: no pinch/double-tap zoom (which pans the whole UI).
 // The public website keeps zoom for accessibility; fields are 16px on touch devices so focus never zooms anyway.
@@ -51,6 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Notifier>
               <Toasts />
               <LinkConfirmHost />
+              <ChatSearchHost />
               <AppShell>
                 <AuthGate>{children}</AuthGate>
               </AppShell>

@@ -836,3 +836,36 @@ html.ol-recaptcha-active body:has([aria-modal]) {
 html[data-lowend] .ol-word-wave > span, html[data-lowend] .ol-head-mic, html[data-lowend] .ol-splash-mic,
 html[data-lowend] .ol-splash-word > span { animation: none !important; }
 html[data-lowend] .ol-head-mic::after { display: none; }
+
+/* in-chat search (src/components/search/ChatSearch.tsx) */
+@keyframes ol-slide-down {
+  from {
+    transform: translate3d(0, -100%, 0);
+  }
+}
+.ol-slide-down {
+  animation: ol-slide-down 180ms var(--ease-ios, ease-out);
+}
+@keyframes ol-flash {
+  0%,
+  60% {
+    background-color: rgb(16 185 129 / 0.28);
+    box-shadow: 0 0 0 4px rgb(16 185 129 / 0.28);
+  }
+}
+.ol-flash {
+  animation: ol-flash 1.4s ease-out;
+  border-radius: 1rem;
+}
+::highlight(ol-search) {
+  background-color: rgb(251 191 36 / 0.35);
+  color: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-slide-down {
+    animation: none;
+  }
+  .ol-flash {
+    animation-duration: 0.8s;
+  }
+}

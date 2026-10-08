@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { GlobalResults, SearchSuggestions } from "@/components/search/SearchResults";
+import { isEmptyQuery, parseSearchQuery, typingToken } from "@/lib/searchQuery";
 import { Search } from "lucide-react";
 import type { PublicUser } from "@/lib/types";
 import { useApp } from "@/components/AppProvider";
@@ -11,7 +14,30 @@ import { UserRow } from "@/components/UserRow";
 export default function ExplorePage() {
   const { request, rooms, me } = useApp();
   const [users, setUsers] = useState<PublicUser[]>([]);
+  const router = useRouter();
+  // ?q= deep link (tapped #tag / "All chats" from a chat); kept in the URL so Back returns to the same search
   const [q, setQ] = useState("");
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    // read after mount (not during render) so the server HTML and the first client render match
+    setQ(new URLSearchParams(window.location.search).get("q") ?? "");
+    setReady(true);
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => {
+      const cur = new URLSearchParams(window.location.search).get("q") ?? "";
+      if (cur !== q)
+        router.replace(q ? `/explore?q=${encodeURIComponent(q)}` : "/explore", {
+          scroll: false,
+        });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [q, router, ready]);
+  const parsed = useMemo(() => parseSearchQuery(q), [q]);
+  // "#…" / "@…" anywhere in the query → index-backed search (messages in my chats, rooms, people)
+  const tagged = parsed.tags.length > 0 || parsed.mentions.length > 0;
+  const typing = typingToken(q);
 
   useEffect(() => {
     request<{ users: PublicUser[] }>("users:list")
@@ -25,10 +51,7 @@ export default function ExplorePage() {
     [users, needle, me?.id],
   );
   const matchingRooms = useMemo(
-    () =>
-      needle
-        ? rooms.filter((r) => [r.title, r.topic, r.description, r.hostName].some((s) => s.toLowerCase().includes(needle)))
-        : [],
+    () => (needle ? rooms.filter((r) => [r.title, r.topic, r.description, r.hostName].some((s) => s.toLowerCase().includes(needle))) : []),
     [rooms, needle],
   );
 
@@ -42,34 +65,47 @@ export default function ExplorePage() {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search people, rooms and topics"
+            placeholder="Search people, rooms, #topics and @names"
+            enterKeyHint="search"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            data-testid="explore-search"
             className="w-full rounded-full border border-white/10 bg-zinc-900 py-3 pr-4 pl-11 outline-none placeholder:text-zinc-600 focus:border-emerald-500/60"
           />
         </div>
 
-        {needle && (
-          <section className="mt-6">
-            <h2 className="mb-3 text-sm font-semibold text-zinc-400">Rooms</h2>
-            <div className="space-y-3">
-              {matchingRooms.map((r) => (
-                <RoomCard key={r.id} room={r} />
-              ))}
-              {matchingRooms.length === 0 && <p className="text-sm text-zinc-600">No live rooms match “{q}”.</p>}
-            </div>
-          </section>
-        )}
+        {typing && <SearchSuggestions q={q} onPick={setQ} />}
 
-        <section className="mt-6">
-          <h2 className="mb-2 text-sm font-semibold text-zinc-400">{needle ? "People" : "People to follow"}</h2>
-          <div className="space-y-0.5">
-            {people.map((u) => (
-              <UserRow key={u.id} user={u} />
-            ))}
-            {people.length === 0 && (
-              <p className="text-sm text-zinc-600">{needle ? `No people match “${q}”.` : "No one else is here yet. Invite a few friends!"}</p>
+        {tagged && !isEmptyQuery(parsed) ? (
+          <GlobalResults q={q} />
+        ) : (
+          <>
+            {needle && (
+              <section className="mt-6">
+                <h2 className="mb-3 text-sm font-semibold text-zinc-400">Rooms</h2>
+                <div className="space-y-3">
+                  {matchingRooms.map((r) => (
+                    <RoomCard key={r.id} room={r} />
+                  ))}
+                  {matchingRooms.length === 0 && <p className="text-sm text-zinc-600">No live rooms match “{q}”.</p>}
+                </div>
+              </section>
             )}
-          </div>
-        </section>
+
+            <section className="mt-6">
+              <h2 className="mb-2 text-sm font-semibold text-zinc-400">{needle ? "People" : "People to follow"}</h2>
+              <div className="space-y-0.5">
+                {people.map((u) => (
+                  <UserRow key={u.id} user={u} />
+                ))}
+                {people.length === 0 && (
+                  <p className="text-sm text-zinc-600">{needle ? `No people match “${q}”.` : "No one else is here yet. Invite a few friends!"}</p>
+                )}
+              </div>
+            </section>
+          </>
+        )}
       </main>
     </>
   );
