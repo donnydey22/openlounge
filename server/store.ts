@@ -26,6 +26,7 @@ import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId, isGroupId } from "./conversation";
+import { ChatPrefs } from "./chatPrefs";
 import type { GroupService } from "./groups/service";
 import { REPORT_REASONS, REPORT_TARGETS, filterText, type ReportReason, type ReportRecord, type ReportTarget } from "./moderation";
 import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
@@ -109,6 +110,10 @@ export interface StoreEvents {
   meChanged?(userId: string, user: Me): void;
   /** a member deleted their account: tell every open client so names/avatars flip to "Deleted Account" live */
   userDeleted?(userId: string): void;
+  /** a user's unread total changed outside a socket handler (e.g. messages from a deleted account were cleared) */
+  unreadChanged?(userId: string): void;
+  /** a user's inbox state for a 1:1 chat changed (pin / remove): sync their other devices */
+  chatStateChanged?(userId: string, state: { peerId: string; pinned: boolean; hidden: boolean }): void;
 }
 
 /** Account-deletion hooks (store compliance): other features clean up their own data for a deleted member
@@ -176,6 +181,8 @@ export class Store {
   rooms = new Map<string, RoomRecord>();
   dms = new Map<string, DirectMessage[]>(); // conversationId -> messages (oldest first)
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
+  /** per-user inbox state for 1:1 chats (pinned, "Delete chat for me"): server/chatPrefs.ts */
+  chatPrefs = new ChatPrefs();
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
   /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
   identities = new Map<string, IdentityRecord>();
@@ -231,6 +238,11 @@ export class Store {
       await this.backend.markImported?.(source);
       console.log(`[store] import done — ${source} is no longer read and can be archived`);
     }
+    await this.chatPrefs.load();
+    // backfill (idempotent): messages from already-deleted accounts count as read for everyone
+    let cleared = 0;
+    for (const id of this.tombstones.keys()) cleared += this.readAllFrom(id, { silent: true }).length;
+    if (cleared) log.info("cleared unread from deleted accounts", { conversations: cleared });
   }
 
   attach(events: StoreEvents) {
@@ -903,7 +915,8 @@ export class Store {
     this.follows.delete(userId);
     for (const set of this.follows.values()) set.delete(userId);
     this.dmReads.delete(userId);
-    for (const m of this.dmReads.values()) m.delete(userId);
+    // other people's read pointers for this chat are theirs: keep them (dropping them made every message unread);
+    // everything the deleted account sent is marked read for its recipients right after the tombstone is in place
     this.blocks.delete(userId);
     for (const m of this.blocks.values()) m.delete(userId);
     for (const list of this.dms.values())
@@ -942,8 +955,12 @@ export class Store {
         deletedAt: Date.now(),
       });
     this.scheduleSave();
+    this.chatPrefs.forgetUser(userId);
+    // Telegram-style: nothing from a deleted account stays unread (inbox counters, tab badge, push/app badge)
+    const cleared = opts.tombstone !== false ? this.readAllFrom(userId) : [];
     this.events?.roomsListChanged();
     this.events?.userDeleted?.(userId);
+    for (const uid of cleared) this.events?.unreadChanged?.(uid);
     for (const fn of this.deletionHooks)
       Promise.resolve()
         .then(() => fn(userId))
@@ -1889,6 +1906,71 @@ export class Store {
     return { changed, receipt };
   }
 
+  /**
+   * Mark every 1:1 message from `senderId` (a deleted account) as read for its recipients: read pointer + readAt.
+   * Not silent → normal read events (receipts, push "clear" with the new badge). Returns the recipients whose unread
+   * pointer moved.
+   */
+  readAllFrom(senderId: string, opts: { silent?: boolean } = {}) {
+    const changed: string[] = [];
+    for (const [key, list] of this.dms) {
+      if (!list.length || !key.includes("|")) continue;
+      const [a, b] = key.split("|");
+      if (a !== senderId && b !== senderId) continue;
+      const peerId = a === senderId ? b : a;
+      if (!this.users.has(peerId)) continue;
+      if (opts.silent) {
+        let reads = this.dmReads.get(peerId);
+        if (!reads) this.dmReads.set(peerId, (reads = new Map()));
+        const last = list[list.length - 1].createdAt;
+        let stamped = false;
+        for (const m of list) if (m.fromId === senderId && m.toId === peerId && !m.readAt) (m.readAt = m.createdAt), (stamped = true);
+        if ((reads.get(senderId) ?? 0) < last) {
+          reads.set(senderId, last);
+          changed.push(peerId);
+        } else if (stamped) this.scheduleSave();
+        if (changed.length) this.scheduleSave();
+      } else if (this.markDmRead(peerId, senderId).changed) changed.push(peerId);
+    }
+    return changed;
+  }
+
+  /**
+   * Inbox actions on a 1:1 chat, for `userId` only (the peer is never affected):
+   *  pin / unpin; read (mark everything read); remove = Telegram "Delete chat for me": unpin + mark read + hide the
+   *  thread and its messages from my inbox in one go (a newer message brings the chat back). Works on deleted accounts.
+   */
+  chatAction(userId: string, peerId: string, action: unknown) {
+    if (isGroupId(peerId) || peerId === userId) return { ok: false as const, error: "Not a direct chat" };
+    if (!this.users.has(peerId) && !this.isDeletedUser(peerId)) return { ok: false as const, error: "Chat not found" };
+    const list = this.dms.get(conversationId(userId, peerId)) ?? [];
+    let unreadChanged = false;
+    switch (action) {
+      case "pin":
+        this.chatPrefs.set(userId, peerId, { pinnedAt: Date.now() });
+        break;
+      case "unpin":
+        this.chatPrefs.set(userId, peerId, { pinnedAt: null });
+        break;
+      case "read":
+        unreadChanged = this.markDmRead(userId, peerId).changed;
+        break;
+      case "remove": {
+        if (list.length) unreadChanged = this.markDmRead(userId, peerId).changed;
+        const last = list.length ? list[list.length - 1].createdAt : 0;
+        this.chatPrefs.set(userId, peerId, { pinnedAt: null, hiddenAt: Math.max(Date.now(), last) });
+        break;
+      }
+      default:
+        return { ok: false as const, error: "Unknown action" };
+    }
+    const st = this.chatPrefs.get(userId, peerId);
+    const state = { peerId, pinned: !!st?.pinnedAt, hidden: !!st?.hiddenAt && (!list.length || list[list.length - 1].createdAt <= st.hiddenAt) };
+    this.events?.chatStateChanged?.(userId, state);
+    if (unreadChanged) this.events?.unreadChanged?.(userId);
+    return { ok: true as const, ...state, unread: this.unreadDmCount(userId) };
+  }
+
   unreadDmCount(userId: string) {
     return this.conversations(userId).reduce((n, c) => n + c.unread, 0) + (this.groups?.unreadTotal(userId) ?? 0);
   }
@@ -1903,17 +1985,25 @@ export class Store {
       if (this.isBlockedEither(userId, peerId)) continue;
       const peer = this.publicUser(peerId);
       if (!peer) continue;
-      const read = this.lastRead(userId, peerId);
-      const unread = list.filter((m) => m.toId === userId && m.createdAt > read).length;
-      out.push({ peer, lastMessage: list[list.length - 1], unread });
+      // "Delete chat for me": messages up to hiddenAt are gone for me; nothing newer → the chat isn't listed
+      const pref = this.chatPrefs.get(userId, peerId);
+      const hiddenAt = pref?.hiddenAt ?? 0;
+      if (list[list.length - 1].createdAt <= hiddenAt) continue;
+      const read = Math.max(this.lastRead(userId, peerId), hiddenAt);
+      // deleted accounts never count as unread (inbox counters, tab badge, push badge all come from here)
+      const unread = peer.deleted ? 0 : list.filter((m) => m.toId === userId && m.createdAt > read).length;
+      out.push({ peer, lastMessage: list[list.length - 1], unread, ...(pref?.pinnedAt ? { pinnedAt: pref.pinnedAt } : {}) });
     }
-    return out.sort((x, y) => y.lastMessage.createdAt - x.lastMessage.createdAt);
+    // pinned chats first (most recently pinned on top), then by last message
+    return out.sort((x, y) => (y.pinnedAt ?? 0) - (x.pinnedAt ?? 0) || y.lastMessage.createdAt - x.lastMessage.createdAt);
   }
 
   dmHistory(userId: string, peerId: string, before?: number, limit = 60) {
     if (isGroupId(peerId)) return this.groups?.history(userId, peerId, before, limit) ?? { messages: [], hasMore: false };
     if (this.isBlocked(userId, peerId)) return { messages: [], hasMore: false };
-    const list = this.dms.get(conversationId(userId, peerId)) ?? [];
+    const hiddenAt = this.chatPrefs.hiddenAt(userId, peerId);
+    const all = this.dms.get(conversationId(userId, peerId)) ?? [];
+    const list = hiddenAt ? all.filter((m) => m.createdAt > hiddenAt) : all;
     const older = before ? list.filter((m) => m.createdAt < before) : list;
     return { messages: older.slice(-limit), hasMore: older.length > limit };
   }
@@ -1925,7 +2015,8 @@ export class Store {
       const [a, b] = key.split("|");
       if (a !== userId && b !== userId) continue;
       if (this.isBlockedEither(a, b)) continue;
-      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) out.push(list[i]);
+      const hiddenAt = this.chatPrefs.hiddenAt(userId, a === userId ? b : a);
+      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) if (list[i].createdAt > hiddenAt) out.push(list[i]);
     }
     if (this.groups) out.push(...this.groups.since(userId, after));
     out.sort((x, y) => x.createdAt - y.createdAt);

@@ -5,14 +5,15 @@ import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, PenSquare, Search, Users } from "lucide-react";
-import type { ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
+import { Loader2, PenSquare, Pin, Search, Users } from "lucide-react";
+import type { ChatStateEvent, ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
+import { ChatRowMenu, RemoveChatConfirm, SwipeRow, removeLabel, sortPinned } from "@/components/chat/ChatActions";
 import { GroupInboxRow, mergeInbox, useGroupInbox } from "@/components/groups/GroupBits";
 
 export default function MessagesPage() {
@@ -42,6 +43,25 @@ export default function MessagesPage() {
     setActiveDm("*");
     return () => setActiveDm(null);
   }, [setActiveDm]);
+
+  // inbox actions (long-press / right-click / swipe): pin, mark read, remove ("Delete chat for me")
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<PublicUser | null>(null);
+  const dropRow = useCallback((peerId: string) => setConversations((list) => list && list.filter((c) => c.peer.id !== peerId)), []);
+  useEffect(() => {
+    if (!socket) return;
+    // my other devices (or this one) changed a chat's inbox state
+    const onState = (st: ChatStateEvent) =>
+      setConversations((list) => {
+        if (!list) return list;
+        if (st.hidden) return list.filter((c) => c.peer.id !== st.peerId);
+        return list.map((c) => (c.peer.id !== st.peerId || !!c.pinnedAt === st.pinned ? c : { ...c, pinnedAt: st.pinned ? Date.now() : undefined }));
+      });
+    socket.on("dm:chat-state", onState);
+    return () => {
+      socket.off("dm:chat-state", onState);
+    };
+  }, [socket]);
 
   // live: a DM to/from me moves that conversation to the top in place (no refetch, no flash)
   useEffect(() => {
@@ -135,14 +155,17 @@ export default function MessagesPage() {
           </div>
         ) : (
           <ul data-testid="dm-conversations">
-            {mergeInbox(conversations, groupInbox.rows).map((c0) => {
+            {sortPinned(mergeInbox(conversations, groupInbox.rows)).map((c0) => {
               if ("group" in c0) return <GroupInboxRow key={c0.id} r={c0} meId={me?.id} typingName={groupInbox.typing[c0.id]} onOpen={groupInbox.markOpened} />;
-              const c = { ...c0, peer: displayUser(c0.peer) };
+              const peer = displayUser(c0.peer);
+              // deleted accounts never show unread (the server clears them too)
+              const c = { ...c0, peer, unread: peer.deleted ? 0 : c0.unread };
               const mine = c.lastMessage.fromId === me?.id;
               const st = c.peer.isBot ? "offline" : presenceOf(c.peer.id);
               const isTyping = typing.has(c.peer.id);
               return (
                 <li key={c.peer.id} className="cv-auto [contain-intrinsic-size:auto_72px]">
+                  <SwipeRow onMenu={() => setMenuFor(c.peer.id)} onRemove={() => setRemoving(c.peer)} removeText={removeLabel(!!c.peer.deleted)}>
                   <Link
                     href={`/messages/${c.peer.id}`}
                     data-testid="dm-row"
@@ -172,9 +195,11 @@ export default function MessagesPage() {
                             {c.unread > 99 ? "99+" : c.unread}
                           </span>
                         )}
+                        {!!c.pinnedAt && !c.unread && <Pin className="h-3.5 w-3.5 shrink-0 rotate-45 text-zinc-500" aria-label="Pinned" data-testid="dm-row-pinned" />}
                       </div>
                     </div>
                   </Link>
+                  </SwipeRow>
                 </li>
               );
             })}
@@ -182,6 +207,19 @@ export default function MessagesPage() {
         )}
       </main>
       <NewMessageSheet open={composing} onClose={() => setComposing(false)} />
+      {(() => {
+        const c = menuFor ? conversations?.find((x) => x.peer.id === menuFor) : undefined;
+        const peer = c ? displayUser(c.peer) : null;
+        return (
+          <ChatRowMenu
+            chat={c && peer ? { peer, pinned: !!c.pinnedAt, unread: peer.deleted ? 0 : c.unread } : null}
+            onClose={() => setMenuFor(null)}
+            onRemove={() => peer && setRemoving(peer)}
+            onChanged={() => load()}
+          />
+        );
+      })()}
+      <RemoveChatConfirm peer={removing} onClose={() => setRemoving(null)} onRemoved={dropRow} />
     </>
   );
 }

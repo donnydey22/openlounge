@@ -211,6 +211,13 @@ export function registerRealtime(io: WsHub) {
     dmTyping(fromId, toId) {
       io.to(`user:${toId}`).emit("dm:typing", { from: fromId });
     },
+    unreadChanged(userId) {
+      io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
+    },
+    chatStateChanged(userId, state) {
+      // new event (old clients ignore it): my other devices pin / drop the row
+      io.to(`user:${userId}`).emit("dm:chat-state", state);
+    },
   });
 
   // Auth re-validation for long-lived sockets: a session that expired (or was revoked by a sibling instance) while
@@ -586,6 +593,15 @@ export function registerRealtime(io: WsHub) {
         presence.activity(userId, typeof readAt === "number" ? readAt : Date.now());
         if (r.changed) io.to(`user:${userId}`).emit("dm:unread", { count: store.unreadDmCount(userId) });
         ack({ ok: true, receipt: r.receipt });
+      }),
+    );
+
+    // Inbox actions on a 1:1 chat, for me only: pin / unpin / read / remove ("Delete chat for me": unpin + read +
+    // hide in one go). Allowed on deleted accounts and blocked chats too: they're about my inbox, not the peer.
+    socket.on("dm:chat", ({ peerId, action }: { peerId: string; action: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        if (typeof peerId !== "string" || !peerId) return ack({ ok: false, error: "Chat not found" });
+        ack(store.chatAction(userId, peerId, action));
       }),
     );
 

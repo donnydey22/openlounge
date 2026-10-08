@@ -190,6 +190,15 @@ export interface ConversationSummary {
   peer: PublicUser;
   lastMessage: DirectMessage;
   unread: number;
+  /** pinned to the top of my inbox (absent = not pinned) */
+  pinnedAt?: number;
+}
+
+/** "dm:chat-state" — my inbox state for a 1:1 chat changed (pin / remove), pushed to all my devices */
+export interface ChatStateEvent {
+  peerId: string;
+  pinned: boolean;
+  hidden: boolean;
 }
 
 /**

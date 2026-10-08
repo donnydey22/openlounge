@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, Trash2, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -15,6 +15,7 @@ import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { RemoveChatConfirm, removeLabel } from "./ChatActions";
 import { StickerMessage } from "../stickers/StickerMessage";
 import { parseSticker } from "@/lib/stickers/token";
 import { TypingLabel } from "./TypingDots";
@@ -146,6 +147,7 @@ export function DmThread({
   const { socket, connected, offline, me, request, setActiveDm, toast } = useApp();
   const safety = useSafety(me?.id);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false); // "Remove chat" / "Delete chat" for me (unpin + read + hide)
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [blockOpen, setBlockOpen] = useState(false);
   const iBlocked = safety.isBlocked(peerId);
@@ -716,8 +718,10 @@ export function DmThread({
       </header>
       {peer && (
         <>
-          <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title={`@${peer.username}`}>
+          <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title={peer.deleted ? peer.name : `@${peer.username}`}>
             <div className="space-y-1">
+              {!peer.deleted && (
+              <>
               <button
                 onClick={() => {
                   setMoreOpen(false);
@@ -736,9 +740,22 @@ export function DmThread({
               >
                 <Ban className="h-4 w-4" /> {iBlocked ? `Unblock @${peer.username}` : `Block @${peer.username}`}
               </button>
-              <p className="px-3 pt-2 text-xs text-zinc-500">Tip: press and hold a message to report just that message.</p>
+              </>
+              )}
+              <button
+                onClick={() => {
+                  setMoreOpen(false);
+                  setRemoveOpen(true);
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-red-400 hover:bg-red-500/10"
+                data-testid="dm-menu-remove-chat"
+              >
+                <Trash2 className="h-4 w-4" /> {removeLabel(!!peer.deleted)}
+              </button>
+              {!peer.deleted && <p className="px-3 pt-2 text-xs text-zinc-500">Tip: press and hold a message to report just that message.</p>}
             </div>
           </Sheet>
+          <RemoveChatConfirm peer={removeOpen ? peer : null} onClose={() => setRemoveOpen(false)} onRemoved={() => onBack()} />
           <ReportSheet
             target={reportTarget}
             onClose={() => setReportTarget(null)}
@@ -888,8 +905,16 @@ export function DmThread({
             {gone === "left" ? "You left this group." : gone === "removed" ? "You were removed from this group." : "This group is no longer available."}
           </div>
         ) : peer?.deleted ? (
-          <div className="flex items-center justify-center gap-2 py-3 text-sm text-zinc-400" data-testid="dm-deleted">
-            {DELETED_COMPOSER_TEXT}
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 py-2 text-center text-sm text-zinc-400" data-testid="dm-deleted">
+            <span>{DELETED_COMPOSER_TEXT}</span>
+            <button
+              type="button"
+              onClick={() => setRemoveOpen(true)}
+              className="shrink-0 rounded-full border border-red-500/40 px-4 py-1.5 text-sm font-semibold text-red-400 hover:bg-red-500/10"
+              data-testid="dm-deleted-remove"
+            >
+              Remove chat
+            </button>
           </div>
         ) : hiddenPeer ? (
           <div className="flex items-center justify-between gap-3 py-2 text-sm text-zinc-400" data-testid="dm-blocked">

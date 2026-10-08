@@ -62,6 +62,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "dm:send": { to: "id", text: "string", clientId: "id?" },
   "dm:since": { after: "number?" },
   "dm:read": { peerId: "id", upToMessageId: "id?" },
+  "dm:chat": { peerId: "id", action: "string" },
   "dm:typing": { to: "id" },
   "dm:typing_stop": { to: "id" },
   "room:inviteDm": { roomId: "id", to: "string-array?" },
