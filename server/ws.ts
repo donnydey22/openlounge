@@ -191,6 +191,8 @@ class Broadcast {
 }
 
 export class WsHub {
+  /** the most recently created hub (one per process): lets modules outside realtime.ts broadcast (account deletion) */
+  static latest: WsHub | null = null;
   private wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   private conns = new Map<string, Conn>();
   private channels = new Map<string, Set<Conn>>();
@@ -202,6 +204,7 @@ export class WsHub {
     /** Origin policy: browsers on other sites are refused; no Origin (native apps, bots) is allowed */
     private allowUpgrade: (req: IncomingMessage) => boolean = () => true,
   ) {
+    WsHub.latest = this;
     server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const pathname = (req.url ?? "").split("?")[0];
       if (pathname !== this.path) return; // leave other upgrades (e.g. Next.js HMR) alone

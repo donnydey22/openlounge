@@ -38,21 +38,30 @@ test("delete account wipes personal data and anonymises shared content", async (
   assert.equal((await api(app.base, "/api/me/delete", {}, { token: tok })).status, 400);
   assert.equal((await api(app.base, "/api/me/delete", { confirm: "DELETE" })).status, 401);
 
-  const del = await api(app.base, "/api/me/delete", { confirm: "DELETE" }, { token: tok });
+  // re-verification is required (store compliance): a fresh sign-in (< 10 min) counts as proof
+  assert.equal((await api(app.base, "/api/me/delete", { confirm: "DELETE" }, { token: tok })).status, 403);
+  const reauth = (await api(app.base, "/api/me/delete/verify", { method: "recent" }, { token: tok })).data.reauth;
+  const del = await api(app.base, "/api/me/delete", { confirm: "DELETE", reauth }, { token: tok });
   assert.equal(del.status, 200, JSON.stringify(del.data));
   await store.flush();
 
   // the old token no longer works
   assert.equal((await api(app.base, "/api/me/social-links", { links: {} }, { token: tok })).status, 401);
   // DB: personal rows gone
-  for (const [t, col] of [["users", "id"], ["sessions", "user_id"], ["auth_identities", "user_id"], ["follows", "follower_id"], ["follows", "followee_id"], ["device_tokens", "user_id"], ["notification_prefs", "user_id"], ["contact_hashes", "owner_id"]]) {
+  for (const [t, col] of [["sessions", "user_id"], ["auth_identities", "user_id"], ["follows", "follower_id"], ["follows", "followee_id"], ["device_tokens", "user_id"], ["notification_prefs", "user_id"], ["contact_hashes", "owner_id"]]) {
     const r = await sql<{ n: string }>(`SELECT count(*)::text AS n FROM ${t} WHERE ${col} = $1`, [aid]);
     assert.equal(r[0].n, "0", `${t}.${col} still has rows`);
   }
+  // the users row is a scrubbed tombstone (deleted_at set, no PII) so their messages still render as "Deleted Account"
+  const tomb = await sql<{ name: string; phone: string | null; deleted_at: string | null }>("SELECT name, phone, deleted_at FROM users WHERE id = $1", [aid]);
+  assert.equal(tomb.length, 1);
+  assert.equal(tomb[0].name, "Deleted Account");
+  assert.equal(tomb[0].phone, null);
+  assert.ok(tomb[0].deleted_at);
   // DMs kept for the other person, anonymised
   const dms = await sql<{ from_name: string }>("SELECT from_name FROM dms WHERE from_id = $1", [aid]);
   assert.ok(dms.length >= 1);
-  for (const d of dms) assert.equal(d.from_name, "Deleted account");
+  for (const d of dms) assert.equal(d.from_name, "Deleted Account");
   assert.equal(store.users.has(aid), false);
   assert.equal(store.users.has(bid), true);
 

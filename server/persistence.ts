@@ -32,6 +32,8 @@ export interface UserRecord {
   photoVersion?: number | null;
   /** scrypt hash (server/authx/password.ts) for accounts with an email identity; never leaves the server */
   passwordHash?: string | null;
+  /** account deleted (epoch ms): the row is a scrubbed tombstone (store compliance, migration 012_store_users_deleted_at) */
+  deletedAt?: number | null;
 }
 
 export type IdentityProvider = "phone" | "email" | "google" | "apple";

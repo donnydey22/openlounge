@@ -1,5 +1,6 @@
 "use client";
 
+import { markDeleted } from "@/lib/userDisplay";
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -347,6 +348,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     s.on("toast", ({ message }: { message: string }) => banner({ title: message, avatar: "app" }));
     s.on("follows:update", ({ following }: { following: string[] }) => setFollowing(new Set(following)));
     s.on("me:update", ({ user }: { user: Me }) => setMe(user));
+    // store compliance: a member deleted their account → names/avatars flip to "Deleted Account" everywhere, live
+    s.on("user:deleted", ({ userId }: { userId: string }) => markDeleted(userId));
     s.on("dm:unread", ({ count }: { count: number }) => setUnreadDms(count));
     s.on("presence:snapshot", ({ onlineIds: ids, awayIds: away, lastSeen: seen }: { onlineIds: string[]; awayIds?: string[]; lastSeen?: Record<string, number> }) => {
       setOnlineIds(new Set(ids));

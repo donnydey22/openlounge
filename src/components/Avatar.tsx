@@ -1,4 +1,5 @@
-import { MicOff } from "lucide-react";
+import { Ghost, MicOff } from "lucide-react";
+import { DELETED_COLOR, isDeletedName } from "@/lib/userDisplay";
 import { cn, initials } from "@/lib/utils";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
 
@@ -54,6 +55,7 @@ export function Avatar({
   online,
   presence,
   onPodium = false,
+  deleted,
   className,
 }: {
   name: string;
@@ -70,8 +72,15 @@ export function Avatar({
   /** In-room live presence (bottom-left): green = here, amber = backgrounded / reconnecting; omit to hide */
   presence?: "online" | "away" | null;
   onPodium?: boolean;
+  /** deleted account: grey ghost avatar (also inferred from the name "Deleted Account" with no photo) */
+  deleted?: boolean;
   className?: string;
 }) {
+  const ghost = deleted ?? (isDeletedName(name) && !photo);
+  if (ghost) {
+    color = DELETED_COLOR;
+    photo = null;
+  }
   const lvl = Math.max(0, Math.min(1, level));
   const showGlow = speaking || lvl > 0.02;
   // Clubhouse-like verbalize: ring scale + opacity track loudness
@@ -136,7 +145,9 @@ export function Avatar({
         style={{ background: `linear-gradient(145deg, ${color}, ${shade(color, -28)})` }}
         aria-label={name}
       >
-        {photo ? (
+        {ghost ? (
+          <Ghost className="relative z-[1] h-[55%] w-[55%] text-white/80" aria-hidden />
+        ) : photo ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={photo} alt="" className="openlounge-hex absolute inset-0 h-full w-full object-cover" draggable={false} />
         ) : (

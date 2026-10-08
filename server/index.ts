@@ -10,6 +10,7 @@ import { originAllowed } from "./auth";
 import { api, isApiRequest, json } from "./http";
 import { logProviderStatus } from "./authx/providers";
 import { initPush } from "./push";
+import { startDeletionQueue } from "./deletionQueue";
 import { demoOtpEnabled, firebaseConfigured } from "./firebase";
 import { log, metrics, requestContext } from "./log";
 import { BadJson, BodyTooLarge, RateLimiter, clientIp, requestId, securityHeaders, sendJson, wwwRedirect } from "./httpsec";
@@ -24,6 +25,7 @@ async function main() {
   await store.init();
   logProviderStatus();
   initPush();
+  startDeletionQueue(); // store compliance: operator-initiated account deletions (account_deletion_requests)
   log.info("phone auth", { firebase: firebaseConfigured(), demoOtp: demoOtpEnabled() });
 
   const app = next({ dev, hostname: "localhost", port });

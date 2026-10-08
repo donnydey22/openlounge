@@ -24,6 +24,8 @@ export interface PublicUser {
   lastSeenAt?: number | null;
   /** Live app presence: "online" = app open in the foreground, "away" = connected but backgrounded, "offline" = gone */
   presence?: PresenceStatus;
+  /** the account was deleted: render as "Deleted Account" with a ghost avatar (src/lib/userDisplay.ts) */
+  deleted?: boolean;
 }
 
 /** App-wide presence (presence:update / presence:snapshot): green / amber / no dot */

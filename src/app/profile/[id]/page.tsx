@@ -1,5 +1,6 @@
 "use client";
 
+import { DELETED_COLOR, DELETED_NAME, DELETED_PROFILE_TEXT, isDeletedUser, useDeletedIds } from "@/lib/userDisplay";
 import { SocialLinkChips } from "@/components/profile/SocialLinks";
 import { ShareProfileButton } from "@/components/ShareProfileButton";
 import { friendlyMessage, isTransient } from "@/lib/errors";
@@ -37,6 +38,7 @@ export default function ProfilePage() {
   const [editingInterests, setEditingInterests] = useState(false);
   const isMe = me?.id === id;
   const safety = useSafety(me?.id);
+  const deletedIds = useDeletedIds();
   const [moreOpen, setMoreOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [blockOpen, setBlockOpen] = useState(false);
@@ -88,6 +90,22 @@ export default function ProfilePage() {
       </>
     );
   }
+
+  // store compliance: deleted account → the Telegram-style "This account was deleted" page (no actions, no PII)
+  if (isDeletedUser(profile.user) || deletedIds.has(profile.user.id))
+    return (
+      <>
+        <TopBar />
+        <main className="mx-auto flex max-w-lg flex-col items-center px-5 pt-16 pb-28 text-center fade-in" data-testid="profile-deleted">
+          <Avatar name={DELETED_NAME} color={DELETED_COLOR} deleted size="profile" />
+          <h1 className="mt-5 text-xl font-bold">{DELETED_NAME}</h1>
+          <p className="mt-2 text-sm text-zinc-400">{DELETED_PROFILE_TEXT}</p>
+          <button onClick={() => router.back()} className="mt-8 rounded-full border border-white/12 px-5 py-2 text-sm font-semibold hover:bg-white/5">
+            Go back
+          </button>
+        </main>
+      </>
+    );
 
   const u = profile.user;
   const iBlocked = safety.isBlocked(u.id);

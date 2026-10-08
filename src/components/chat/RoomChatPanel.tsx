@@ -1,5 +1,6 @@
 "use client";
 
+import { DELETED_NAME, isDeletedId, useDeletedIds } from "@/lib/userDisplay";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Flag, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
@@ -57,6 +58,7 @@ export function RoomChatPanel({
 }) {
   const all = messages;
   messages = hiddenIds?.size ? all.filter((m) => !hiddenIds.has(m.authorId)) : all;
+  useDeletedIds(); // live "Deleted Account" for authors who delete their account
   useClockTick(); // soft stamps ("now" → "4m") keep counting
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -133,7 +135,7 @@ export function RoomChatPanel({
                   <div className="w-6 shrink-0">
                     {!grouped && (
                       <button onClick={() => onAuthorClick(m.authorId)} aria-label={`Open ${m.authorName}`}>
-                        <Avatar name={m.authorName} color={m.authorColor} photo={m.authorPhotoUrl} size="xs" className="scale-[0.86]" />
+                        <Avatar name={isDeletedId(m.authorId) ? DELETED_NAME : m.authorName} color={m.authorColor} photo={isDeletedId(m.authorId) ? null : m.authorPhotoUrl} size="xs" className="scale-[0.86]" />
                       </button>
                     )}
                   </div>
@@ -155,7 +157,7 @@ export function RoomChatPanel({
                         }}
                         className="font-semibold text-zinc-200 hover:underline"
                       >
-                        {firstName(m.authorName)}
+                        {isDeletedId(m.authorId) ? DELETED_NAME : firstName(m.authorName)}
                       </button>
                       {roleMark && (
                         <span className={isHost ? "text-emerald-400" : "text-[10px]"} title={isHost ? "Host" : "Speaker"}>

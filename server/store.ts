@@ -107,7 +107,14 @@ export interface StoreEvents {
   sessionRevoked?(sessionId: string): void;
   /** the user's own profile changed outside a socket handler (REST): push me:update to their sockets */
   meChanged?(userId: string, user: Me): void;
+  /** a member deleted their account: tell every open client so names/avatars flip to "Deleted Account" live */
+  userDeleted?(userId: string): void;
 }
+
+/** Account-deletion hooks (store compliance): other features clean up their own data for a deleted member
+ *  (groups: transfer ownership; new-people: cancel pending notifications; files: delete uploads; …).
+ *  Register with store.onAccountDeleted(fn). Hooks run after the tombstone is in place; errors are logged, never thrown. */
+export type AccountDeletedHook = (userId: string) => void | Promise<void>;
 
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
 const AWAY_GRACE_MS = 45_000; // keep your seat during a refresh / network switch / app backgrounding (LiveKit audio keeps playing)
@@ -121,7 +128,7 @@ const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
 export const DELETED_USER_ID = "u_deleted";
-const DELETED_NAME = "Deleted account";
+const DELETED_NAME = "Deleted Account";
 const DELETED_COLOR = "#64748B";
 
 export { conversationId };
@@ -158,6 +165,13 @@ const rand = <T,>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr
 
 export class Store {
   users = new Map<string, UserRecord>();
+  /** deleted accounts: scrubbed tombstone rows (users.deleted_at). Never in `users`, so search, suggestions,
+   *  sign-in and DMs can't reach them; publicUser() renders them as "Deleted Account". */
+  tombstones = new Map<string, UserRecord>();
+  private deletionHooks: AccountDeletedHook[] = [];
+  onAccountDeleted(fn: AccountDeletedHook) {
+    this.deletionHooks.push(fn);
+  }
   follows = new Map<string, Set<string>>(); // followerId -> followeeIds
   rooms = new Map<string, RoomRecord>();
   dms = new Map<string, DirectMessage[]>(); // conversationId -> messages (oldest first)
@@ -277,12 +291,16 @@ export class Store {
   private hydrate(db: PersistedDb, from: string) {
     try {
       for (const u of db.users ?? []) {
+        if (u.deletedAt) {
+          this.tombstones.set(u.id, { ...u, isBot: false });
+          continue;
+        }
         // older demo users (pre phone-auth) get a generated handle
         this.users.set(u.id, { ...u, isBot: false, username: u.username || this.uniqueUsername(u.name) });
       }
       for (const i of db.identities ?? []) if (this.users.has(i.userId)) this.identities.set(identityKey(i.provider, i.subject), { ...i });
       // every phone number is a phone identity (db.json files and rows written by a pre-005 server have none yet)
-      for (const u of db.users ?? []) if (u.phone) this.ensurePhoneIdentity(u.id, u.phone, u.createdAt);
+      for (const u of db.users ?? []) if (u.phone && !u.deletedAt) this.ensurePhoneIdentity(u.id, u.phone, u.createdAt);
       const now0 = Date.now();
       const legacyOf = new Set((db.sessions ?? []).map((s) => s.legacyHash).filter((h): h is string => !!h));
       for (const s of db.sessions ?? []) {
@@ -404,7 +422,7 @@ export class Store {
   private snapshot(): PersistedDb {
     return {
       version: 1,
-      users: [...this.users.values()].filter((u) => !u.isBot),
+      users: [...[...this.users.values()].filter((u) => !u.isBot), ...this.tombstones.values()],
       follows: Object.fromEntries(
         [...this.follows.entries()].filter(([k]) => !k.startsWith("bot-")).map(([k, v]) => [k, [...v]]),
       ),
@@ -858,20 +876,30 @@ export class Store {
     return { ...st, sessions: active };
   }
 
-  // ----- account deletion (App Store 5.1.1(v)) -----
+  // ----- account deletion (App Store 5.1.1(v), Play data deletion; Telegram-style tombstone) -----
 
   /**
-   * Permanently delete a member: sessions (tokens), sign-in identities, follows (both directions), read markers,
-   * interests, avatar and the user row. DMs they sent are kept for the other person but anonymised
-   * ("Deleted account"); rooms they hosted are ended and re-attributed to a placeholder host.
-   * Device tokens, notification prefs and contact hashes live in the push repo and are removed by the caller.
+   * Permanently delete a member. The user row stays as a scrubbed tombstone (users.deleted_at) so their messages in
+   * other people's chats still render — as "Deleted Account" with a ghost avatar — and every lookup goes through
+   * publicUser() → deletedPublicUser(). Erased: phone, email + all sign-in identities, password hash, sessions,
+   * name, username (freed for reuse), bio, photo, interests, social links, follows both ways, blocks, read markers,
+   * in-room presence. Rooms they host are ended. Device tokens / notification prefs / contact hashes live in the
+   * push repo (caller); other features clean up via onAccountDeleted hooks. Re-signing up with the same phone or
+   * email creates a brand-new account (nothing links back: identities are gone, the tombstone holds no PII).
    */
-  deleteAccount(userId: string) {
+  deleteAccount(userId: string, opts: { tombstone?: boolean } = {}) {
     const u = this.users.get(userId);
     if (!u || u.isBot) return { ok: false as const, status: 404, error: "Account not found" };
     const revoked = this.revokeSession(undefined, { allForUser: userId });
     for (const s of [...this.sessions.values()]) if (s.userId === userId) this.dropSession(s);
     for (const [k, idn] of [...this.identities]) if (idn.userId === userId) this.identities.delete(k);
+    // leave every room first (host hand-off logic runs), then end rooms they still host
+    for (const r of this.rooms.values()) if (!r.ended && r.participants.has(userId)) this.leave(r.id, userId);
+    for (const r of this.rooms.values())
+      if (r.hostId === userId) {
+        if (!r.ended) this.finish(r);
+        r.hostId = DELETED_USER_ID;
+      }
     this.follows.delete(userId);
     for (const set of this.follows.values()) set.delete(userId);
     this.dmReads.delete(userId);
@@ -885,14 +913,41 @@ export class Store {
           m.fromColor = DELETED_COLOR;
         }
     for (const r of this.rooms.values())
-      if (r.hostId === userId) {
-        r.hostId = DELETED_USER_ID;
-        r.ended = true;
-      }
+      for (const m of r.chat)
+        if (m.authorId === userId) {
+          m.authorName = DELETED_NAME;
+          m.authorColor = DELETED_COLOR;
+          m.authorPhotoUrl = null;
+        }
     fs.rmSync(path.join(AVATAR_DIR, `${userId}.img`), { force: true });
     fs.rmSync(path.join(AVATAR_DIR, `${userId}.type`), { force: true });
     this.users.delete(userId);
+    // scrubbed tombstone: no name, handle, phone, bio, photo, links, password. username is a non-claimable placeholder.
+    // (an empty duplicate merged away during sign-in linking has nothing to render, so it's removed outright)
+    if (opts.tombstone !== false)
+      this.tombstones.set(userId, {
+        id: userId,
+        name: DELETED_NAME,
+        username: `deleted-${userId.replace(/^u_/, "").slice(0, 36)}`,
+        color: DELETED_COLOR,
+        bio: "",
+        isBot: false,
+        createdAt: u.createdAt,
+        baseFollowers: 0,
+        baseFollowing: 0,
+        interests: [],
+        socialLinks: {},
+        photoVersion: null,
+        passwordHash: null,
+        deletedAt: Date.now(),
+      });
     this.scheduleSave();
+    this.events?.roomsListChanged();
+    this.events?.userDeleted?.(userId);
+    for (const fn of this.deletionHooks)
+      Promise.resolve()
+        .then(() => fn(userId))
+        .catch((err) => log.warn("account deletion hook failed", { err: String(err) }));
     return { ok: true as const, revokedSessions: revoked.length };
   }
 
@@ -941,7 +996,7 @@ export class Store {
   updateUser(id: string, patch: { name?: string; bio?: string; color?: string; username?: string; interests?: unknown }) {
     const u = this.users.get(id);
     if (!u || u.isBot) return { ok: false as const, error: "Could not update profile" };
-    if (patch.name !== undefined && !filterText(clamp(patch.name, 48)).ok) return { ok: false as const, error: "Please choose a different name." };
+    if (patch.name !== undefined && (!filterText(clamp(patch.name, 48)).ok || /^\s*deleted\s+account\s*$/i.test(String(patch.name)))) return { ok: false as const, error: "Please choose a different name." };
     if (patch.username !== undefined && !filterText(String(patch.username)).ok) return { ok: false as const, error: "Please choose a different username." };
     let bio: string | undefined;
     if (patch.bio !== undefined) {
@@ -1034,7 +1089,7 @@ export class Store {
 
   publicUser(id: string): PublicUser | null {
     const u = this.users.get(id);
-    if (!u) return null;
+    if (!u) return this.tombstones.has(id) || id === DELETED_USER_ID ? this.deletedPublicUser(id) : null;
     return {
       id: u.id,
       name: u.name,
@@ -1049,6 +1104,15 @@ export class Store {
       followers: u.baseFollowers + this.followerIds(id).length,
       following: u.baseFollowing + this.followingIds(id).length,
     };
+  }
+
+  /** the one place a deleted member's display is built (name, ghost avatar flag, no PII) */
+  deletedPublicUser(id: string): PublicUser {
+    return { id, name: DELETED_NAME, username: "", color: DELETED_COLOR, photoUrl: null, interests: [], bio: "", socialLinks: {}, isBot: false, createdAt: this.tombstones.get(id)?.createdAt ?? 0, followers: 0, following: 0, deleted: true };
+  }
+
+  isDeletedUser(id: string) {
+    return this.tombstones.has(id) || id === DELETED_USER_ID;
   }
 
   profile(id: string): UserProfile | null {
@@ -1871,7 +1935,7 @@ export class Store {
   sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
     if (isGroupId(toId)) return this.groups ? this.groups.send(fromId, toId, rawText, clientId) : { ok: false as const, error: "Group not found" };
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
-    if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
+    if (!this.users.has(toId)) return { ok: false as const, ...(this.isDeletedUser(toId) ? { deleted: true, error: "You can't message a deleted account." } : { error: "User not found" }) };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
     if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't message this account." };
     const c = clean(rawText, CHAT_MAX_LENGTH);

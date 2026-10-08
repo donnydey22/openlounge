@@ -1,5 +1,6 @@
 "use client";
 
+import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDisplay";
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -149,6 +150,11 @@ export function DmThread({
   const [peer, setPeer] = useState<PublicUser | null>(null);
   const [messages, setMessages] = useState<Item[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  // store compliance: the peer deleted their account while this thread is open → flip to the ghost live
+  const deletedIds = useDeletedIds();
+  useEffect(() => {
+    if (peer && !peer.deleted && deletedIds.has(peer.id)) setPeer(displayUser(peer));
+  }, [deletedIds, peer]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
@@ -600,7 +606,7 @@ export function DmThread({
             <div className="h-3 w-28 animate-pulse rounded-full bg-zinc-800" />
           </div>
         )}
-        {peer && !hiddenPeer && (
+        {peer && !hiddenPeer && !peer.deleted && (
           <div className="pr-1">
             <FollowButton userId={peer.id} small />
           </div>
@@ -766,7 +772,11 @@ export function DmThread({
       </div>
 
       <div className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        {hiddenPeer ? (
+        {peer?.deleted ? (
+          <div className="flex items-center justify-center gap-2 py-3 text-sm text-zinc-400" data-testid="dm-deleted">
+            {DELETED_COMPOSER_TEXT}
+          </div>
+        ) : hiddenPeer ? (
           <div className="flex items-center justify-between gap-3 py-2 text-sm text-zinc-400" data-testid="dm-blocked">
             <span className="flex items-center gap-2">
               <Ban className="h-4 w-4 shrink-0 text-red-400" />

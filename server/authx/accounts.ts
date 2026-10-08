@@ -154,7 +154,7 @@ export function linkToPhoneAccount(store: Store, userId: string, ext: ExternalId
   if (known && known.userId === userId) return { ok: true, already: true, removedDuplicate };
   if (known && store.users.has(known.userId)) {
     if (!disposableDuplicate(store, known.userId, ext).ok) return { ok: false, code: "taken", error: TAKEN_WITH_DATA_ERROR };
-    const d = store.deleteAccount(known.userId);
+    const d = store.deleteAccount(known.userId, { tombstone: false }); // empty duplicate: hard delete, no "Deleted Account" tombstone
     if (!d.ok) return { ok: false, code: "taken", error: TAKEN_WITH_DATA_ERROR };
     removedDuplicate = known.userId;
     console.log(`[auth] moved ${ext.provider} identity from empty duplicate ${known.userId} to ${userId}`);

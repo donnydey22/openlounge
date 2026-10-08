@@ -1,5 +1,6 @@
 "use client";
 
+import { useDisplayUser } from "@/lib/userDisplay";
 import Link from "next/link";
 import type { PublicUser } from "@/lib/types";
 import { compact } from "@/lib/utils";
@@ -31,7 +32,8 @@ export function FollowButton({ userId, small }: { userId: string; small?: boolea
   );
 }
 
-export function UserRow({ user }: { user: PublicUser }) {
+export function UserRow({ user: raw }: { user: PublicUser }) {
+  const user = useDisplayUser(raw)!;
   // live presence (pushed over the WebSocket), not the snapshot captured when the list was fetched
   const { online, dot } = usePresence(user.id, user.lastSeenAt);
   return (

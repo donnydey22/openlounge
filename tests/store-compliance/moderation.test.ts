@@ -103,7 +103,11 @@ test("suspend: tokens rejected everywhere, persisted; unsuspend restores", async
 test("account deletion API (used by Settings and /privacy/delete-account)", async () => {
   assert.equal((await api(app.base, "/api/me/delete", { confirm: "nope" }, { token: tok(A) })).status, 400);
   assert.equal((await api(app.base, "/api/me/delete", { confirm: "DELETE" })).status, 401);
-  const r = await api(app.base, "/api/me/delete", { confirm: "DELETE" }, { token: tok(A) });
+  assert.equal((await api(app.base, "/api/me/delete", { confirm: "DELETE" }, { token: tok(A) })).status, 403);
+  const reauth = (await api(app.base, "/api/me/delete/verify", { method: "recent" }, { token: tok(A) })).data.reauth;
+  const r = await api(app.base, "/api/me/delete", { confirm: "DELETE", reauth }, { token: tok(A) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal((await sql("SELECT id FROM users WHERE id = $1", [aid], process.env.TEST_DATABASE_URL)).length, 0);
+  const rows = await sql<{ name: string; deleted_at: string | null }>("SELECT name, deleted_at FROM users WHERE id = $1", [aid], process.env.TEST_DATABASE_URL);
+  assert.equal(rows[0]?.name, "Deleted Account");
+  assert.ok(rows[0]?.deleted_at);
 });

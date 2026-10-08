@@ -84,7 +84,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const FONT = `-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue','Noto Sans',Arial,sans-serif,'Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji'`; // computed on openlounge.app
 const SITE = "https://openlounge.app";
 
-function layout(o: { preheader: string; title: string; lead: string; intro: string; code?: string; codeNote?: string; button?: { label: string; url: string }; outro: string }) {
+export function layout(o: { preheader: string; title: string; lead: string; intro: string; code?: string; codeNote?: string; button?: { label: string; url: string }; outro: string }) {
   const btn = o.button
     ? `<tr><td align="center" style="padding:4px 32px 20px"><a href="${esc(o.button.url)}" style="display:inline-block;background:#10b981;color:#06281d;font-weight:600;font-size:16px;line-height:20px;text-decoration:none;padding:14px 28px;border-radius:999px">${esc(o.button.label)}</a></td></tr>
 <tr><td style="font-size:12px;line-height:18px;color:#71717a;padding:0 32px 20px;word-break:break-all">Button not working? Paste this link into your browser:<br><span style="color:#047857">${esc(o.button.url)}</span></td></tr>`

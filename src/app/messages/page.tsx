@@ -1,5 +1,6 @@
 "use client";
 
+import { displayUser, useDeletedIds } from "@/lib/userDisplay";
 import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -14,6 +15,7 @@ import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 
 export default function MessagesPage() {
+  useDeletedIds(); // re-render when someone deletes their account (live ghost)
   const { socket, connected, request, me, setActiveDm, presenceOf } = useApp();
   useClockTick(); // inbox stamps flip ("9:24 PM" → "Yesterday") on the minute tick / foreground / timezone change
   const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
@@ -130,7 +132,8 @@ export default function MessagesPage() {
           </div>
         ) : (
           <ul data-testid="dm-conversations">
-            {conversations.map((c) => {
+            {conversations.map((c0) => {
+              const c = { ...c0, peer: displayUser(c0.peer) };
               const mine = c.lastMessage.fromId === me?.id;
               const st = c.peer.isBot ? "offline" : presenceOf(c.peer.id);
               const isTyping = typing.has(c.peer.id);

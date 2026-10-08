@@ -5,7 +5,7 @@ import { LegalFooter } from "@/components/safety/LegalFooter";
 import { DeleteAccountWeb } from "./DeleteAccountWeb";
 
 // Public account-deletion page (Google Play "Data deletion" web link; Apple 5.1.1(v) in-app deletion lives in
-// Settings > Delete account). Reachable signed out (/privacy/* is public in AuthGate).
+// Settings > Account > Delete account). Reachable signed out (/privacy/* is public in AuthGate).
 export const metadata: Metadata = { title: "Delete your account — Open Lounge" };
 export const dynamic = "force-static";
 
@@ -24,7 +24,7 @@ export default function DeleteAccountPage() {
       <ol className="mb-3 list-decimal space-y-1 pl-5">
         <li>Open the Open Lounge app (or openlounge.app) and sign in.</li>
         <li>Go to <b>Settings</b> and scroll to <b>Account</b>.</li>
-        <li>Tap <b>Delete account</b>, type DELETE, and confirm.</li>
+        <li>Tap <b>Delete account</b>, read what is deleted and kept, confirm it&apos;s you (a code sent to your phone or email, your password, or Face ID / fingerprint in the app), then tap the red <b>Delete my account</b> button. Deletion is immediate.</li>
       </ol>
       <p>Deletion happens immediately and can&apos;t be undone. You can also do it right here:</p>
       <DeleteAccountWeb />
@@ -41,21 +41,23 @@ export default function DeleteAccountPage() {
 
       <H>What gets deleted</H>
       <ul className="mb-3 list-disc space-y-1 pl-5">
-        <li>Your profile: name, username, bio, photo, interests and social links.</li>
+        <li>Your profile: name, username, bio, photo, interests and social links. Your username becomes available for others to use later.</li>
         <li>Your sign-in methods: phone number, email, password hash, and Google or Apple sign-in links.</li>
         <li>Your sessions, push-notification tokens and notification settings.</li>
         <li>Who you follow and who follows you, your blocks, and your read markers.</li>
         <li>Your uploaded contact codes (the scrambled phone numbers used to find friends).</li>
+        <li>Your online status and any files you uploaded.</li>
         <li>Rooms you are hosting are ended.</li>
       </ul>
 
       <H>What is kept, and for how long</H>
       <ul className="mb-3 list-disc space-y-1 pl-5">
         <li>
-          Direct messages you already sent stay in the other person&apos;s inbox, shown as from &ldquo;Deleted account&rdquo; with no link to you. They are removed when
-          that person deletes their account.
+          Direct messages you already sent stay in the other person&apos;s inbox, shown as from &ldquo;Deleted Account&rdquo; with a grey placeholder picture and no link to you. Nobody can message a deleted account.
         </li>
         <li>Reports other people filed about your content, and our record of any moderation action, are kept for safety and legal reasons.</li>
+        <li>If you sign up again later with the same phone number or email, you get a brand-new account with no link to the deleted one.</li>
+        <li>Open Lounge has no purchases today. If purchases are added, we keep only anonymized transaction records where tax or accounting law requires it.</li>
         <li>Database backups are kept for a short rolling period and then overwritten.</li>
       </ul>
 

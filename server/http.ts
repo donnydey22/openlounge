@@ -5,6 +5,7 @@ import { store } from "./store";
 import { handleGroupsApi } from "./groups";
 import { REPORT_REASONS, SUPPORT_EMAIL, isAdmin } from "./moderation";
 import { applyReportAction, listSuspensions, unsuspendUser } from "./adminModeration";
+import { handleDeletionApi } from "./accountDeletion";
 import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
@@ -223,18 +224,13 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     return json(res, 404, { ok: false, error: "Not found" });
   }
 
-  // Account deletion: Authorization: Bearer <access token>, body { confirm: "DELETE" }. Irreversible.
-  if (url === "/api/me/delete" && (req.method === "POST" || req.method === "DELETE")) {
+  // Account deletion (store compliance, server/accountDeletion.ts): options → re-verify → { confirm: "DELETE", reauth }.
+  if (url === "/api/me/delete" || url.startsWith("/api/me/delete/")) {
     const auth = await store.authenticate(bearer(req));
     if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
-    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>);
-    if (body?.confirm !== "DELETE") return json(res, 400, { ok: false, error: 'Confirmation required: send { "confirm": "DELETE" }' });
-    const n = push();
-    if (n) await n.deleteUserData(auth.userId);
-    const r = store.deleteAccount(auth.userId);
-    if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
-    await store.flush().catch(() => {});
-    return json(res, 200, { ok: true });
+    const body = () => readJson(req).catch(() => ({}) as Record<string, unknown>);
+    if (await handleDeletionApi(req, res, url, auth, body, push())) return;
+    return json(res, 404, { ok: false, error: "Not found" });
   }
 
   // ---- UGC safety (App Store 1.2): blocks, reports, admin review. Authorization: Bearer <access token> ----
