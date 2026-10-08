@@ -31,6 +31,7 @@ import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
 import { conversationId, isGroupId } from "./conversation";
 import { ChatPrefs } from "./chatPrefs";
+import { DmActions } from "./dmActions";
 import type { GroupService } from "./groups/service";
 import { REPORT_REASONS, REPORT_TARGETS, filterText, type ReportReason, type ReportRecord, type ReportTarget } from "./moderation";
 import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
@@ -93,6 +94,9 @@ interface RoomRecord {
   /** private rooms: who may join (host + invited people) */
   allowed?: Set<string>;
 }
+
+/** max messages per delete request (multi-select) */
+export const DM_DELETE_MAX = 100;
 
 export interface StoreEvents {
   roomChanged(roomId: string): void;
@@ -202,6 +206,8 @@ export class Store {
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
   /** per-user inbox state for 1:1 chats (pinned, "Delete chat for me"): server/chatPrefs.ts */
   chatPrefs = new ChatPrefs();
+  /** "Delete for me" hidden ids + the "Delete for everyone" archive (029): server/dmActions.ts */
+  dmActions = new DmActions();
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
   /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
   identities = new Map<string, IdentityRecord>();
@@ -259,6 +265,7 @@ export class Store {
       console.log(`[store] import done — ${source} is no longer read and can be archived`);
     }
     await this.chatPrefs.load();
+    await this.dmActions.load();
     // backfill (idempotent): messages from already-deleted accounts count as read for everyone
     let cleared = 0;
     for (const id of this.tombstones.keys()) cleared += this.readAllFrom(id, { silent: true }).length;
@@ -981,6 +988,7 @@ export class Store {
       });
     this.scheduleSave();
     this.chatPrefs.forgetUser(userId);
+    this.dmActions.forgetUser(userId);
     // Telegram-style: nothing from a deleted account stays unread (inbox counters, tab badge, push/app badge)
     const cleared = opts.tombstone !== false ? this.readAllFrom(userId) : [];
     this.events?.roomsListChanged();
@@ -2017,11 +2025,12 @@ export class Store {
       // "Delete chat for me": messages up to hiddenAt are gone for me; nothing newer → the chat isn't listed
       const pref = this.chatPrefs.get(userId, peerId);
       const hiddenAt = pref?.hiddenAt ?? 0;
-      if (list[list.length - 1].createdAt <= hiddenAt) continue;
+      const mine = this.visibleTo(userId, list); // minus messages I deleted "for me"
+      if (!mine.length || mine[mine.length - 1].createdAt <= hiddenAt) continue;
       const read = Math.max(this.lastRead(userId, peerId), hiddenAt);
       // deleted accounts never count as unread (inbox counters, tab badge, push badge all come from here)
-      const unread = peer.deleted ? 0 : list.filter((m) => m.toId === userId && m.createdAt > read).length;
-      out.push({ peer, lastMessage: list[list.length - 1], unread, ...(pref?.pinnedAt ? { pinnedAt: pref.pinnedAt } : {}) });
+      const unread = peer.deleted ? 0 : mine.filter((m) => m.toId === userId && m.createdAt > read).length;
+      out.push({ peer, lastMessage: mine[mine.length - 1], unread, ...(pref?.pinnedAt ? { pinnedAt: pref.pinnedAt } : {}) });
     }
     // pinned chats first (most recently pinned on top), then by last message
     return out.sort((x, y) => (y.pinnedAt ?? 0) - (x.pinnedAt ?? 0) || y.lastMessage.createdAt - x.lastMessage.createdAt);
@@ -2031,10 +2040,43 @@ export class Store {
     if (isGroupId(peerId)) return this.groups?.history(userId, peerId, before, limit) ?? { messages: [], hasMore: false };
     if (this.isBlocked(userId, peerId)) return { messages: [], hasMore: false };
     const hiddenAt = this.chatPrefs.hiddenAt(userId, peerId);
-    const all = this.dms.get(conversationId(userId, peerId)) ?? [];
+    const all = this.visibleTo(userId, this.dms.get(conversationId(userId, peerId)) ?? []);
     const list = hiddenAt ? all.filter((m) => m.createdAt > hiddenAt) : all;
     const older = before ? list.filter((m) => m.createdAt < before) : list;
     return { messages: older.slice(-limit), hasMore: older.length > limit };
+  }
+
+  /** a 1:1 list minus the messages this viewer deleted "for me" (same array when there are none) */
+  private visibleTo(userId: string, list: DirectMessage[]) {
+    const hid = this.dmActions.hiddenFor(userId);
+    return hid?.size ? list.filter((m) => !hid.has(m.id)) : list;
+  }
+
+  /**
+   * Telegram-style delete in a 1:1 chat. forEveryone: only your own messages; they leave the conversation for both
+   * sides (archived 30 days for moderation — the soft delete). Otherwise: hidden for you only, any message.
+   * Unknown ids are ignored (already deleted / trimmed) so a retry is harmless. Groups use group:deleteMessage.
+   */
+  deleteDmMessages(userId: string, peerId: unknown, rawIds: unknown, forEveryone: unknown) {
+    if (typeof peerId !== "string" || !peerId || isGroupId(peerId) || peerId === userId) return { ok: false as const, error: "User not found" };
+    if (!Array.isArray(rawIds) || !rawIds.length || rawIds.length > DM_DELETE_MAX || !rawIds.every((x) => typeof x === "string" && x.length <= 80))
+      return { ok: false as const, error: `Select 1–${DM_DELETE_MAX} messages` };
+    const ids = [...new Set(rawIds as string[])];
+    const list = this.dms.get(conversationId(userId, peerId)) ?? [];
+    const found = list.filter((m) => ids.includes(m.id));
+    if (forEveryone === true) {
+      if (found.some((m) => m.fromId !== userId)) return { ok: false as const, error: "You can only delete your own messages for everyone" };
+      const now = Date.now();
+      this.dmActions.archiveMessages(
+        found.map((m) => ({ messageId: m.id, conversationId: conversationId(m.fromId, m.toId), fromId: m.fromId, toId: m.toId, text: m.text, createdAt: m.createdAt, deletedAt: now, deletedBy: userId })),
+      );
+      const key = conversationId(userId, peerId);
+      for (const m of found) this.removeConversationMessage(key, m.id);
+      return { ok: true as const, forEveryone: true, messageIds: found.map((m) => m.id), peerUnreadChanged: found.some((m) => !m.readAt) };
+    }
+    const hide = found.map((m) => m.id);
+    this.dmActions.hide(userId, hide);
+    return { ok: true as const, forEveryone: false, messageIds: hide, peerUnreadChanged: false };
   }
 
   /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
@@ -2045,7 +2087,8 @@ export class Store {
       if (a !== userId && b !== userId) continue;
       if (this.isBlockedEither(a, b)) continue;
       const hiddenAt = this.chatPrefs.hiddenAt(userId, a === userId ? b : a);
-      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) if (list[i].createdAt > hiddenAt) out.push(list[i]);
+      const hid = this.dmActions.hiddenFor(userId);
+      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) if (list[i].createdAt > hiddenAt && !hid?.has(list[i].id)) out.push(list[i]);
     }
     if (this.groups) out.push(...this.groups.since(userId, after));
     out.sort((x, y) => x.createdAt - y.createdAt);

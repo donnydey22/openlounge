@@ -21,7 +21,7 @@ const kindOf = (e: string): Kind => FAMILY.find(([re]) => re.test(e))?.[1] ?? "s
 type P = {
   x: number; y: number; vx: number; vy: number; ax: number; ay: number; drag: number;
   life: number; age: number; size: number; rot: number; vr: number; hue: number;
-  shape: "sprite" | "rect" | "dot" | "spark" | "star" | "drop" | "ring";
+  shape: "sprite" | "rect" | "dot" | "spark" | "star" | "drop" | "ring" | "dust";
   sprite?: CanvasImageSource; phase: number; sway: number; grow: number; additive?: boolean; px?: number; py?: number;
 };
 
@@ -250,6 +250,13 @@ function frame(t: number) {
         g.restore();
         break;
       }
+      case "dust": {
+        // hue < 0 → light grey (dark bubbles), else the bubble's accent hue
+        g.fillStyle = p.hue < 0 ? `rgba(228,228,231,${0.85 * (1 - k)})` : `hsla(${p.hue},70%,55%,${0.9 * (1 - k)})`;
+        const d = p.size * (1 - k * 0.5);
+        g.fillRect(p.x - d / 2, p.y - d / 2, d, d);
+        break;
+      }
       case "dot": {
         g.fillStyle = `hsl(${p.hue - k * 18},100%,${62 - k * 20}%)`;
         g.beginPath();
@@ -309,6 +316,30 @@ export function burst(x: number, y: number, emoji: string, big = false) {
   ensure();
   if (parts.length > 900) parts.splice(0, parts.length - 600); // hammering taps: keep the frame budget
   spawn(x, y, emoji, big);
+  if (!raf) raf = requestAnimationFrame(frame);
+}
+
+/** Telegram-style "dust" for a deleted message: the bubble's area crumbles into drifting specks. */
+export function dust(r: { left: number; top: number; width: number; height: number }, accent = false) {
+  if (typeof window === "undefined" || prefersReducedMotion()) return;
+  ensure();
+  const n = Math.min(220, Math.max(40, Math.round((r.width * r.height) / 90)));
+  const base = { ax: 0, ay: -40, drag: 0.96, age: 0, rot: 0, vr: 0, phase: 0, sway: 0, grow: 0 };
+  for (let i = 0; i < n; i++) {
+    const fx = Math.random();
+    parts.push({
+      ...base,
+      x: r.left + fx * r.width,
+      y: r.top + Math.random() * r.height,
+      vx: 60 + fx * 160 + rnd(-30, 30),
+      vy: rnd(-120, -20),
+      age: -fx * 0.25, // sweeps left → right
+      life: rnd(0.55, 1.0),
+      size: rnd(1.6, 3.4),
+      shape: "dust",
+      hue: accent ? 152 : -1,
+    } as P);
+  }
   if (!raf) raf = requestAnimationFrame(frame);
 }
 
