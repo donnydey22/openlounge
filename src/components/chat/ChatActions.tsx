@@ -172,7 +172,7 @@ export function SwipeRow({ children, onMenu, onRemove, removeText, testId }: { c
       </button>
       <div
         className="relative bg-app"
-        style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: g.current.axis === "x" ? "none" : "transform 180ms ease-out", touchAction: "pan-y" }}
+        style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: g.current.axis === "x" ? "none" : "transform 180ms ease-out", touchAction: "pan-y", WebkitTouchCallout: "none" }}
         onContextMenu={(e) => {
           e.preventDefault();
           clear();
@@ -199,8 +199,10 @@ export function SwipeRow({ children, onMenu, onRemove, removeText, testId }: { c
             setDx(Math.max(-ACTION_W * 1.4, Math.min(0, g.current.base + mx)));
           }
         }}
-        onTouchEnd={() => {
+        onTouchEnd={(e) => {
           clear();
+          // the menu opened under the finger: lifting it must not "click" the sheet backdrop (or follow the link)
+          if (g.current.fired && e.cancelable) e.preventDefault();
           if (g.current.axis === "x") {
             const reveal = dx < -ACTION_W / 2;
             setOpen(reveal);
