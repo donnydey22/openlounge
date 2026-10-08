@@ -301,7 +301,9 @@ export function Notifier({ children }: { children: React.ReactNode }) {
   }, [socket, banner, getActiveDm, flushJoins]);
 
   const value = useMemo(() => ({ setRoomContext, reportSpeaking }), [setRoomContext, reportSpeaking]);
-  const promptAllowed = status === "ready" && !onboarding && !!meId && !pathname?.startsWith("/room/");
+  // never on screens with a composer (DMs/groups, room chat): the floating card would cover the message field
+  const chatScreen = !!pathname && /^\/(room|messages|groups)(\/|$)/.test(pathname);
+  const promptAllowed = status === "ready" && !onboarding && !!meId && !chatScreen;
 
   return (
     <Ctx.Provider value={value}>
