@@ -7,6 +7,7 @@ import { Keyboard, SendHorizontal, Smile } from "lucide-react";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
+import { useEmojiPanelHeight } from "@/lib/emoji/fit";
 
 // the animated picker (and its catalog) loads only when the panel is first opened
 const EmojiPicker = lazy(() => import("./emoji/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
@@ -50,6 +51,7 @@ export function ChatComposer({
   const [sending, setSending] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [panel, setPanel] = useState(false);
+  const panelH = useEmojiPanelHeight(!!emojiPanel && panel); // fits landscape phones / follows the keyboard
   const insert = (emoji: string) => {
     const ta = ref.current;
     const start = ta?.selectionStart ?? text.length;
@@ -187,8 +189,8 @@ export function ChatComposer({
     {emojiPanel && panel && (() => {
       const el = (
         <div className="emoji-panel-in -mx-3 mt-2 border-t border-white/5 bg-zinc-950" data-testid="emoji-panel">
-          <Suspense fallback={<div className="h-[300px]" />}>
-            <EmojiPicker height={300} onPick={insert} />
+          <Suspense fallback={<div style={{ height: panelH }} />}>
+            <EmojiPicker height={panelH} onPick={insert} />
           </Suspense>
         </div>
       );

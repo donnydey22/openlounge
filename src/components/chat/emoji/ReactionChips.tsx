@@ -59,7 +59,7 @@ const Chip = memo(function Chip({ c, arriving, play, onToggle, messageId, live }
       aria-pressed={c.mine}
       aria-label={`${c.emoji} ${c.count}${c.mine ? ", you reacted" : ""}`}
       className={cn(
-        "flex h-[26px] items-center gap-1 rounded-full pr-2 pl-1 text-[12.5px] font-semibold tabular-nums shadow-sm ring-1 transition-colors duration-150 active:scale-95",
+        "flex h-7 items-center gap-1 rounded-full pr-2.5 pl-1 text-[12.5px] font-semibold tabular-nums shadow-sm ring-1 transition-colors duration-150 active:scale-95",
         c.mine ? "bg-emerald-500 text-on-accent ring-emerald-300/40" : "bg-zinc-800/95 text-zinc-200 ring-white/10 hover:bg-zinc-700",
       )}
     >

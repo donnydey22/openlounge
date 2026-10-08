@@ -11,6 +11,7 @@ import { Plus } from "lucide-react";
 import { AnimatedEmoji } from "./AnimatedEmoji";
 import { EmojiPicker } from "./EmojiPicker";
 import { QUICK_REACTIONS } from "@/lib/emoji/assets";
+import { safeInsets, visibleViewport } from "@/lib/emoji/fit";
 import { SPRING_POP, SPRING_SNAPPY, animate, haptic, prefersReducedMotion } from "./motion";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,9 @@ const BAR_H = 52;
 const GAP = 8;
 const EDGE = 10;
 const ITEM_H = 44;
+/** quick-reaction button width (tap target ≥ 36 px) and the "+" button */
+const QR_W = 38;
+const MORE_W = 36;
 
 export function MessageActionOverlay({
   target,
@@ -127,10 +131,11 @@ export function MessageActionOverlay({
     close(() => onReact(emoji, from));
   };
 
-  const pickerW = Math.min(360, window.innerWidth - EDGE * 2);
-  const pickerLeft = Math.max(EDGE, Math.min(target.mine ? geo.rect.right - pickerW : geo.rect.left, window.innerWidth - EDGE - pickerW));
-  const pickerH = Math.min(340, window.innerHeight - 2 * EDGE - 40);
-  const pickerTop = Math.max(EDGE, Math.min(geo.barTop, window.innerHeight - EDGE - pickerH));
+  // "+" picker: inside the visible area (keyboard / safe-area aware), anchored where the bar was
+  const pickerW = Math.min(360, geo.box.right - geo.box.left);
+  const pickerLeft = clamp(target.mine ? geo.rect.right - pickerW : geo.rect.left, geo.box.left, geo.box.right - pickerW);
+  const pickerH = Math.max(160, Math.min(340, geo.box.bottom - geo.box.top - 40));
+  const pickerTop = clamp(geo.barTop, geo.box.top, geo.box.bottom - pickerH);
 
   return createPortal(
     <div ref={root} className="fixed inset-0 z-[90] touch-none select-none" data-testid="msg-overlay" role="dialog" aria-modal="true" aria-label="Message actions">
@@ -154,7 +159,7 @@ export function MessageActionOverlay({
           className="absolute flex items-center gap-0.5 rounded-full bg-zinc-900/95 px-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.5)] ring-1 ring-white/10"
           style={{ left: geo.barLeft, top: geo.barTop, height: BAR_H, width: geo.barW, transformOrigin: target.mine ? "right bottom" : "left bottom" }}
         >
-          {QUICK_REACTIONS.map((e) => (
+          {QUICK_REACTIONS.slice(0, geo.nQuick).map((e) => (
             <button
               key={e}
               type="button"
@@ -162,7 +167,7 @@ export function MessageActionOverlay({
               aria-label={`React ${e}`}
               onClick={(ev) => pick(e, ev.currentTarget)}
               className={cn(
-                "flex h-10 max-w-[38px] min-w-0 flex-1 items-center justify-center rounded-full transition-transform duration-150 hover:scale-125 active:scale-90 motion-reduce:transition-none",
+                "flex h-10 max-w-[38px] min-w-[34px] flex-1 items-center justify-center rounded-full transition-transform duration-150 hover:scale-125 active:scale-90 motion-reduce:transition-none",
                 target.myReaction === e && "bg-emerald-500/25 ring-1 ring-emerald-400/60",
               )}
             >
@@ -174,7 +179,7 @@ export function MessageActionOverlay({
             aria-label="More reactions"
             data-testid="reaction-more"
             onClick={() => setExpanded(true)}
-            className="ml-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-zinc-200 hover:bg-white/15"
+            className="ml-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-zinc-200 hover:bg-white/15"
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -220,21 +225,27 @@ export function MessageActionOverlay({
 /** Where everything goes: the snapshot stays where the bubble was unless the bar / menu wouldn't fit. */
 function layout(target: OverlayTarget, nActions: number) {
   const rect = target.el.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.visualViewport?.height ?? window.innerHeight;
+  // the usable box: visible viewport (on-screen keyboard) minus safe-area insets (notch, home bar, landscape sides)
+  const vp = visibleViewport();
+  const ins = safeInsets();
+  const box = { left: EDGE + ins.left, right: vp.width - EDGE - ins.right, top: vp.top + EDGE + ins.top, bottom: vp.top + vp.height - EDGE - ins.bottom };
+  const avail = box.right - box.left;
   const menuH = nActions ? nActions * ITEM_H + 8 + (target.meta ? 24 : 0) : 0;
   const barSpace = target.canReact ? BAR_H + GAP : 0;
-  const minTop = EDGE + barSpace;
-  const maxH = Math.max(80, vh - minTop - (menuH ? menuH + GAP : 0) - EDGE);
+  const minTop = box.top + barSpace;
+  const maxH = Math.max(80, box.bottom - minTop - (menuH ? menuH + GAP : 0));
   const h = Math.min(rect.height, maxH);
-  const maxTop = vh - EDGE - (menuH ? menuH + GAP : 0) - h;
+  const maxTop = box.bottom - (menuH ? menuH + GAP : 0) - h;
   const top = Math.max(minTop, Math.min(rect.top, maxTop));
-  const barW = Math.min(vw - EDGE * 2, QUICK_REACTIONS.length * 38 + 50);
-  const barLeft = clamp(target.mine ? rect.right - barW : rect.left, EDGE, vw - EDGE - barW);
+  // narrow screens (Fold cover, split view) show fewer quick reactions rather than shrinking the tap targets
+  // per item: QR_W + 2 px gap; the bar adds 12 px padding, the "+" and its margin
+  const nQuick = clamp(Math.floor((avail - 12 - MORE_W - 4) / (QR_W + 2)), 4, QUICK_REACTIONS.length);
+  const barW = Math.min(avail, nQuick * (QR_W + 2) + 12 + MORE_W + 4);
+  const barLeft = clamp(target.mine ? rect.right - barW : rect.left, box.left, box.right - barW);
   const barTop = top - GAP - BAR_H;
-  const menuW = Math.min(240, vw - EDGE * 2);
-  const menuLeft = clamp(target.mine ? rect.right - menuW : rect.left, EDGE, vw - EDGE - menuW);
+  const menuW = Math.min(240, avail);
+  const menuLeft = clamp(target.mine ? rect.right - menuW : rect.left, box.left, box.right - menuW);
   const menuTop = top + h + GAP;
-  return { rect, top, maxH, barW, barLeft, barTop, menuW, menuLeft, menuTop };
+  return { rect, box, top, maxH, nQuick, barW, barLeft, barTop, menuW, menuLeft, menuTop };
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));

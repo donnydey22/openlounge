@@ -209,9 +209,12 @@ export function EmojiPicker({
   };
 
   const grid = "grid grid-cols-[repeat(auto-fill,minmax(42px,1fr))] gap-0.5 px-2";
+  // short panels (landscape phones, keyboard-sized): tabs + search share one row so the grid keeps its space
+  const compact = height < 250;
   return (
-    <div className={cn("flex flex-col overflow-hidden", className)} style={{ height }} data-testid="emoji-picker">
-      <div className="flex items-center gap-1 px-3 pt-2" role="tablist" aria-label="Emoji sets">
+    <div className={cn("flex flex-col overflow-hidden", className)} style={{ height }} data-testid="emoji-picker" data-compact={compact || undefined}>
+      <div className={compact ? "flex min-w-0 items-center" : "contents"}>
+      <div className={cn("flex shrink-0 items-center gap-1", compact ? "pt-1.5 pl-2" : "px-3 pt-2")} role="tablist" aria-label="Emoji sets">
         {(
           [
             ["emoji", "Emoji"],
@@ -226,23 +229,23 @@ export function EmojiPicker({
             data-testid={`emoji-tab-${k}`}
             onClick={() => setTab(k)}
             className={cn(
-              "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+              "flex h-8 items-center rounded-full px-3 text-xs font-semibold transition-colors",
               tab === k ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300",
             )}
           >
             {label}
-            {k === "google" && <span className="ml-1 font-normal text-emerald-400/90">animated</span>}
+            {k === "google" && !compact && <span className="ml-1 font-normal text-emerald-400/90">animated</span>}
           </button>
         ))}
       </div>
-      <div className="flex items-center gap-2 px-3 pt-1.5 pb-1.5">
+      <div className={cn("flex min-w-0 items-center gap-2 pt-1.5 pb-1.5", compact ? "flex-1 pr-3 pl-1" : "px-3")}>
         <label className="flex h-9 flex-1 items-center gap-2 rounded-full bg-white/[0.06] px-3 text-zinc-400 focus-within:ring-1 focus-within:ring-emerald-500/50">
           <Search className="h-4 w-4 shrink-0" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             autoFocus={autoFocusSearch}
-            placeholder={tab === "google" ? "Search Google animated emoji" : "Search emoji"}
+            placeholder={compact ? "Search" : tab === "google" ? "Search Google animated emoji" : "Search emoji"}
             enterKeyHint="search"
             className="min-w-0 flex-1 bg-transparent text-[16px] text-zinc-100 outline-none placeholder:text-zinc-500 sm:text-sm"
             data-testid="emoji-search"
@@ -253,6 +256,7 @@ export function EmojiPicker({
             </button>
           )}
         </label>
+      </div>
       </div>
       <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2 [scrollbar-width:thin]">
         {tab === "google" ? (
