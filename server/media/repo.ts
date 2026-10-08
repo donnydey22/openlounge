@@ -1,4 +1,4 @@
-// Media metadata persistence: Postgres (DATABASE_URL, migration 024_media.sql) or memory (local dev without a DB).
+// Media metadata persistence: Postgres (DATABASE_URL, migration 026_media.sql) or memory (local dev without a DB).
 import pg from "pg";
 import { chooseSsl } from "../pg";
 import type { MediaGoneReason, MediaKind, MediaStatus } from "../../src/lib/media/types";

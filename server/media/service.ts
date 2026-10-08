@@ -105,7 +105,7 @@ export class MediaService {
     this.ffmpeg = await ffmpegAvailable();
     const url = process.env.DATABASE_URL;
     this.repo = url ? new PgMediaRepo(url) : new MemoryMediaRepo();
-    // store.init() ran the migrations (024_media.sql) before we get here
+    // store.init() ran the migrations (026_media.sql) before we get here
     const [rows, tombs] = await Promise.all([this.repo.all(), this.repo.tombstones()]);
     for (const t of tombs) {
       this.tombs.set(t.messageId, t);
