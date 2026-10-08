@@ -32,7 +32,8 @@
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": false,
         "NSContactsUsageDescription": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on “Tell me when contacts join”, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -181,7 +182,7 @@
       [
         "expo-secure-store",
         {
-          "faceIDPermission": false
+          "faceIDPermission": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
         }
       ],
       [
@@ -227,7 +228,13 @@
           }
         }
       ],
-      "./plugins/withRNFirebaseDisableSPM.js"
+      "./plugins/withRNFirebaseDisableSPM.js",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
+        }
+      ]
     ],
     "extra": {
       "startUrl": "https://openlounge.app",

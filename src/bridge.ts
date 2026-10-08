@@ -14,6 +14,8 @@
 //                                       'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error' | 'selection'
 //     openBrowser(url: string):  void   0.3.0 cross-platform contract (/workspace/native/BROWSER_BRIDGE.md):
 //                                       external https → SFSafariViewController; openlounge.app → stays in the app
+//     biometrics: { isAvailable(): Promise<boolean>, getEnabled(): Promise<boolean>,
+//                   setEnabled(on: boolean): Promise<boolean> }   opt-in app lock; setEnabled(true) prompts first
 //     __expo: true, platform: 'ios', version: '0.2.3', capabilities: string[]
 //   }
 //
@@ -69,6 +71,9 @@ export type BridgeRequest =
   | { __ol: 1; id: string; method: 'setSession'; value: string }
   | { __ol: 1; id: string; method: 'clearSession' }
   | { __ol: 1; id: string; method: 'openAuth'; value: string }
+  | { __ol: 1; id: string; method: 'bioIsAvailable' }
+  | { __ol: 1; id: string; method: 'bioGetEnabled' }
+  | { __ol: 1; id: string; method: 'bioSetEnabled'; value: boolean }
   | { __ol: 1; method: 'theme'; value: 'dark' | 'light' }
   | { __ol: 1; method: 'ready'; value?: string }
   | { __ol: 1; method: 'haptic'; value: HapticKind }
@@ -110,6 +115,8 @@ export function parseBridgeMessage(data: string): BridgeRequest | null {
     }
     if (typeof m.id !== 'string' || m.id.length > 64) return null;
     if (m.method === 'getSession' || m.method === 'clearSession') return m as BridgeRequest;
+    if (m.method === 'bioIsAvailable' || m.method === 'bioGetEnabled') return { __ol: 1, id: m.id, method: m.method } as BridgeRequest;
+    if (m.method === 'bioSetEnabled' && typeof m.value === 'boolean') return { __ol: 1, id: m.id, method: 'bioSetEnabled', value: m.value };
     if ((m.method === 'setSession' || m.method === 'openAuth') && typeof m.value === 'string') return m as BridgeRequest;
     return null;
   } catch {
@@ -168,14 +175,14 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       if (!bridge || typeof bridge.postMessage !== 'function') return false;
       try { bridge.postMessage(JSON.stringify(msg)); return true; } catch (e) { return false; }
     }
-    function call(method, value) {
+    function call(method, value, timeoutMs) {
       return new Promise(function (resolve, reject) {
         var bridge = window.ReactNativeWebView;
         if (!bridge || typeof bridge.postMessage !== 'function') { reject(new Error('OpenLoungeNative unavailable')); return; }
         var id = 'ol' + Date.now().toString(36) + '_' + (++seq);
         var timer = setTimeout(function () {
           if (pending[id]) { delete pending[id]; reject(new Error('OpenLoungeNative ' + method + ' timed out')); }
-        }, 10000);
+        }, timeoutMs || 10000);
         pending[id] = { resolve: resolve, reject: reject, timer: timer };
         var msg = { __ol: 1, id: id, method: method };
         if (value !== undefined) msg.value = value;
@@ -206,7 +213,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics']),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
       getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
@@ -231,7 +238,13 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       haptics: function (type) { return post({ __ol: 1, method: 'haptic', value: String(type || 'light') }); },
       openBrowser: function (url) { return post({ __ol: 1, method: 'openExternal', value: absolute(url) }); },
       openAuth: function (url) { return call('openAuth', absolute(url)).then(function () {}); },
-      openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); }
+      openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); },
+      biometrics: Object.freeze({
+        isAvailable: function () { return call('bioIsAvailable').then(function (v) { return v === true; }); },
+        getEnabled: function () { return call('bioGetEnabled').then(function (v) { return v === true; }); },
+        // waits for the Face ID / passcode sheet → generous timeout
+        setEnabled: function (on) { return call('bioSetEnabled', !!on, 120000).then(function (v) { return v === true; }); }
+      })
     };
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
