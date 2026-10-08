@@ -215,6 +215,9 @@ export function ChatComposer({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [barOpen]);
+  // placeholder that fits the field: "Message Maya…" → "Message…" → none, so small phones never show a word cut mid-letter
+  // (textarea placeholders can't ellipsize in Chromium); re-checked when the field resizes or web fonts land
+  const ph = useFittedPlaceholder(ref, placeholder);
   // the field gets wider when the sticker button steps aside (small phones) → re-measure its height
   const hasText = !!text.trim();
   useEffect(() => {
@@ -356,7 +359,7 @@ export function ChatComposer({
           autoFocus={autoFocus}
           maxLength={CHAT_MAX_LENGTH}
           disabled={disabled}
-          placeholder={placeholder}
+          placeholder={ph}
           enterKeyHint="send"
           onBlur={() => {
             onTypingStop?.();
@@ -480,3 +483,41 @@ const FORMAT_BUTTONS: { style: MdStyle | "link"; label: string; Icon: typeof Bol
   { style: "code", label: "Monospace (Ctrl+Shift+M)", Icon: Code },
   { style: "link", label: "Link (Ctrl+K)", Icon: Link2 },
 ];
+
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+/** First candidate whose text fits the textarea's content box (font from computed style); "" if none does. */
+function useFittedPlaceholder(ref: React.RefObject<HTMLTextAreaElement | null>, placeholder: string) {
+  const [ph, setPh] = useState(placeholder);
+  useLayoutEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    const cands = [placeholder, "Message…"].filter((c, i, a) => c && a.indexOf(c) === i);
+    const fit = () => {
+      try {
+        const cs = getComputedStyle(ta);
+        const avail = ta.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        if (!(avail > 0)) return; // hidden / not laid out yet: keep the current text
+        if (measureCtx === undefined) measureCtx = document.createElement("canvas").getContext("2d");
+        if (!measureCtx) return setPh(placeholder);
+        measureCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        setPh(cands.find((c) => measureCtx!.measureText(c).width <= avail - 2) ?? "");
+      } catch {
+        setPh(placeholder);
+      }
+    };
+    fit();
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver === "function") {
+      ro = new ResizeObserver(fit);
+      ro.observe(ta);
+    } else window.addEventListener("resize", fit);
+    let live = true;
+    document.fonts?.ready?.then(() => live && fit()).catch(() => {});
+    return () => {
+      live = false;
+      ro?.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [ref, placeholder]);
+  return ph;
+}

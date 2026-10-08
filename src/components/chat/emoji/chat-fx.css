@@ -63,3 +63,17 @@
 @media (max-width: 359px) {
   form[data-has-text] [data-testid="sticker-button"]:not([aria-expanded="true"]) { display: none !important; }
 }
+/* composer placeholder stays on one line ("Message Maya…" never wraps a half-hidden second line under the field edge) */
+textarea[data-testid="composer-input"]::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* small phones (≤399 px: Fold cover 280, SE 320, 360/375/390 Android/iPhone): tighter row gaps, slimmer icon-only
+   attach / sticker buttons and less field padding, so the field (and the emoji button inside it) keeps room for words.
+   !important: the legacy build flattens Tailwind's layers by raising utility specificity, so plain rules here would lose. */
+@media (max-width: 399px) {
+  [data-composer-row], [data-composer-row] form { gap: 4px !important; }
+  [data-noflexgap] [data-composer-row] > * + *:not(.absolute):not(.fixed):not(.hidden),
+  [data-noflexgap] [data-composer-row] form > * + *:not(.absolute):not(.fixed):not(.hidden),
+  [data-noflexgap] [data-composer-row] [data-gp] { margin-left: 4px !important; }
+  [data-composer-row] [data-testid="attach-button"], [data-composer-row] [data-testid="sticker-button"] { width: 34px !important; }
+  [data-composer-row] textarea[data-testid="composer-input"] { padding-left: 12px !important; }
+  [data-composer-row] textarea[data-testid="composer-input"].pr-11 { padding-right: 40px !important; }
+}
