@@ -886,7 +886,7 @@ export class MediaService {
         await this.expire(r, "deleted");
         continue;
       }
-      if (r.messageId && r.conversationId?.includes("|") && !store.findDm(r.conversationId, r.messageId)) {
+      if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId!, r.messageId)) {
         // message deleted for everyone / trimmed from history: no tombstone needed, the bubble is gone
         this.rows.delete(r.id);
         this.unlink(r);
@@ -901,6 +901,15 @@ export class MediaService {
       }
     }
     for (const s of [...this.sessions.values()]) if (now - s.updatedAt > UPLOAD_STALE_MS) this.dropSession(s.id);
+  }
+
+  /** Conversation deleted by the chat layer (a group's last member left): remove every file sent in it. Idempotent. */
+  async purgeConversation(conversationId: string) {
+    await this.ready();
+    const mids = new Set<string>();
+    for (const r of this.rows.values()) if (r.conversationId === conversationId && r.messageId) mids.add(r.messageId);
+    for (const mid of mids) await this.onMessageDeleted(mid);
+    if (mids.size) log.info("media conversation purged", { conversationId, messages: mids.size });
   }
 
   /** Message deleted by the chat layer (delete for everyone): remove its file right away. */

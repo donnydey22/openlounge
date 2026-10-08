@@ -55,6 +55,10 @@ export interface GroupEmitter {
   clearPush?(userId: string, conversationId: string): void;
   /** presence decoration for member lists */
   presence?(userId: string): { online: boolean; presence: "online" | "away" | "offline"; lastSeenAt: number | null };
+  /** attachments: a group message was deleted for everyone → erase its files (server/media onMessageDeleted) */
+  mediaMessageDeleted?(messageId: string): void;
+  /** attachments: a group was deleted (last member out) → erase every file sent in it (server/media purgeConversation) */
+  mediaConversationDeleted?(conversationId: string): void;
 }
 
 type Err = { ok: false; error: string; status?: number };
@@ -106,6 +110,8 @@ export class GroupService {
   async init() {
     const snap = await this.repo.load();
     for (const c of snap.convs) if (c.type === "group" && !c.deletedAt) this.convs.set(c.id, c);
+    // groups deleted earlier: make sure their attachments are gone too (idempotent; server/media waits for its own load)
+    for (const c of snap.convs) if (c.type === "group" && c.deletedAt) this.emitter?.mediaConversationDeleted?.(c.id);
     for (const m of snap.members) if (this.convs.has(m.conversationId)) this.indexMember(m);
     for (const p of snap.pins) if (this.convs.has(p.conversationId)) (this.pins.get(p.conversationId) ?? this.pins.set(p.conversationId, []).get(p.conversationId)!).push(p);
     for (const i of snap.invites) if (this.convs.has(i.conversationId)) this.invites.set(i.token, i);
@@ -483,6 +489,7 @@ export class GroupService {
       this.repo.upsertConv(conv);
       this.convs.delete(gid);
       for (const [tok, inv] of this.invites) if (inv.conversationId === gid) this.invites.delete(tok);
+      this.emitter?.mediaConversationDeleted?.(gid);
       this.emitTo([userId], "group:removed", { id: gid, reason: "left" });
       return { ok: true as const, deleted: true };
     }
@@ -548,6 +555,7 @@ export class GroupService {
     if (!msg) return err("Message not found", 404);
     if (msg.fromId !== userId && !canAdmin(me.role)) return err("Only admins can delete other people's messages", 403);
     this.store.removeConversationMessage(gid, msg.id);
+    this.emitter?.mediaMessageDeleted?.(msg.id);
     const pins = this.pins.get(gid) ?? [];
     const pi = pins.findIndex((p) => p.messageId === msg.id);
     if (pi >= 0) {

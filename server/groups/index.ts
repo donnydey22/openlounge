@@ -48,6 +48,12 @@ export function wireGroups(io: WsHub, withOnline: WithOnline) {
     clearPush(userId, gid) {
       bg(push()?.dmRead(userId, gid));
     },
+    mediaMessageDeleted(messageId) {
+      void media.onMessageDeleted(messageId).catch((err) => console.error("[groups] media delete failed:", err));
+    },
+    mediaConversationDeleted(conversationId) {
+      void media.purgeConversation(conversationId).catch((err) => console.error("[groups] media purge failed:", err));
+    },
     presence(userId) {
       const u = withOnline({ id: userId });
       return { online: u.online, presence: u.presence, lastSeenAt: u.lastSeenAt };

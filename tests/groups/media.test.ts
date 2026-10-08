@@ -8,7 +8,8 @@ import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 process.env.TEST_DATABASE_URL ||= "postgresql://ua@127.0.0.1:55433/groups_media_test";
 process.env.MEDIA_SWEEP_MS ||= "500";
-import { setTestEnv, wipeDb, api, phoneLogin } from "../unified-auth/harness";
+import path from "node:path";
+import { setTestEnv, wipeDb, api, phoneLogin, sql } from "../unified-auth/harness";
 import { makeFixtures } from "../media/fixtures";
 
 setTestEnv({ providers: false });
@@ -138,4 +139,71 @@ test("albums and voice notes go to groups; view once is refused (1:1 only); a ti
   const dm = await upload(D, f("gps.jpg"), "photo");
   const out = await api(base, "/api/media/send", { to: gid, mediaId: dm, clientId: `c${uniq()}` }, { token: tok(D) });
   assert.notEqual(out.status, 200);
+});
+
+const fileDir = async (id: string) => path.join((await import("../../server/media/config")).MEDIA_DIR, id.slice(0, 2), id);
+const rowCount = async (id: string) => Number((await sql<{ n: string }>("SELECT count(*)::text AS n FROM media WHERE id = $1", [id]))[0]?.n ?? 0);
+
+test("deleting a group message for everyone (sender or admin) erases its files and rows; albums go entirely", async () => {
+  const g = await A.client.req("group:create", { title: "Cleanup " + uniq(), memberIds: [id(B)] });
+  const gid = g.group.id as string;
+  // B's own photo, deleted by B
+  const p = await upload(B, f("gps.jpg"), "photo");
+  const s1 = await api(base, "/api/media/send", { to: gid, mediaId: p, clientId: `c${uniq()}` }, { token: tok(B) });
+  assert.equal(s1.status, 200);
+  await sleep(200);
+  assert.ok(fs.existsSync(await fileDir(p)), "file on disk after send");
+  assert.equal((await B.client.req("group:deleteMessage", { id: gid, messageId: s1.data.message.id })).ok, true);
+  await sleep(300);
+  assert.ok(!fs.existsSync(await fileDir(p)), "file erased");
+  assert.equal(await rowCount(p), 0, "media row removed");
+  // B's album, deleted by the owner/admin A
+  const a1 = await upload(B, f("gps.jpg"), "photo");
+  const a2 = await upload(B, f("alpha.png"), "photo");
+  const s2 = await api(base, "/api/media/send", { to: gid, mediaIds: [a1, a2], clientId: `c${uniq()}` }, { token: tok(B) });
+  assert.equal(s2.status, 200);
+  assert.equal((await A.client.req("group:deleteMessage", { id: gid, messageId: s2.data.message.id })).ok, true);
+  await sleep(300);
+  for (const x of [a1, a2]) {
+    assert.ok(!fs.existsSync(await fileDir(x)), "album files erased");
+    assert.equal(await rowCount(x), 0);
+  }
+  assert.ok(!(await sign(B, a1))?.full);
+});
+
+test("a deleted group (last member out) erases every file sent in it; other groups keep theirs", async () => {
+  const keep = await A.client.req("group:create", { title: "Keep " + uniq(), memberIds: [id(B)] });
+  const kp = await upload(A, f("gps.jpg"), "photo");
+  assert.equal((await api(base, "/api/media/send", { to: keep.group.id, mediaId: kp, clientId: `c${uniq()}` }, { token: tok(A) })).status, 200);
+  const g = await A.client.req("group:create", { title: "Doomed " + uniq(), memberIds: [id(B)] });
+  const gid = g.group.id as string;
+  const ids = [await upload(A, f("gps.jpg"), "photo"), await upload(B, f("voice.webm"), "voice")];
+  assert.equal((await api(base, "/api/media/send", { to: gid, mediaId: ids[0], clientId: `c${uniq()}` }, { token: tok(A) })).status, 200);
+  assert.equal((await api(base, "/api/media/send", { to: gid, mediaId: ids[1], clientId: `c${uniq()}` }, { token: tok(B) })).status, 200);
+  assert.equal((await B.client.req("group:leave", { id: gid })).ok, true);
+  await sleep(200);
+  for (const x of ids) assert.ok(fs.existsSync(await fileDir(x)), "still there while a member remains");
+  const last = await A.client.req("group:leave", { id: gid });
+  assert.equal(last.deleted, true);
+  await sleep(400);
+  for (const x of ids) {
+    assert.ok(!fs.existsSync(await fileDir(x)), "erased with the group");
+    assert.equal(await rowCount(x), 0);
+  }
+  assert.ok(fs.existsSync(await fileDir(kp)), "another group's file is untouched");
+});
+
+test("sweeper: a group attachment whose message is gone from history (trimmed) is erased; live ones stay", async () => {
+  const { store } = await import("../../server/store");
+  const g = await A.client.req("group:create", { title: "Trim " + uniq(), memberIds: [id(B)] });
+  const gid = g.group.id as string;
+  const gone = await upload(A, f("gps.jpg"), "photo");
+  const live = await upload(A, f("alpha.png"), "photo");
+  const s1 = await api(base, "/api/media/send", { to: gid, mediaId: gone, clientId: `c${uniq()}` }, { token: tok(A) });
+  assert.equal((await api(base, "/api/media/send", { to: gid, mediaId: live, clientId: `c${uniq()}` }, { token: tok(A) })).status, 200);
+  store.removeConversationMessage(gid, s1.data.message.id); // what the history cap does to the oldest rows
+  await media.sweep();
+  assert.ok(!fs.existsSync(await fileDir(gone)));
+  assert.equal(await rowCount(gone), 0);
+  assert.ok(fs.existsSync(await fileDir(live)), "attachments of live messages stay");
 });
