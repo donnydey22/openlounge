@@ -11,7 +11,7 @@ import { Sheet } from "@/components/Sheet";
 import { AppleLogo, GoogleLogo, useProviders } from "@/components/auth/ProviderButtons";
 import { COUNTRIES, formatNational } from "@/components/auth/countries";
 import { PasswordInput } from "@/components/auth/ui";
-import { AuthFormError, SUGGEST_LINK_KEY, authGet, authPost, canUseOAuth, showAppleHere, startLink, type OAuthProvider } from "@/lib/authApi";
+import { AuthFormError, SUGGEST_LINK_KEY, authGet, authPost, canUseOAuth, showAppleHere, showGoogleHere, startLink, type OAuthProvider } from "@/lib/authApi";
 
 interface Identity {
   id: string;
@@ -73,7 +73,7 @@ export function SignInMethods() {
       /* storage disabled */
     }
   };
-  const canSuggest = !!items && oauth && ((flags?.google && !has("google")) || (flags?.apple && showAppleHere() && !has("apple")));
+  const canSuggest = !!items && oauth && ((flags?.google && showGoogleHere() && !has("google")) || (flags?.apple && showAppleHere() && !has("apple")));
   const showSuggest = suggest && canSuggest && !has("google") && !has("apple");
 
   async function remove(i: Identity) {
@@ -154,7 +154,7 @@ export function SignInMethods() {
             {busy === "apple" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4 text-zinc-500" />}
           </button>
         )}
-        {items && flags?.google && oauth && !has("google") && (
+        {items && flags?.google && showGoogleHere() && oauth && !has("google") && (
           <button className={row} onClick={() => connect("google")} disabled={busy === "google"}>
             <GoogleLogo className="h-4 w-4" /> <span className="flex-1">Connect Google</span>
             {busy === "google" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4 text-zinc-500" />}

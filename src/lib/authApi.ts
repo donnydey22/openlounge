@@ -80,21 +80,33 @@ export const inNativeShell = () => typeof navigator !== "undefined" && (hasNativ
  * the system browser (Custom Tab / ASWebAuthenticationSession) and route openlounge://auth?code=… back to
  * /auth/complete?code=… in the WebView.
  */
-/** Native wrapper platform ("android" | "ios"), or null on the plain web. */
+/**
+ * Native wrapper platform ("android" | "ios"), or null on the plain web (desktop and mobile browsers, incl. iOS Safari).
+ * Explicit native signals only, in order: the wrapper's bridge (OpenLoungeNative.getPlatform() / .platform — the iOS
+ * Expo app and the Android app both inject it before the page's scripts run), then the wrapper's user-agent suffix
+ * ("OpenLoungeiOS/<v>" from the iOS app, "OpenLoungeAndroid/<v>" from the Android app). Plain-browser UA sniffing is only
+ * a last resort inside a shell that identified itself (native session store) but gave no platform.
+ */
 export function nativePlatform(): "android" | "ios" | null {
-  if (!inNativeShell()) return null;
   try {
-    const p = nativeBridge()?.getPlatform?.();
+    const b = nativeBridge() as (NativeAuthBridge & { platform?: unknown }) | null;
+    const p = b ? (typeof b.getPlatform === "function" ? b.getPlatform() : b.platform) : null;
     if (p === "android" || p === "ios") return p;
   } catch {
     /* ignore */
   }
   const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  return /OpenLoungeAndroid|Android/i.test(ua) ? "android" : /OpenLoungeiOS|iPhone|iPad/i.test(ua) ? "ios" : null;
+  if (/OpenLoungeiOS\b/i.test(ua)) return "ios";
+  if (/OpenLoungeAndroid\b/i.test(ua)) return "android";
+  if (!inNativeShell()) return null;
+  return /Android/i.test(ua) ? "android" : /iPhone|iPad|iPod|Macintosh/i.test(ua) ? "ios" : null;
 }
 
 /** Sign in with Apple is offered on iOS and the web, not inside the Android app (Donny's call). */
 export const showAppleHere = () => nativePlatform() !== "android";
+
+/** Google sign-in is not offered inside the iOS app (Donny's call: Apple on iOS; Google on Android). The web keeps it. */
+export const showGoogleHere = () => nativePlatform() !== "ios";
 
 export const canUseOAuth = () => !inNativeShell() || typeof nativeBridge()?.openAuth === "function";
 
