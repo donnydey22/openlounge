@@ -51,12 +51,37 @@ function splitGap(v) {
   for (let i = 0; i < v.length; i++) { const c = v[i]; if (c === "(") depth++; else if (c === ")") depth--; else if (c === " " && depth === 0) { cut = i; break; } }
   return cut < 0 ? [v, v] : [v.slice(0, cut).trim(), v.slice(cut + 1).trim()];
 }
+// 4) :where() is Chrome 88+ / Safari 14+; Tailwind v4 wraps space-x/y, divide-* and group-* selectors in it, so older
+//    engines drop those rules (no stack spacing, no overlapping avatar rows). The head script sets <html data-nowhere>
+//    there, and each :where() rule gets a twin right after it (same layer) with :where(…) unwrapped, under that flag.
+function unwrapWhere(sel) {
+  let out = "", i = 0;
+  while (i < sel.length) {
+    const j = sel.indexOf(":where(", i);
+    if (j < 0) { out += sel.slice(i); break; }
+    out += sel.slice(i, j);
+    let depth = 1, k = j + 7, comma = false;
+    for (; k < sel.length && depth; k++) { const c = sel[k]; if (c === "(") depth++; else if (c === ")") depth--; else if (c === "," && depth === 1) comma = true; }
+    if (comma) return null;
+    out += sel.slice(j + 7, k - 1);
+    i = k;
+  }
+  return out;
+}
 function flexGapFallback(postcss) {
   return {
     postcssPlugin: "ol-flex-gap-fallback",
     OnceExit(root) {
       const out = [];
+      let whereTwins = 0;
       root.walkRules((rule) => {
+        if (rule.selector?.includes(":where(") && !rule.parent?.name?.endsWith("keyframes")) {
+          const twins = rule.selectors.map(unwrapWhere);
+          if (twins.every(Boolean)) {
+            rule.after(rule.clone({ selectors: twins.map((t) => `[data-nowhere] ${t}`) }));
+            whereTwins++;
+          }
+        }
         if (!rule.selector || rule.parent?.type === "rule") return;
         let row = null, col = null, display = "", dir = "", wrap = "";
         rule.each((d) => {
@@ -98,6 +123,7 @@ function flexGapFallback(postcss) {
       });
       if (out.length) root.append(...out);
       root.__olGapRules = out.length;
+      root.__olWhere = whereTwins;
     },
   };
 }
@@ -109,18 +135,19 @@ try {
   const flatten = postcss([presetEnv({ browsers: pkg.browserslist, stage: false, features: { "nesting-rules": true } })]);
   const gaps = postcss([flexGapFallback(postcss)]);
   const run = postcss([presetEnv({ browsers: pkg.browserslist, stage: 2, features: { "cascade-layers": true, "nesting-rules": true, "custom-properties": false } })]);
-  let css = 0, before = 0, after = 0, gapRules = 0;
+  let css = 0, before = 0, after = 0, gapRules = 0, whereRules = 0;
   for (const p of files.filter((f) => f.endsWith(".css"))) {
     const s = fs.readFileSync(p, "utf8");
     if (s.startsWith(CSS_MARK)) continue;
     const flat = (await flatten.process(s, { from: p, to: p, map: false })).root;
     const g = await gaps.process(flat, { from: p, to: p, map: false });
     gapRules += g.root.__olGapRules || 0;
+    whereRules += g.root.__olWhere || 0;
     const out = await run.process(g.root, { from: p, to: p, map: false });
     fs.writeFileSync(p, CSS_MARK + out.css);
     css++; before += s.length; after += out.css.length;
   }
-  console.log(`[legacy] CSS lowered in ${css} file(s): ${(before / 1024).toFixed(0)} KB → ${(after / 1024).toFixed(0)} KB (${gapRules} flex-gap fallbacks)`);
+  console.log(`[legacy] CSS lowered in ${css} file(s): ${(before / 1024).toFixed(0)} KB → ${(after / 1024).toFixed(0)} KB (${gapRules} flex-gap fallbacks, ${whereRules} :where twins)`);
 } catch (e) {
   console.warn(`[legacy] CSS lowering skipped: ${e.message}`); if (process.env.LEGACY_DEBUG) console.warn(e.stack);
 }
