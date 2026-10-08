@@ -6,6 +6,7 @@ import { BookUser, Check, ChevronLeft, Copy, Loader2, Lock, Share2, ShieldCheck,
 import { TopBar } from "@/components/TopBar";
 import { Sheet } from "@/components/Sheet";
 import { Avatar } from "@/components/Avatar";
+import { Switch } from "@/components/Switch";
 import { FollowButton } from "@/components/UserRow";
 import { useApp } from "@/components/AppProvider";
 import { hasNativeContacts, native, readNativeContacts, shareLink } from "@/lib/native";
@@ -25,6 +26,7 @@ export default function InvitePage() {
   const [members, setMembers] = useState<PublicUser[]>([]);
   const [others, setOthers] = useState<ContactEntry[]>([]);
   const [optedIn, setOptedIn] = useState(false);
+  const [keep, setKeep] = useState(false);
   const [limited, setLimited] = useState(false);
   const [progress, setProgress] = useState<{ label: string; p: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -34,7 +36,10 @@ export default function InvitePage() {
     setCount(invitesShared());
     setCanContacts(hasNativeContacts());
     getNotifPrefs()
-      .then((p) => setOptedIn(p.contactsOptIn))
+      .then((p) => {
+        setOptedIn(p.contactsOptIn);
+        setKeep(!!p.contactsKeep);
+      })
       .catch(() => {});
   }, []);
 
@@ -88,10 +93,27 @@ export default function InvitePage() {
     }
   }
 
+  // "Tell me when contacts join": on = keep the codes of contacts who aren't here yet; off = erase them now
+  async function toggleKeep(v: boolean) {
+    const prev = keep;
+    setKeep(v);
+    try {
+      const p = await setNotifPrefs({ contactsKeep: v });
+      setKeep(!!p.contactsKeep);
+      if (!v && prev) {
+        toast("Done. Codes for contacts who aren't here yet were deleted");
+      } else if (v) toast("We'll tell you when one of your contacts joins");
+    } catch (e) {
+      setKeep(prev);
+      reportError(e);
+    }
+  }
+
   async function removeContacts() {
     try {
       await deleteUploadedContacts();
       setOptedIn(false);
+      setKeep(false);
       setMembers([]);
       setOthers([]);
       setPhase("idle");
@@ -238,6 +260,17 @@ export default function InvitePage() {
               )}
             </div>
           )}
+          {optedIn && canContacts && (
+            <label className="mt-3 flex items-center gap-3 rounded-2xl border border-white/5 bg-zinc-900/70 px-4 py-3" data-testid="contacts-keep">
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Tell me when contacts join</span>
+                <span className="block text-xs text-zinc-500">
+                  {keep ? "We keep scrambled codes of contacts who aren't here yet, only to tell you when they join." : "Off: codes for contacts who aren't here are erased within 24 hours."}
+                </span>
+              </span>
+              <Switch label="Tell me when contacts join" on={keep} onChange={(v) => void toggleKeep(v)} />
+            </label>
+          )}
           {optedIn && (
             <button onClick={removeContacts} className="mt-3 flex items-center gap-2 text-sm text-red-400 hover:underline">
               <Trash2 className="h-4 w-4" /> Delete uploaded contacts
@@ -264,7 +297,7 @@ export default function InvitePage() {
           <li className="flex gap-3">
             <Trash2 className="h-5 w-5 shrink-0 text-zinc-400" />
             <span>
-              <b>Deleted automatically.</b> Codes for people not on Open Lounge are erased within 24 hours. Delete everything anytime here.
+              <b>Deleted automatically.</b> Codes for people not on Open Lounge are erased within 24 hours, unless you turn on &ldquo;Tell me when contacts join&rdquo;. Delete everything anytime here.
             </span>
           </li>
           <li className="flex gap-3">

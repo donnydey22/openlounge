@@ -1,7 +1,7 @@
 // Wires the Notifier to the Store. Created after store.init() so migration 007 has run.
 import { store } from "../store";
 import { firebaseConfigured } from "../firebase";
-import { Notifier } from "./notifier";
+import { Notifier, type InAppNotice } from "./notifier";
 import { MemoryPushRepo, PgPushRepo, type PushRepo } from "./repo";
 import { FcmSender, MemorySender, type PushSender } from "./sender";
 
@@ -10,6 +10,12 @@ let isForeground: (userId: string) => boolean = () => false;
 
 export function setForegroundCheck(fn: (userId: string) => boolean) {
   isForeground = fn;
+}
+
+/** realtime.ts plugs in the WebSocket fan-out for in-app notices ("notify:activity") */
+let inAppSink: ((userId: string, n: InAppNotice) => boolean) | null = null;
+export function setInAppSink(fn: ((userId: string, n: InAppNotice) => boolean) | null) {
+  inAppSink = fn;
 }
 
 export function initPush(opts: { repo?: PushRepo; sender?: PushSender } = {}) {
@@ -28,6 +34,7 @@ export function initPush(opts: { repo?: PushRepo; sender?: PushSender } = {}) {
     },
     isBot: (id) => store.users.get(id)?.isBot ?? false,
     badgeCount: (id) => store.unreadDmCount(id),
+    inApp: (id, n) => inAppSink?.(id, n) ?? false,
   });
   console.log(`[push] ${sender.name === "fcm" ? "FCM HTTP v1 (firebase-admin)" : "disabled (no FIREBASE_SERVICE_ACCOUNT_JSON) — pushes are recorded, not sent"}; storage ${repo instanceof PgPushRepo ? "Postgres" : "memory"}`);
   const purge = setInterval(() => void repo.purgeExpiredHashes().catch(() => {}), 3600_000);

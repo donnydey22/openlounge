@@ -356,5 +356,19 @@ export interface NotifPrefsClient {
   newFollower: boolean;
   contactJoined: boolean;
   contactsOptIn: boolean;
+  /** "Tell me when contacts join": keep codes of contacts who aren't members yet (no 24 h purge) */
+  contactsKeep?: boolean;
   quietHours: { start: string; end: string; tz: string } | null;
+}
+
+/** In-app copy of a people / live-activity notification (server "notify:activity", see server/push/notifier.ts) */
+export interface ActivityNotice {
+  type: string;
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+  roomId?: string;
+  actor: { id: string; name: string; color: string; photoUrl: string | null } | null;
+  at: number;
 }

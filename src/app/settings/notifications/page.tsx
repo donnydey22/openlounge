@@ -10,7 +10,7 @@ import { getNotifPrefs, setNotifPrefs } from "@/lib/push";
 import { nativePlatform } from "@/lib/native";
 import type { NotifPrefsClient } from "@/lib/types";
 
-type Key = Exclude<keyof NotifPrefsClient, "quietHours" | "contactsOptIn">;
+type Key = Exclude<keyof NotifPrefsClient, "quietHours" | "contactsOptIn" | "contactsKeep">;
 const GROUPS: { title: string; items: { key: Key; label: string; hint: string }[] }[] = [
   {
     title: "Rooms",
@@ -27,7 +27,7 @@ const GROUPS: { title: string; items: { key: Key; label: string; hint: string }[
     title: "People",
     items: [
       { key: "newFollower", label: "New followers", hint: "Grouped so you don't get one per follow" },
-      { key: "contactJoined", label: "Friends joining", hint: "A contact joins (only if you turned on Find friends)" },
+      { key: "contactJoined", label: "Friends joining", hint: "A contact just joined Open Lounge (needs Find friends in Invite friends)" },
     ],
   },
 ];

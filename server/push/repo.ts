@@ -10,7 +10,8 @@ export interface DeviceToken {
   platform: Platform;
 }
 
-/** Unmatched contact hashes are deleted this long after upload (see docs/privacy-contacts.md). */
+/** Unmatched contact hashes are deleted this long after upload (see docs/privacy-contacts.md), unless the owner turned
+ *  on "Tell me when contacts join" (keep): then they stay until the switch goes off / contacts are deleted. */
 export const UNMATCHED_HASH_TTL_MS = 24 * 60 * 60_000;
 
 export interface PushRepo {
@@ -21,9 +22,12 @@ export interface PushRepo {
   setPrefs(userId: string, prefs: NotifPrefs): Promise<void>;
   /** replace the owner's stored (peppered) hashes */
   /** append=true adds to the owner's current upload (batched matching); false replaces it */
-  replaceContactHashes(ownerId: string, hashes: string[], append?: boolean): Promise<void>;
+  /** keep=true: exempt from the 24 h purge ("Tell me when contacts join" on) */
+  replaceContactHashes(ownerId: string, hashes: string[], append?: boolean, keep?: boolean): Promise<void>;
+  /** flip the owner's already-uploaded hashes to kept (switch turned on) */
+  keepContactHashes(ownerId: string): Promise<void>;
   deleteContactHashes(ownerId: string): Promise<void>;
-  /** owners (who uploaded within the TTL) that have `hash` */
+  /** owners that have `hash` (uploaded within the TTL, or kept) */
   ownersOfHash(hash: string): Promise<string[]>;
   purgeExpiredHashes(now?: number): Promise<number>;
   /** account deletion: device tokens, notification prefs and contact hashes owned by the user */
@@ -34,7 +38,7 @@ export interface PushRepo {
 export class MemoryPushRepo implements PushRepo {
   tokens = new Map<string, DeviceToken>();
   prefs = new Map<string, NotifPrefs>();
-  hashes = new Map<string, { set: Set<string>; at: number }>();
+  hashes = new Map<string, { set: Set<string>; at: number; keep?: boolean }>();
   async upsertToken(t: DeviceToken) {
     this.tokens.set(t.token, { ...t });
   }
@@ -51,20 +55,24 @@ export class MemoryPushRepo implements PushRepo {
   async setPrefs(userId: string, p: NotifPrefs) {
     this.prefs.set(userId, p);
   }
-  async replaceContactHashes(ownerId: string, hashes: string[], append = false) {
+  async replaceContactHashes(ownerId: string, hashes: string[], append = false, keep = false) {
     const prev = append ? this.hashes.get(ownerId)?.set : undefined;
-    this.hashes.set(ownerId, { set: new Set([...(prev ?? []), ...hashes]), at: Date.now() });
+    this.hashes.set(ownerId, { set: new Set([...(prev ?? []), ...hashes]), at: Date.now(), keep });
+  }
+  async keepContactHashes(ownerId: string) {
+    const h = this.hashes.get(ownerId);
+    if (h) h.keep = true;
   }
   async deleteContactHashes(ownerId: string) {
     this.hashes.delete(ownerId);
   }
   async ownersOfHash(hash: string) {
     const now = Date.now();
-    return [...this.hashes].filter(([, v]) => v.set.has(hash) && now - v.at < UNMATCHED_HASH_TTL_MS).map(([k]) => k);
+    return [...this.hashes].filter(([, v]) => v.set.has(hash) && (v.keep || now - v.at < UNMATCHED_HASH_TTL_MS)).map(([k]) => k);
   }
   async purgeExpiredHashes(now = Date.now()) {
     let n = 0;
-    for (const [k, v] of this.hashes) if (now - v.at >= UNMATCHED_HASH_TTL_MS) (this.hashes.delete(k), n++);
+    for (const [k, v] of this.hashes) if (!v.keep && now - v.at >= UNMATCHED_HASH_TTL_MS) (this.hashes.delete(k), n++);
     return n;
   }
   async deleteUserData(userId: string) {
@@ -107,12 +115,16 @@ export class PgPushRepo implements PushRepo {
       [userId, JSON.stringify(p)],
     );
   }
-  async replaceContactHashes(ownerId: string, hashes: string[], append = false) {
+  async replaceContactHashes(ownerId: string, hashes: string[], append = false, keep = false) {
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN");
       if (!append) await c.query("DELETE FROM contact_hashes WHERE owner_id = $1", [ownerId]);
-      if (hashes.length) await c.query("INSERT INTO contact_hashes (owner_id, hash) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING", [ownerId, hashes]);
+      if (hashes.length)
+        await c.query(
+          "INSERT INTO contact_hashes (owner_id, hash, keep) SELECT $1, unnest($2::text[]), $3 ON CONFLICT (owner_id, hash) DO UPDATE SET keep = EXCLUDED.keep, created_at = now()",
+          [ownerId, hashes, keep],
+        );
       await c.query("COMMIT");
     } catch (e) {
       await c.query("ROLLBACK").catch(() => {});
@@ -121,18 +133,21 @@ export class PgPushRepo implements PushRepo {
       c.release();
     }
   }
+  async keepContactHashes(ownerId: string) {
+    await this.pool.query("UPDATE contact_hashes SET keep = true WHERE owner_id = $1", [ownerId]);
+  }
   async deleteContactHashes(ownerId: string) {
     await this.pool.query("DELETE FROM contact_hashes WHERE owner_id = $1", [ownerId]);
   }
   async ownersOfHash(hash: string) {
     const r = await this.pool.query<{ owner_id: string }>(
-      "SELECT owner_id FROM contact_hashes WHERE hash = $1 AND created_at > now() - ($2::bigint * interval '1 millisecond')",
+      "SELECT owner_id FROM contact_hashes WHERE hash = $1 AND (keep OR created_at > now() - ($2::bigint * interval '1 millisecond'))",
       [hash, UNMATCHED_HASH_TTL_MS],
     );
     return r.rows.map((x) => x.owner_id);
   }
   async purgeExpiredHashes(now = Date.now()) {
-    const r = await this.pool.query("DELETE FROM contact_hashes WHERE created_at <= to_timestamp($1::double precision / 1000)", [now - UNMATCHED_HASH_TTL_MS]);
+    const r = await this.pool.query("DELETE FROM contact_hashes WHERE NOT keep AND created_at <= to_timestamp($1::double precision / 1000)", [now - UNMATCHED_HASH_TTL_MS]);
     return r.rowCount ?? 0;
   }
   async deleteUserData(userId: string) {

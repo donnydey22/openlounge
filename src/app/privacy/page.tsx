@@ -130,16 +130,18 @@ export default function Privacy() {
           database, could turn the codes back into phone numbers.
         </li>
         <li>
-          <b>What they&apos;re used for:</b> to show which of your contacts already use Open Lounge, and, if one of your contacts joins soon after, to send you a
-          &ldquo;friend joined&rdquo; notification.
+          <b>What they&apos;re used for:</b> to show which of your contacts already use Open Lounge, and to send you a &ldquo;friend joined&rdquo; notification (for
+          example, &ldquo;Maya just joined Open Lounge&rdquo;) when one of your contacts joins within 24 hours of your last sync, or anytime while &ldquo;Tell me when
+          contacts join&rdquo; is on.
         </li>
         <li>
-          <b>How long we keep them:</b> codes that don&apos;t match a member are <b>deleted automatically after 24 hours</b>. All of your codes are deleted when you delete your
-          account.
+          <b>How long we keep them:</b> codes that don&apos;t match a member are <b>deleted automatically after 24 hours</b>, unless you turn on{" "}
+          <b>&ldquo;Tell me when contacts join&rdquo;</b> in Invite friends: then we keep them while that switch is on. Turning it off, tapping{" "}
+          <b>Delete uploaded contacts</b>, or deleting your account deletes all of your codes right away.
         </li>
         <li>
-          <b>Your switches:</b> turn off &ldquo;Friends joining&rdquo; in <b>Settings &gt; Notifications</b> to stop those alerts, and turn off contacts access at any time in your
-          phone&apos;s settings.
+          <b>Your switches:</b> &ldquo;Tell me when contacts join&rdquo; (off by default) and <b>Delete uploaded contacts</b> in <b>Settings &gt; Invite friends</b>; turn
+          off &ldquo;Friends joining&rdquo; in <b>Settings &gt; Notifications</b> to stop those alerts; turn off contacts access at any time in your phone&apos;s settings.
         </li>
         <li>We never sell, rent or share contact data, use it for ads, build profiles of people who aren&apos;t members, or message your contacts.</li>
       </UL>
@@ -219,7 +221,7 @@ export default function Privacy() {
         <li>Account data: until you delete your account.</li>
         <li>Direct messages: up to the most recent 1,000 messages in each conversation.</li>
         <li>In-room chat: deleted when the room ends. Live audio and video: never stored.</li>
-        <li>Unmatched contact codes: 24 hours.</li>
+        <li>Unmatched contact codes: 24 hours, or while &ldquo;Tell me when contacts join&rdquo; is on.</li>
         <li>Sign-in codes and reset links: expire within 10 to 30 minutes.</li>
         <li>Reports and moderation records: as long as needed for safety and legal reasons.</li>
         <li>Purchase records: as long as tax and accounting laws require.</li>

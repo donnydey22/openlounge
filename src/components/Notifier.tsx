@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { usePathname, useRouter } from "next/navigation";
 import { Bell, Share } from "lucide-react";
 import { useApp } from "./AppProvider";
-import type { ChatMessage, DirectMessage, RoomPresenceEvent, RoomState } from "@/lib/types";
+import type { ActivityNotice, ChatMessage, DirectMessage, RoomPresenceEvent, RoomState } from "@/lib/types";
+import { nativePlatform } from "@/lib/native";
 import { firstName } from "@/lib/utils";
 import {
   getPermission,
@@ -308,10 +309,26 @@ export function Notifier({ children }: { children: React.ReactNode }) {
       banner({ title, body, avatar: { name: msg.fromName, color: msg.fromColor, photo: msg.fromPhotoUrl ?? null, userId: msg.fromId }, href: url, key: tag });
     };
 
+    // people / live activity (a contact joined, someone you follow went live…): the server already applied your
+    // notification settings, quiet hours and caps. Visible → banner; hidden web tab → OS notification; hidden native
+    // app → nothing (the device push covers it). Never for the room you're already in.
+    const onActivity = (n: ActivityNotice) => {
+      if (!n || typeof n.title !== "string") return;
+      if (n.roomId && roomCtx.current?.room.id === n.roomId) return;
+      if (pageHidden()) {
+        if (!nativePlatform() && osEnabled()) void showOsNotification({ title: n.title, body: n.body, tag: n.tag, url: n.url, renotify: realert(n.tag) });
+        return;
+      }
+      const avatar = n.actor ? { name: n.actor.name, color: n.actor.color, photo: n.actor.photoUrl, userId: n.actor.id } : ("app" as const);
+      banner({ title: n.title, body: n.body || undefined, avatar, href: n.url, key: n.tag });
+    };
+
+    socket.on("notify:activity", onActivity);
     socket.on("room:presence", onPresence);
     socket.on("chat:message", onChat);
     socket.on("dm:message", onDm);
     return () => {
+      socket.off("notify:activity", onActivity);
       socket.off("room:presence", onPresence);
       socket.off("chat:message", onChat);
       socket.off("dm:message", onDm);

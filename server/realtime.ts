@@ -15,7 +15,7 @@ import { ACTIVITY_THROTTLE_MS, PRESENCE_CHANNEL, Presence, type PresenceStatus }
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
-import { bg, push, setForegroundCheck } from "./push";
+import { bg, push, setForegroundCheck, setInAppSink } from "./push";
 import { attachCallHandlers, calls, wireCalls } from "./calls";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
@@ -72,6 +72,19 @@ export function registerRealtime(io: WsHub) {
   setForegroundCheck((userId) => {
     for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
     return false;
+  });
+  // in-app copies of people / live-activity notifications → every open connection of the user (client decides banner vs OS notice)
+  setInAppSink((userId, n) => {
+    const ch = `user:${userId}`;
+    let any = false;
+    for (const _c of io.members(ch)) {
+      any = true;
+      break;
+    }
+    if (!any) return false;
+    const actor = n.actorId ? store.publicUser(n.actorId) : null;
+    io.to(ch).emit("notify:activity", { ...n, actor: actor ? { id: actor.id, name: actor.name, color: actor.color, photoUrl: actor.photoUrl } : null, at: Date.now() });
+    return true;
   });
   // 1:1 audio/video calls (server/calls): ringing is pushed when no app/tab is visible
   wireCalls(io, (userId) => {

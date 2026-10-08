@@ -229,6 +229,67 @@ await t("contacts: opting out deletes uploaded hashes; 24h auto-purge", async ()
   assert.equal(s.repo.hashes.has("a"), false);
 });
 
+await t("new people: 'Tell me when contacts join' keeps codes past 24 h; off erases them; opt-out forces it off", async () => {
+  const s = setup();
+  await s.n.updatePrefs("a", { contactsOptIn: true, contactsKeep: true });
+  await s.n.matchContacts("a", [clientHash("+15550000001")]);
+  assert.equal(s.repo.hashes.get("a")!.keep, true);
+  assert.equal(await s.repo.purgeExpiredHashes(Date.now() + 30 * 24 * 3600_000), 0, "kept rows survive the purge");
+  assert.deepEqual(await s.repo.ownersOfHash(pepperHash(clientHash("+15550000001"))), ["a"]);
+  await s.n.updatePrefs("a", { contactsKeep: false });
+  assert.equal(s.repo.hashes.has("a"), false, "switch off → erased right away");
+  // switching on later flips the current upload to kept
+  await s.n.matchContacts("a", [clientHash("+15550000002")]);
+  assert.equal(s.repo.hashes.get("a")!.keep, false);
+  await s.n.updatePrefs("a", { contactsKeep: true });
+  assert.equal(s.repo.hashes.get("a")!.keep, true);
+  const off = await s.n.updatePrefs("a", { contactsOptIn: false });
+  assert.equal(off.contactsKeep, false);
+  assert.equal(s.repo.hashes.has("a"), false);
+  assert.equal(mergePrefs(null, { contactsKeep: true }).contactsKeep, false, "can't keep without contacts on");
+});
+
+await t("new people: 'Maya just joined Open Lounge' — push when away, in-app banner (no push) when the app is open", async () => {
+  const s = setup();
+  const shown: { uid: string; n: { type: string; title: string; actorId?: string; url: string } }[] = [];
+  const online = new Set<string>();
+  (s.n as unknown as { d: { inApp: unknown } }).d.inApp = (uid: string, n: never) => (online.has(uid) ? (shown.push({ uid, n }), true) : false);
+  for (const u of ["a", "c"]) {
+    await s.n.updatePrefs(u, { contactsOptIn: true });
+    await s.n.matchContacts(u, [clientHash("+14155550199")]);
+    await s.tok(u);
+  }
+  online.add("c");
+  s.fg.add("c");
+  const r = await s.n.contactJoined("newbie", "+14155550199");
+  assert.equal(r.a, "sent");
+  assert.equal(r.c, "in-app");
+  assert.equal(s.sender.sent.length, 1, "no device push while the app is open");
+  assert.match(s.sender.sent[0].msg.title, /just joined Open Lounge/);
+  assert.equal(shown[0].uid, "c");
+  assert.equal(shown[0].n.type, "contactJoined");
+  assert.equal(shown[0].n.actorId, "newbie");
+  assert.equal(shown[0].n.url, "/profile/newbie");
+  // dedupe: the same person never announced twice
+  const again = await s.n.contactJoined("newbie", "+14155550199");
+  assert.equal(again.a, "skip:dedupe");
+  assert.equal(again.c, "skip:dedupe");
+  // pref off → nothing anywhere
+  const s2 = setup();
+  (s2.n as unknown as { d: { inApp: unknown } }).d.inApp = () => true;
+  await s2.n.updatePrefs("a", { contactsOptIn: true, contactJoined: false });
+  await s2.n.matchContacts("a", [clientHash("+14155550198")]);
+  assert.equal((await s2.n.contactJoined("x", "+14155550198")).a, "skip:pref");
+  // web-only member (no device token) with a hidden tab still gets the in-app copy (OS notification on the web)
+  const s3 = setup();
+  let hit = 0;
+  (s3.n as unknown as { d: { inApp: unknown } }).d.inApp = () => (hit++, true);
+  await s3.n.updatePrefs("a", { contactsOptIn: true });
+  await s3.n.matchContacts("a", [clientHash("+14155550197")]);
+  assert.equal((await s3.n.contactJoined("y", "+14155550197")).a, "in-app");
+  assert.equal(hit, 1);
+});
+
 await t("service account parse: raw JSON, base64, junk", () => {
   const sa = { project_id: "p", client_email: "e@x", private_key: "k" };
   assert.equal(parseServiceAccount(JSON.stringify(sa))?.project_id, "p");

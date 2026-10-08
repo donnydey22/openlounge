@@ -6,7 +6,9 @@ export interface QuietHours {
   end: string;
   tz: string; // IANA zone
 }
-export type NotifPrefs = Record<NotifType, boolean> & { quietHours: QuietHours | null; contactsOptIn: boolean };
+/** contactsKeep = "Tell me when contacts join": while on, scrambled codes of contacts who aren't members yet are kept
+ *  (no 24 h purge) so we can say "Maya just joined Open Lounge" whenever they join. Off → codes erased right away. */
+export type NotifPrefs = Record<NotifType, boolean> & { quietHours: QuietHours | null; contactsOptIn: boolean; contactsKeep: boolean };
 
 export const DEFAULT_PREFS: NotifPrefs = {
   dm: true,
@@ -19,6 +21,7 @@ export const DEFAULT_PREFS: NotifPrefs = {
   contactJoined: true,
   quietHours: null,
   contactsOptIn: false,
+  contactsKeep: false,
 };
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -40,6 +43,8 @@ export function mergePrefs(base: Partial<NotifPrefs> | null | undefined, patch: 
   const p = patch as Record<string, unknown>;
   for (const k of NOTIF_TYPES) if (typeof p[k] === "boolean") out[k] = p[k] as boolean;
   if (typeof p.contactsOptIn === "boolean") out.contactsOptIn = p.contactsOptIn;
+  if (typeof p.contactsKeep === "boolean") out.contactsKeep = p.contactsKeep;
+  if (!out.contactsOptIn) out.contactsKeep = false; // no contacts uploaded → nothing to keep
   if (p.quietHours === null) out.quietHours = null;
   else if (p.quietHours && typeof p.quietHours === "object") {
     const q = p.quietHours as Record<string, unknown>;

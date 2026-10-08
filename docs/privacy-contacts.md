@@ -17,8 +17,8 @@ Contact names, emails, photos, notes and any other fields **never leave your pho
 
 ## How we use it — matching and inviting, nothing else
 - To show you which of your contacts already have an Open Lounge account ("Friends on Open Lounge"), so you can follow them.
-- To tell you, if you have **Friends joining** notifications on, when one of your contacts creates an account within
-  24 hours of your last sync.
+- To tell you, if you have **Friends joining** notifications on, when one of your contacts creates an account
+  ("Maya just joined Open Lounge"): within 24 hours of your last sync, or anytime while **Tell me when contacts join** is on.
 
 We do **not** use contact data for advertising, profiling, or recommendations to other people; we do **not** sell,
 rent or share it with anyone; we do **not** build profiles of people who aren't Open Lounge members; and we **never
@@ -31,11 +31,13 @@ and you choose whether and how to send it.
 - Codes for numbers that **matched** an existing member are not stored at all — the match is returned to your phone and discarded.
 - Codes for numbers that **did not match** are kept for at most **24 hours** (only so we can tell you if that
   contact joins in the meantime), then deleted automatically.
+- If you turn on **Tell me when contacts join** (Invite friends, off by default), those codes are kept while the switch is
+  on, only so we can tell you when one of those contacts joins. Turning the switch off deletes them right away.
 - **Delete uploaded contacts** (Invite friends screen) or turning the feature off deletes everything you uploaded immediately.
 - Deleting your account deletes your uploaded codes.
 
 ## Your choices
-Turn the feature off or delete uploaded contacts anytime in **Settings → Invite friends**. Revoke contacts access in
+Turn **Tell me when contacts join** off or delete uploaded contacts anytime in **Settings → Invite friends**. Revoke contacts access in
 your phone's Settings → Open Lounge → Contacts.
 
 ---
@@ -43,5 +45,5 @@ your phone's Settings → Open Lounge → Contacts.
 - Pre-permission explainer: `src/app/invite/page.tsx` (sheet shown before `OpenLoungeNative.requestContacts()` triggers the OS prompt).
 - iOS `NSContactsUsageDescription` (Expo `app.json`): "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime."
 - Android: `READ_CONTACTS` runtime permission requested only from the same flow.
-- Server: `server/push/contacts.ts`, `server/push/notifier.ts#matchContacts`, table `contact_hashes` (migration 007), hourly purge (`purgeExpiredHashes`, TTL 24 h), `POST /api/contacts/delete`.
+- Server: `server/push/contacts.ts`, `server/push/notifier.ts#matchContacts`, table `contact_hashes` (migration 007; `keep` column migration 024), hourly purge (`purgeExpiredHashes`, TTL 24 h for rows with keep = false), `POST /api/contacts/delete`, pref `contactsKeep` (turning it off deletes all of the owner's rows).
 - Requires the server env `CONTACTS_PEPPER` (random secret) in production.

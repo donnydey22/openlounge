@@ -4,6 +4,19 @@ import type { PushRepo, Platform } from "./repo";
 import type { PushMessage, PushSender } from "./sender";
 import { cleanHashes, pepperHash, clientHash } from "./contacts";
 
+/** In-app copy of a notification for the user's open tabs/apps ("notify:activity" frame). The client shows a banner
+ *  when visible, an OS notification from a hidden web tab, and nothing in a hidden native WebView (the push covers it). */
+export interface InAppNotice {
+  type: string;
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+  /** whose avatar the banner shows (new member, host, joiner) */
+  actorId?: string;
+  roomId?: string;
+}
+
 export interface NotifierDeps {
   repo: PushRepo;
   sender: PushSender;
@@ -18,6 +31,8 @@ export interface NotifierDeps {
   isBot?(userId: string): boolean;
   /** app-icon badge: total unread for the user (unread DMs + unread notifications; main has no notification inbox yet, so = unread DMs) */
   badgeCount?(userId: string): number;
+  /** send the in-app copy to the user's open connections; true when at least one connection got it */
+  inApp?(userId: string, n: InAppNotice): boolean;
   now?(): number;
 }
 
@@ -30,7 +45,8 @@ export const FOLLOWER_BATCH_MS = 10 * 60_000;
 export const TRENDING_MIN_FOLLOWED = 3;
 export const RECENT_ROOM_MS = 7 * 24 * 3600_000;
 
-export type Outcome = "sent" | "no-tokens" | `skip:${string}`;
+/** "in-app": shown in the user's open (visible) app/tab instead of a device push */
+export type Outcome = "sent" | "in-app" | "no-tokens" | `skip:${string}`;
 
 export class Notifier {
   private lastActiveRoom = new Map<string, number>();
@@ -63,9 +79,12 @@ export class Notifier {
     return this.d.repo.getPrefs(userId);
   }
   async updatePrefs(userId: string, patch: unknown) {
-    const next = mergePrefs(await this.d.repo.getPrefs(userId), patch);
+    const prev = await this.d.repo.getPrefs(userId);
+    const next = mergePrefs(prev, patch);
     await this.d.repo.setPrefs(userId, next);
-    if (!next.contactsOptIn) await this.d.repo.deleteContactHashes(userId);
+    // contacts off, or "Tell me when contacts join" switched off → every uploaded code is erased right away
+    if (!next.contactsOptIn || (prev.contactsKeep && !next.contactsKeep)) await this.d.repo.deleteContactHashes(userId);
+    else if (next.contactsKeep && !prev.contactsKeep) await this.d.repo.keepContactHashes(userId);
     return next;
   }
 
@@ -74,7 +93,11 @@ export class Notifier {
     return list.filter((t) => now - t < 3600_000);
   }
 
-  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string } = {}): Promise<Outcome> {
+  /**
+   * opts.live: also send the in-app copy (notify:activity) to the user's open connections, and skip the device push
+   * while one of them is visible (same rule as DMs: the in-app banner already showed it). Same gates either way.
+   */
+  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; live?: { actorId?: string; roomId?: string } } = {}): Promise<Outcome> {
     if (this.d.isBot?.(userId)) return "skip:bot";
     const now = this.now();
     const prefs: NotifPrefs = await this.d.repo.getPrefs(userId);
@@ -94,11 +117,22 @@ export class Notifier {
     if (recent.length >= (type === "dm" ? DM_HOURLY_CAP : HOURLY_CAP)) return "skip:cap";
 
     const tokens = await this.d.repo.tokensFor(userId);
-    if (!tokens.length) return "no-tokens";
+    const live = opts.live && this.d.inApp ? opts.live : null;
+    const foreground = live ? this.d.isForeground(userId) : false;
     // count it before the network round-trip so bursts can't race past the gates
-    if (opts.dedupeKey) this.dedupe.set(`${userId}|${opts.dedupeKey}`, now);
-    if (ACTIVE_ROOM_TYPES.includes(type)) this.lastActiveRoom.set(userId, now);
-    this.hourly.set(capKey, [...recent, now]);
+    const mark = () => {
+      if (opts.dedupeKey) this.dedupe.set(`${userId}|${opts.dedupeKey}`, now);
+      if (ACTIVE_ROOM_TYPES.includes(type)) this.lastActiveRoom.set(userId, now);
+      this.hourly.set(capKey, [...recent, now]);
+    };
+    let shown = false;
+    if (live) {
+      shown = this.d.inApp!(userId, { type: msg.type, title: msg.title, body: msg.body, url: msg.url, tag: msg.tag, actorId: live.actorId, roomId: live.roomId });
+      if (shown) mark();
+      if (foreground && shown) return "in-app";
+    }
+    if (!tokens.length) return shown ? "in-app" : "no-tokens";
+    if (!shown) mark();
     const res = await this.d.sender.send(tokens, this.withBadge(userId, msg));
     for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
     return "sent";
@@ -349,6 +383,7 @@ export class Notifier {
     const hashes = cleanHashes(raw);
     if (!hashes) return { ok: false as const, error: "Too many contacts" };
     const want = new Set(hashes);
+    const keep = prefs.contactsKeep;
     const matches: string[] = [];
     const matchedHashes = new Set<string>();
     for (const [uid, phone] of this.d.usersWithPhones()) {
@@ -361,14 +396,17 @@ export class Notifier {
       ownerId,
       hashes.filter((h) => !matchedHashes.has(h)).map(pepperHash),
       append,
+      keep,
     );
     return { ok: true as const, userIds: matches, matchedHashes: [...matchedHashes] };
   }
 
-  /** a new member joined: tell opted-in users who uploaded their number in the last 24 h */
+  /** a new member joined: tell opted-in users who have their number (uploaded in the last 24 h, or kept by
+   *  "Tell me when contacts join"): "Maya just joined Open Lounge". Push + live in-app banner. */
   async contactJoined(newUserId: string, e164: string) {
     const owners = await this.d.repo.ownersOfHash(pepperHash(clientHash(e164)));
     const name = this.d.userName(newUserId) ?? "A friend";
+    const first = name.split(/\s+/)[0] || name;
     const out: Record<string, Outcome> = {};
     for (const uid of owners) {
       if (uid === newUserId) continue;
@@ -380,8 +418,16 @@ export class Notifier {
       out[uid] = await this.deliver(
         uid,
         "contactJoined",
-        { type: "contactJoined", title: "A friend joined Open Lounge 🎉", body: `Your contact ${name} just joined — say hi!`, channel: "social", tag: `joined:${newUserId}`, url: `/profile/${newUserId}`, data: { userId: newUserId } },
-        { dedupeKey: `joined:${newUserId}` },
+        {
+          type: "contactJoined",
+          title: `${name} just joined Open Lounge 🎉`,
+          body: `${first} is in your contacts. Say hi or follow them.`,
+          channel: "social",
+          tag: `joined:${newUserId}`,
+          url: `/profile/${newUserId}`,
+          data: { userId: newUserId },
+        },
+        { dedupeKey: `joined:${newUserId}`, live: { actorId: newUserId } },
       );
     }
     return out;
