@@ -30,7 +30,8 @@ function peerOf(s: CallSnapshot) {
 function statusText(s: CallSnapshot) {
   const c = s.call!;
   if (s.ui === "ended") return s.endedText ?? "Call ended";
-  if (s.reconnecting) return "Reconnecting…";
+  // reconnecting mid-call: the timer keeps running (banner says "Reconnecting…"); before connect, say it here
+  if (s.reconnecting && !s.connectedAt) return "Reconnecting…";
   if (s.ui === "incoming") return `Open Lounge ${c.video ? "video" : "audio"} call`;
   if (s.ui === "outgoing") return c.phase === "ringing" ? "Ringing…" : c.id ? "Calling…" : "Requesting…";
   if (s.ui === "connecting") return "Connecting…";
@@ -340,8 +341,17 @@ export function CallOverlay() {
 
         {/* banners */}
         <div className="pointer-events-none flex flex-col items-center gap-2 px-4">
-          {s.reconnecting && <div className={cn("rounded-full bg-black/50 px-3 py-1 text-xs font-semibold backdrop-blur-md", css.banner)}>Reconnecting…</div>}
-          {!s.reconnecting && active && (s.quality === "poor" || s.quality === "lost") && (
+          {s.reconnecting && (
+            <div className={cn("rounded-full bg-black/50 px-3 py-1 text-xs font-semibold backdrop-blur-md", css.banner)} data-testid="call-reconnecting">
+              Reconnecting…
+            </div>
+          )}
+          {!s.reconnecting && s.peerReconnecting && active && (
+            <div className={cn("rounded-full bg-black/50 px-3 py-1 text-xs font-semibold backdrop-blur-md", css.banner)} data-testid="call-peer-reconnecting">
+              {p.name.split(" ")[0]} is reconnecting…
+            </div>
+          )}
+          {!s.reconnecting && !s.peerReconnecting && active && (s.quality === "poor" || s.quality === "lost") && (
             <div className={cn("rounded-full bg-amber-500/90 px-3 py-1 text-xs font-semibold text-black", css.banner)} data-testid="call-weak">
               Weak connection
             </div>

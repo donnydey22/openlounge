@@ -33,6 +33,8 @@ export interface CallSnapshot {
   speakerSupported: boolean;
   quality: Quality;
   reconnecting: boolean;
+  /** the other person lost their connection (server call:peer / LiveKit): "Bea is reconnecting…" */
+  peerReconnecting: boolean;
   connectedAt: number | null;
   endedText: string | null;
   /** ended because of busy / no answer → offer "Call again" */
@@ -61,6 +63,7 @@ const initial = (): CallSnapshot => ({
   speakerSupported: false,
   quality: "unknown",
   reconnecting: false,
+  peerReconnecting: false,
   connectedAt: null,
   endedText: null,
   canRetry: false,
@@ -145,12 +148,15 @@ export class CallEngine {
       this.socket.off("call:incoming", this.onIncoming);
       this.socket.off("call:state", this.onState);
       this.socket.off("call:video", this.onVideo);
+      this.socket.off("call:peer", this.onPeer);
     }
     this.socket = socket;
     if (!socket) return;
     socket.on("call:incoming", this.onIncoming);
     socket.on("call:state", this.onState);
     socket.on("call:video", this.onVideo);
+    socket.on("call:peer", this.onPeer);
+    this.watchNetwork();
   }
 
   private req<T = Record<string, unknown>>(ev: string, data: unknown, ms = 10_000): Promise<T> {
@@ -164,11 +170,20 @@ export class CallEngine {
       const r = await this.req<{ ok: boolean; call?: CallInfo | null }>("call:current", {});
       const call = r.call;
       if (!call) {
-        // our local call ended while we were offline
-        if (this.s.call && this.busy) this.finishLocal(this.s.call.outcome ?? "completed", true);
+        // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
+        if (this.s.call && this.busy) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
         return;
       }
-      if (this.s.call?.id === call.id && this.room) return; // still connected; nothing to do
+      if (this.s.call?.id === call.id && this.room) {
+        // WS came back while media kept going (or LiveKit is resuming): just re-sync the peer's state
+        this.set({ peerReconnecting: !!call.offline?.some((u) => u !== this.meId) });
+        return;
+      }
+      if (this.s.call?.id === call.id && call.phase === "active" && this.s.connectedAt) {
+        this.wake?.();
+        if (!this.rejoining) void this.rejoin("ws-resume");
+        return;
+      }
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
       if (!g.ok || !g.call) return;
       const role = g.call.callerId === this.meId ? "caller" : "callee";
@@ -376,10 +391,11 @@ export class CallEngine {
       }
       return;
     }
-    if (call.phase === "ended") this.finishLocal(call.outcome ?? "completed", false, call);
+    if (call.phase === "ended") this.finishLocal(call.outcome ?? "completed", false, call, (d as { reason?: string }).reason);
+    else if (call.offline) this.set({ peerReconnecting: call.offline.some((u) => u !== this.meId) });
   };
 
-  private finishLocal(outcome: CallOutcome, quiet: boolean, call: CallInfo | null = this.s.call) {
+  private finishLocal(outcome: CallOutcome, quiet: boolean, call: CallInfo | null = this.s.call, reason?: string) {
     if (!call || !this.busy) return;
     const role = this.s.role;
     const wasIncoming = this.s.ui === "incoming";
@@ -392,8 +408,11 @@ export class CallEngine {
     }
     const dur = this.s.connectedAt ? Math.round((Date.now() - this.s.connectedAt) / 1000) : 0;
     const name = (role === "caller" ? call.callee.name : call.caller.name).split(" ")[0];
+    const lost = reason === "connection_lost" && outcome === "completed";
     const text =
-      outcome === "completed"
+      lost
+        ? `Connection lost · ${fmt(dur)}`
+        : outcome === "completed"
         ? `Call ended · ${fmt(dur)}`
         : outcome === "missed"
           ? "No answer"
@@ -406,7 +425,7 @@ export class CallEngine {
                 : "Call ended";
     if (outcome === "completed") playHangup();
     else if (outcome !== "cancelled") playBusy();
-    this.endWith(call, text, role === "caller" && (outcome === "missed" || outcome === "declined" || outcome === "busy"));
+    this.endWith(call, text, lost || (role === "caller" && (outcome === "missed" || outcome === "declined" || outcome === "busy")));
   }
 
   private endWith(call: CallInfo, text: string, canRetry: boolean) {
@@ -597,23 +616,161 @@ export class CallEngine {
         void p;
         this.setQuality(worst);
       })
-      .on(RoomEvent.Reconnecting, () => this.set({ reconnecting: true }))
-      .on(RoomEvent.Reconnected, () => this.set({ reconnecting: false }))
+      .on(RoomEvent.Reconnecting, () => {
+        this.set({ reconnecting: true });
+        this.netLog("lk-reconnecting");
+      })
+      .on(RoomEvent.Reconnected, () => {
+        this.set({ reconnecting: false });
+        this.netLog("lk-reconnected");
+      })
+      .on(RoomEvent.ParticipantDisconnected, () => this.busy && this.s.ui === "active" && this.set({ peerReconnecting: true }))
+      .on(RoomEvent.ParticipantConnected, () => this.set({ peerReconnecting: false }))
       .on(RoomEvent.AudioPlaybackStatusChanged, () => this.set({ needsGesture: !room.canPlaybackAudio }))
       .on(RoomEvent.Disconnected, () => {
         if (this.room !== room || !this.busy) return;
-        // LiveKit gave up reconnecting: try once more with the same token, else end
-        this.roomPromise = null;
-        this.room = null;
-        this.set({ reconnecting: true });
-        setTimeout(() => {
-          if (!this.busy || this.room) return;
-          void this.connect(true).then((r) => {
-            if (!r && this.busy) void this.hangup();
-            else this.set({ reconnecting: false });
-          });
-        }, 800);
+        // LiveKit's own resume (ICE restart) and full-reconnect attempts are exhausted: rejoin ourselves with a fresh
+        // token, republishing mic/camera, for as long as the server keeps the call (45 s grace) — never hang up here.
+        this.netLog("lk-disconnected");
+        void this.rejoin("lk-disconnected");
       });
+  }
+
+  // ---------- reconnect ----------
+  private rejoining = false;
+  private wake: (() => void) | null = null;
+  /** give up locally only when we can't even reach our server for this long (it ends the call after 45 s) */
+  static LOCAL_GIVEUP_MS = 60_000;
+
+  private netLog(ev: string, extra: Record<string, unknown> = {}) {
+    try {
+      const w = window as unknown as { __olCallNet?: { ev: string; t: number }[] };
+      (w.__olCallNet ??= []).push({ ev, t: Date.now(), ...extra });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Tear down only the media connection (keep the call, its timer and UI); local tracks are re-acquired on rejoin. */
+  private dropMediaForRejoin() {
+    const room = this.room;
+    this.room = null;
+    this.roomPromise = null;
+    if (room) {
+      room.removeAllListeners();
+      void room.disconnect(true).catch(() => {});
+    }
+    void this.preMic?.then((t) => t?.stop());
+    this.preMic = null;
+    this.micTrack?.stop();
+    this.micTrack = null;
+    this.camTrack?.stop();
+    this.camTrack = null;
+    for (const el of this.audioEls) el.remove();
+    this.audioEls = [];
+  }
+
+  /** Rejoin the call's LiveKit room: re-sync with the server (call:get → still on? fresh token), reconnect, republish. */
+  private async rejoin(reason: string) {
+    if (this.rejoining) return;
+    const callId = this.s.call?.id;
+    if (!callId) return;
+    this.rejoining = true;
+    const t0 = Date.now();
+    this.set({ reconnecting: true });
+    this.dropMediaForRejoin();
+    const delays = [300, 1000, 2000, 3000, 5000];
+    let attempt = 0;
+    try {
+      while (this.busy && this.s.call?.id === callId) {
+        const online = typeof navigator === "undefined" || navigator.onLine !== false;
+        if (online) {
+          const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:get", { callId }, 4000).catch(() => null);
+          if (g && (!g.ok || g.call?.phase === "ended")) {
+            // the server ended it (grace ran out / the other side hung up): show the real outcome, no false "missed"
+            const call = g.call ?? this.s.call;
+            if (call) this.finishLocal(g.call?.outcome ?? "completed", false, { ...call, phase: "ended" }, "connection_lost");
+            return;
+          }
+          if (g?.ok && g.call) {
+            if (g.media) this.media = g.media;
+            this.netLog("rejoin-attempt", { attempt, reason });
+            const room = await this.connect(true);
+            if (room && this.room === room) {
+              this.set({ reconnecting: false, call: g.call });
+              this.netLog("rejoined", { ms: Date.now() - t0, attempt });
+              return;
+            }
+            this.dropMediaForRejoin();
+          }
+        }
+        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS) {
+          const call = this.s.call;
+          if (call?.id) void this.req("call:hangup", { callId: call.id }, 3000).catch(() => {});
+          this.teardownMedia();
+          if (call) this.endWith(call, "Call ended · connection lost", true);
+          this.netLog("gave-up", { ms: Date.now() - t0 });
+          return;
+        }
+        await new Promise<void>((r) => {
+          const t = setTimeout(r, delays[Math.min(attempt, delays.length - 1)]);
+          this.wake = () => (clearTimeout(t), r());
+        });
+        this.wake = null;
+        attempt++;
+      }
+    } finally {
+      this.rejoining = false;
+    }
+  }
+
+  private onPeer = (d: { callId: string; userId: string; online: boolean }) => {
+    if (!d || d.callId !== this.s.call?.id || d.userId === this.meId) return;
+    this.set({ peerReconnecting: !d.online });
+    this.netLog(d.online ? "peer-online" : "peer-offline");
+  };
+
+  private netWatched = false;
+  private lastNetType: string | null = null;
+  private netTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Network changes (Wi-Fi ↔ cellular, IP change, offline/online): refresh the media path right away instead of
+   *  waiting for ICE consent to time out. LiveKit resumes with an ICE restart; if it has given up, we rejoin. */
+  private watchNetwork() {
+    if (this.netWatched || typeof window === "undefined") return;
+    this.netWatched = true;
+    const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
+    this.lastNetType = conn?.type ?? null;
+    const refresh = (why: string) => {
+      if (this.netTimer) clearTimeout(this.netTimer);
+      this.netTimer = setTimeout(() => {
+        if (!this.busy || (this.s.ui !== "active" && this.s.ui !== "connecting")) return;
+        this.netLog("net-change", { why });
+        const room = this.room;
+        if (!room) {
+          if (this.rejoining) this.wake?.();
+          else void this.rejoin(why);
+        } else if (room.state === "connected") {
+          // public LiveKit API that performs a real resume: signal reconnect + ICE restart on the new interface
+          void room.simulateScenario("resume-reconnect").catch(() => {});
+        }
+        // reconnecting: LiveKit's own 'online' handler retries immediately
+      }, 800);
+    };
+    window.addEventListener("offline", () => {
+      if (this.busy && this.s.ui === "active") this.set({ reconnecting: true });
+      this.netLog("offline");
+    });
+    window.addEventListener("online", () => {
+      this.netLog("online");
+      if (this.rejoining) this.wake?.();
+      else if (this.busy && this.room?.state === "connected") this.set({ reconnecting: false });
+    });
+    conn?.addEventListener?.("change", () => {
+      const ty = conn.type ?? null;
+      if (ty === this.lastNetType) return; // effectiveType wobble on the same network: ignore
+      this.lastNetType = ty;
+      if (navigator.onLine !== false) refresh(`connection:${ty}`);
+    });
   }
 
   private setQuality(qy: Quality) {
