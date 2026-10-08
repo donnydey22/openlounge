@@ -133,9 +133,27 @@ export class CallEngine {
   };
   snapshot = () => this.s;
   private set(patch: Partial<CallSnapshot>) {
+    const was = this.s.reconnecting;
     this.s = { ...this.s, ...patch, v: this.s.v + 1 };
+    if (this.s.reconnecting !== was) this.armStuckGuard();
     for (const l of this.listeners) l();
   }
+  private stuckTimer: ReturnType<typeof setTimeout> | null = null;
+  /** LiveKit's resume can wedge (seen in Firefox after a long silent loss: "reconnecting" forever, no Disconnected).
+   *  Still reconnecting 20 s later while the network is up → do our own full rejoin with a fresh token. */
+  private armStuckGuard() {
+    if (this.stuckTimer) clearTimeout(this.stuckTimer);
+    this.stuckTimer = null;
+    if (!this.s.reconnecting) return;
+    this.stuckTimer = setTimeout(() => {
+      this.stuckTimer = null;
+      if (!this.s.reconnecting || !this.busy || this.rejoining || this.s.ui !== "active") return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return void this.armStuckGuard();
+      this.netLog("stuck-rejoin");
+      void this.rejoin("stuck");
+    }, CallEngine.STUCK_MS);
+  }
+  static STUCK_MS = 20_000;
   get busy() {
     return this.s.ui !== null && this.s.ui !== "ended";
   }
