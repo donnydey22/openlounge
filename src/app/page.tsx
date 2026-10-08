@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { RoomCard } from "@/components/RoomCard";
 import { SponsoredSlot } from "@/components/sponsored/Sponsored";
+import { FeaturedSponsored } from "@/components/ads/FeaturedSponsored";
 import { CreateRoomSheet } from "@/components/CreateRoomSheet";
 import { useApp } from "@/components/AppProvider";
 import { TOPIC_EMOJI, cn, firstName } from "@/lib/utils";
@@ -51,6 +52,7 @@ export default function HallwayPage() {
           {!roomsLoaded &&
             rooms.length === 0 &&
             [0, 1, 2].map((i) => <div key={i} className="skeleton h-40 rounded-3xl" aria-hidden />)}
+          {roomsLoaded && <FeaturedSponsored placement="hallway" />}
           {visible.map((r) => (
             <RoomCard key={r.id} room={r} highlight={r.speakers.some((s) => following.has(s.id) || s.id === me?.id)} />
           ))}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
+import { AdsAdminNav } from "@/components/ads/AdsAdminNav";
 import { Switch } from "@/components/Switch";
 import { SponsoredCard, type SponsoredAd } from "@/components/sponsored/Sponsored";
 import { authFetch } from "@/lib/auth";
@@ -117,6 +118,7 @@ export default function AdminSponsoredPage() {
     <>
       <TopBar />
       <main className="mx-auto max-w-2xl px-4 pt-6 pb-[calc(6rem+env(safe-area-inset-bottom))]">
+        <AdsAdminNav current="messages" />
         <h1 className="text-2xl font-bold text-zinc-50">Sponsored messages</h1>
         <p className="mt-1 text-sm text-zinc-400">
           Shown at the bottom of the room list and in large groups, at most one per screen, never in 1:1 chats. Nothing about viewers is used to pick them and no views or taps are tracked.

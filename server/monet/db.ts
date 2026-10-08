@@ -1,5 +1,5 @@
 // Tiny persistence layer shared by the monetization modules (Premium, ads, creator accounts).
-// Postgres when DATABASE_URL is set (own small pool, tables from migrations 022+), memory otherwise (local dev/tests).
+// Postgres when DATABASE_URL is set (own small pool, tables from migrations 022+ (premium), 027+ (ads)), memory otherwise (local dev/tests).
 // Each Collection is loaded fully at boot (these tables are small: memberships, campaigns, branding) and written
 // through on every change. Counters (ad stats, analytics) use dedicated upserts.
 import pg from "pg";

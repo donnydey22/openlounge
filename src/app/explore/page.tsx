@@ -9,6 +9,7 @@ import type { PublicUser } from "@/lib/types";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { RoomCard } from "@/components/RoomCard";
+import { FeaturedSponsored } from "@/components/ads/FeaturedSponsored";
 import { UserRow } from "@/components/UserRow";
 
 export default function ExplorePage() {
@@ -93,6 +94,7 @@ export default function ExplorePage() {
               </section>
             )}
 
+            {!needle && <FeaturedSponsored placement="explore" className="mt-6" />}
             <section className="mt-6">
               <h2 className="mb-2 text-sm font-semibold text-zinc-400">{needle ? "People" : "People to follow"}</h2>
               <div className="space-y-0.5">
