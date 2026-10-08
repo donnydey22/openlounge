@@ -77,7 +77,7 @@ export class CreatorService {
     if (opts.sampler !== false && !this.timer) {
       this.timer = setInterval(() => {
         if (this.enabled) void this.sample().catch((e) => console.warn("[creator] sample failed", (e as Error).message));
-      }, 60_000);
+      }, Math.max(5_000, Number(this.env.CREATOR_SAMPLE_MS) || 60_000));
       this.timer.unref?.();
     }
   }
@@ -422,9 +422,9 @@ export class CreatorService {
   }
   private toSession(id: string, title: string, startedAt: number, endedAt: number | null, l: Live, prev: RoomSession | null): RoomSession {
     const lastSample = Math.max(0, ...l.last.values());
-    const ret = (min: number) => {
+    const ret = (min: number): number | null => {
       const eligible = [...l.first].filter(([, f]) => f <= lastSample - min * 60_000);
-      if (!eligible.length) return 0;
+      if (!eligible.length) return null; // nobody has been around long enough to tell yet
       const kept = eligible.filter(([u, f]) => (l.last.get(u) ?? f) - f >= min * 60_000).length;
       return Math.round((kept / eligible.length) * 100) / 100;
     };

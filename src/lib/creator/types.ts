@@ -66,8 +66,8 @@ export interface RoomSession {
   listenerMinutes: number;
   /** concurrency sampled about once a minute: [minutesSinceStart, listeners] (downsampled to ≤240 points) */
   curve: [number, number][];
-  /** share of unique listeners still there at 5/15/30/60 min after they joined */
-  retention: { m5: number; m15: number; m30: number; m60: number };
+  /** share of unique listeners still there at 5/15/30/60 min after they joined (null = too early to tell) */
+  retention: { m5: number | null; m15: number | null; m30: number | null; m60: number | null };
   replays: number;
 }
 

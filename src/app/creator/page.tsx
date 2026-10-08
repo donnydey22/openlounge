@@ -137,7 +137,8 @@ function Spark({ points, h = 40, className }: { points: [number, number][]; h?: 
     </svg>
   );
 }
-const pct = (x: number) => `${Math.round(x * 100)}%`;
+const pct = (x: number | null) => (x === null ? "—" : `${Math.round(x * 100)}%`);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 function Analytics() {
   const { toast } = useApp();
   const [days, setDays] = useState(30);
@@ -200,13 +201,13 @@ function SessionRow({ s }: { s: RoomSession }) {
         <span className="shrink-0 text-xs text-zinc-500">{new Date(s.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {dur} min{s.endedAt ? "" : " · live"}</span>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-4 text-xs text-zinc-400">
-        <span>{s.uniqueListeners} listeners</span><span>peak {s.peak}</span><span>{Math.round(s.listenerMinutes)} listening min</span>{s.replays > 0 && <span>{s.replays} replays</span>}
+        <span>{plural(s.uniqueListeners, "listener")}</span><span>peak {s.peak}</span><span>{Math.round(s.listenerMinutes)} listening min</span>{s.replays > 0 && <span>{plural(s.replays, "replay")}</span>}
       </div>
       <Spark points={s.curve} h={28} className="mt-2 text-sky-400" />
       <div className="mt-2 grid grid-cols-4 gap-1 text-center text-[11px] text-zinc-400">
         {(["m5", "m15", "m30", "m60"] as const).map((k) => (
           <div key={k}>
-            <div className="h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-emerald-400" style={{ width: pct(s.retention[k]) }} /></div>
+            <div className="h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-emerald-400" style={{ width: `${Math.round((s.retention[k] ?? 0) * 100)}%` }} /></div>
             {k.slice(1)}m {pct(s.retention[k])}
           </div>
         ))}

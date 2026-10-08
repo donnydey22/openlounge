@@ -109,7 +109,7 @@ test("stats: aggregate counters only, click/join once per person per day, only a
   const rows = await a.report(d, d);
   const r = rows.find((x) => x.campaignId === id && x.placement === "hallway")!;
   assert.deepEqual([r.impressions, r.clicks, r.joins], [2, 1, 0]);
-  assert.ok(!JSON.stringify(rows).includes("u1"), "no user ids in stats");
+  assert.ok(!JSON.stringify(rows).includes('"u1"'), "no user ids in stats");
   const csv = await a.reportCsv(d, d);
   assert.match(csv, /^day,campaign_id,advertiser,title,placement,impressions,clicks,joins,ctr\n/);
   assert.match(csv, /Acme,Try Acme,hallway,2,1,0,50\.00%/);

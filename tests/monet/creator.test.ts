@@ -159,6 +159,7 @@ test("analytics: sampler records unique listeners, peak, listener-minutes, reten
     assert.equal(s.endedAt, null);
     assert.ok(s.listenerMinutes >= 20 && s.listenerMinutes <= 22, String(s.listenerMinutes));
     assert.equal(s.retention.m5, 0.67, "b left after 2 min");
+    assert.equal(s.retention.m30, null, "too early to tell");
     room.ended = true;
     await c.sample(t0 + 11 * 60_000);
     s = c.sessions.get(room.id)!;
