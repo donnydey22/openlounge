@@ -2308,10 +2308,12 @@ export class Store {
   reactDm(userId: string, peerId: string, messageId: string, rawEmoji: unknown, on: boolean) {
     const emoji = normalizeReactionEmoji(rawEmoji);
     if (!emoji) return { ok: false as const, error: "Pick an emoji" };
-    if (!this.users.has(userId) || !this.users.has(peerId) || userId === peerId) return { ok: false as const, error: "Message not found" };
-    if (this.isBlockedEither(userId, peerId)) return { ok: false as const, blocked: true, error: "You can't react in this conversation." };
+    // groups: any member may react (peerId = the group id); events go to every member (realtime dmReaction)
+    const inGroup = isGroupId(peerId);
+    if (!this.users.has(userId) || userId === peerId || (inGroup ? !this.groups?.canAccess(userId, peerId) : !this.users.has(peerId))) return { ok: false as const, error: "Message not found" };
+    if (!inGroup && this.isBlockedEither(userId, peerId)) return { ok: false as const, blocked: true, error: "You can't react in this conversation." };
     const m = (this.dms.get(conversationId(userId, peerId)) ?? []).find((x) => x.id === messageId);
-    if (!m) return { ok: false as const, error: "Message not found" };
+    if (!m || (inGroup && this.groups?.isService(m.id))) return { ok: false as const, error: "Message not found" };
     if (this.slidingLimit(this.dmReactRate, userId, 10_000, 40)) return { ok: false as const, error: "Slow down a little 🙂" };
     const list: DmReaction[] = m.reactions ?? [];
     const ev = (r: DmReaction): DmReactionEvent => ({ messageId: m.id, fromId: m.fromId, toId: m.toId, userId: r.userId, emoji: r.emoji, at: r.at });

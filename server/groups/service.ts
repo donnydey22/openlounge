@@ -130,6 +130,10 @@ export class GroupService {
     this.byUser.get(userId)?.delete(gid);
     if (this.store.chatPrefs?.get(userId, gid)?.pinnedAt) this.store.chatPrefs.set(userId, gid, { pinnedAt: null }); // a re-join starts unpinned
   }
+  /** group service rows ("Maya added Ryan") take no reactions / pins */
+  isService(messageId: string) {
+    return this.service.has(messageId);
+  }
   member(gid: string, userId: string) {
     return this.members.get(gid)?.get(userId) ?? null;
   }

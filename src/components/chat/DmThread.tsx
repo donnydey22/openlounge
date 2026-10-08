@@ -432,11 +432,12 @@ export function DmThread({
       if (typingTimer.current) clearTimeout(typingTimer.current);
       setPeerTyping(false);
     };
-    const inThreadEv = (ev: DmReactionEvent) => (ev.fromId === peerId && ev.toId === me?.id) || (ev.fromId === me?.id && ev.toId === peerId);
+    const inThreadEv = (ev: DmReactionEvent) =>
+      isGroupId(peerId) ? ev.toId === peerId : (ev.fromId === peerId && ev.toId === me?.id) || (ev.fromId === me?.id && ev.toId === peerId);
     const onReactAdd = (ev: DmReactionEvent) => {
       if (!inThreadEv(ev)) return;
       setMessages((list) => (list ? applyReactionEvent(list, ev, true) : list));
-      if (ev.userId === peerId) {
+      if (isGroupId(peerId) ? ev.userId !== me?.id : ev.userId === peerId) {
         // their reaction lands while I'm looking: chip pops + a burst around it (Telegram plays the effect too)
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
@@ -759,12 +760,11 @@ export function DmThread({
   );
   const onQuickReact = useCallback(
     (m: Item, el: HTMLElement) => {
-      if (isGroup) return;
       const r = el.getBoundingClientRect();
       haptic("medium");
       react(m.id, QUICK_REACTION, { x: r.left + r.width / 2, y: r.top });
     },
-    [react, isGroup],
+    [react],
   );
   const onBigTap = useCallback(
     (m: Item, emoji: string, at: { x: number; y: number }) => {
@@ -783,11 +783,11 @@ export function DmThread({
         mine: m.fromId === meNow?.id,
         myReaction: m.reactions?.find((r) => r.userId === meNow?.id)?.emoji ?? null,
         meta: `${formatDaySeparator(m.createdAt)} ${formatClock(m.createdAt)}`,
-        // reactions are DM-only for now (groups: menu only)
-        canReact: !m.state && !isGroup,
+        // groups too: the server fans group reactions out to every member
+        canReact: !m.state,
       },
     });
-  }, [isGroup]);
+  }, []);
   const takeFlyFrom = useCallback((clientId: string) => {
     const r = flyFrom.current.get(clientId);
     flyFrom.current.delete(clientId);

@@ -321,3 +321,27 @@ test("inbox actions on group rows: pin / unpin / mark read via dm:chat; leave cl
   row = (await B.client.req("conv:list")).items.find((x: any) => x.id === pg);
   assert.ok(row && !row.pinnedAt, "a re-join starts unpinned");
 });
+
+test("reactions in groups: members react through dm:reaction_add, every member hears it; outsiders and service rows refused", async () => {
+  const g = await A.client.req("group:create", { title: "Reacts " + uniq(), memberIds: [id(B), id(C)] });
+  const rg = g.group.id as string;
+  const s = await A.client.req("dm:send", { to: rg, text: "react to me" });
+  assert.equal(s.ok, true);
+  await sleep(100);
+  const r = await B.client.req("dm:reaction_add", { peerId: rg, messageId: s.message.id, emoji: "🔥" });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.reactions.map((x: any) => [x.userId, x.emoji]), [[id(B), "🔥"]]);
+  await sleep(150);
+  for (const who of ["A", "B", "C"]) assert.ok(ev[who].some((e) => e.ev === "dm:reaction_add" && e.data.messageId === s.message.id && e.data.toId === rg), `${who} hears the reaction`);
+  assert.ok(!ev.D.some((e) => e.ev === "dm:reaction_add" && e.data.toId === rg), "non-members hear nothing");
+  const h = await C.client.req("dm:history", { peerId: rg });
+  assert.equal(h.messages.find((m: any) => m.id === s.message.id).reactions[0].emoji, "🔥");
+  const out = await D.client.req("dm:reaction_add", { peerId: rg, messageId: s.message.id, emoji: "👍" });
+  assert.equal(out.ok, false);
+  const svc = h.messages.find((m: any) => m.service);
+  const sr = await B.client.req("dm:reaction_add", { peerId: rg, messageId: svc.id, emoji: "👍" });
+  assert.equal(sr.ok, false, "service messages take no reactions");
+  const off = await B.client.req("dm:reaction_remove", { peerId: rg, messageId: s.message.id, emoji: "🔥" });
+  assert.equal(off.ok, true);
+  assert.equal(off.reactions.length, 0);
+});

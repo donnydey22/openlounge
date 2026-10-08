@@ -243,6 +243,11 @@ export function registerRealtime(io: WsHub) {
     },
     dmReaction(ev, on) {
       // every tab of both participants (the reactor's other devices stay in sync too)
+      if (isGroupId(ev.toId)) {
+        // group message: every member (toId is the group id)
+        for (const id of groups.audience(ev.toId)) io.to(`user:${id}`).emit(on ? "dm:reaction_add" : "dm:reaction_remove", ev);
+        return;
+      }
       io.to(`user:${ev.fromId}`).to(`user:${ev.toId}`).emit(on ? "dm:reaction_add" : "dm:reaction_remove", ev);
     },
   });
