@@ -130,7 +130,7 @@ test("photo: chunked upload, EXIF/GPS stripped, thumb + placeholder, signed URL 
   const full = await fetch(base + urls.full);
   assert.equal(full.status, 200);
   assert.equal(full.headers.get("content-type"), "image/jpeg");
-  assert.match(full.headers.get("cache-control") ?? "", /private/);
+  assert.match(full.headers.get("cache-control") ?? "", /public, max-age=31536000, immutable/);
   const bytes = Buffer.from(await full.arrayBuffer());
   const after = await sharp(bytes).metadata();
   assert.equal(after.exif, undefined, "GPS / camera EXIF must be stripped");
@@ -139,7 +139,7 @@ test("photo: chunked upload, EXIF/GPS stripped, thumb + placeholder, signed URL 
   assert.equal(ranged.status, 206);
   assert.equal((await ranged.arrayBuffer()).byteLength, 100);
   // tampered / other viewer's URL
-  assert.equal((await fetch(base + urls.full.replace(/s=[^&]+/, "s=AAAA"))).status, 403);
+  assert.equal((await fetch(base + urls.full.replace(/&t=[^&]+/, "&t=AAAA"))).status, 403);
   assert.equal((await fetch(base + urls.full.replace(`u=${id(B)}`, `u=${id(C)}`))).status, 403);
   // C isn't in the conversation
   assert.ok((await sign(C, m.id)).gone);
@@ -222,8 +222,11 @@ test("video: H.264 remuxed with faststart and no location metadata; VP9 transcod
   await sendMedia(A, B, wm.id);
   // while processing, the original is what "full" resolves to
   assert.ok((await sign(B, wm.id, ["full"])).full.includes("/original"));
+  // "ready" now arrives as soon as the 240p HLS rung is playable; the MP4 fallback follows
   const upd = await waitFor(() => events[id(B)].find((e) => e.ev === "media:update" && e.data.media.id === wm.id && e.data.media.status === "ready"), 30_000);
   assert.equal(upd.data.media.mime, "video/mp4");
+  assert.deepEqual(upd.data.media.hls, [240]);
+  await waitFor(async () => ((await sign(B, wm.id, ["full"])).full.includes("/full") ? true : null), 30_000);
   const fu = await sign(B, wm.id, ["full"]);
   assert.ok(fu.full.includes("/full"));
   fs.writeFileSync(f("vp9-out.mp4"), Buffer.from(await (await fetch(base + fu.full)).arrayBuffer()));
@@ -418,3 +421,110 @@ async function waitFor<T>(fn: () => T | undefined | null | false | Promise<T | u
     await sleep(100);
   }
 }
+
+test("adaptive video: 240p first then the full ladder; master/rendition playlists, fMP4 segments, cache headers, tokens", async () => {
+  const v = await upload(A, f("hd.mp4"), "video", { chunk: 512 * 1024 });
+  const m = v.done!.data.media;
+  assert.equal(m.status, "ready"); // H.264 → faststart MP4 right away
+  await sendMedia(A, B, m.id);
+  const first = await waitFor(() => events[id(B)].find((e) => e.ev === "media:update" && e.data.media.id === m.id && e.data.media.hls?.length === 1), 60_000);
+  assert.deepEqual(first.data.media.hls, [240]);
+  const full = await waitFor(() => events[id(B)].find((e) => e.ev === "media:update" && e.data.media.id === m.id && e.data.media.hls?.length === 4), 120_000);
+  assert.deepEqual(full.data.media.hls, [240, 360, 480, 720]);
+
+  const urls = await sign(B, m.id, ["hls", "hlsLow", "full", "poster"]);
+  assert.match(urls.hls, /^\/media\/[0-9a-f]+\/v\d+\/hls\/master\.m3u8\?exp=\d+&p=%2Fmedia%2F[0-9a-f]+%2Fv\d+%2F&u=[^&]+&t=[\w-]+$/);
+  // master: CODECS/RESOLUTION/BANDWIDTH, 360p first (native start), every URI carries the token query; final → immutable
+  const mr = await fetch(base + urls.hls, { headers: { "accept-encoding": "identity" } });
+  assert.equal(mr.status, 200);
+  assert.equal(mr.headers.get("content-type"), "application/vnd.apple.mpegurl");
+  assert.equal(mr.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.equal(mr.headers.get("access-control-allow-origin"), "*");
+  const master = await mr.text();
+  assert.match(master, /#EXT-X-STREAM-INF:BANDWIDTH=\d+,AVERAGE-BANDWIDTH=\d+,RESOLUTION=640x360,CODECS="avc1\.4d401f,mp4a\.40\.2"/);
+  assert.match(master, /RESOLUTION=1280x720,CODECS="avc1\.64001f,mp4a\.40\.2"/);
+  const q = urls.hls.split("?")[1];
+  const uris = master.split("\n").filter((l) => l && !l.startsWith("#"));
+  assert.equal(uris[0], `r360/index.m3u8?${q}`);
+  assert.equal(uris.length, 4);
+  const low = await (await fetch(base + urls.hlsLow)).text();
+  assert.ok(low.split("\n").find((l) => l && !l.startsWith("#"))!.startsWith("r240/"));
+  // rendition playlist: short first segment, ~4 s after, init + segments with the token
+  const prefix = urls.hls.split("?")[0].replace(/master\.m3u8$/, "");
+  const pl = await fetch(`${base}${prefix}r240/index.m3u8?${q}`);
+  assert.equal(pl.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  const plText = await pl.text();
+  assert.match(plText, new RegExp(`#EXT-X-MAP:URI="init\\.mp4\\?${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  const durs = [...plText.matchAll(/#EXTINF:([\d.]+)/g)].map((x) => Number(x[1]));
+  assert.ok(durs[0] <= 2.1 && durs[1] >= 3.9, durs.join(","));
+  const seg = await fetch(`${base}${prefix}r240/seg_00001.m4s?${q}`, { headers: { range: "bytes=0-99" } });
+  assert.equal(seg.status, 206);
+  assert.equal(seg.headers.get("content-type"), "video/iso.segment");
+  assert.equal(seg.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.match(seg.headers.get("content-range") ?? "", /^bytes 0-99\/\d+$/);
+  const init = await fetch(`${base}${prefix}r720/init.mp4?${q}`);
+  assert.equal(init.headers.get("content-type"), "video/mp4");
+  // gzip for playlists only
+  const gz = await fetch(base + urls.hls, { headers: { "accept-encoding": "gzip" } });
+  assert.equal(gz.headers.get("vary"), "Accept-Encoding");
+  // one token covers the directory, but not another media, not a tampered uid, not after expiry
+  assert.equal((await fetch(base + urls.poster)).headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.equal((await fetch(`${base}${prefix}r240/index.m3u8?${q.replace(/&u=[^&]+/, `&u=${id(C)}`)}`)).status, 403);
+  assert.equal((await fetch(`${base}${prefix}r240/index.m3u8?${q.replace(/&t=[\w-]+/, "&t=AAAA")}`)).status, 403);
+  assert.equal((await fetch(`${base}${prefix}../../x?${q}`)).status, 404);
+  assert.equal((await fetch(`${base}${prefix}r240/index.m3u8`)).status, 403);
+  // a signed link for a non-member (valid token, no access) → 404 at the origin
+  const { signedUrl } = await import("../../server/media/origin");
+  const rev = Number(/\/v(\d+)\//.exec(prefix)![1]);
+  const cUrl = signedUrl(m.id, rev, "hls/master.m3u8", id(C), Math.floor(Date.now() / 1000) + 60, { origin: true });
+  assert.equal((await fetch(base + cUrl)).status, 404);
+  const expired = signedUrl(m.id, rev, "hls/master.m3u8", id(B), Math.floor(Date.now() / 1000) - 5, { origin: true });
+  assert.equal((await fetch(base + expired)).status, 403);
+  // CORS preflight + health
+  const pre = await fetch(base + urls.hls, { method: "OPTIONS" });
+  assert.equal(pre.status, 204);
+  assert.match(pre.headers.get("access-control-allow-headers") ?? "", /Range/);
+  const hz = (await (await fetch(`${base}/media/healthz`)).json()) as any;
+  assert.equal(hz.ok, true);
+
+  // internal origin (cache service side): same token rules, raw playlists (no rewrite, no gzip)
+  const { handleMediaOrigin } = await import("../../server/media/origin");
+  const internal = http.createServer((req, res) => void handleMediaOrigin(req, res, { internal: true }));
+  await new Promise<void>((r) => internal.listen(0, "127.0.0.1", r));
+  const ib = `http://127.0.0.1:${(internal.address() as AddressInfo).port}`;
+  const raw = await (await fetch(ib + urls.hls, { headers: { "accept-encoding": "gzip" } })).text();
+  assert.ok(raw.includes("\nr360/index.m3u8\n"), raw);
+  assert.equal((await fetch(ib + urls.hls.split("?")[0])).status, 403);
+  internal.close();
+
+  // purge hook: deleting the media tells the cache to drop /media/<id>/
+  const got: any[] = [];
+  const purge = http.createServer((req, res) => {
+    let b = "";
+    req.on("data", (d) => (b += d));
+    req.on("end", () => (got.push({ auth: req.headers.authorization, body: JSON.parse(b) }), res.writeHead(204).end()));
+  });
+  await new Promise<void>((r) => purge.listen(0, "127.0.0.1", r));
+  process.env.MEDIA_CACHE_PURGE_URL = `http://127.0.0.1:${(purge.address() as AddressInfo).port}/_purge`;
+  process.env.MEDIA_CACHE_PURGE_SECRET = "purge-test";
+  const del = await api(base, `/api/media/${m.id}/delete`, { all: true }, { token: tok(A) });
+  assert.equal(del.status, 200);
+  await waitFor(() => got.length > 0, 5000);
+  assert.deepEqual(got[0], { auth: "Bearer purge-test", body: { prefixes: [`/media/${m.id}/`] } });
+  delete process.env.MEDIA_CACHE_PURGE_URL;
+  purge.close();
+  assert.equal((await fetch(base + urls.hls)).status, 404);
+});
+
+test("photos get srcset thumbnails (320 WebP, 640/320 AVIF) on the same signed directory", async () => {
+  const p = await upload(A, f("gps.jpg"), "photo");
+  const m = p.done!.data.media;
+  assert.equal(m.srcset, true);
+  await sendMedia(A, B, m.id);
+  const u = await sign(B, m.id, ["thumb", "thumbS", "thumbAvif", "thumbSAvif"]);
+  for (const [k, type] of [["thumbS", "image/webp"], ["thumbAvif", "image/avif"], ["thumbSAvif", "image/avif"]] as const) {
+    const r = await fetch(base + u[k]);
+    assert.equal(r.status, 200, k);
+    assert.equal(r.headers.get("content-type"), type);
+  }
+});

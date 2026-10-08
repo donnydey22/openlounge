@@ -46,7 +46,12 @@ import {
   UPLOADS_PER_10MIN,
   URL_TTL_S,
   URL_WINDOW_S,
+  HLS_ENABLED,
+  HLS_MAX_MS,
+  HLS_URL_EXTRA_S,
 } from "./config";
+import { configureOrigin, purgeCache, signedUrl, startInternalOrigin, setFallbackSecret, type OriginFile } from "./origin";
+import { encodeRungs, hlsQueue, ladderFor, probe as probeVideo, rungInfo, writeMasters, type RungInfo } from "./hls";
 import { INLINE_SAFE, safeName, sniff } from "./sniff";
 import { MediaError, ffmpegAvailable, gifFrames, processImage, processVideo, processVoice, transcodeVideo, placeholderFrom } from "./process";
 import { MemoryMediaRepo, PgMediaRepo, type MediaRepo, type MediaRow, type Tombstone } from "./repo";
@@ -67,7 +72,10 @@ interface UploadSession {
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
-const VARIANTS: MediaVariant[] = ["full", "thumb", "poster", "original"];
+const VARIANTS: MediaVariant[] = ["full", "thumb", "poster", "original", "hls", "hlsLow", "thumbS", "thumbAvif", "thumbSAvif"];
+const HLS_PATH_RE = /^hls\/r(\d{2,4})\/(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$/;
+const HLS_MIME = "application/vnd.apple.mpegurl";
+const IMMUTABLE = "public, max-age=31536000, immutable";
 
 export class MediaService {
   repo: MediaRepo | null = null;
@@ -92,6 +100,8 @@ export class MediaService {
 
   attachHub(hub: Hub) {
     this.hub = hub;
+    // origin-only port for the self-hosted media cache (Railway private networking)
+    startInternalOrigin();
   }
 
   ready() {
@@ -102,6 +112,11 @@ export class MediaService {
     fs.mkdirSync(TMP_DIR, { recursive: true });
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
     this.secret = this.loadSecret();
+    setFallbackSecret(this.secret);
+    configureOrigin(
+      (uid, id, rev, rest) => this.originFile(uid, id, rev, rest),
+      () => ({ ffmpeg: this.ffmpeg, queue: hlsQueue.depth, ...this.disk() }),
+    );
     this.ffmpeg = await ffmpegAvailable();
     const url = process.env.DATABASE_URL;
     this.repo = url ? new PgMediaRepo(url) : new MemoryMediaRepo();
@@ -116,6 +131,8 @@ export class MediaService {
       this.rows.set(r.id, r);
       this.link(r);
     }
+    // ladders interrupted by a deploy/restart: redo them in the background (new rev → fresh URLs)
+    for (const r of rows) if (this.wantsHls(r) && !r.files.hls?.final && r.status !== "failed") void this.buildHls(r, { restart: true }).catch(() => {});
     for (const [mid, ids] of this.byMessage) {
       const first = this.rows.get(ids[0]);
       const m = first?.conversationId ? store.findDm(first.conversationId, mid) : null;
@@ -215,6 +232,8 @@ export class MediaService {
       status: r.status,
       ...(r.files.thumb ? { thumb: true } : {}),
       ...(r.files.poster ? { poster: true } : {}),
+      ...(r.files.hls?.rungs?.length ? { hls: r.files.hls.rungs } : {}),
+      ...(r.files.thumbS ? { srcset: true } : {}),
       label: r.label,
       ...(r.ttlSeconds ? { ttl: r.ttlSeconds } : {}),
       ...(r.viewOnce ? { viewOnce: true } : {}),
@@ -288,6 +307,12 @@ export class MediaService {
   }
 
   // ---------- uploads ----------
+
+  /** Delete a media folder and tell the media cache to drop it (no-op without MEDIA_CACHE_PURGE_URL). */
+  private removeFiles(id: string) {
+    fs.rmSync(this.dirOf(id), { recursive: true, force: true });
+    purgeCache([`/media/${id}/`]);
+  }
 
   private dirOf(id: string) {
     return path.join(MEDIA_DIR, id.slice(0, 2), id);
@@ -475,6 +500,7 @@ export class MediaService {
         createdAt: now,
         sentAt: null,
         position: 0,
+        rev: 1,
       };
       const t0 = Date.now();
       await this.process(row, src, dir, sn.mime, sn.family);
@@ -483,6 +509,7 @@ export class MediaService {
       this.rows.set(row.id, row);
       await this.repo!.insert(row);
       if (row.status === "processing") void this.finishVideo(row).catch(() => {});
+      else if (this.wantsHls(row)) void this.buildHls(row).catch(() => {});
       return { status: 200, body: { ok: true, media: this.toAttachment(row) } };
     } catch (e) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -490,6 +517,16 @@ export class MediaService {
     } finally {
       this.busy.delete(id);
     }
+  }
+
+  /** srcset thumbnails when they were made (AVIF can fail on odd inputs: WebP alone is fine) */
+  private extraThumbs(dir: string) {
+    const out: Record<string, { file: string; mime: string; size: number }> = {};
+    const add = (k: string, file: string, mime: string) => fs.existsSync(path.join(dir, file)) && (out[k] = this.fileEntry(dir, file, mime));
+    add("thumbS", "thumb-320.webp", "image/webp");
+    add("thumbAvif", "thumb-640.avif", "image/avif");
+    add("thumbSAvif", "thumb-320.avif", "image/avif");
+    return out;
   }
 
   private fileEntry(dir: string, file: string, mime: string) {
@@ -524,7 +561,7 @@ export class MediaService {
         width: out.width,
         height: out.height,
         placeholder: out.placeholder,
-        files: { full: this.fileEntry(dir, `full.${out.ext}`, out.mime), thumb: this.fileEntry(dir, "thumb.webp", "image/webp") },
+        files: { full: this.fileEntry(dir, `full.${out.ext}`, out.mime), thumb: this.fileEntry(dir, "thumb.webp", "image/webp"), ...this.extraThumbs(dir) },
       });
       return;
     }
@@ -574,6 +611,9 @@ export class MediaService {
     if (!orig) return;
     const dir = this.dirOf(row.id);
     try {
+      // playable early: the 240p rung comes first, then the rest of the ladder, then the MP4 fallback
+      if (this.wantsHls(row)) await this.buildHls(row).catch(() => {});
+      if (!this.rows.has(row.id)) return;
       const out = await transcodeVideo(path.join(dir, orig.file), dir, { gif: row.gif });
       if (!this.rows.has(row.id)) return fs.rmSync(dir, { recursive: true, force: true }); // expired/deleted meanwhile
       fs.rmSync(path.join(dir, orig.file), { force: true });
@@ -667,6 +707,21 @@ export class MediaService {
     return `/api/media/f/${id}/${variant}?u=${encodeURIComponent(viewer)}&e=${exp}&s=${this.sig(id, variant, viewer, exp)}${opts.dl ? "&dl=1" : ""}`;
   }
 
+  /** Link lifetime: timer/view-once media exact + short; videos cover the clip + 15 min; rounded so URLs repeat. */
+  private expFor(r: MediaRow, now = Date.now()) {
+    const nowS = Math.floor(now / 1000);
+    if (r.expiresAt || r.viewOnce) return nowS + URL_TTL_S;
+    const ttl = r.kind === "video" ? Math.max(URL_TTL_S, Math.ceil((r.durationMs ?? 0) / 1000) + HLS_URL_EXTRA_S) : URL_TTL_S;
+    return Math.ceil((nowS + ttl) / URL_WINDOW_S) * URL_WINDOW_S;
+  }
+
+  /** Signed `/media/<id>/v<rev>/<file>` URL (MEDIA_CDN_BASE unless the media is private-by-time). */
+  private fileUrl(r: MediaRow, variant: string, viewerId: string, now = Date.now(), opts: { dl?: boolean } = {}) {
+    const f = r.files[variant];
+    if (!f) return null;
+    return signedUrl(r.id, r.rev ?? 1, f.file, viewerId, this.expFor(r, now), { origin: !!(r.expiresAt || r.viewOnce), dl: opts.dl });
+  }
+
   /** Signed URLs for the variants the viewer may load now. View-once full files only come from open(). */
   sign(viewerId: string, items: unknown) {
     const out: Record<string, Partial<Record<MediaVariant, string>> & { gone?: boolean }> = {};
@@ -687,11 +742,128 @@ export class MediaService {
         if (variant === "full" && !r.files.full && r.files.original) variant = "original"; // still processing
         if (!r.files[variant]) continue;
         if (r.viewOnce) continue; // view once: nothing loads until the recipient opens it
-        urls[v as MediaVariant] = this.url(id, variant, viewerId, now, { exact: !!r.expiresAt });
+        const u = this.fileUrl(r, variant, viewerId, now);
+        if (u) urls[v as MediaVariant] = u;
       }
       out[id] = urls;
     }
     return { urls: out };
+  }
+
+  /** Resolve a verified /media/<id>/v<rev>/<rest> request (contract §2/§4). Access is re-checked every time. */
+  originFile(uid: string, id: string, rev: number, rest: string): OriginFile | { status: 404 | 403 } {
+    const r = ID_RE.test(id) ? this.rows.get(id) : undefined;
+    if (!r || (r.rev ?? 1) !== rev || !this.canView(uid, r)) return { status: 404 };
+    if (r.viewOnce && !(uid !== r.ownerId && r.openedAt)) return { status: 404 };
+    const timed = !!(r.expiresAt || r.viewOnce);
+    const dir = this.dirOf(id);
+    const hls = HLS_PATH_RE.exec(rest);
+    if (hls) {
+      if (timed || !r.files.hls?.rungs?.includes(Number(hls[1]))) return { status: 404 };
+      const file = path.join(dir, rest);
+      if (hls[2] === "index.m3u8") {
+        let ended = false;
+        try {
+          ended = fs.readFileSync(file, "utf8").includes("#EXT-X-ENDLIST");
+        } catch {
+          return { status: 404 };
+        }
+        return { file, mime: HLS_MIME, playlist: true, cache: ended ? IMMUTABLE : "public, max-age=5, stale-while-revalidate=5" };
+      }
+      return { file, mime: hls[2] === "init.mp4" ? "video/mp4" : "video/iso.segment", cache: IMMUTABLE };
+    }
+    const entry = Object.entries(r.files).find(([, f]) => f.file === rest);
+    if (!entry) return { status: 404 };
+    const [variant, f] = entry;
+    if (r.viewOnce && variant !== "full" && variant !== "original" && variant !== "poster") return { status: 404 };
+    if (variant === "hls" || variant === "hlsLow") {
+      if (timed) return { status: 404 };
+      return { file: path.join(dir, f.file), mime: HLS_MIME, playlist: true, cache: r.files.hls?.final ? IMMUTABLE : "public, max-age=10, stale-while-revalidate=10" };
+    }
+    const inlineOk = INLINE_SAFE.has(f.mime) || f.mime === "image/webp" || f.mime === "image/avif" || f.mime === "video/webm" || f.mime === "video/quicktime";
+    const name = r.name || `${r.kind}-${id.slice(0, 8)}.${f.file.split(".").pop()}`;
+    const dl = !inlineOk || (r.kind === "document" && !(f.mime === "application/pdf" || f.mime.startsWith("image/")) && variant === "full");
+    return {
+      file: path.join(dir, f.file),
+      mime: inlineOk ? f.mime : "application/octet-stream",
+      cache: timed ? "no-store" : IMMUTABLE,
+      disposition: `${dl ? "attachment" : "inline"}; filename="${name.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "'")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    };
+  }
+
+  // ---------- adaptive video (HLS ladder) ----------
+
+  private wantsHls(r: MediaRow) {
+    return HLS_ENABLED && this.ffmpeg && r.kind === "video" && !r.gif && !r.viewOnce && (r.durationMs ?? 0) > 0 && (r.durationMs ?? 0) <= HLS_MAX_MS;
+  }
+
+  /**
+   * Build the ladder on the background queue: 240p alone first (playable early; status flips to ready for videos
+   * that were still transcoding), then every higher rung in one multi-output pass, then the final masters.
+   */
+  async buildHls(row: MediaRow, opts: { restart?: boolean } = {}) {
+    return hlsQueue.run(async () => {
+      if (!this.rows.has(row.id) || row.files.hls?.final) return;
+      const dir = this.dirOf(row.id);
+      const srcFile = row.files.full?.file ?? row.files.original?.file;
+      if (!srcFile) return;
+      const src = path.join(dir, srcFile);
+      const hlsDir = path.join(dir, "hls");
+      const t0 = Date.now();
+      try {
+        if (opts.restart || fs.existsSync(hlsDir)) {
+          fs.rmSync(hlsDir, { recursive: true, force: true });
+          if (row.files.hls) {
+            // something was already published under this rev: move to a new one so caches never mix versions
+            row.rev = (row.rev ?? 1) + 1;
+            const files = { ...row.files };
+            delete files.hls;
+            delete files.hlsLow;
+            row.files = files;
+            await this.repo!.update(row.id, { rev: row.rev, files: row.files });
+          }
+        }
+        fs.mkdirSync(hlsDir, { recursive: true });
+        const p = await probeVideo(src);
+        if (!p.video) return;
+        const ladder = ladderFor(p);
+        const done: RungInfo[] = [];
+        const publishRungs = async (final: boolean) => {
+          if (!this.rows.has(row.id)) throw new Error("gone");
+          writeMasters(hlsDir, done);
+          const rungs = done.map((x) => x.r).sort((a, b) => a - b);
+          const files = {
+            ...row.files,
+            hls: { ...this.fileEntry(dir, "hls/master.m3u8", HLS_MIME), rungs, final },
+            hlsLow: { ...this.fileEntry(dir, "hls/master-low.m3u8", HLS_MIME), rungs, final },
+          };
+          const patch: Partial<MediaRow> = { files };
+          if (row.status === "processing") patch.status = "ready";
+          Object.assign(row, patch);
+          await this.repo!.update(row.id, patch);
+          this.publish(row);
+        };
+        await encodeRungs(src, hlsDir, [ladder[0]], p);
+        done.push(await rungInfo(hlsDir, ladder[0], !!p.audio));
+        await publishRungs(ladder.length === 1);
+        log.info("media hls first rung", { id: row.id, rung: ladder[0], ms: Date.now() - t0 });
+        if (ladder.length > 1) {
+          await encodeRungs(src, hlsDir, ladder.slice(1), p);
+          for (const r of ladder.slice(1)) done.push(await rungInfo(hlsDir, r, !!p.audio));
+          await publishRungs(true);
+        }
+        metrics.inc("media_hls_ready_total");
+        log.info("media hls ready", { id: row.id, rungs: done.map((x) => x.r), ms: Date.now() - t0, durMs: p.durationMs });
+      } catch (err) {
+        if (!this.rows.has(row.id)) return void fs.rmSync(hlsDir, { recursive: true, force: true });
+        log.warn("media hls failed", { id: row.id, err: String(err).slice(0, 400) });
+        // keep what's playable; mark the ladder final so it isn't retried forever
+        if (row.files.hls) {
+          row.files = { ...row.files, hls: { ...row.files.hls, final: true }, ...(row.files.hlsLow ? { hlsLow: { ...row.files.hlsLow, final: true } } : {}) };
+          await this.repo!.update(row.id, { files: row.files }).catch(() => {});
+        }
+      }
+    });
   }
 
   // ---------- file serving ----------
@@ -784,8 +956,8 @@ export class MediaService {
     }
     const variant = r.files.full ? "full" : r.files.original ? "original" : null;
     if (!variant) throw new MediaError("Still processing. Try again in a moment.", 409);
-    const urls: Partial<Record<MediaVariant, string>> = { full: this.url(id, variant, viewerId, now, { exact: true }) };
-    if (r.files.poster) urls.poster = this.url(id, "poster", viewerId, now, { exact: true });
+    const urls: Partial<Record<MediaVariant, string>> = { full: this.fileUrl(r, variant, viewerId, now)! };
+    if (r.files.poster) urls.poster = this.fileUrl(r, "poster", viewerId, now)!;
     return { urls };
   }
 
@@ -851,7 +1023,7 @@ export class MediaService {
     this.rows.delete(r.id);
     clearTimeout(this.timers.get(r.id));
     this.timers.delete(r.id);
-    fs.rmSync(this.dirOf(r.id), { recursive: true, force: true });
+    this.removeFiles(r.id);
     await this.repo!.remove(r.id).catch((err) => log.error("media row delete failed", { id: r.id, err }));
     metrics.inc(`media_gone_${reason}_total`);
     if (!r.messageId) return;
@@ -890,13 +1062,13 @@ export class MediaService {
         // message deleted for everyone / trimmed from history: no tombstone needed, the bubble is gone
         this.rows.delete(r.id);
         this.unlink(r);
-        fs.rmSync(this.dirOf(r.id), { recursive: true, force: true });
+        this.removeFiles(r.id);
         await this.repo!.remove(r.id).catch(() => {});
         continue;
       }
       if (!r.messageId && now - r.createdAt > UNSENT_TTL_MS) {
         this.rows.delete(r.id);
-        fs.rmSync(this.dirOf(r.id), { recursive: true, force: true });
+        this.removeFiles(r.id);
         await this.repo!.remove(r.id).catch(() => {});
       }
     }
@@ -918,7 +1090,7 @@ export class MediaService {
       this.rows.delete(r.id);
       clearTimeout(this.timers.get(r.id));
       this.timers.delete(r.id);
-      fs.rmSync(this.dirOf(r.id), { recursive: true, force: true });
+      this.removeFiles(r.id);
       await this.repo!.remove(r.id).catch(() => {});
     }
     this.byMessage.delete(messageId);

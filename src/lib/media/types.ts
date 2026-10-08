@@ -30,7 +30,7 @@ export type MediaStatus = "processing" | "ready" | "failed";
 export type MediaGoneReason = "expired" | "viewed" | "deleted";
 
 /** Signed-URL variants a client can ask for. */
-export type MediaVariant = "full" | "thumb" | "poster" | "original";
+export type MediaVariant = "full" | "thumb" | "poster" | "original" | "hls" | "hlsLow" | "thumbS" | "thumbAvif" | "thumbSAvif";
 
 export interface MediaAttachment {
   id: string;
@@ -54,6 +54,10 @@ export interface MediaAttachment {
   /** which variants exist (thumb for photos/videos/image documents, poster for videos) */
   thumb?: boolean;
   poster?: boolean;
+  /** adaptive video: HLS rungs available so far (short edge px, e.g. [240, 360]); absent → MP4 only */
+  hls?: number[];
+  /** photos: responsive thumbnails exist (thumbS 320 WebP, thumbAvif 640 / thumbSAvif 320 AVIF) */
+  srcset?: boolean;
   /** the message text is the auto label ("📷 Photo"), not a caption the sender typed */
   label?: boolean;
   /** self-destruct */

@@ -148,6 +148,11 @@ export async function processImage(src: string, outDir: string, sniffedMime: str
     const ext = alpha ? "webp" : "jpg";
     const info = await full.toFile(path.join(outDir, `full.${ext}`));
     await sharp(path.join(outDir, `full.${ext}`)).resize(THUMB_MAX_EDGE, THUMB_MAX_EDGE, { fit: "inside", withoutEnlargement: true }).webp({ quality: 72 }).toFile(path.join(outDir, "thumb.webp"));
+    // responsive thumbnails for srcset: 320 WebP + 640/320 AVIF (smaller bytes on slow networks; WebP is the fallback)
+    const small = (w: number) => sharp(path.join(outDir, "thumb.webp")).resize(w, w, { fit: "inside", withoutEnlargement: true });
+    await small(THUMB_MAX_EDGE / 2).webp({ quality: 68 }).toFile(path.join(outDir, "thumb-320.webp"));
+    await small(THUMB_MAX_EDGE).avif({ quality: 50, effort: 2 }).toFile(path.join(outDir, "thumb-640.avif")).catch(() => null);
+    await small(THUMB_MAX_EDGE / 2).avif({ quality: 48, effort: 2 }).toFile(path.join(outDir, "thumb-320.avif")).catch(() => null);
     const placeholder = await placeholderFrom(path.join(outDir, "thumb.webp"));
     if (input !== src) fs.rmSync(input, { force: true });
     return { width: info.width, height: info.height, mime: alpha ? "image/webp" : "image/jpeg", ext, placeholder, thumb: true };

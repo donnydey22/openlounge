@@ -18,6 +18,7 @@ export async function makeFixtures() {
   await sharp({ create: { width: 300, height: 200, channels: 4, background: { r: 0, g: 128, b: 255, alpha: 0.5 } } }).png().toFile(f("alpha.png"));
   ff("-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=1", "-vf", "split[a][b];[a]palettegen[p];[b][p]paletteuse", f("anim.gif"));
   ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-metadata", "location=+33.4484-112.0740/", "-shortest", f("h264.mp4"));
+  ff("-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=9", "-f", "lavfi", "-i", "sine=frequency=330:duration=9", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", f("hd.mp4"));
   ff("-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=1", "-c:v", "libvpx-vp9", "-b:v", "200k", f("vp9.webm"));
   ff("-f", "lavfi", "-i", "sine=frequency=300:duration=2", "-c:a", "libopus", "-b:a", "32k", f("voice.webm"));
   ff("-f", "lavfi", "-i", "sine=frequency=500:duration=1.5", "-c:a", "aac", "-b:a", "64k", "-f", "mp4", f("voice-safari.mp4"));

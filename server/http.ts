@@ -15,11 +15,12 @@ import { clearRefreshCookie, deviceLabel, originAllowed, readRefreshCookie, refr
 import { UNIFIED_AUTH_PATH, handleAuthApi, handleNavigation, isNavigationRoute } from "./authx/routes";
 import { handleLiveKitWebhook } from "./livekitWebhook";
 import { handleMediaApi } from "./media/http";
+import { handleMediaOrigin } from "./media/origin";
 
 /** Requests answered by api() instead of Next.js. */
 export function isApiRequest(url: string) {
   const path = url.split("?")[0];
-  return path.startsWith("/api/") || /^\/auth\/(validate|refresh|logout)$/.test(path) || UNIFIED_AUTH_PATH.test(path);
+  return path.startsWith("/api/") || path.startsWith("/media/") || /^\/auth\/(validate|refresh|logout)$/.test(path) || UNIFIED_AUTH_PATH.test(path);
 }
 
 export function json(res: ServerResponse, status: number, body: unknown) {
@@ -77,6 +78,8 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   if (isNavigationRoute(url)) return handleNavigation(req, res, url, new URLSearchParams((req.url ?? "").split("?")[1] ?? ""));
   // LiveKit server → us (server-to-server, signed JWT over the body; no browser CORS involved)
   if (url === "/api/livekit/webhook" && req.method === "POST") return handleLiveKitWebhook(req, res);
+  // signed media files for the self-hosted media cache contract (own CORS: *, tokens in the query)
+  if (url.startsWith("/media/")) return handleMediaOrigin(req, res, { internal: false });
   if (!cors(req, res)) return;
   if (url.startsWith("/api/groups/") && (await handleGroupsApi(req, res, url))) return;
   // photos / videos / documents / voice notes: uploads, signed file URLs, view once, delete now (server/media)

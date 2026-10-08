@@ -62,6 +62,9 @@ export function buildCsp(env: Record<string, string | undefined> = process.env, 
     d["frame-src"].push("https://*.paypal.com", "https://pay.google.com");
     d["img-src"].push("https://*.paypal.com", "https://*.paypalobjects.com");
   }
+  // self-hosted media cache (MEDIA_CDN_BASE): photos/videos/HLS come from its origin
+  const mediaCdn = hostOf(env.MEDIA_CDN_BASE) ? new URL(env.MEDIA_CDN_BASE!).origin : "";
+  if (mediaCdn) for (const k of ["img-src", "media-src", "connect-src"]) d[k].push(mediaCdn);
   // upgrade-insecure-requests is ignored (with a console error) when delivered in a report-only policy
   if (!dev && env.CSP_REPORT_ONLY !== "1") d["upgrade-insecure-requests"] = [];
   // a report-only policy without a reporting endpoint makes WebKit log an error on every page; /csp-report is a 204 sink

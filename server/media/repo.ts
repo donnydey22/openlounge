@@ -7,6 +7,9 @@ export interface MediaFile {
   file: string;
   mime: string;
   size: number;
+  /** HLS master entries: rungs available so far (short edge) and whether the ladder is complete */
+  rungs?: number[];
+  final?: boolean;
 }
 
 export interface MediaRow {
@@ -36,6 +39,8 @@ export interface MediaRow {
   sentAt: number | null;
   /** order inside an album (0 for single attachments) */
   position: number;
+  /** URL version: bumped when a file is regenerated, so cached URLs never go stale (contract §2) */
+  rev: number;
 }
 
 export interface Tombstone {
@@ -87,6 +92,7 @@ const COLS: [keyof MediaRow, string][] = [
   ["createdAt", "created_at"],
   ["sentAt", "sent_at"],
   ["position", "position"],
+  ["rev", "rev"],
 ];
 const colOf = new Map(COLS);
 const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
@@ -118,6 +124,7 @@ function fromRow(r: Record<string, unknown>): MediaRow {
     createdAt: Number(r.created_at),
     sentAt: n(r.sent_at),
     position: Number(r.position ?? 0),
+    rev: Number(r.rev ?? 1) || 1,
   };
 }
 

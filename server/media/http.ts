@@ -12,7 +12,7 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 };
 const bearer = (req: IncomingMessage) => (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
 
-export const isMediaFileRequest = (path: string) => path.startsWith("/api/media/f/");
+export const isMediaFileRequest = (path: string) => path.startsWith("/api/media/f/") || path.startsWith("/media/");
 
 export async function handleMediaApi(req: IncomingMessage, res: ServerResponse, url: string) {
   await media.ready();
