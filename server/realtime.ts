@@ -241,6 +241,15 @@ export function registerRealtime(io: WsHub) {
       // new event (old clients ignore it): my other devices pin / drop the row
       io.to(`user:${userId}`).emit("dm:chat-state", state);
     },
+    messageEdited(ev, chat) {
+      // groups: every member (conversationId = the group id); 1:1: each side sees the chat as the other person
+      if (isGroupId(chat.key)) {
+        for (const id of groups.audience(chat.key)) io.to(`user:${id}`).emit("message_edited", { ...ev, conversationId: chat.key });
+        return;
+      }
+      io.to(`user:${chat.fromId}`).emit("message_edited", { ...ev, conversationId: chat.toId });
+      io.to(`user:${chat.toId}`).emit("message_edited", { ...ev, conversationId: chat.fromId });
+    },
     dmReaction(ev, on) {
       // every tab of both participants (the reactor's other devices stay in sync too)
       if (isGroupId(ev.toId)) {
@@ -691,6 +700,18 @@ export function registerRealtime(io: WsHub) {
         }
         if (r.peerUnreadChanged) io.to(`user:${peerId}`).emit("dm:unread", { count: store.unreadDmCount(peerId) });
         ack({ ok: true, messageIds: r.messageIds, forEveryone: r.forEveryone });
+      }),
+    );
+
+    // ----- Edit (Telegram-style): my own text messages in a 1:1 (chatId = peer id) or a group (chatId = group id).
+    // The store validates, rate-limits (20/min) and fires message_edited to everyone in the chat (also for PATCH).
+    socket.on("dm:edit", ({ chatId, messageId, text }: { chatId: string; messageId: string; text: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        presence.activity(userId);
+        const r = store.editMessage(userId, chatId, messageId, text);
+        if (!r.ok) return ack({ ok: false, error: r.error });
+        const m = r.message;
+        ack({ ok: true, unchanged: r.unchanged, message: { id: m.id, text: m.text, editedAt: m.editedAt ?? null, editCount: m.editCount ?? 0 } });
       }),
     );
 

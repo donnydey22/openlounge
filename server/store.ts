@@ -23,7 +23,8 @@ import type {
   UserProfile,
 } from "../src/lib/types";
 import type { CallMeta, DmKind, MessageKind, RoomCard } from "../src/lib/types";
-import { DM_REACTION_MAX_EMOJI } from "../src/lib/types";
+import { DM_REACTION_MAX_EMOJI, MESSAGE_EDIT_WINDOW_MS, type MessageEditedEvent } from "../src/lib/types";
+import { parseSticker } from "../src/lib/stickers/token";
 import type { MediaAttachment } from "../src/lib/media/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
@@ -110,6 +111,8 @@ export interface StoreEvents {
   dmTyping(fromId: string, toId: string): void;
   /** someone saw messages in a DM conversation (read receipt for the sender) */
   dmRead?(receipt: DmReadReceipt): void;
+  /** a message was edited: push message_edited to everyone in the chat (audience = user ids) */
+  messageEdited?(ev: Omit<MessageEditedEvent, "conversationId">, chat: { key: string; fromId: string; toId: string }): void;
   /** a reaction was added (on) or removed (!on) on a DM: push to both participants */
   dmReaction?(ev: DmReactionEvent, on: boolean): void;
   roomPresence(ev: RoomPresenceEvent): void;
@@ -266,6 +269,13 @@ export class Store {
     }
     await this.chatPrefs.load();
     await this.dmActions.load();
+    // edit stamps (031) onto the loaded messages ("edited" label survives restarts)
+    if (this.dmActions.allEdits().size)
+      for (const list of this.dms.values())
+        for (const m of list) {
+          const e = this.dmActions.editOf(m.id);
+          if (e) (m.editedAt = e.at), (m.editCount = e.count);
+        }
     // backfill (idempotent): messages from already-deleted accounts count as read for everyone
     let cleared = 0;
     for (const id of this.tombstones.keys()) cleared += this.readAllFrom(id, { silent: true }).length;
@@ -2078,6 +2088,40 @@ export class Store {
     this.dmActions.hide(userId, hide);
     return { ok: true as const, forEveryone: false, messageIds: hide, peerUnreadChanged: false };
   }
+
+  /**
+   * Edit my own text message (1:1 or group; chatId = the peer id or the group id). Plain text only: no stickers, media,
+   * invite / call cards. Within MESSAGE_EDIT_WINDOW_MS. Same cleaning / filtering as sending. An empty edit is refused
+   * (clients treat it as cancel); an unchanged one is a no-op (unchanged: true, no event). The new text lands in dms.text
+   * through the normal snapshot upsert, so 020's triggers re-index hashtags / mentions / FTS.
+   */
+  editMessage(userId: string, chatId: unknown, messageId: unknown, rawText: unknown) {
+    const nf = { ok: false as const, status: 404, error: "Message not found" };
+    if (typeof chatId !== "string" || !chatId || typeof messageId !== "string" || !messageId || messageId.length > 80 || !this.users.has(userId)) return nf;
+    const inGroup = isGroupId(chatId);
+    if (inGroup ? !this.groups?.canAccess(userId, chatId) : chatId === userId || !this.users.has(chatId)) return nf;
+    if (!inGroup && this.isBlockedEither(userId, chatId)) return { ok: false as const, status: 403, blocked: true, error: "You can't edit messages in this conversation." };
+    const key = conversationId(userId, chatId);
+    const m = (this.dms.get(key) ?? []).find((x) => x.id === messageId);
+    if (!m || (inGroup && this.groups?.isService(m.id))) return nf;
+    if (m.fromId !== userId) return { ok: false as const, status: 403, error: "You can only edit your own messages" };
+    if (m.kind || m.call || m.media || m.attachments?.length || parseSticker(m.text)) return { ok: false as const, status: 400, error: "This message can't be edited" };
+    if (Date.now() - m.createdAt > MESSAGE_EDIT_WINDOW_MS) return { ok: false as const, status: 400, error: "Messages can only be edited for 48 hours" };
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, status: 400, error: c.error };
+    if (!c.text) return { ok: false as const, status: 400, error: "Message is empty" };
+    if (parseSticker(c.text)) return { ok: false as const, status: 400, error: "This message can't be edited" };
+    if (c.text === m.text) return { ok: true as const, unchanged: true, message: m };
+    if (this.slidingLimit(this.editRate, userId, 60_000, 20)) return { ok: false as const, status: 429, error: "Slow down a little 🙂" };
+    const e = this.dmActions.markEdited(m.id);
+    m.text = c.text;
+    m.editedAt = e.at;
+    m.editCount = e.count;
+    this.scheduleSave();
+    this.events?.messageEdited?.({ messageId: m.id, text: m.text, editedAt: e.at, editCount: e.count, by: userId }, { key, fromId: m.fromId, toId: m.toId });
+    return { ok: true as const, unchanged: false, message: m };
+  }
+  private editRate = new Map<string, number[]>();
 
   /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
   dmsSince(userId: string, after: number, limit = 200) {

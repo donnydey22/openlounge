@@ -173,6 +173,22 @@ export interface DirectMessage {
    * reply quotes and previews still show a cover. Absent for single attachments.
    */
   attachments?: MediaAttachment[];
+  /** Last edit (epoch ms) and how many times it was edited (message editing). Absent = never edited. */
+  editedAt?: number;
+  editCount?: number;
+}
+
+/** Authors can edit their text messages this long after sending (Telegram: 48 h). */
+export const MESSAGE_EDIT_WINDOW_MS = 48 * 3_600_000;
+
+/** WS `message_edited`: a 1:1 or group message's text changed. conversationId = the chat as the receiver sees it. */
+export interface MessageEditedEvent {
+  conversationId: string;
+  messageId: string;
+  text: string;
+  editedAt: number;
+  editCount: number;
+  by: string;
 }
 
 /** Outcome of a 1:1 call as recorded in the DM ("Outgoing call · 3:12", "Missed call", …). */

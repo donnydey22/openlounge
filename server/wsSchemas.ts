@@ -82,6 +82,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "dm:reaction_add": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:reaction_remove": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:delete": { peerId: "id", messageIds: "string-array?", forEveryone: "bool?" },
+  "dm:edit": { chatId: "id", messageId: "id", text: "string" },
   "dm:emoji_interaction": { to: "id", messageId: "id", emoji: "string" },
   "user:get": { userId: "id" },
   "users:list": {},

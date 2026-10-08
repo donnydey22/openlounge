@@ -1,5 +1,6 @@
 // Message actions for 1:1 chats: "Delete for me" (per-viewer hidden ids) and the short-lived archive behind
-// "Delete for everyone" (soft delete, migration 030_dm_deletes). Write-through like chatPrefs: Postgres when
+// "Delete for everyone" (soft delete, migration 030_dm_deletes), plus edit stamps for 1:1 and group messages
+// (031_dm_edits: edited_at / edit_count; the text itself is in dms). Write-through like chatPrefs: Postgres when
 // DATABASE_URL is set, else DATA_DIR/dm-actions.json (local dev), memory-only in tests (DM_ACTIONS_MEMORY=1).
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +25,7 @@ export interface ArchivedMessage {
 export class DmActions {
   private hidden = new Map<string, Map<string, number>>(); // userId -> messageId -> hiddenAt
   private archive = new Map<string, ArchivedMessage>();
+  private edits = new Map<string, { at: number; count: number }>(); // messageId -> last edit
   private pool: pg.Pool | null = null;
   private chain: Promise<void> = Promise.resolve();
   private file: string | null = null;
@@ -43,6 +45,9 @@ export class DmActions {
         const a = await this.pool.query<{ message_id: string; conversation_id: string; from_id: string; to_id: string; text: string; created_at: string; deleted_at: string; deleted_by: string }>(
           "SELECT * FROM dm_deleted",
         );
+        await this.pool.query("DELETE FROM dm_edits e WHERE NOT EXISTS (SELECT 1 FROM dms WHERE dms.id = e.message_id)");
+        const e = await this.pool.query<{ message_id: string; edited_at: string; edit_count: number }>("SELECT * FROM dm_edits");
+        for (const r of e.rows) this.edits.set(r.message_id, { at: Number(r.edited_at), count: Number(r.edit_count) });
         for (const r of a.rows)
           this.archive.set(r.message_id, {
             messageId: r.message_id, conversationId: r.conversation_id, fromId: r.from_id, toId: r.to_id, text: r.text,
@@ -56,9 +61,10 @@ export class DmActions {
     if (process.env.DM_ACTIONS_MEMORY === "1" || process.env.NODE_ENV === "test") return;
     this.file = path.join(DATA_DIR, "dm-actions.json");
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, "utf8")) as { hidden?: Record<string, Record<string, number>>; archive?: ArchivedMessage[] };
+      const raw = JSON.parse(fs.readFileSync(this.file, "utf8")) as { hidden?: Record<string, Record<string, number>>; archive?: ArchivedMessage[]; edits?: Record<string, { at: number; count: number }> };
       for (const [u, ids] of Object.entries(raw.hidden ?? {})) for (const [id, at] of Object.entries(ids)) this.setHidden(u, id, at);
       for (const a of raw.archive ?? []) if (a.deletedAt >= cutoff) this.archive.set(a.messageId, a);
+      for (const [id, e] of Object.entries(raw.edits ?? {})) this.edits.set(id, e);
     } catch {
       /* first run */
     }
@@ -90,6 +96,7 @@ export class DmActions {
     if (!rows.length) return;
     for (const r of rows) this.archive.set(r.messageId, r);
     for (const r of rows) for (const m of this.hidden.values()) m.delete(r.messageId); // gone for everyone anyway
+    for (const r of rows) this.edits.delete(r.messageId);
     if (this.pool) {
       const c = <K extends keyof ArchivedMessage>(k: K) => rows.map((r) => r[k]);
       this.q(
@@ -99,7 +106,30 @@ export class DmActions {
         [c("messageId"), c("conversationId"), c("fromId"), c("toId"), c("text"), c("createdAt"), c("deletedAt"), c("deletedBy")],
       );
       this.q("DELETE FROM dm_hidden WHERE message_id = ANY($1::text[])", [rows.map((r) => r.messageId)]);
+      this.q("DELETE FROM dm_edits WHERE message_id = ANY($1::text[])", [rows.map((r) => r.messageId)]);
     } else this.writeFile();
+  }
+
+  /** last edit of a message (null = never edited) */
+  editOf(messageId: string) {
+    return this.edits.get(messageId) ?? null;
+  }
+  /** all edit stamps (boot: copied onto the in-memory messages) */
+  allEdits(): ReadonlyMap<string, { at: number; count: number }> {
+    return this.edits;
+  }
+  /** a message was edited now: bump its stamp, returns the new one */
+  markEdited(messageId: string, at = Date.now()) {
+    const e = { at, count: (this.edits.get(messageId)?.count ?? 0) + 1 };
+    this.edits.set(messageId, e);
+    if (this.pool)
+      this.q(
+        `INSERT INTO dm_edits (message_id, edited_at, edit_count) VALUES ($1, $2, $3)
+         ON CONFLICT (message_id) DO UPDATE SET edited_at = EXCLUDED.edited_at, edit_count = EXCLUDED.edit_count`,
+        [messageId, e.at, e.count],
+      );
+    else this.writeFile();
+    return e;
   }
 
   /** moderation: a message deleted for everyone (within ARCHIVE_DAYS) */
@@ -141,7 +171,7 @@ export class DmActions {
     for (const [u, m] of this.hidden) if (m.size) hidden[u] = Object.fromEntries(m);
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify({ hidden, archive: [...this.archive.values()] }));
+      fs.writeFileSync(this.file, JSON.stringify({ hidden, archive: [...this.archive.values()], edits: Object.fromEntries(this.edits) }));
     } catch (err) {
       log.warn("dm actions file write failed", { err: String(err) });
     }

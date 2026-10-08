@@ -61,7 +61,7 @@ function cors(req: IncomingMessage, res: ServerResponse): boolean {
   res.setHeader("Vary", "Origin");
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
       "Access-Control-Max-Age": "600",
     });
@@ -200,6 +200,18 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     if (!pub) return json(res, 404, { ok: false, error: "Not found" });
     const { id, name, username, color, photoUrl, bio, followers, following } = pub;
     return json(res, 200, { ok: true, user: { id, name, username, color, photoUrl, bio, followers, following } });
+  }
+
+  // ---- message editing: PATCH /api/messages/<id> { chat: <peer id | group id>, text } (same rules as WS dm:edit) ----
+  const em = /^\/api\/messages\/([\w-]{1,80})$/.exec(url);
+  if (em && req.method === "PATCH") {
+    const auth = await store.authenticate(bearer(req));
+    if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
+    const b = await readJson(req);
+    const r = store.editMessage(auth.userId, b.chat, em[1], b.text);
+    if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+    const m = r.message;
+    return json(res, 200, { ok: true, unchanged: r.unchanged, message: { id: m.id, text: m.text, editedAt: m.editedAt ?? null, editCount: m.editCount ?? 0 } });
   }
 
   // ---- native call ring UIs: decline / status / PushKit token (server/calls/api.ts) ----
