@@ -2144,6 +2144,21 @@ export class Store {
     return this.appendDm(meta.callerId, calleeId, text, undefined, { kind: "call", roomId: `call-${meta.id}`, call: meta, read: !missed });
   }
 
+  /** Calls tab: the viewer's call service messages across 1:1 chats, newest first (respects blocks + "remove chat"). */
+  callHistory(userId: string, before?: number, limit = 100) {
+    const out: DirectMessage[] = [];
+    for (const [key, list] of this.dms) {
+      const [a, b] = key.split("|");
+      if (a !== userId && b !== userId) continue;
+      const peer = a === userId ? b : a;
+      if (this.isBlockedEither(userId, peer) || !this.users.has(peer)) continue;
+      const hiddenAt = this.chatPrefs.hiddenAt(userId, peer);
+      for (const m of list) if (m.kind === "call" && m.call && m.createdAt > hiddenAt && (!before || m.createdAt < before)) out.push(m);
+    }
+    out.sort((x, y) => y.createdAt - x.createdAt);
+    return { calls: out.slice(0, limit), hasMore: out.length > limit };
+  }
+
   // ---------- audio rooms in DMs: invite cards + drop-in audio chats ----------
 
   private canJoinPrivate(room: RoomRecord, userId: string) {

@@ -77,6 +77,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:video": { callId: "id", on: "bool" },
   "call:get": { callId: "id" },
   "call:current": {},
+  "call:history": { before: "number?" },
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },
   "dm:reaction_add": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:reaction_remove": { peerId: "id", messageId: "id", emoji: "string" },

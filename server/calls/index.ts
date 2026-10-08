@@ -93,6 +93,17 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     authed(ack, (uid) => void s().get_(callId, uid).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
   );
   socket.on("call:current", (_: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack({ ok: true, call: s().liveCallOf(uid) })));
+  socket.on("call:history", ({ before }: { before?: number }, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const h = store.callHistory(uid, before);
+      const peers: Record<string, unknown> = {};
+      for (const m of h.calls) {
+        const pid = m.fromId === uid ? m.toId : m.fromId;
+        if (!(pid in peers)) peers[pid] = store.publicUser(pid);
+      }
+      ack({ ok: true, ...h, peers });
+    }),
+  );
   socket.on("call:metric", ({ callId, acceptToAudioMs }: { callId: string; acceptToAudioMs: number }, ack: AckFn = noop) =>
     authed(ack, (uid) => ack(s().metric(callId, uid, acceptToAudioMs))),
   );

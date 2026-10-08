@@ -5,7 +5,7 @@ import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, PenSquare, Pin, Search, Users } from "lucide-react";
+import { Loader2, PenSquare, Phone, Pin, Search, Users } from "lucide-react";
 import type { ChatStateEvent, ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
@@ -127,12 +127,17 @@ export default function MessagesPage() {
       <main className="mx-auto max-w-2xl px-2 pt-5 pb-24">
         <div className="mb-3 flex items-center justify-between px-2">
           <h1 className="text-2xl font-bold tracking-tight">Messages</h1>
-          <button
-            onClick={() => setComposing(true)}
-            className="flex items-center gap-1.5 rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-emerald-400"
-          >
-            <PenSquare className="h-4 w-4" /> New
-          </button>
+          <div className="flex items-center gap-1.5">
+            <Link href="/calls" aria-label="Calls" data-testid="open-calls" className="grid h-10 w-10 place-items-center rounded-full text-zinc-300 hover:bg-white/5 hover:text-white">
+              <Phone className="h-5 w-5" />
+            </Link>
+            <button
+              onClick={() => setComposing(true)}
+              className="flex items-center gap-1.5 rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-on-accent hover:bg-emerald-400"
+            >
+              <PenSquare className="h-4 w-4" /> New
+            </button>
+          </div>
         </div>
 
         {conversations === null ? (

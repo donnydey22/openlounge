@@ -121,3 +121,19 @@ test("APNs provider token: ES256 JWT with kid/iss, cached ~50 min", async () => 
   assert.equal(deadToken({ ok: false, status: 400, reason: "BadDeviceToken" }), true);
   assert.equal(deadToken({ ok: false, status: 429, reason: "TooManyRequests" }), false);
 });
+
+test("Calls tab: call:history lists my call service messages newest first with peers; blocks hide them", async () => {
+  const h = await A.client.req("call:history", {});
+  assert.equal(h.ok, true);
+  assert.ok(h.calls.length >= 2, JSON.stringify(h));
+  assert.ok(h.calls.every((m: any) => m.kind === "call" && m.call));
+  assert.ok(h.calls[0].createdAt >= h.calls[h.calls.length - 1].createdAt);
+  assert.equal(h.peers[id(B)].name, "Bea");
+  const hb = await B.client.req("call:history", {});
+  assert.equal(hb.calls.length, h.calls.length);
+  assert.deepEqual((await D.client.req("call:history", {})).calls, []);
+  await api(app.base, "/api/me/blocks", { userId: id(A), block: true }, { token: tok(B) });
+  assert.deepEqual((await B.client.req("call:history", {})).calls, []);
+  await api(app.base, "/api/me/blocks", { userId: id(A), block: false }, { token: tok(B) });
+  assert.equal((await A.client.req("call:history", { before: "x" })).ok, false);
+});
