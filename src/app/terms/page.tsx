@@ -113,24 +113,38 @@ export default function Terms() {
       </p>
 
       <H id="payments">6. Payments and Premium</H>
+      <p>
+        Open Lounge is free to use. Some extras, such as sticker packs or a Premium plan if we offer one, may cost money. We always show the price and what you get before
+        you pay, and prices may change for future purchases. If we offer Premium as a subscription, it renews automatically at the price shown until you cancel; cancelling
+        stops the next renewal and you keep access until the end of the paid period.
+      </p>
+
+      <h3 id="digital-purchases" className="mt-5 mb-2 scroll-mt-20 font-semibold text-zinc-100">
+        Digital purchases (stickers and Premium)
+      </h3>
       <UL>
         <li>
-          Open Lounge is free to use. Some extras, such as sticker packs or a Premium plan if we offer one, may cost money. We show the price and what you get before you
-          pay.
+          <b>Sold on the web only.</b> Paid stickers and Premium are sold only on openlounge.app, through <b>PayPal</b>, including <b>Apple Pay</b> and{" "}
+          <b>Google Pay</b> where your browser supports them. The iPhone and Android apps don&apos;t sell anything. We never see or store your card number.
         </li>
         <li>
-          On openlounge.app, payments are processed by <b>PayPal</b>, including <b>Apple Pay</b> and <b>Google Pay</b> where available. We never see or store your card
-          number. Purchases made inside the iPhone or Android app, when offered, go through Apple&apos;s or Google&apos;s payment systems and their terms.
+          <b>A licence, not ownership.</b> A purchase gives you a personal, non-transferable, revocable licence to use that content in Open Lounge with your account. It
+          can&apos;t be resold, transferred or moved to another account.
         </li>
         <li>
-          Digital items are licensed to your account for personal use, not sold, and are delivered right away. Because of that, purchases are final except where the law
-          gives you a right to a refund or the item didn&apos;t work. Email <Mail /> within 14 days if something went wrong.
+          <b>Refunds</b> follow the payment processor&apos;s policy (PayPal, Apple Pay or Google Pay) and the law that applies to you. If something didn&apos;t work, email{" "}
+          <Mail />.
         </li>
         <li>
-          Subscriptions, if offered, renew automatically at the price shown until you cancel. Cancelling stops the next renewal, and you keep access until the end of the paid
-          period. App Store or Google Play subscriptions are managed in your Apple or Google account settings.
+          <b>Refunded or charged-back purchases are removed</b> from your account, including from My stickers.
         </li>
-        <li>Prices may change for future purchases. Items you&apos;ve bought stay tied to your account, and they end if you delete the account or it&apos;s banned.</li>
+        <li>
+          <b>Restore purchases</b> any time at <L href="/stickers/receipts">openlounge.app/stickers/receipts</L>, where your receipts are also listed.
+        </li>
+        <li>Purchases end if you delete your account or it&apos;s banned for breaking these Terms.</li>
+        <li>
+          Free sticker packs include Google&apos;s Noto Emoji Animation, licensed under CC BY 4.0. That credit stays on every pack page and in Settings &gt; About.
+        </li>
       </UL>
 
       <H id="apple">7. Apple App Store and Google Play</H>
