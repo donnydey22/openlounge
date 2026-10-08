@@ -129,6 +129,12 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     res.setHeader("Set-Cookie", refreshCookie(body.refreshToken as string, secureCookies(req)));
     return json(res, 200, { ok: true });
   }
+  if (authPath === "/auth/forget-cookie" && req.method === "POST") {
+    // App lock "quick sign-in": the session is parked in the native encrypted store; drop only the httpOnly cookie
+    // (no revoke) so a reload doesn't silently sign back in. Clearing your own cookie needs no auth.
+    res.setHeader("Set-Cookie", clearRefreshCookie(secureCookies(req)));
+    return json(res, 200, { ok: true });
+  }
   if (authPath === "/auth/logout" && req.method === "POST") {
     // Authorization: Bearer <access token> and/or body { refreshToken } and/or the ol_rt cookie; body { all: true } signs out every device
     const body = await readJson(req);

@@ -441,32 +441,61 @@ async function emailVerify(req: IncomingMessage, res: ServerResponse, body: Reco
   json(res, 200, { ok: true, status: "new", ...choice, profile: { firstName: "", lastName: "", email: p.email } });
 }
 
+/** Screen name (with or without @) → the account, or null. Bots never sign in. */
+function userByScreenName(raw: unknown): string | null {
+  const u = store.normalizeUsername(typeof raw === "string" ? raw.trim().replace(/^@/, "") : "");
+  if (!u) return null;
+  for (const user of store.users.values()) if (user.username === u && !user.isBot) return user.id;
+  return null;
+}
+
+/** The address to mail an account at: its email identity, else a verified Google/Apple email. */
+function mailAddressOf(userId: string): string | null {
+  const ids = store.identitiesOf(userId);
+  return ids.find((i) => i.provider === "email")?.subject ?? ids.find((i) => i.verified && i.email)?.email ?? null;
+}
+
+/**
+ * Sign in with ONE field (email OR screen name) + password. Body: { identifier, password } (legacy { email } still
+ * accepted). Same generic error for unknown account / no password / wrong password, so it never reveals which.
+ */
 async function emailLogin(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
   if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
-  const email = normalizeEmail(body.email);
+  const rawId = typeof body.identifier === "string" ? body.identifier : typeof body.email === "string" ? body.email : "";
+  const idTrim = rawId.trim().slice(0, 254);
   const password = typeof body.password === "string" ? body.password : "";
-  if (!email || !password) return json(res, 400, { ok: false, error: "Enter your email and password." });
-  if (!allow(`login:ip:${clientIp(req)}`, LIMITS.loginIp) || !allow(`login:email:${email}`, LIMITS.loginEmail)) return tooMany(res);
-  const ident = store.findIdentity("email", email);
-  const hash = ident ? store.passwordHashOf(ident.userId) : null;
-  if (!ident || !hash) {
+  if (!idTrim || !password) return json(res, 400, { ok: false, error: "Enter your email or screen name, and your password." });
+  const isEmail = idTrim.includes("@") && !idTrim.startsWith("@");
+  const email = isEmail ? normalizeEmail(idTrim) : null;
+  if (isEmail && !email) return json(res, 400, { ok: false, error: "That email address doesn't look right." });
+  const key = email ?? `@${idTrim.replace(/^@/, "").toLowerCase()}`;
+  if (!allow(`login:ip:${clientIp(req)}`, LIMITS.loginIp) || !allow(`login:email:${key}`, LIMITS.loginEmail)) return tooMany(res);
+  const userId = email ? store.findIdentity("email", email)?.userId ?? null : userByScreenName(idTrim);
+  const hash = userId ? store.passwordHashOf(userId) : null;
+  const wrong = isEmail ? "That email and password don't match. Try again or reset your password." : "That screen name and password don't match. Try again or reset your password.";
+  if (!userId || !hash) {
     await dummyVerify(password);
-    return json(res, 401, { ok: false, error: "That email and password don't match. Try again or reset your password." });
+    return json(res, 401, { ok: false, error: wrong });
   }
-  if (!(await verifyPassword(password, hash))) return json(res, 401, { ok: false, error: "That email and password don't match. Try again or reset your password." });
-  if (needsRehash(hash)) store.setPasswordHash(ident.userId, await hashPassword(password));
-  store.touchIdentity("email", email);
-  json(res, 200, sessionBody(ident.userId, req, body.device));
+  if (!(await verifyPassword(password, hash))) return json(res, 401, { ok: false, error: wrong });
+  if (needsRehash(hash)) store.setPasswordHash(userId, await hashPassword(password));
+  if (email) store.touchIdentity("email", email);
+  json(res, 200, sessionBody(userId, req, body.device));
 }
 
 async function forgotPassword(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
   const generic = { ok: true, sent: true };
-  const email = normalizeEmail(body.email);
-  if (!email) return json(res, 400, { ok: false, error: "Enter a valid email address." });
+  // one field: email OR screen name (a screen name mails the reset link to that account's address on file)
+  const rawId = (typeof body.identifier === "string" ? body.identifier : typeof body.email === "string" ? body.email : "").trim().slice(0, 254);
+  const byName = !!rawId && !(rawId.includes("@") && !rawId.startsWith("@"));
+  const nameUser = byName ? userByScreenName(rawId) : null;
+  const email = byName ? (nameUser ? mailAddressOf(nameUser) : null) : normalizeEmail(rawId);
+  if (!rawId || (!byName && !email)) return json(res, 400, { ok: false, error: "Enter your email or screen name." });
   if (!allow(`forgot:ip:${clientIp(req)}`, LIMITS.forgotIp)) return tooMany(res);
+  if (!email) return json(res, 200, generic); // unknown screen name / no address on file: same answer
   if (!allow(`forgot:email:${email}`, LIMITS.forgotEmail)) return json(res, 200, generic);
   // the account: its email identity, else the one account with a verified Google/Apple identity on this email
-  const userId = store.findIdentity("email", email)?.userId ?? store.userByVerifiedEmail(email);
+  const userId = nameUser ?? store.findIdentity("email", email)?.userId ?? store.userByVerifiedEmail(email);
   if (userId && store.users.has(userId)) {
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();

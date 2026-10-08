@@ -7,6 +7,23 @@ export interface BiometricsBridge {
   isAvailable(): Promise<boolean> | boolean;
   getEnabled(): Promise<boolean> | boolean;
   setEnabled(on: boolean): Promise<boolean> | boolean;
+  /** Optional (Android 0.3.0+ / iOS with the bridge): one-off OS prompt; true only on success. */
+  authenticate?(): Promise<boolean> | boolean;
+}
+
+/** Quick sign-in (screen name + Face ID / fingerprint) needs App lock on AND a shell with authenticate(). */
+export async function quickSignInReady(b: BiometricsBridge | null): Promise<boolean> {
+  if (!b || typeof b.authenticate !== "function") return false;
+  return (await readBiometrics(b)).enabled;
+}
+
+export async function biometricAuthenticate(b: BiometricsBridge | null): Promise<boolean> {
+  if (!b || typeof b.authenticate !== "function") return false;
+  try {
+    return (await b.authenticate()) === true;
+  } catch {
+    return false;
+  }
 }
 
 type W = { OpenLoungeNative?: { biometrics?: BiometricsBridge }; OpenLoungeBiometrics?: BiometricsBridge };

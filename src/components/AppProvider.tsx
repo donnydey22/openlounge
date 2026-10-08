@@ -6,7 +6,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { bumpClock } from "@/lib/time";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
-import { clearToken, hydrateFromNative, loadCreds, loadToken, saveCreds } from "@/lib/session";
+import { clearToken, hydrateFromNative, loadCreds, loadToken, parkSession, saveCreds } from "@/lib/session";
+import { biometricsBridge, quickSignInReady } from "@/lib/biometrics";
 import { SignedOutError, getAccessToken, logout, persistSessionCookie, recoverFromCookie, refreshSession, validateStoredSession } from "@/lib/auth";
 import { FriendlyError, GENERIC_COPY, NETWORK_COPY, friendlyMessage, isTransient, toFriendly } from "@/lib/errors";
 
@@ -464,6 +465,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await unregisterPush();
+    // App lock on (and the shell can prompt): keep this session parked in the encrypted native store, so the next
+    // sign-in is just the screen name + Face ID / fingerprint. Otherwise revoke it on the server as before.
+    const parked = me?.username && (await quickSignInReady(biometricsBridge())) ? await parkSession(me.username, me.name ?? null) : false;
+    if (parked) {
+      // don't revoke (session:logout would) — drop this page's state and start fresh with an unauthenticated socket
+      dropSession();
+      location.replace("/");
+      return;
+    }
     await logout();
     try {
       await socket?.request("session:logout", {}, 2000);
@@ -471,7 +481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       /* offline: token is already dropped locally */
     }
     dropSession();
-  }, [socket, dropSession]);
+  }, [socket, dropSession, me]);
 
   const follow = useCallback(
     async (userId: string, f: boolean) => {
