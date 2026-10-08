@@ -14,7 +14,7 @@ import { badgesOf, handlers, inits, mount, provideBadges, type Ctx } from "./reg
 import type { Badges } from "../../src/lib/premium/types";
 export { badgesOf, mount, onInit, provideBadges } from "./registry";
 
-const PREFIXES = ["/api/premium", "/api/admin/premium", "/api/badges", "/api/ads", "/api/admin/ads", "/api/creator", "/api/admin/creator", "/api/rooms/branding", "/api/r/", "/ad-files/"];
+const PREFIXES = ["/api/premium", "/api/admin/premium", "/api/badges", "/api/ads", "/api/admin/ads", "/api/creator", "/api/admin/creator", "/api/rooms/branding", "/api/r/", "/ad-files/", "/creator-files/"];
 export function isMonetRoute(path: string) {
   return PREFIXES.some((p) => path === p || path.startsWith(p.endsWith("/") ? p : p + "/") || path.startsWith(p + "?"));
 }
@@ -80,7 +80,7 @@ export async function handleMonetRoute(req: IncomingMessage, res: ServerResponse
     method,
     wrapper: isWrapper(req),
     uid: () => (uidP ??= authUser(req)),
-    body: () => (bodyP ??= body(req, url.startsWith("/api/admin/") || url.startsWith("/api/creator/") || url.startsWith("/api/rooms/branding") ? 3_000_000 : 32_768)),
+    body: () => (bodyP ??= body(req, url === "/api/creator/verify" ? 24_000_000 : url.startsWith("/api/admin/") || url.startsWith("/api/creator/") ? 12_000_000 : 32_768)),
     admin: async () => {
       const u = await ctx.uid();
       return u && isAdmin(u) ? u : null;
