@@ -215,7 +215,7 @@ export function ChatComposer({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [barOpen]);
-  // placeholder that fits the field: "Message Maya…" → "Message…" → none, so small phones never show a word cut mid-letter
+  // placeholder that fits the field: "Message Maya…" → "Message…" → "Message" → none, so small phones never show a word cut mid-letter
   // (textarea placeholders can't ellipsize in Chromium); re-checked when the field resizes or web fonts land
   const ph = useFittedPlaceholder(ref, placeholder);
   // the field gets wider when the sticker button steps aside (small phones) → re-measure its height
@@ -491,7 +491,7 @@ function useFittedPlaceholder(ref: React.RefObject<HTMLTextAreaElement | null>, 
   useLayoutEffect(() => {
     const ta = ref.current;
     if (!ta) return;
-    const cands = [placeholder, "Message…"].filter((c, i, a) => c && a.indexOf(c) === i);
+    const cands = [placeholder, "Message…", "Message"].filter((c, i, a) => c && a.indexOf(c) === i);
     const fit = () => {
       try {
         const cs = getComputedStyle(ta);
@@ -500,7 +500,7 @@ function useFittedPlaceholder(ref: React.RefObject<HTMLTextAreaElement | null>, 
         if (measureCtx === undefined) measureCtx = document.createElement("canvas").getContext("2d");
         if (!measureCtx) return setPh(placeholder);
         measureCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-        setPh(cands.find((c) => measureCtx!.measureText(c).width <= avail - 2) ?? "");
+        setPh(cands.find((c) => measureCtx!.measureText(c).width <= avail) ?? "");
       } catch {
         setPh(placeholder);
       }
