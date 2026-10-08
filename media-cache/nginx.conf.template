@@ -1,0 +1,154 @@
+# Open Lounge media cache (generated at boot by entrypoint.sh from nginx.conf.template; do not edit the output).
+# Contract: /workspace/media/CACHE_CONTRACT.md (v1). Secrets are read by njs from the environment, never templated.
+load_module __MODULES_DIR__/ngx_http_js_module.so;
+worker_processes auto;
+pid __TMP_DIR__/nginx.pid;
+error_log /dev/stderr warn;
+env MEDIA_SIGNING_SECRET;
+env MEDIA_CACHE_PURGE_SECRET;
+env DATA_DIR;
+env READYZ_REQUIRE_ORIGIN;
+
+events { worker_connections 4096; }
+
+http {
+  include __CONF_DIR__/mime.types;
+  client_body_temp_path __TMP_DIR__/body;
+  proxy_temp_path __TMP_DIR__/proxy;
+  fastcgi_temp_path __TMP_DIR__/fastcgi;
+  uwsgi_temp_path __TMP_DIR__/uwsgi;
+  scgi_temp_path __TMP_DIR__/scgi;
+  default_type application/octet-stream;
+  server_tokens off;
+  sendfile on;
+  tcp_nopush on;
+  keepalive_timeout 65s;
+  # Railway's edge terminates TLS and adds X-Forwarded-For; private-network peers come over fd00::/8 (IPv6)
+  real_ip_header X-Forwarded-For;
+  set_real_ip_from 10.0.0.0/8;
+  set_real_ip_from 100.64.0.0/10;
+  set_real_ip_from fd00::/8;
+  real_ip_recursive on;
+
+  # never log the query string (it carries the viewer's signed token)
+  log_format cache '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent '
+                   'cache=$upstream_cache_status auth=$media_auth rt=$request_time urt=$upstream_response_time';
+  access_log /dev/stdout cache;
+
+  # Railway private DNS (from /etc/resolv.conf at boot); short TTL so a moved/redeployed origin is re-resolved
+  resolver __RESOLVER__ valid=10s ipv6=on;
+  resolver_timeout 3s;
+
+  js_path __CONF_DIR__/njs/;
+  js_import media from media.js;
+  js_set $media_auth media.verify;
+  js_set $media_bypass media.bypass;
+
+  upstream media_origin {
+    zone media_origin 64k;
+    server __ORIGIN_HOSTPORT__ __ORIGIN_RESOLVE__ max_fails=0;
+    keepalive 32;
+    keepalive_timeout 60s;
+  }
+
+  proxy_cache_path __DATA_DIR__/cache levels=1:2 keys_zone=media:16m max_size=__MAX_SIZE__ min_free=__MIN_FREE__
+                   inactive=__INACTIVE__ use_temp_path=off;
+
+  map $upstream_cache_status $cache_status { "" "NONE"; default $upstream_cache_status; }
+
+  # ---------------------------------------------------------------- shared proxy settings
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host __ORIGIN_HOST__;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto https;
+  proxy_set_header Accept-Encoding "";        # origin internal port never gzips; be explicit
+  proxy_set_header Cookie "";
+  proxy_set_header Authorization "";
+  proxy_connect_timeout 3s;
+  proxy_read_timeout 30s;
+  proxy_buffering on;
+  proxy_buffers 32 64k;
+  proxy_busy_buffers_size 256k;
+  proxy_max_temp_file_size 0;
+
+  proxy_cache media;
+  proxy_cache_key $uri;                       # path only: exp/p/u/t (and any other query) are NOT part of the key
+  proxy_cache_methods GET HEAD;
+  proxy_cache_convert_head on;
+  proxy_cache_revalidate on;
+  proxy_cache_lock on;                        # stampede: one origin fetch per object, the rest wait on it
+  proxy_cache_lock_age 10s;
+  proxy_cache_lock_timeout 15s;
+  proxy_cache_use_stale updating error timeout http_500 http_502 http_503 http_504;
+  proxy_cache_background_update on;
+  # Cache-Control from the origin always wins; this is only the fallback when a 2xx carries no caching headers.
+  # Nothing else is stored: 403/404 come with no-store, and 5xx/other codes have no validity here.
+  proxy_cache_valid 200 206 10s;
+  proxy_no_cache $media_bypass;
+  proxy_cache_bypass $media_bypass;
+
+  # ---------------------------------------------------------------- public port (Railway domain → this)
+  server {
+    listen __PORT__ default_server;
+    listen [::]:__PORT__ default_server;
+    server_name _;
+
+    location = /healthz { default_type application/json; add_header Cache-Control no-store always; return 200 '{"ok":true,"service":"media-cache"}'; }
+    location = /readyz { js_content media.readyz; }
+    location = /_origin_health { internal; proxy_cache off; proxy_pass http://media_origin/media/healthz; }
+    location = /media/healthz { proxy_cache off; add_header X-Cache-Status BYPASS always; proxy_pass http://media_origin; }
+
+    location = /robots.txt { default_type text/plain; return 200 "User-agent: *\nDisallow: /\n"; }
+
+    location / { add_header Cache-Control no-store always; return 404; }
+
+    # rendition + master playlists: one token-free cached copy, rewritten per viewer (§3 HLS)
+    location ~ "^/media/[0-9a-f]{32}/v[0-9]+/.+\.m3u8$" {
+      include __CONF_DIR__/media-guard.conf;
+      max_ranges 0;
+      gzip on;
+      gzip_types application/vnd.apple.mpegurl application/x-mpegurl;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_min_length 256;
+      js_header_filter media.m3u8Headers;
+      js_body_filter media.m3u8Body buffer_type=string;
+      proxy_pass http://media_origin;
+    }
+
+    # progressive MP4 fallback: cached in 1 MiB slices, so a seek or a Range never waits for the whole file
+    location ~ "^/media/[0-9a-f]{32}/v[0-9]+/full\.mp4$" {
+      include __CONF_DIR__/media-guard.conf;
+      slice 1m;
+      proxy_cache_key $uri|$slice_range;
+      proxy_set_header Range $slice_range;
+      proxy_pass http://media_origin;
+    }
+
+    # segments, init, posters, thumbnails, images, voice, documents: whole object; Range served from the stored copy
+    location ~ "^/media/[0-9a-f]{32}/v[0-9]+/" {
+      include __CONF_DIR__/media-guard.conf;
+      proxy_pass http://media_origin;
+    }
+
+    location @forbidden {
+      default_type text/plain;
+      add_header Cache-Control no-store always;
+      add_header Access-Control-Allow-Origin * always;
+      add_header X-Cache-Status DENIED always;
+      return 403 "Link expired\n";
+    }
+    location @method { add_header Allow "GET, HEAD, OPTIONS" always; add_header Cache-Control no-store always; return 405; }
+  }
+
+  # ---------------------------------------------------------------- internal port (Railway private network only)
+  server {
+    listen [::]:__INTERNAL_PORT__ ipv6only=off;
+    server_name _;
+    client_max_body_size 64k;
+    location = /_purge { proxy_cache off; js_content media.purge; }
+    location = /healthz { default_type application/json; return 200 '{"ok":true,"service":"media-cache"}'; }
+    location / { return 404; }
+  }
+}

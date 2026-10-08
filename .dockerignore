@@ -14,3 +14,4 @@ npm-debug.log*
 *.log
 /clubroom.apk
 !public/downloads/*.apk
+media-cache
