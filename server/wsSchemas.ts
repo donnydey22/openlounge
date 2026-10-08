@@ -81,6 +81,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },
   "dm:reaction_add": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:reaction_remove": { peerId: "id", messageId: "id", emoji: "string" },
+  "dm:delete": { peerId: "id", messageIds: "string-array?", forEveryone: "bool?" },
   "dm:emoji_interaction": { to: "id", messageId: "id", emoji: "string" },
   "user:get": { userId: "id" },
   "users:list": {},

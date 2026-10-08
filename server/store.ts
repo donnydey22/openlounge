@@ -2072,7 +2072,7 @@ export class Store {
       );
       const key = conversationId(userId, peerId);
       for (const m of found) this.removeConversationMessage(key, m.id);
-      return { ok: true as const, forEveryone: true, messageIds: found.map((m) => m.id), peerUnreadChanged: found.some((m) => !m.readAt) };
+      return { ok: true as const, forEveryone: true, messageIds: found.map((m) => m.id), peerUnreadChanged: found.length > 0 }; // their badge may have counted these
     }
     const hide = found.map((m) => m.id);
     this.dmActions.hide(userId, hide);

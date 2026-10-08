@@ -673,6 +673,27 @@ export function registerRealtime(io: WsHub) {
     socket.on("dm:reaction_add", react(true));
     socket.on("dm:reaction_remove", react(false));
 
+    // ----- Delete (Telegram-style). forEveryone: own messages leave both sides; else hidden for me only (my devices).
+    // Clients get the existing conv:deleted shape (conversationId = the chat as THEY see it), one per message.
+    const deleteWindow: number[] = [];
+    socket.on("dm:delete", ({ peerId, messageIds, forEveryone }: { peerId: string; messageIds: string[]; forEveryone?: boolean }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const now = Date.now();
+        while (deleteWindow.length && now - deleteWindow[0] > 10_000) deleteWindow.shift();
+        if (deleteWindow.length >= 20) return ack({ ok: false, error: "Slow down a little" });
+        deleteWindow.push(now);
+        presence.activity(userId);
+        const r = store.deleteDmMessages(userId, peerId, messageIds, forEveryone === true);
+        if (!r.ok) return ack(r);
+        for (const messageId of r.messageIds) {
+          io.to(`user:${userId}`).emit("conv:deleted", { conversationId: peerId, messageId, by: userId, forEveryone: r.forEveryone });
+          if (r.forEveryone) io.to(`user:${peerId}`).emit("conv:deleted", { conversationId: userId, messageId, by: userId, forEveryone: true });
+        }
+        if (r.peerUnreadChanged) io.to(`user:${peerId}`).emit("dm:unread", { count: store.unreadDmCount(peerId) });
+        ack({ ok: true, messageIds: r.messageIds, forEveryone: r.forEveryone });
+      }),
+    );
+
     // Emoji interactions (tap a big animated emoji → full-screen effect, mirrored to the peer if their thread is
     // open). Ephemeral relay like typing: never stored, block-aware, 1 / 400 ms per socket, 30 / 10 s.
     const interactWindow: number[] = [];
