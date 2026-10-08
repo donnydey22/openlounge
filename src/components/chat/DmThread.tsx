@@ -1171,7 +1171,7 @@ export function DmThread({
               ) : (m as ConvMessage).service ? (
                 <ServiceRow key={keyOf(m)} m={m as ConvMessage} meId={me?.id} members={memberMap} />
               ) : (
-                <div key={keyOf(m)} data-mid={m.id}>
+                <div key={keyOf(m)}>
                 <MessageRow
                   key={keyOf(m)}
                   m={m}

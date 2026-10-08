@@ -138,7 +138,8 @@ export function PinnedBar({ pins, canUnpin, onJump, onUnpin }: { pins: GroupPin[
 /** Scroll a message into view inside its list and flash it (tap on a pin / reply). */
 export function jumpToMessage(list: HTMLElement | null, messageId: string) {
   const safe = messageId.replace(/[^A-Za-z0-9_-]/g, "");
-  const el = list?.querySelector<HTMLElement>(`[data-mid="${safe}"]`);
+  // the message row (or a service row) — reaction chips also carry data-mid, so don't match those
+  const el = list?.querySelector<HTMLElement>(`[data-testid="dm-msg"][data-mid="${safe}"], [data-testid="group-service"][data-mid="${safe}"]`);
   if (!el) return false;
   el.scrollIntoView({ block: "center", behavior: "smooth" });
   // brief highlight (Web Animations: iOS 13.1+ / every evergreen engine; skipped for reduced motion)
