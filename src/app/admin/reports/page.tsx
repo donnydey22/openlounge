@@ -34,6 +34,7 @@ export default function AdminReportsPage() {
   const [reports, setReports] = useState<Report[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [acted, setActed] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setError(null);
@@ -58,6 +59,26 @@ export default function AdminReportsPage() {
     try {
       const r = await authFetch(`/api/admin/reports/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
       if (r.ok) setReports((list) => (list ?? []).map((x) => (x.id === id ? { ...x, status } : x)).filter((x) => !filter || x.status === filter));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // store compliance (App Store 1.2): act on a report — remove the content, end the room, or suspend the account
+  const act = async (r: Report, action: "remove_content" | "end_room" | "suspend_user" | "unsuspend_user") => {
+    const label = { remove_content: "Remove this content", end_room: "End this room", suspend_user: `Suspend ${r.targetUser?.name ?? "this account"}`, unsuspend_user: "Lift the suspension" }[action];
+    if (!window.confirm(`${label}? This takes effect immediately.`)) return;
+    setBusy(r.id);
+    setError(null);
+    try {
+      const res = await authFetch(`/api/admin/reports/${r.id}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.error || "That didn't work");
+      setActed((m) => ({ ...m, [r.id]: d.detail }));
+      if (action !== "unsuspend_user")
+        setReports((list) => (list ?? []).map((x) => (x.id === r.id ? { ...x, status: "actioned" as const } : x)).filter((x) => !filter || x.status === filter || x.id === r.id));
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -132,7 +153,30 @@ export default function AdminReportsPage() {
                   </div>
                   <div className="font-mono text-[10px] text-zinc-600">{r.id}</div>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2" data-testid="admin-actions">
+                  {r.targetType !== "user" && (
+                    <button disabled={busy === r.id} onClick={() => void act(r, "remove_content")} className="rounded-full bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/25 disabled:opacity-40">
+                      {r.targetType === "room" ? "End room" : "Remove message"}
+                    </button>
+                  )}
+                  {r.targetType === "message" && r.roomId && (
+                    <button disabled={busy === r.id} onClick={() => void act(r, "end_room")} className="rounded-full bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/25 disabled:opacity-40">
+                      End room
+                    </button>
+                  )}
+                  {r.targetUser && r.targetUser.username && (
+                    <>
+                      <button disabled={busy === r.id} onClick={() => void act(r, "suspend_user")} className="rounded-full bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/25 disabled:opacity-40">
+                        Suspend account
+                      </button>
+                      <button disabled={busy === r.id} onClick={() => void act(r, "unsuspend_user")} className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-400 hover:bg-white/5 disabled:opacity-40">
+                        Unsuspend
+                      </button>
+                    </>
+                  )}
+                </div>
+                {acted[r.id] && <p className="mt-2 text-xs text-emerald-400">Done: {acted[r.id]}</p>}
+                <div className="mt-2 flex flex-wrap gap-2">
                   {(["reviewed", "actioned", "dismissed", "open"] as const)
                     .filter((s) => s !== r.status)
                     .map((s) => (

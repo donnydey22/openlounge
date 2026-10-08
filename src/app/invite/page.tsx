@@ -252,7 +252,7 @@ export default function InvitePage() {
           <li className="flex gap-3">
             <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-400" />
             <span>
-              <b>Only scrambled numbers leave your phone.</b> We turn each number into a one-way code (SHA-256 hash). Names, emails and photos are never uploaded.
+              <b>Open Lounge collects the phone numbers in your contacts.</b> On this phone, each number is turned into a one-way code (SHA-256 hash) and only those codes are uploaded. Names, emails and photos are never uploaded.
             </span>
           </li>
           <li className="flex gap-3">
@@ -272,8 +272,9 @@ export default function InvitePage() {
             <span>We never message your contacts. Invites only go out when you tap Invite and pick an app.</span>
           </li>
         </ul>
-        <button onClick={findFriends} className="mt-6 w-full rounded-full bg-sky-500 py-3.5 font-semibold text-on-color hover:bg-sky-400">
-          Continue
+        <p className="mt-5 text-xs text-zinc-500">Tapping Agree &amp; continue asks your phone for contacts access, then uploads only the codes. Turn it off anytime with Delete uploaded contacts.</p>
+        <button onClick={findFriends} className="mt-3 w-full rounded-full bg-sky-500 py-3.5 font-semibold text-on-color hover:bg-sky-400" data-testid="contacts-consent">
+          Agree &amp; continue
         </button>
         <button onClick={() => setPhase("idle")} className="mt-2 w-full rounded-full py-3 text-sm text-zinc-400 hover:text-zinc-200">
           Not now

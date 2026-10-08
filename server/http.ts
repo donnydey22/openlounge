@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
 import { REPORT_REASONS, SUPPORT_EMAIL, isAdmin } from "./moderation";
+import { applyReportAction, listSuspensions, unsuspendUser } from "./adminModeration";
 import { readJsonBody } from "./httpsec";
 import { firebasePhoneLogin } from "./realtime";
 import { push } from "./push";
@@ -232,7 +233,7 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   }
 
   // ---- UGC safety (App Store 1.2): blocks, reports, admin review. Authorization: Bearer <access token> ----
-  if (/^\/api\/(me\/blocks|reports|admin\/reports)(\/|$)/.test(url)) {
+  if (/^\/api\/(me\/blocks|reports|admin\/reports|admin\/suspensions)(\/|$)/.test(url)) {
     const auth = await store.authenticate(bearer(req));
     if (!auth.ok) {
       res.setHeader("WWW-Authenticate", `Bearer error="invalid_token"`);
@@ -263,6 +264,17 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
         const qs = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
         return json(res, 200, { ok: true, reports: store.listReports({ status: qs.get("status") ?? undefined, limit: Number(qs.get("limit")) || 200 }) });
       }
+      // store compliance: moderator enforcement — POST { action: remove_content|end_room|suspend_user|unsuspend_user, note? }
+      const act = url.match(/^\/api\/admin\/reports\/(rp_[\w-]{1,80})\/action$/);
+      if (act && req.method === "POST") {
+        const b = await readJson(req);
+        const r = await applyReportAction(act[1], b.action, uid, b.note);
+        if (!r.ok) return json(res, r.status, { ok: false, error: r.error });
+        return json(res, 200, { ok: true, done: r.done, detail: r.detail, report: r.report, suspended: r.suspended });
+      }
+      if (url === "/api/admin/suspensions" && req.method === "GET") return json(res, 200, { ok: true, suspensions: await listSuspensions() });
+      const un = url.match(/^\/api\/admin\/suspensions\/(u_[\w-]{1,80})$/);
+      if (un && req.method === "DELETE") return json(res, 200, await unsuspendUser(un[1]));
       const m = url.match(/^\/api\/admin\/reports\/(rp_[\w-]{1,80})$/);
       if (m && req.method === "POST") {
         const r = store.setReportStatus(m[1], (await readJson(req)).status);

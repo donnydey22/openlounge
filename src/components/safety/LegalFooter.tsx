@@ -11,6 +11,9 @@ export function LegalFooter({ className = "" }: { className?: string }) {
       <Link href="/privacy" className="hover:text-zinc-300 hover:underline">
         Privacy
       </Link>
+      <Link href="/privacy/delete-account" className="hover:text-zinc-300 hover:underline">
+        Delete account
+      </Link>
       <a href={SUPPORT_MAILTO} className="hover:text-zinc-300 hover:underline">
         Contact &amp; support
       </a>
