@@ -139,6 +139,13 @@ http {
       add_header X-Cache-Status DENIED always;
       return 403 "Link expired\n";
     }
+    location @origin_down {
+      default_type text/plain;
+      add_header Cache-Control no-store always;
+      add_header Access-Control-Allow-Origin * always;
+      add_header X-Cache-Status $cache_status always;
+      return 502 "Origin unavailable\n";
+    }
     location @method { add_header Allow "GET, HEAD, OPTIONS" always; add_header Cache-Control no-store always; return 405; }
   }
 
