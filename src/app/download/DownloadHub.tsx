@@ -4,17 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
 
 const ANDROID = {
-  file: "/downloads/openlounge-0.3.1.apk",
-  version: "0.3.1 (build 13)",
+  file: "/downloads/openlounge-0.3.2.apk",
+  version: "0.3.2 (build 14)",
   size: "6.9 MB",
-  sha256: "d966215a8295daeea671d9ad9776b6947ae7b4421700fc1cffe659ed5604822b",
+  sha256: "7c9f0490eb01de0d9997602bbcbf4f59eda1e6348fdf826074b727deaec41d12",
 };
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
-  file: "/downloads/openlounge-0.3.1-b18.ipa",
-  version: "0.3.1 (build 18)",
+  file: "/downloads/openlounge-0.3.1-b19.ipa",
+  version: "0.3.1 (build 19)",
   size: "9.3 MB",
-  sha256: "6ff177b9d47a9bc9a474688e157d806c4882736b1960f867eb7678ce1c351998",
+  sha256: "f8a12f0702589c8c895504f09f8a7a9d885803fbbde62deca3136ebb3a553e82",
 };
 
 function Sha({ value }: { value: string }) {
@@ -111,7 +111,7 @@ export function DownloadHub() {
             <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
           </ul>
           <p className="mt-3 text-xs text-zinc-500">
-            Direct file: <a className="underline" href={IOS.file}>openlounge-0.3.1-b18.ipa</a>
+            Direct file: <a className="underline" href={IOS.file}>openlounge-0.3.1-b19.ipa</a>
           </p>
           <Sha value={IOS.sha256} />
         </section>
