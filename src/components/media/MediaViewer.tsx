@@ -1,4 +1,5 @@
 "use client";
+import { attachAdaptive } from "@/lib/media/adaptive";
 // Full-screen photo / video viewer (Telegram style): opens out of the tapped tile, swipe down (or Esc / back) to
 // dismiss, pinch / double-tap / wheel zoom with pan for photos, scrubber for videos, swipe or arrows between the
 // conversation's photos and videos. Transforms are written straight to the DOM in rAF (no React render per frame).
@@ -8,13 +9,13 @@ import { ChevronLeft, ChevronRight, Download, Loader2, Pause, Play, Share2, Tras
 import type { DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatFull, serverNow } from "@/lib/time";
-import { formatDuration, formatRemaining, itemsOf, mediaGone, type MediaAttachment } from "@/lib/media/types";
+import { formatBytes, formatDuration, formatRemaining, itemsOf, mediaGone, type MediaAttachment } from "@/lib/media/types";
 import { deleteMediaNow, getUrls, markViewed } from "@/lib/media/client";
-import { mediaNative, prefersReducedMotion } from "@/lib/media/capabilities";
+import { mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabilities";
 import { closeViewer, type ViewerTarget } from "./viewerStore";
 import { useTick } from "./hooks";
 
-type Urls = { full?: string; thumb?: string; poster?: string; original?: string };
+type Urls = { full?: string; thumb?: string; poster?: string; original?: string; hls?: string; hlsLow?: string };
 
 /** one page of the viewer: an attachment and the message carrying it (albums contribute one page per item) */
 interface Page {
@@ -343,6 +344,8 @@ function PhotoStage({
   backdrop: React.RefObject<HTMLDivElement | null>;
   stage: React.RefObject<HTMLDivElement | null>;
 }) {
+  const [saver] = useState(() => saveData());
+  const [hd, setHd] = useState(false);
   const img = useRef<HTMLDivElement>(null);
   const [fullLoaded, setFullLoaded] = useState(false);
   const t = useRef({ scale: 1, x: 0, y: 0 });
@@ -492,9 +495,21 @@ function PhotoStage({
       <div ref={img} className="relative will-change-transform" style={{ aspectRatio: String(ar), width: `min(100vw, calc(100dvh * ${ar}))`, maxHeight: "100dvh" }}>
         {a.ph && <img src={a.ph} alt="" className="absolute inset-0 h-full w-full object-contain blur-lg" draggable={false} />}
         {urls?.thumb && <img src={urls.thumb} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />}
-        {urls?.full && <img src={urls.full} alt={a.name ?? "Photo"} decoding="async" onLoad={() => setFullLoaded(true)} className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-150", fullLoaded ? "opacity-100" : "opacity-0")} draggable={false} />}
-        {!fullLoaded && <Loader2 className="absolute inset-0 m-auto h-7 w-7 animate-spin text-white/70 motion-reduce:animate-none" />}
+        {urls?.full && (!saver || hd) && <img src={urls.full} alt={a.name ?? "Photo"} decoding="async" onLoad={() => setFullLoaded(true)} className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-150", fullLoaded ? "opacity-100" : "opacity-0")} draggable={false} />}
+        {!fullLoaded && (!saver || hd) && <Loader2 className="absolute inset-0 m-auto h-7 w-7 animate-spin text-white/70 motion-reduce:animate-none" />}
       </div>
+      {/* data saver: the 640px preview is shown; full quality only on request */}
+      {saver && !hd && urls?.full && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => setHd(true)}
+          className="absolute bottom-[max(5rem,calc(env(safe-area-inset-bottom)+4rem))] left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-4 py-2 text-sm font-medium text-white backdrop-blur"
+          data-testid="viewer-load-hd"
+        >
+          Load full quality · {formatBytes(a.size)}
+        </button>
+      )}
     </div>
   );
 }
@@ -522,11 +537,16 @@ function VideoStage({
   const [waiting, setWaiting] = useState(true);
   const [failed, setFailed] = useState(false);
   const drag = useRef<{ y: number; x: number; t0: number; active: boolean } | null>(null);
-  const src = urls?.full ?? urls?.original;
+  const mp4 = urls?.full ?? urls?.original;
+  // adaptive: HLS ladder when it exists (hls.js / native), else the faststart MP4. GIF loops stay on the MP4.
+  const hls = !a.gif && a.hls?.length ? urls?.hls : undefined;
+  const src = hls ?? mp4;
+  const srcKey = `${hls ? hls.split("?")[0] : ""}|${mp4 ? mp4.split("?")[0] : ""}`;
 
   useEffect(() => {
     const el = v.current;
     if (!el || !src) return;
+    const detach = attachAdaptive(el, { hls, hlsLow: hls ? urls?.hlsLow : undefined, mp4 }, { id: a.id, onFatal: () => setFailed(true) });
     el.muted = !!a.gif;
     const p = el.play();
     // autoplay with sound can be refused (no gesture reached the element on some engines): retry muted
@@ -536,7 +556,10 @@ function VideoStage({
         setMuted(true);
         void el.play().catch(() => setPlaying(false));
       });
-  }, [src, a.gif]);
+    return detach;
+    // re-attach only when the media itself changes (signed-URL refreshes keep the running player)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srcKey, a.gif]);
 
   return (
     <div
@@ -564,12 +587,10 @@ function VideoStage({
       {src && !failed && (
         <video
           ref={v}
-          src={src}
           poster={urls?.poster}
           playsInline
-          autoPlay
           loop={!!a.gif}
-          preload="auto"
+          preload="metadata"
           className="max-h-full max-w-full"
           style={{ aspectRatio: a.w && a.h ? `${a.w}/${a.h}` : undefined }}
           onPlay={() => setPlaying(true)}

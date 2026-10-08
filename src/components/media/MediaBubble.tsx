@@ -46,6 +46,7 @@ import { cancelMedia, useOutbox } from "@/lib/media/outbox";
 import { getUrls, markPlayed, openViewOnce } from "@/lib/media/client";
 import { cycleRate, pauseVoice, playVoice, registerVoice, seekVoice, useVoiceState } from "@/lib/media/player";
 import { inNativeApp, mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabilities";
+import { PLAYBACK_EVENT, exclusivePlaying } from "@/lib/media/adaptive";
 import { useInView, useMediaUrls, useTick } from "./hooks";
 import { CountdownRing, ProgressRing } from "./Rings";
 import { openViewer } from "./viewerStore";
@@ -232,15 +233,7 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
       {/* blurred placeholder: the tile has its final size from the first frame (no layout shift) */}
       {a.ph && <img src={a.ph} alt="" aria-hidden className={cn("absolute inset-0 h-full w-full scale-110 object-cover blur-xl", viewOnceLocked && "blur-2xl")} draggable={false} />}
       {!viewOnceLocked && src && (
-        <img
-          src={src}
-          alt=""
-          decoding="async"
-          loading="lazy"
-          draggable={false}
-          onLoad={() => setLoaded(true)}
-          className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")}
-        />
+        <ThumbImage a={a} urls={urls} src={src} local={local} width={box.width} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")} />
       )}
       {isVideo && !viewOnceLocked && !uploading && <InlineVideo a={a} urls={urls} />}
       {viewOnceLocked && (
@@ -566,15 +559,7 @@ const AlbumPage = memo(function AlbumPage({
     >
       {a.ph && <img src={a.ph} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" draggable={false} />}
       {src && (
-        <img
-          src={src}
-          alt=""
-          decoding="async"
-          loading="lazy"
-          draggable={false}
-          onLoad={() => setLoaded(true)}
-          className={cn("absolute inset-0 h-full w-full transition-opacity duration-200 motion-reduce:transition-none", fit, loaded || local ? "opacity-100" : "opacity-0")}
-        />
+        <ThumbImage a={a} urls={urls} src={src} local={local} width={330} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full transition-opacity duration-200 motion-reduce:transition-none", fit, loaded || local ? "opacity-100" : "opacity-0")} />
       )}
       {isVideo && active && progress === undefined && <InlineVideo a={a} urls={urls} />}
       {isVideo && (
@@ -595,24 +580,119 @@ const AlbumPage = memo(function AlbumPage({
   );
 });
 
-/** Muted inline autoplay while on screen (iOS needs muted + playsinline); paused + unloaded off screen. */
+declare global {
+  interface Window {
+    __olThumbStats?: { id: string; ms: number; ok: boolean }[];
+  }
+}
+
+/**
+ * Photo / poster thumbnail: progressive AVIF → WebP via srcset at 320/640 for the tile's CSS width (data saver: the
+ * 320 one), lazy + async decode, the blurred inline placeholder stays underneath (no layout shift). A failed or
+ * stalled load (bad network) keeps the placeholder and shows "Tap to retry".
+ */
+function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: MediaAttachment; urls: ReturnType<typeof useMediaUrls>; src: string; local?: string; width: number; className: string; onLoaded: () => void }) {
+  const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
+  const [attempt, setAttempt] = useState(0);
+  const t0 = useRef(0);
+  useEffect(() => {
+    if (local || state !== "loading") return;
+    t0.current = performance.now();
+    const t = setTimeout(() => setState((s) => (s === "loading" ? "error" : s)), 20_000);
+    return () => clearTimeout(t);
+  }, [local, state, attempt]);
+  const record = (ok: boolean) => {
+    if (local) return;
+    const list = (window.__olThumbStats ??= []);
+    list.push({ id: a.id, ms: Math.round(performance.now() - t0.current), ok });
+    if (list.length > 200) list.shift();
+  };
+  const bust = (u: string) => (attempt && !local ? `${u}${u.includes("?") ? "&" : "?"}r=${attempt}` : u);
+  const sizes = saveData() ? "160px" : `${width}px`;
+  const img = (
+    <img
+      src={bust(src)}
+      alt=""
+      decoding="async"
+      loading="lazy"
+      draggable={false}
+      onLoad={() => {
+        setState("loaded");
+        record(true);
+        onLoaded();
+      }}
+      onError={() => {
+        setState("error");
+        record(false);
+      }}
+      className={cn(className, state === "error" && "invisible")}
+    />
+  );
+  const responsive = !local && a.kind === "photo" && a.srcset && urls?.thumbS && urls.thumb;
+  return (
+    <>
+      {responsive ? (
+        <picture>
+          {urls.thumbSAvif && urls.thumbAvif && <source type="image/avif" srcSet={`${bust(urls.thumbSAvif)} 320w, ${bust(urls.thumbAvif)} 640w`} sizes={sizes} />}
+          <source type="image/webp" srcSet={`${bust(urls.thumbS!)} 320w, ${bust(urls.thumb!)} 640w`} sizes={sizes} />
+          {img}
+        </picture>
+      ) : (
+        img
+      )}
+      {state === "error" && (
+        <button
+          type="button"
+          data-testid="media-retry"
+          onClick={(e) => {
+            e.stopPropagation();
+            setState("loading");
+            setAttempt((n) => n + 1);
+          }}
+          className="absolute inset-0 m-auto flex h-9 w-fit items-center gap-1.5 rounded-full bg-black/55 px-3 text-[13px] font-medium text-white backdrop-blur-sm"
+        >
+          <RotateCw className="h-4 w-4" /> Tap to retry
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * Inline playback in the chat: only GIF loops (silent, small) autoplay while on screen, and they pause whenever a real
+ * video is playing (one video at a time) or data saver is on. Videos show their poster + play button and load nothing
+ * until tapped (the viewer streams them adaptively).
+ */
 function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof useMediaUrls> }) {
   const [ref, visible] = useInView<HTMLVideoElement>("0px", true);
   const [playing, setPlaying] = useState(false);
-  const src = urls?.full && !urls.full.includes("/original") ? urls.full : a.gif ? urls?.full : undefined;
-  const allowed = !saveData() && (a.gif || a.size <= 40 * 1024 * 1024);
+  const [blocked, setBlocked] = useState(false);
+  const src = a.gif ? urls?.full : undefined;
+  const allowed = !!a.gif && !saveData();
+  useEffect(() => {
+    const on = (e: Event) => setBlocked(!!(e as CustomEvent<{ active: boolean }>).detail?.active);
+    window.addEventListener(PLAYBACK_EVENT, on);
+    setBlocked(exclusivePlaying());
+    return () => window.removeEventListener(PLAYBACK_EVENT, on);
+  }, []);
   useEffect(() => {
     const v = ref.current;
     // (the ref sits on a placeholder <span> while there's nothing to play)
     if (!(v instanceof HTMLMediaElement)) return;
-    if (visible && src && allowed) {
+    if (visible && src && allowed && !blocked) {
       v.muted = true;
       const p = v.play();
-      if (p) p.catch(() => setPlaying(false)); // Low Power Mode / autoplay blocked: the poster + play icon stay
+      if (p) p.catch(() => setPlaying(false)); // Low Power Mode / autoplay blocked: the poster stays
     } else v.pause();
-  }, [visible, src, allowed, ref]);
+  }, [visible, src, allowed, blocked, ref]);
+  if (!a.gif)
+    return (
+      <span className="pointer-events-none absolute inset-0 m-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm" data-testid="video-play">
+        <Play className="ml-0.5 h-6 w-6 fill-current" />
+      </span>
+    );
   if (!src || !allowed) return <span ref={ref as never} className="hidden" />;
-  if (a.mime === "image/gif" || src.includes("/original") && a.gif) {
+  if (a.mime === "image/gif" || src.includes("/original")) {
     // GIF still converting: show the GIF itself
     return <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />;
   }
@@ -623,7 +703,7 @@ function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof 
       muted
       playsInline
       loop
-      preload="metadata"
+      preload="none"
       disablePictureInPicture
       onPlaying={() => setPlaying(true)}
       onPause={() => setPlaying(false)}
