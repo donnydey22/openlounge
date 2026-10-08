@@ -35,6 +35,7 @@ export function initPush(opts: { repo?: PushRepo; sender?: PushSender } = {}) {
     isBot: (id) => store.users.get(id)?.isBot ?? false,
     badgeCount: (id) => store.unreadDmCount(id),
     inApp: (id, n) => inAppSink?.(id, n) ?? false,
+    blocked: (a, b) => store.isBlockedEither(a, b),
   });
   console.log(`[push] ${sender.name === "fcm" ? "FCM HTTP v1 (firebase-admin)" : "disabled (no FIREBASE_SERVICE_ACCOUNT_JSON) — pushes are recorded, not sent"}; storage ${repo instanceof PgPushRepo ? "Postgres" : "memory"}`);
   const purge = setInterval(() => void repo.purgeExpiredHashes().catch(() => {}), 3600_000);

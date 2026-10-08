@@ -290,6 +290,44 @@ await t("new people: 'Maya just joined Open Lounge' — push when away, in-app b
   assert.equal(hit, 1);
 });
 
+await t("live activity: room started / joined → in-app banner while open (no push), push when away; throttle shared; blocks respected", async () => {
+  const s = setup();
+  const shown: { uid: string; n: { type: string; roomId?: string; actorId?: string } }[] = [];
+  const online = new Set<string>(["a"]);
+  const blocks = new Set<string>(["c|h"]);
+  const d = (s.n as unknown as { d: Record<string, unknown> }).d;
+  d.inApp = (uid: string, n: never) => (online.has(uid) ? (shown.push({ uid, n }), true) : false);
+  d.blocked = (x: string, y: string) => blocks.has(`${x}|${y}`) || blocks.has(`${y}|${x}`);
+  s.follows.a = ["h"];
+  s.follows.b = ["h"];
+  s.follows.c = ["h"];
+  for (const u of ["a", "b", "c"]) await s.tok(u);
+  s.fg.add("a");
+  const r = await s.n.roomStarted("r1", "Late night jazz", "h");
+  assert.equal(r.a, "in-app");
+  assert.equal(r.b, "sent");
+  assert.equal(r.c, "skip:blocked");
+  assert.equal(s.sender.sent.length, 1);
+  assert.equal(s.sender.sent[0].tokens[0].userId, "b");
+  assert.deepEqual([shown[0].uid, shown[0].n.type, shown[0].n.roomId, shown[0].n.actorId], ["a", "followedRoom", "r1", "h"]);
+  // the 1-per-10-min active-room throttle covers the in-app copy too
+  s.adv(60_000);
+  const j = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
+  assert.equal(j.a, "skip:throttle");
+  s.adv(10 * 60_000);
+  const j2 = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
+  assert.equal(j2.a, "in-app");
+  assert.equal(shown.at(-1)!.n.actorId, "h");
+  // a hidden tab (online, not foreground) gets the in-app copy AND the device push
+  s.fg.delete("a");
+  s.adv(11 * 60_000);
+  const before = s.sender.sent.length;
+  const r3 = await s.n.roomStarted("r3", "Morning", "h");
+  assert.equal(r3.a, "sent");
+  assert.equal(shown.at(-1)!.n.roomId, "r3");
+  assert.ok(s.sender.sent.slice(before).some((x) => x.tokens[0].userId === "a"));
+});
+
 await t("service account parse: raw JSON, base64, junk", () => {
   const sa = { project_id: "p", client_email: "e@x", private_key: "k" };
   assert.equal(parseServiceAccount(JSON.stringify(sa))?.project_id, "p");

@@ -475,7 +475,8 @@ export function registerRealtime(io: WsHub) {
         socket.join(`room:${roomId}`);
         presence.refresh(userId);
         const rec = store.rooms.get(roomId);
-        if (rec && rec.hostId !== userId)
+        // invite-only rooms (drop-in audio chats) never announce who's in them
+        if (rec && rec.hostId !== userId && !rec.private)
           bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, userId));
         // the LiveKit join token rides on the ack (saves the /api/livekit/token round trip on the way into a room);
         // the client still falls back to the HTTP endpoint when it's missing or for reconnects

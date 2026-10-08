@@ -31,6 +31,8 @@ export interface NotifierDeps {
   isBot?(userId: string): boolean;
   /** app-icon badge: total unread for the user (unread DMs + unread notifications; main has no notification inbox yet, so = unread DMs) */
   badgeCount?(userId: string): number;
+  /** either user blocked the other (live-activity notices never cross a block) */
+  blocked?(a: string, b: string): boolean;
   /** send the in-app copy to the user's open connections; true when at least one connection got it */
   inApp?(userId: string, n: InAppNotice): boolean;
   now?(): number;
@@ -258,23 +260,28 @@ export class Notifier {
     const name = this.d.userName(hostId) ?? "Someone";
     const out: Record<string, Outcome> = {};
     const followers = new Set(this.d.followerIds(hostId));
+    const live = { actorId: hostId, roomId };
     for (const uid of followers) {
       if (uid === hostId) continue;
+      if (this.d.blocked?.(uid, hostId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
       out[uid] = await this.deliver(
         uid,
         "followedRoom",
-        { type: "followedRoom", title: `${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
-        { dedupeKey: `room:${roomId}` },
+        { type: "followedRoom", title: `🎙️ ${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        { dedupeKey: `room:${roomId}`, live },
       );
     }
     const now = this.now();
     for (const [uid, at] of this.recentByHost.get(hostId) ?? []) {
-      if (uid === hostId || followers.has(uid) || now - at > RECENT_ROOM_MS) continue;
+      if (uid === hostId || followers.has(uid) || now - at > RECENT_ROOM_MS || this.d.blocked?.(uid, hostId)) continue;
       out[uid] = await this.deliver(
         uid,
         "recentRoom",
-        { type: "recentRoom", title: `${name} is live again`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
-        { dedupeKey: `room:${roomId}` },
+        { type: "recentRoom", title: `🔴 ${name} is live again`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        { dedupeKey: `room:${roomId}`, live },
       );
     }
     return out;
@@ -293,6 +300,10 @@ export class Notifier {
     const out: Record<string, Outcome> = {};
     for (const uid of this.d.followerIds(userId)) {
       if (inRoom.has(uid)) continue;
+      if (this.d.blocked?.(uid, userId) || this.d.blocked?.(uid, room.hostId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
       const followedInRoom = this.d.followingIds(uid).filter((f) => inRoom.has(f));
       if (followedInRoom.length >= TRENDING_MIN_FOLLOWED) {
         const names = followedInRoom.slice(0, 2).map((f) => this.d.userName(f) ?? "someone");
@@ -308,14 +319,14 @@ export class Notifier {
             url: `/room/${room.id}`,
             data: { roomId: room.id },
           },
-          { dedupeKey: `room:${room.id}` },
+          { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
         );
       } else {
         out[uid] = await this.deliver(
           uid,
           "followedRoom",
           { type: "followedRoom", title: `${name} joined a room`, body: room.title, channel: "rooms", tag: `room:${room.id}`, url: `/room/${room.id}`, data: { roomId: room.id } },
-          { dedupeKey: `room:${room.id}` },
+          { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
         );
       }
     }
@@ -330,7 +341,7 @@ export class Notifier {
         uid,
         "scheduledRoom",
         { type: "scheduledRoom", title: "⏰ Starting now", body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
-        { dedupeKey: `room:${roomId}` },
+        { dedupeKey: `room:${roomId}`, live: { roomId } },
       );
     return out;
   }
