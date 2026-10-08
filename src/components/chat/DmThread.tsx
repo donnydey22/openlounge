@@ -471,7 +471,8 @@ export function DmThread({
   }, [selected]);
   useEffect(() => setSelected(null), [peerId]);
   // ---- emoji reactions / big emoji / interactions ----
-  const [overlay, setOverlay] = useState<{ m: Item; target: OverlayTarget } | null>(null);
+  const [overlay, setOverlay] = useState<{ m: Item; target: OverlayTarget; seq: number } | null>(null);
+  const overlaySeq = useRef(0);
   const [flights, setFlights] = useState<Flight[]>([]);
   const [arriving, setArriving] = useState<Record<string, string>>({}); // messageId → emoji whose flight is in the air
   const [chipPlay, setChipPlay] = useState<Record<string, string>>({}); // messageId → "emoji|nonce" (replay chip)
@@ -986,6 +987,7 @@ export function DmThread({
     const meNow = meRef.current;
     setOverlay({
       m,
+      seq: ++overlaySeq.current,
       target: {
         el,
         mine: m.fromId === meNow?.id,
@@ -1519,10 +1521,15 @@ export function DmThread({
       )}
       {overlay && (
         <MessageActionOverlay
+          // a fresh instance per open; a closing one (150 ms fade) must not close the menu opened right after it
+          key={overlay.seq}
           target={overlay.target}
           actions={overlayActions}
           onReact={(emoji, from) => react(overlay.m.id, emoji, from)}
-          onClose={() => setOverlay(null)}
+          onClose={() => {
+            const mineOv = overlay;
+            setOverlay((cur) => (cur === mineOv ? null : cur));
+          }}
         />
       )}
       {flights.map((f) => (

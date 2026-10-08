@@ -76,14 +76,19 @@ export function ChatComposer({
       setText(editing.text);
       requestAnimationFrame(() => {
         if (!ta) return;
+        ta.value = editing.text; // measure the new text even if React hasn't painted it yet
         grow();
         ta.focus();
         ta.setSelectionRange(editing.text.length, editing.text.length);
       });
     } else if (draftRef.current !== null) {
-      setText(draftRef.current);
+      const draft = draftRef.current;
+      setText(draft);
       draftRef.current = null;
-      requestAnimationFrame(grow);
+      requestAnimationFrame(() => {
+        if (ta) ta.value = draft;
+        grow();
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the message being edited only
   }, [editId]);
