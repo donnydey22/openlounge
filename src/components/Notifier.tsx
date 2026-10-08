@@ -366,7 +366,8 @@ function NotificationPrompt() {
   const ios = support === "ios-install";
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-[58] flex justify-center px-3"
+      // z-45: above page content and the header (z-30) but under modal sheets (z-50+), so it never covers a sheet's actions
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-[45] flex justify-center px-3"
       style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
     >
       <div
