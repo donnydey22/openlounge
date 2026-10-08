@@ -26,7 +26,18 @@ export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
  */
 export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", 45_000);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
-const ENDED_KEEP_MS = 10 * 60_000; // ended calls answer call:get ("Call ended") for a while
+/**
+ * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
+ * ring → accept → connect (ring ≤ 45 s). Once connected, LiveKit keeps the client on server-refreshed tokens (sent right
+ * after join and every few minutes, ~10 min validity), so resume and LiveKit's own full reconnect work in calls of any
+ * length (verified against livekit-server 1.13: /workspace/calls/token-ttl). Our own rejoin asks call:get, which re-mints
+ * while the call is live. After the call ends nothing is re-minted, and a join with a still-valid refreshed token into an
+ * ended call's room is kicked by the LiveKit webhook guard (calls/index.ts) — the credential dies with the call.
+ */
+export const CALL_TOKEN_TTL_S = num("CALL_TOKEN_TTL_S", 180);
+/** ended calls answer call:get ("Call ended") — and keep the webhook guard armed — for a while: longer than a
+ *  LiveKit-refreshed token stays valid (10 min) plus LiveKit's 1 min clock leeway */
+const ENDED_KEEP_MS = 12 * 60_000;
 const METRIC_KEEP = 500;
 
 export interface CallDeps {
@@ -41,7 +52,7 @@ export interface CallDeps {
   inRoom(userId: string): boolean;
   appendCallMessage(meta: CallMeta, calleeId: string): void;
   /** LiveKit: null when audio isn't configured */
-  mintToken(callId: string, userId: string, name: string): Promise<string | null>;
+  mintToken(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
   mediaUrl(): string | null;
   closeMedia(callId: string): void;
   push?: {
@@ -65,7 +76,8 @@ interface CallRec {
   answeredAt: number | null;
   endedAt: number | null;
   outcome: CallOutcome | null;
-  tokens: Map<string, Promise<string | null>>;
+  /** per participant: the current LiveKit token (re-minted by media() once it's past half its lifetime) */
+  tokens: Map<string, { p: Promise<string | null>; at: number }>;
   timer: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
@@ -129,12 +141,30 @@ export class CallService {
     };
   }
 
+  private mint(c: CallRec, userId: string) {
+    const t = { p: this.d.mintToken(c.id, userId, this.d.peer(userId)?.name ?? "Guest", CALL_TOKEN_TTL_S).catch(() => null), at: this.now() };
+    c.tokens.set(userId, t);
+    return t;
+  }
+
+  /** media credential for a participant of a LIVE call (never for an ended one); fresh enough to connect with */
   private async media(c: CallRec, userId: string): Promise<CallMedia | null> {
     const url = this.d.mediaUrl();
-    const t = c.tokens.get(userId);
-    if (!url || !t) return null;
-    const token = await t.catch(() => null);
-    return token ? { url, token } : null;
+    if (!url || c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
+    let t = c.tokens.get(userId);
+    if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
+    const token = await t.p;
+    return token && (c.phase as CallPhase) !== "ended" ? { url, token } : null;
+  }
+
+  /**
+   * LiveKit webhook guard: may this identity be in this call's media room right now? false = the call ended (or the
+   * identity isn't one of its two participants) → kick. null = unknown call (e.g. the app server restarted): leave it.
+   */
+  mediaAllowed(callId: string, userId: string): boolean | null {
+    const c = this.calls.get(callId);
+    if (!c) return null;
+    return c.phase !== "ended" && (userId === c.callerId || userId === c.calleeId);
   }
 
   private limited(userId: string) {
@@ -195,7 +225,7 @@ export class CallService {
     this.live.set(callerId, c.id);
     this.live.set(calleeId, c.id);
     // pre-create both LiveKit tokens now (room is created by LiveKit on first join); accept → connect only
-    for (const uid of [callerId, calleeId]) c.tokens.set(uid, this.d.mintToken(c.id, uid, this.d.peer(uid)?.name ?? "Guest").catch(() => null));
+    for (const uid of [callerId, calleeId]) this.mint(c, uid);
     c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
     c.timer.unref?.();
     const info = this.info(c);
@@ -336,6 +366,7 @@ export class CallService {
     if (c.timer) clearTimeout(c.timer);
     c.timer = null;
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
+    c.tokens.clear(); // the media credential dies with the call: nothing is handed out or re-minted after this
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;
     if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
     else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });

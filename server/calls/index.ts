@@ -1,7 +1,8 @@
 // Wires CallService into the realtime layer (WS handlers) + store + LiveKit + push.
 import type { Conn, WsHub } from "../ws";
 import { store } from "../store";
-import { closeLiveKitRoom, createJoinToken, livekit } from "../livekit";
+import { closeLiveKitRoom, createJoinToken, kickFromLiveKitRoom, livekit } from "../livekit";
+import { onLiveKitEvent } from "../livekitWebhook";
 import { bg, push } from "../push";
 import { log, metrics } from "../log";
 import { CallService } from "./service";
@@ -12,10 +13,12 @@ type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
 
 let svc: CallService | null = null;
+let unwatchMedia: (() => void) | null = null;
 export const calls = () => svc;
 
 /** room id passed to createJoinToken / closeLiveKitRoom → LiveKit room "openlounge-call-<id>" */
 const mediaRoom = (callId: string) => `call-${callId}`;
+const CALL_ROOM_RE = /^openlounge-call-([0-9a-f-]{36})$/;
 
 /** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */
 function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, declineToken: string) {
@@ -49,7 +52,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    mintToken: (callId, userId, name) => (livekit.enabled ? createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true }) : Promise.resolve(null)),
+    mintToken: (callId, userId, name, ttlSec) =>
+      livekit.enabled ? createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec }) : Promise.resolve(null),
     mediaUrl: () => (livekit.enabled ? livekit.url : null),
     closeMedia: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     push: {
@@ -68,6 +72,21 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     log: (msg, extra) => log.info(`[calls] ${msg}`, extra),
   });
   const cur = svc;
+  // The call's media credential dies with the call: anyone joining an ENDED call's LiveKit room (e.g. with a token
+  // LiveKit refreshed for them during the call, valid ~10 min) is removed and the room closed. Unknown calls (app
+  // server restarted mid-call) are left alone — those calls end through the clients' own call:get.
+  unwatchMedia?.();
+  unwatchMedia = onLiveKitEvent((ev) => {
+    if (ev.event !== "participant_joined" || svc !== cur) return;
+    const m = CALL_ROOM_RE.exec(ev.room?.name ?? "");
+    const who = ev.participant?.identity;
+    if (!m || !who) return;
+    if (cur.mediaAllowed(m[1], who) === false) {
+      metrics.inc("calls_media_kicked_total");
+      log.warn("[calls] join into an ended call's media room — removed", { callId: m[1] });
+      return kickFromLiveKitRoom(mediaRoom(m[1]), who);
+    }
+  });
   metrics.gauge("calls_live", () => cur.stats().live);
   metrics.gauge("calls_accept_to_audio_p50_ms", () => cur.stats().acceptToAudio.p50 ?? 0);
   return svc;

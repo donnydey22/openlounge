@@ -19,11 +19,11 @@ const svc = livekit.enabled
 /** One LiveKit room per Open Lounge room. */
 export const lkRoomName = (roomId: string) => `openlounge-${roomId}`;
 
-export async function createJoinToken(opts: { roomId: string; userId: string; name: string; canPublish: boolean }) {
+export async function createJoinToken(opts: { roomId: string; userId: string; name: string; canPublish: boolean; ttlSec?: number }) {
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
     identity: opts.userId,
     name: opts.name,
-    ttl: "2h",
+    ttl: opts.ttlSec ? Math.max(5, Math.round(opts.ttlSec)) : "2h",
   });
   at.addGrant({
     room: lkRoomName(opts.roomId),
@@ -70,6 +70,16 @@ export function muteParticipantAudio(roomId: string, userId: string) {
  * `room:ended`; the delayed deleteRoom is the backstop for anyone who doesn't (so ended
  * rooms can't keep carrying audio).
  */
+/** Remove one participant now and close the room (webhook guard for ended calls). */
+export function kickFromLiveKitRoom(roomId: string, identity: string) {
+  if (!svc) return Promise.resolve();
+  const s = svc;
+  return s
+    .removeParticipant(lkRoomName(roomId), identity)
+    .catch(quiet("removeParticipant"))
+    .then(() => s.deleteRoom(lkRoomName(roomId)).catch(quiet("deleteRoom")));
+}
+
 export function closeLiveKitRoom(roomId: string, delayMs = 4000) {
   if (!svc) return;
   const s = svc;
