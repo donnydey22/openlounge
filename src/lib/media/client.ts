@@ -149,8 +149,8 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 const URL_CACHE_MS = 4 * 60_000;
 
 export function variantsFor(m: MediaAttachment): MediaVariant[] {
-  if (m.kind === "photo") return ["thumb", "full"];
-  if (m.kind === "video") return ["poster", "full"];
+  if (m.kind === "photo") return m.srcset ? ["thumb", "thumbS", "thumbAvif", "thumbSAvif", "full"] : ["thumb", "full"];
+  if (m.kind === "video") return m.hls?.length ? ["poster", "full", "hls", "hlsLow"] : ["poster", "full"];
   if (m.kind === "voice") return ["full"];
   return m.thumb ? ["thumb", "full"] : ["full"];
 }
@@ -175,7 +175,7 @@ async function flush() {
 /** Signed URLs for one attachment (cached ~4 min; requests from the same frame are batched into one call). */
 export function getUrls(m: MediaAttachment, fresh = false): Promise<Urls> {
   const c = cache.get(m.id);
-  if (c && !fresh && c.until > Date.now() && !(m.status === "ready" && c.urls.full?.includes("/original"))) return Promise.resolve(c.urls);
+  if (c && !fresh && c.until > Date.now() && !(m.status === "ready" && c.urls.full?.includes("/original")) && !(m.hls?.length && !c.urls.hls)) return Promise.resolve(c.urls);
   return new Promise((resolve) => {
     const p = pending.get(m.id) ?? { v: variantsFor(m), waiters: [] };
     p.waiters.push(resolve);

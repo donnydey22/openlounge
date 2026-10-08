@@ -41,6 +41,7 @@
     "cross-env": "^7.0.3",
     "firebase": "^12.19.0",
     "firebase-admin": "^14.5.0",
+    "hls.js": "^1.7.3",
     "livekit-client": "^2.22.3",
     "livekit-server-sdk": "^2.19.1",
     "lottie-web": "^5.13.0",

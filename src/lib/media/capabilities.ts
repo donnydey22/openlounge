@@ -1,4 +1,5 @@
 "use client";
+import { dataSaverOn } from "@/lib/dataSaver";
 // Feature detection for media (every engine back to iOS 15 Safari / Android 7 WebView). Never throws.
 
 /** Recorder mime in preference order: Opus in WebM (Chrome, Edge, Firefox, Android), AAC in MP4 (Safari / iOS), Ogg. */
@@ -19,10 +20,9 @@ export function canRecordVoice() {
 
 export const prefersReducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-/** data saver / 2G: don't autoplay videos or prefetch full-size photos */
+/** data saver (shared setting: Settings → Data saver; "auto" = Save-Data / 2G): don't autoplay or prefetch big media */
 export function saveData() {
-  const c = (navigator as unknown as { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
-  return !!c?.saveData || c?.effectiveType === "2g" || c?.effectiveType === "slow-2g";
+  return typeof navigator !== "undefined" && dataSaverOn();
 }
 
 export const hasIntersectionObserver = () => typeof window !== "undefined" && "IntersectionObserver" in window;

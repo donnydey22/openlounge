@@ -37,7 +37,7 @@ export function useMediaUrls(m: MediaAttachment | undefined, enabled: boolean): 
   const id = m?.id;
   const skip = !m || !enabled || id!.startsWith("local-") || !!m.viewOnce || mediaGone(m, serverNow());
   const [urls, setUrls] = useState<Urls | null>(() => (id && !skip ? cachedUrls(id) : null));
-  const status = m?.status;
+  const status = `${m?.status}:${m?.hls?.length ?? 0}`;
   useEffect(() => {
     if (skip || !m) return;
     let alive = true;
