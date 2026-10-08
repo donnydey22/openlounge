@@ -47,7 +47,8 @@ import { getUrls, markPlayed, openViewOnce } from "@/lib/media/client";
 import { cycleRate, pauseVoice, playVoice, registerVoice, seekVoice, useVoiceState } from "@/lib/media/player";
 import { inNativeApp, mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabilities";
 import { PLAYBACK_EVENT, exclusivePlaying, measuredBps, prefetchPlayer } from "@/lib/media/adaptive";
-import { networkHint } from "@/lib/dataSaver";
+import { linkBps, linkSlow, networkHint } from "@/lib/dataSaver";
+import { afterCritical, beginCritical } from "@/lib/media/critical";
 import { useInView, useMediaUrls, useTick } from "./hooks";
 import { CountdownRing, ProgressRing } from "./Rings";
 import { openViewer } from "./viewerStore";
@@ -204,6 +205,12 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
   const uploading = !!outbox && outbox.phase !== "done" && outbox.phase !== "failed";
   const failed = m.state === "failed" || outbox?.phase === "failed";
   const viewOnceLocked = !!a.viewOnce;
+  // a video near the screen: warm the player chunk once the thumbnails are in, so a tap starts streaming right away
+  // (not on data saver; a tap / hover still warms it)
+  const warm = near && isVideo && !a.gif && !uploading;
+  useEffect(() => {
+    if (warm && !saveData()) afterCritical(prefetchPlayer, 2);
+  }, [warm]);
 
   const open = async () => {
     if (uploading || failed || m.id.startsWith("local-")) return;
@@ -601,8 +608,14 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
   useEffect(() => {
     if (local || state !== "loading") return;
     t0.current = performance.now();
-    const t = setTimeout(() => setState((s) => (s === "loading" ? "error" : s)), 20_000);
-    return () => clearTimeout(t);
+    // on screen thumbnails go before deferred downloads (quick-reaction animations, the player chunk)
+    const done = beginCritical();
+    // a stalled load shows "Tap to retry"; slow links get longer before we call it stalled
+    const t = setTimeout(() => setState((s) => (s === "loading" ? "error" : s)), linkSlow() ? 45_000 : 20_000);
+    return () => {
+      clearTimeout(t);
+      done();
+    };
   }, [local, state, attempt]);
   const record = (ok: boolean) => {
     if (local) return;
@@ -612,13 +625,16 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
   };
   const bust = (u: string) => (attempt && !local ? `${u}${u.includes("?") ? "&" : "?"}r=${attempt}` : u);
   // data saver or a slow link → the 320px candidates; otherwise the tile's CSS width (DPR picks 640 on phones)
-  const sizes = saveData() || networkHint().slow || (measuredBps() ?? Infinity) < 600_000 ? "160px" : `${width}px`;
+  const sizes = saveData() || networkHint().slow || (measuredBps() ?? Infinity) < 600_000 || (linkBps() ?? Infinity) < 800_000 ? "160px" : `${width}px`;
   const img = (
     <img
       src={bust(src)}
       alt=""
       decoding="async"
-      loading="lazy"
+      // the tile only mounts this once it's within ~800px of the screen (IntersectionObserver), so no native lazy
+      // loading on top (it defers past layout and drops the request's priority); fetch it ahead of scripts/emoji
+      loading="eager"
+      fetchPriority="high"
       draggable={false}
       onLoad={() => {
         setState("loaded");

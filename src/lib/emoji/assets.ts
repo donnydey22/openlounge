@@ -13,6 +13,8 @@
 // localStorage "ol:emojiSet" / ?emojiSet= for side-by-side comparisons (noto first, then Telegram).
 // Keys are lower-case hex code points without FE0F, joined by "_" (❤️ → "2764", 👍🏽 → "1f44d_1f3fd").
 
+import { linkSlow } from "@/lib/dataSaver";
+import { afterCritical } from "@/lib/media/critical";
 import { NOTO_KEYS, TG_KEYS } from "./keys";
 
 export type EmojiSource = "telegram" | "noto";
@@ -154,10 +156,12 @@ export function preloadQuickReactions() {
   if (preloaded || typeof window === "undefined") return;
   preloaded = true;
   const run = () => {
+    // slow link / data saver: just the small posters; the animations load when the reaction bar opens
+    const postersOnly = linkSlow();
     for (const e of QUICK_REACTIONS) {
       const a = animatedAsset(e);
       if (!a) continue;
-      for (const url of [a.src, a.poster]) {
+      for (const url of postersOnly ? [a.poster] : [a.src, a.poster]) {
         if (!url) continue;
         const img = a.type === "webp" || url === a.poster ? new Image() : null;
         if (img) {
@@ -167,9 +171,8 @@ export function preloadQuickReactions() {
       }
     }
   };
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-  if (ric) ric(run, { timeout: 1500 });
-  else setTimeout(run, 300);
+  // after the chat's on-screen thumbnails/posters (~1 MB of animations would otherwise starve them on slow links)
+  afterCritical(run, 5);
 }
 
 /** 1–3 emoji (and whitespace) and nothing else → big animated emoji, no bubble. Returns the emoji or null. */

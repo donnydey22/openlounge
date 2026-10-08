@@ -4,6 +4,7 @@
 import { authFetch, getAccessToken } from "@/lib/auth";
 import type { DirectMessage } from "@/lib/types";
 import type { MediaAttachment, MediaKind, MediaUpdateEvent, MediaVariant } from "./types";
+import { beginCritical } from "./critical";
 
 export class UploadCancelled extends Error {
   constructor() {
@@ -160,8 +161,11 @@ async function flush() {
   const batch = [...pending.entries()].slice(0, 100);
   for (const [id] of batch) pending.delete(id);
   if (pending.size) flushTimer = setTimeout(flush, 0);
+  // signing gates every thumbnail: it counts as critical (deferred downloads wait for it)
+  const done = beginCritical();
   try {
     const r = await postJson<{ urls: Record<string, Urls> }>("/api/media/sign", { items: batch.map(([id, p]) => ({ id, v: p.v })) });
+    preconnectTo(Object.values(r.urls)[0]);
     for (const [id, p] of batch) {
       const urls = r.urls[id] ?? { gone: true };
       cache.set(id, { urls, until: Date.now() + URL_CACHE_MS });
@@ -169,6 +173,32 @@ async function flush() {
     }
   } catch {
     for (const [, p] of batch) p.waiters.forEach((w) => w({}));
+  } finally {
+    done();
+  }
+}
+
+/** Media served from another origin (the self-hosted media cache, MEDIA_CDN_BASE): open its connections early, both
+ *  the credentialed pool (<img>) and the anonymous one (hls.js / fetch), so the first thumbnail skips DNS+TCP+TLS. */
+const preconnected = new Set<string>();
+function preconnectTo(urls: Urls | undefined) {
+  if (typeof document === "undefined" || !urls) return;
+  const u = Object.values(urls).find((v): v is string => typeof v === "string" && /^https?:\/\//.test(v));
+  if (!u) return;
+  let origin: string;
+  try {
+    origin = new URL(u).origin;
+  } catch {
+    return;
+  }
+  if (origin === location.origin || preconnected.has(origin)) return;
+  preconnected.add(origin);
+  for (const cors of [false, true]) {
+    const l = document.createElement("link");
+    l.rel = "preconnect";
+    l.href = origin;
+    if (cors) l.crossOrigin = "anonymous";
+    document.head.appendChild(l);
   }
 }
 
