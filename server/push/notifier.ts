@@ -174,7 +174,7 @@ export class Notifier {
   // ---------- 1:1 calls ----------
   /** Ringing while the app is closed/backgrounded: data message (wrappers build a full-screen call UI from it; see
    *  /workspace/calls/NATIVE_SPEC.md) + a visible "Incoming call" alert on iOS / web. Same tag as the missed call so it's replaced. */
-  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean } = {}) {
+  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean; declineToken?: string } = {}) {
     // skipIos: the iPhone already rings through CallKit (VoIP push, server/calls/voip.ts) → no duplicate "Incoming call" alert
     return this.deliver(calleeId, "dm", {
       type: "call_incoming",
@@ -183,7 +183,7 @@ export class Notifier {
       channel: "messages",
       tag: `call:${call.id}`,
       url: `/call/${call.id}`,
-      data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId },
+      data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId, ...(opts.declineToken ? { declineToken: opts.declineToken } : {}) },
     }, opts.skipIos ? { skipPlatforms: ["ios"] } : {});
   }
 

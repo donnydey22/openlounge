@@ -205,6 +205,12 @@ export class CallService {
     return c;
   }
 
+  /** participant view of a call without minting media (decline-token checks, server/calls/api.ts) */
+  peek(callId: unknown, userId: string): CallInfo | null {
+    const c = this.get(callId, userId);
+    return c ? this.info(c) : null;
+  }
+
   /** A callee device got call:incoming and is ringing → caller switches "Calling…" to "Ringing…". */
   ack(callId: unknown, userId: string) {
     const c = this.get(callId, userId);

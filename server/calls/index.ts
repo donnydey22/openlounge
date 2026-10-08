@@ -6,6 +6,7 @@ import { bg, push } from "../push";
 import { log, metrics } from "../log";
 import { CallService } from "./service";
 import { initVoip, voipService } from "./voip";
+import { declineTokens } from "./declineToken";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -17,7 +18,7 @@ export const calls = () => svc;
 const mediaRoom = (callId: string) => `call-${callId}`;
 
 /** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */
-function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }) {
+function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, declineToken: string) {
   return {
     type: "call_incoming",
     callId: call.id,
@@ -27,6 +28,7 @@ function voipPayload(call: { id: string; callerId: string; video: boolean; expir
     video: call.video ? "1" : "0",
     expiresAt: String(call.expiresAt),
     url: `/call/${call.id}`,
+    declineToken, // session-less Decline from CallKit (server/calls/declineToken.ts)
   };
 }
 
@@ -55,8 +57,10 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       incoming: (calleeId, call) =>
         bg(
           (async () => {
-            const rang = await (voipService()?.ring(calleeId, voipPayload(call), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
-            await push()?.callIncoming(calleeId, call, { skipIos: rang > 0 });
+            // one single-use, call+callee-scoped token shared by both surfaces: Decline works even with an expired session
+            const declineToken = declineTokens().mint(call.id, calleeId, call.expiresAt);
+            const rang = await (voipService()?.ring(calleeId, voipPayload(call, declineToken), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
+            await push()?.callIncoming(calleeId, call, { skipIos: rang > 0, declineToken });
           })(),
         ),
       cancel: (calleeId, callId, reason) => bg(push()?.callCancel(calleeId, callId, reason)),

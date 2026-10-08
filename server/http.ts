@@ -1,6 +1,6 @@
 // HTTP API (everything under /api/* and /auth/*), shared by server/index.ts and the in-process tests.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleCallsHttp, isCallsHttpPath } from "./calls/api";
+import { handleCallsHttp, handleTokenDecline, isCallsHttpPath } from "./calls/api";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
 import { handleGroupsApi } from "./groups";
@@ -204,6 +204,7 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
 
   // ---- native call ring UIs: decline / status / PushKit token (server/calls/api.ts) ----
   if (isCallsHttpPath(url)) {
+    if (await handleTokenDecline(req, res, url, !!bearer(req), json, readJson)) return; // per-call token from the ring push, no session needed
     const auth = await store.authenticate(bearer(req));
     if (!auth.ok) return json(res, 401, { ok: false, reason: auth.reason, error: "Not signed in" });
     return handleCallsHttp(req, res, url, auth.userId, json, readJson);
