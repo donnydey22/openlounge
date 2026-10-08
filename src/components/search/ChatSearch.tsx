@@ -37,7 +37,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const threadRoot = () => (document.querySelector('[data-testid="dm-thread"]') as HTMLElement | null) ?? (document.querySelector("#app-scroll") as HTMLElement | null);
 
 function findBubble(m: HxMessage): HTMLElement | null {
-  const byId = document.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`) as HTMLElement | null;
+  // DM + group threads mark each message row with data-mid ([data-testid=dm-msg]; group service rows too)
+  const byId = document.querySelector(
+    `[data-message-id="${CSS.escape(m.id)}"], [data-testid="dm-msg"][data-mid="${CSS.escape(m.id)}"], [data-testid="group-service"][data-mid="${CSS.escape(m.id)}"]`,
+  ) as HTMLElement | null;
   if (byId) return byId;
   // fallback for renderers without data-message-id: the smallest element whose text is exactly this message
   const root = threadRoot();
