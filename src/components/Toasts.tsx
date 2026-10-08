@@ -156,7 +156,7 @@ function Banner({ t, queued, onDone }: { t: Toast; queued: boolean; onDone: (id:
       {person ? (
         <Avatar name={person.name} color={person.color} photo={person.photo} size="banner" presence={person.userId && presenceOf(person.userId) !== "offline" ? (presenceOf(person.userId) as "online" | "away") : null} />
       ) : (
-        <span className="openlounge-hex relative block h-9 w-9 shrink-0 overflow-hidden" aria-hidden>
+        <span className="relative block h-9 w-9 shrink-0 overflow-hidden rounded-full" aria-hidden>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={ICON} alt="" className="h-full w-full object-cover" draggable={false} />
         </span>
