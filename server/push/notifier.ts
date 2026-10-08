@@ -132,6 +132,44 @@ export class Notifier {
     });
   }
 
+  // ---------- 1:1 calls ----------
+  /** Ringing while the app is closed/backgrounded: data message (wrappers build a full-screen call UI from it; see
+   *  /workspace/calls/NATIVE_SPEC.md) + a visible "Incoming call" alert on iOS / web. Same tag as the missed call so it's replaced. */
+  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }) {
+    return this.deliver(calleeId, "dm", {
+      type: "call_incoming",
+      title: call.caller.name,
+      body: call.video ? "📹 Incoming video call" : "📞 Incoming audio call",
+      channel: "messages",
+      tag: `call:${call.id}`,
+      url: `/call/${call.id}`,
+      data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId },
+    });
+  }
+
+  /** stop the native ring UI (caller hung up / answered elsewhere / timeout) */
+  async callCancel(calleeId: string, callId: string, reason: string) {
+    const tokens = await this.d.repo.tokensFor(calleeId);
+    if (!tokens.length) return;
+    const res = await this.d.sender.send(tokens, { type: "call_cancel", title: "", body: "", channel: "messages", tag: `call:${callId}`, url: "", clear: true, data: { callId, reason } });
+    for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
+  }
+
+  /** "Missed call" with a Call back action (deep link opens the chat and starts the call back). */
+  async missedCall(m: { fromId: string; toId: string; fromName: string; call?: { id: string; video: boolean } }) {
+    if (this.d.isForeground(m.toId)) return "skip:foreground" as Outcome; // the in-app chat shows it
+    const video = !!m.call?.video;
+    return this.deliver(m.toId, "dm", {
+      type: "missedCall",
+      title: "Missed call",
+      body: `${m.fromName} · ${video ? "video" : "audio"} call`,
+      channel: "messages",
+      tag: m.call ? `call:${m.call.id}` : `dm:${m.fromId}`,
+      url: `/messages/${m.fromId}?call=${video ? "video" : "audio"}`,
+      data: { peerId: m.fromId, action: "callback", ...(m.call ? { callId: m.call.id } : {}) },
+    });
+  }
+
   /** reader saw the thread: clear the notification on their devices */
   async dmRead(readerId: string, peerId: string) {
     const tokens = await this.d.repo.tokensFor(readerId);

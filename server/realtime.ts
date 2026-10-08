@@ -16,6 +16,7 @@ import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
 import { bg, push, setForegroundCheck } from "./push";
+import { attachCallHandlers, calls, wireCalls } from "./calls";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
 const TYPING_MAX_PER_10S = 20; // typing + typing_stop frames per socket per 10s
@@ -69,6 +70,11 @@ export function registerRealtime(io: WsHub) {
   const otp = new OtpService();
   // a user is "in the foreground" when any of their connections is visible (not a backgrounded WebView / hidden tab)
   setForegroundCheck((userId) => {
+    for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
+    return false;
+  });
+  // 1:1 audio/video calls (server/calls): ringing is pushed when no app/tab is visible
+  wireCalls(io, (userId) => {
     for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
     return false;
   });
@@ -205,7 +211,11 @@ export function registerRealtime(io: WsHub) {
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
       // room invite / drop-in cards: a "join the room" push (opens the room) instead of a plain DM push
-      if (msg.kind && msg.roomId) bg(push()?.roomInviteDm(msg.roomId, store.rooms.get(msg.roomId)?.title ?? "", msg.fromId, msg.toId, msg.kind));
+      if (msg.kind === "call") {
+        // call service message: only missed calls notify ("Missed call · Call back"); answered/declined are silent
+        const o = msg.call?.outcome;
+        if (o === "missed" || o === "cancelled" || o === "busy") bg(push()?.missedCall(msg));
+      } else if (msg.kind && msg.roomId) bg(push()?.roomInviteDm(msg.roomId, store.rooms.get(msg.roomId)?.title ?? "", msg.fromId, msg.toId, msg.kind));
       else bg(push()?.dm(msg));
     },
     dmTyping(fromId, toId) {
@@ -257,6 +267,8 @@ export function registerRealtime(io: WsHub) {
       if (!userId) return (ack ?? noop)({ ok: false, error: "Not signed in" });
       fn(userId);
     };
+
+    attachCallHandlers(socket, authed);
 
     // any authenticated interaction moves "last seen" forward (throttled; no-op while online)
     socket.onAny = (ev) => {
@@ -434,6 +446,8 @@ export function registerRealtime(io: WsHub) {
 
     socket.on("room:join", ({ roomId }: { roomId: string }, ack: AckFn = noop) =>
       authed(ack, async (userId) => {
+        // one audio session at a time: a live 1:1 call blocks joining a room (and vice versa, see server/calls)
+        if (calls()?.liveCallOf(userId)) return ack({ ok: false, error: "Hang up your call to join a room" });
         // leave channels for any other rooms
         for (const r of socket.rooms) if (r.startsWith("room:") && r !== `room:${roomId}`) socket.leave(r);
         const res = store.join(roomId, userId, socket.id);

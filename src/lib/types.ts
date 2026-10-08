@@ -157,14 +157,57 @@ export interface DirectMessage {
   fromPhotoUrl?: string | null;
   /** Sender-generated id echoed back so an optimistic bubble is replaced in place (no flicker / duplicate) */
   clientId?: string;
-  /** Rich message kind: a live audio room invite card or a drop-in audio chat (absent = plain text) */
-  kind?: DmKind;
-  /** room the invite card points at (kind set) */
+  /** Rich message kind: a live audio room invite card, a drop-in audio chat, or a call service message (absent = plain text) */
+  kind?: MessageKind;
+  /** room the invite card points at (kind set; "call-<id>" for call messages) */
   roomId?: string;
+  /** call service message details (kind = "call") */
+  call?: CallMeta;
+}
+
+/** Outcome of a 1:1 call as recorded in the DM ("Outgoing call · 3:12", "Missed call", …). */
+export type CallOutcome = "completed" | "missed" | "declined" | "cancelled" | "busy" | "failed";
+export interface CallMeta {
+  id: string;
+  callerId: string;
+  video: boolean;
+  outcome: CallOutcome;
+  durationSec: number;
 }
 
 export const DM_KINDS = ["room_invite", "dropin"] as const;
 export type DmKind = (typeof DM_KINDS)[number];
+export type MessageKind = DmKind | "call";
+
+/** A call as the client sees it (call:incoming / call:start / call:get). */
+export interface CallPeer {
+  id: string;
+  name: string;
+  username?: string;
+  color: string;
+  photoUrl: string | null;
+}
+export type CallPhase = "calling" | "ringing" | "active" | "ended";
+export interface CallInfo {
+  id: string;
+  callerId: string;
+  calleeId: string;
+  video: boolean;
+  phase: CallPhase;
+  createdAt: number;
+  answeredAt: number | null;
+  endedAt: number | null;
+  outcome: CallOutcome | null;
+  /** ring deadline (epoch ms) */
+  expiresAt: number;
+  caller: CallPeer;
+  callee: CallPeer;
+}
+/** What a participant needs to connect media: LiveKit URL + token (pre-created at ring time). */
+export interface CallMedia {
+  url: string;
+  token: string;
+}
 
 /**
  * Live state of an audio room as shown on an in-chat invite / link card ("room:card" events, "room:cards" request).

@@ -1,0 +1,149 @@
+/* Call screens (Telegram-inspired). transform/opacity only on animated layers (compositor, 60fps).
+   prefers-reduced-motion → static, simple fades. */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
+  color: #fff;
+  background: #0b1220;
+  animation: screenIn 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@keyframes screenIn {
+  from { opacity: 0; transform: scale(1.04); }
+  to { opacity: 1; transform: none; }
+}
+.screenOut { animation: screenOut 260ms ease-in both; }
+@keyframes screenOut { to { opacity: 0; transform: scale(0.96); } }
+
+/* blurred avatar + slowly drifting colour blobs behind everything */
+.bgPhoto {
+  position: absolute;
+  inset: -40px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(36px) saturate(1.3) brightness(0.55);
+  transform: scale(1.15);
+}
+.blob {
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.55;
+  will-change: transform;
+}
+.blobA { left: -25vmax; top: -20vmax; animation: driftA 14s ease-in-out infinite alternate; }
+.blobB { right: -30vmax; bottom: -25vmax; animation: driftB 17s ease-in-out infinite alternate; }
+@keyframes driftA { to { transform: translate(18vmax, 14vmax) scale(1.15); } }
+@keyframes driftB { to { transform: translate(-16vmax, -12vmax) scale(1.1); } }
+.shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgb(0 0 0 / 0.25), rgb(0 0 0 / 0.05) 40%, rgb(0 0 0 / 0.55)); }
+
+/* avatar rings while calling / ringing */
+.rings { position: relative; display: grid; place-items: center; }
+.ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid rgb(255 255 255 / 0.35);
+  animation: ring 2.4s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  will-change: transform, opacity;
+}
+.ring:nth-child(2) { animation-delay: 0.8s; }
+.ring:nth-child(3) { animation-delay: 1.6s; }
+@keyframes ring {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+/* speaking glow on the remote avatar during an audio call */
+.talk { transition: transform 120ms ease-out, box-shadow 160ms ease-out; }
+
+/* Accept button: Telegram's pulse + a soft halo */
+.accept { position: relative; animation: acceptPulse 1.4s ease-in-out infinite; }
+.accept::before,
+.accept::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgb(52 211 153 / 0.45);
+  animation: halo 1.4s ease-out infinite;
+  z-index: -1;
+}
+.accept::after { animation-delay: 0.7s; }
+@keyframes acceptPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+@keyframes halo {
+  from { transform: scale(1); opacity: 0.7; }
+  to { transform: scale(1.8); opacity: 0; }
+}
+.swipeHint { animation: swipeHint 1.6s ease-in-out infinite; }
+@keyframes swipeHint {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-6px); opacity: 1; }
+}
+
+.btn { transition: transform 140ms ease-out, background-color 160ms ease-out, opacity 160ms; }
+.btn:active { transform: scale(0.92); }
+
+.fadeUp { animation: fadeUp 280ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.controlsHidden { opacity: 0; transform: translateY(16px); pointer-events: none; }
+.controls { transition: opacity 240ms ease, transform 240ms ease; }
+
+/* self-view PiP */
+.pip {
+  position: absolute;
+  z-index: 5;
+  overflow: hidden;
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  touch-action: none;
+  transition: transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+  will-change: transform;
+}
+.pipDragging { transition: none; }
+
+/* minimized call bar: a full-width green strip at the top; app headers ([data-app-header]) move down under it so
+   nothing is covered (Telegram behaviour) */
+.bar {
+  position: fixed;
+  inset-inline: 0;
+  top: 0;
+  z-index: 85;
+  height: calc(28px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
+  animation: barIn 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@keyframes barIn {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+.barDot { animation: barDot 1.2s ease-in-out infinite; }
+@keyframes barDot { 50% { opacity: 0.35; } }
+:global(html[data-call-bar]) :global([data-app-header]) {
+  margin-top: 28px;
+  transition: margin-top 240ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+:global(html[data-call-bar]) :global([data-app-header].sticky) {
+  top: 28px;
+}
+
+.banner { animation: fadeUp 220ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .screen, .fadeUp, .bar, .banner { animation: none; }
+  .blobA, .blobB, .ring, .accept, .accept::before, .accept::after, .swipeHint, .barDot { animation: none; }
+  .ring { opacity: 0; }
+  .pip, .controls { transition: opacity 200ms; }
+}

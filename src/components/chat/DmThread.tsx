@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, Trash2, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, Phone, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -26,6 +26,8 @@ import { useRoomCards } from "@/hooks/useRoomCards";
 import { roomIdsInText } from "@/lib/roomLinks";
 import { RoomCardRow, RoomLinkCards } from "../rooms/RoomJoinCard";
 import { DmRoomActions } from "../rooms/DmRoomActions";
+import { CallMessageRow } from "../calls/CallMessageRow";
+import { startCall } from "../calls/CallProvider";
 import { DropInBanner } from "../rooms/DropInBanner";
 import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
 import { MentionPicker, MentionText, PinnedBar, ServiceRow, jumpToMessage, memberLine, senderPeer, useGroupInfo } from "../groups/GroupBits";
@@ -634,7 +636,7 @@ export function DmThread({
   }, [messages]);
   const cardIds = useMemo(() => {
     const set = new Set<string>();
-    for (const x of messages ?? []) if (x.kind && x.roomId) set.add(x.roomId);
+    for (const x of messages ?? []) if (x.kind && x.kind !== "call" && x.roomId) set.add(x.roomId);
     for (const ids of linkIds.values()) for (const id of ids) set.add(id);
     return [...set];
   }, [messages, linkIds]);
@@ -643,6 +645,26 @@ export function DmThread({
     for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) if (messages![i].kind === "dropin" && messages![i].roomId) return messages![i].roomId!;
     return null;
   }, [messages]);
+  // 1:1 calls: header buttons, call-back taps, and the "Call back" deep link from a missed-call push (?call=audio|video)
+  const canCall = !!peer && !isGroup && !peer.isBot && !peer.deleted && !iBlocked && !hiddenPeer;
+  const callPeer = useCallback(
+    (video: boolean) => {
+      if (!peer) return;
+      void startCall({ id: peer.id, name: peer.name, color: peer.color, photoUrl: peer.photoUrl ?? null, username: peer.username }, video);
+    },
+    [peer],
+  );
+  const autoCalled = useRef(false);
+  useEffect(() => {
+    if (!canCall || autoCalled.current || typeof window === "undefined" || !connected) return;
+    const u = new URL(window.location.href);
+    const want = u.searchParams.get("call");
+    if (want !== "audio" && want !== "video") return;
+    autoCalled.current = true;
+    u.searchParams.delete("call");
+    window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash);
+    callPeer(want === "video");
+  }, [canCall, connected, callPeer]);
   const onCardSent = useCallback((m: DirectMessage) => {
     stickToBottom.current = true;
     smoothNext.current = true;
@@ -709,6 +731,16 @@ export function DmThread({
           <div className="pr-1">
             <FollowButton userId={peer.id} small />
           </div>
+        )}
+        {canCall && (
+          <>
+            <button onClick={() => callPeer(true)} disabled={offline} className="hidden rounded-full p-2 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 disabled:opacity-40 min-[360px]:block" aria-label={`Video call ${peer.name}`} data-testid="dm-video-call">
+              <Video className="h-5 w-5" />
+            </button>
+            <button onClick={() => callPeer(false)} disabled={offline} className="rounded-full p-2 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 disabled:opacity-40" aria-label={`Call ${peer.name}`} data-testid="dm-call">
+              <Phone className="h-5 w-5" />
+            </button>
+          </>
         )}
         {peer && !peer.isBot && !isGroup && (
           <button onClick={() => setMoreOpen(true)} className="mr-1 rounded-full p-2 text-zinc-400 hover:bg-white/5 hover:text-zinc-100" aria-label="More options">
@@ -838,7 +870,21 @@ export function DmThread({
                   Show earlier messages
                 </button>
               )}
-              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return m.kind && m.roomId ? (
+              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return m.kind === "call" && m.call ? (
+                <CallMessageRow
+                  key={keyOf(m)}
+                  meta={m.call}
+                  mine={m.fromId === me?.id}
+                  time={formatClock(m.createdAt)}
+                  sep={sep}
+                  sepTitle={formatFull(m.createdAt)}
+                  first={first}
+                  last={last}
+                  peer={peer}
+                  disabled={!canCall || offline}
+                  onCallBack={callPeer}
+                />
+              ) : m.kind && m.kind !== "call" && m.roomId ? (
                 <RoomCardRow
                   key={keyOf(m)}
                   roomId={m.roomId}

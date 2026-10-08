@@ -20,7 +20,7 @@ import type {
   RoomSummary,
   UserProfile,
 } from "../src/lib/types";
-import type { DmKind, RoomCard } from "../src/lib/types";
+import type { CallMeta, DmKind, MessageKind, RoomCard } from "../src/lib/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -2048,7 +2048,7 @@ export class Store {
     return { ok: true as const, message: msg };
   }
 
-  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind: DmKind; roomId: string }) {
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind: MessageKind; roomId: string; call?: CallMeta; read?: boolean }) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -2065,13 +2065,55 @@ export class Store {
       readAt: null,
       ...(clientId ? { clientId } : {}),
       ...(extra ? { kind: extra.kind, roomId: extra.roomId } : {}),
+      ...(extra?.call ? { call: extra.call } : {}),
     };
+    if (extra?.read) msg.readAt = msg.createdAt; // answered / declined calls never count as unread
     list.push(msg);
     if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
     this.events?.dmMessage(msg);
     return msg;
+  }
+
+  // ---------- 1:1 calls (server/calls): policy + service messages ----------
+
+  /** Has `fromId` ever sent `toId` a message (text or card) that's still in history? */
+  hasMessaged(fromId: string, toId: string) {
+    const list = this.dms.get(conversationId(fromId, toId));
+    return !!list?.some((m) => m.fromId === fromId && m.toId === toId && m.kind !== "call");
+  }
+
+  /**
+   * Who may ring whom: not blocked either way, both real accounts, and the callee has a relationship with the caller
+   * (follows them back or has messaged them). Cold calls from strangers are the #1 abuse vector for in-app calling.
+   */
+  callPolicy(callerId: string, calleeId: string): { ok: true } | { ok: false; reason: "self" | "unknown" | "blocked" | "not_allowed"; error: string } {
+    if (callerId === calleeId) return { ok: false, reason: "self", error: "You can't call yourself" };
+    const callee = this.users.get(calleeId);
+    if (!callee || !this.users.has(callerId) || callee.isBot) return { ok: false, reason: "unknown", error: "This account can't be called" };
+    if (this.isBlockedEither(callerId, calleeId)) return { ok: false, reason: "blocked", error: "You can't call this account." };
+    const follows = this.follows.get(calleeId)?.has(callerId) ?? false;
+    if (!follows && !this.hasMessaged(calleeId, callerId))
+      return { ok: false, reason: "not_allowed", error: `You can call ${callee.name.split(" ")[0] || callee.name} once they message you or follow you back.` };
+    return { ok: true };
+  }
+
+  /** The call's service message in the DM (one per call, caller → callee). Missed/cancelled/busy stay unread for the callee. */
+  appendCallMessage(meta: CallMeta, calleeId: string) {
+    const kindWord = meta.video ? "video call" : "audio call";
+    const icon = meta.video ? "📹" : "📞";
+    const dur = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    const text =
+      meta.outcome === "completed"
+        ? `${icon} ${meta.video ? "Video" : "Audio"} call · ${dur(meta.durationSec)}`
+        : meta.outcome === "declined"
+          ? `${icon} Declined ${kindWord}`
+          : meta.outcome === "failed"
+            ? `${icon} Call failed`
+            : `${icon} Missed ${kindWord}`;
+    const missed = meta.outcome === "missed" || meta.outcome === "cancelled" || meta.outcome === "busy";
+    return this.appendDm(meta.callerId, calleeId, text, undefined, { kind: "call", roomId: `call-${meta.id}`, call: meta, read: !missed });
   }
 
   // ---------- audio rooms in DMs: invite cards + drop-in audio chats ----------

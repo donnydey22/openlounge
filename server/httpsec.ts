@@ -69,7 +69,7 @@ export function securityHeaders(env: Record<string, string | undefined> = proces
   const h: Record<string, string> = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": `microphone=(self), camera=(), geolocation=(), payment=${
+    "Permissions-Policy": `microphone=(self), camera=(self), geolocation=(), payment=${
       // paid stickers: Google Pay / Payment Request (incl. inside PayPal's frames) only when the paid flag is on
       /^(1|true|yes)$/i.test(env.STICKERS_PAID_ENABLED ?? "") ? '(self "https://pay.google.com" "https://www.paypal.com" "https://www.sandbox.paypal.com")' : "()"
     }, usb=(), interest-cohort=()`,
