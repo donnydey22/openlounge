@@ -36,6 +36,19 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /** Ask before leaving the app for a link someone sent (one sheet for the whole app, see LinkConfirmHost). */
+type NativeBridge = { openUrl?: (url: string, opts?: Record<string, unknown>) => unknown };
+/** Native wrapper bridge (window.OpenLoungeNative.openUrl, see /workspace/native/BROWSER_BRIDGE.md). Only http(s). */
+export function openInNativeBrowser(href: string): boolean {
+  const n = (window as unknown as { OpenLoungeNative?: NativeBridge }).OpenLoungeNative;
+  if (typeof n?.openUrl !== "function" || !/^https?:\/\//i.test(href)) return false;
+  try {
+    n.openUrl(href, { reader: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function openLinkConfirm(t: LinkToken, opts: { menu?: boolean } = {}) {
   window.dispatchEvent(new CustomEvent<{ t: LinkToken; menu: boolean }>(EVENT, { detail: { t, menu: !!opts.menu } }));
 }
@@ -120,7 +133,16 @@ export function LinkConfirmHost() {
                 : null)}
               rel={REL}
               referrerPolicy="no-referrer"
-              {...(!internal ? { onClick: () => setTimeout(close, 0) } : null)}
+              {...(!internal
+                ? {
+                    onClick: (e: React.MouseEvent) => {
+                      // phone apps: hand the URL to the native in-app browser (Custom Tabs / SFSafariViewController)
+                      // when the wrapper exposes it; otherwise the real target=_blank tap does the job
+                      if (t.kind === "external" && openInNativeBrowser(t.href)) e.preventDefault();
+                      setTimeout(close, 0);
+                    },
+                  }
+                : null)}
               className={cn(
                 "flex h-12 items-center justify-center gap-2 rounded-full px-5 text-[15px] font-semibold",
                 risky ? "bg-red-500/90 text-white hover:bg-red-500" : "bg-emerald-500 text-on-accent hover:bg-emerald-400",
