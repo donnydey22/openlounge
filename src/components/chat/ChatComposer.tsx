@@ -1,9 +1,11 @@
 "use client";
 
+import "./emoji/chat-fx.css";
 import { createPortal } from "react-dom";
 
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Check, Keyboard, Pencil, SendHorizontal, Smile, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Bold, Check, Code, EyeOff, Italic, Keyboard, Link2, Pencil, SendHorizontal, Smile, Strikethrough, Underline, X } from "lucide-react";
+import { toggleStyle, wrapLink, type MdStyle } from "@/lib/format/markdown";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
@@ -105,6 +107,121 @@ export function ChatComposer({
       ta.setSelectionRange(pos, pos);
     });
   };
+  // ---- formatting (Telegram): select text → toolbar above the composer; Ctrl/Cmd+B / I / U, +Shift X / P / M, K = link ----
+  const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
+  const [linkMode, setLinkMode] = useState<{ start: number; end: number } | null>(null);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkErr, setLinkErr] = useState(false);
+  const readSel = () => {
+    const ta = ref.current;
+    if (!ta || document.activeElement !== ta) return setSel(null);
+    const a = ta.selectionStart ?? 0;
+    const b = ta.selectionEnd ?? 0;
+    setSel(a !== b ? { start: a, end: b } : null);
+  };
+  // native listeners too: React's onSelect misses programmatic / handle-drag selections in some engines
+  useEffect(() => {
+    const ta = ref.current;
+    const on = () => readSel();
+    document.addEventListener("selectionchange", on);
+    ta?.addEventListener("select", on);
+    return () => {
+      document.removeEventListener("selectionchange", on);
+      ta?.removeEventListener("select", on);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- readSel only reads the ref and sets state
+  }, []);
+  const grow = () => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+  };
+  const applyEdit = (r: { text: string; start: number; end: number }) => {
+    if (r.text.length > CHAT_MAX_LENGTH) return;
+    setText(r.text);
+    onTyping?.();
+    requestAnimationFrame(() => {
+      const ta = ref.current;
+      if (!ta) return;
+      ta.value = r.text;
+      ta.focus();
+      ta.setSelectionRange(r.start, r.end);
+      grow();
+      readSel();
+    });
+  };
+  const applyStyle = (style: MdStyle) => {
+    const ta = ref.current;
+    const a = sel?.start ?? ta?.selectionStart ?? 0;
+    const b = sel?.end ?? ta?.selectionEnd ?? 0;
+    applyEdit(toggleStyle(text, a, b, style));
+  };
+  const startLink = () => {
+    const ta = ref.current;
+    const a = sel?.start ?? ta?.selectionStart ?? 0;
+    const b = sel?.end ?? ta?.selectionEnd ?? 0;
+    setLinkMode({ start: a, end: b });
+    setLinkUrl("");
+    setLinkErr(false);
+  };
+  const saveLink = () => {
+    if (!linkMode) return;
+    const r = wrapLink(text, linkMode.start, linkMode.end, linkUrl);
+    if (!r) return setLinkErr(true);
+    setLinkMode(null);
+    applyEdit(r);
+  };
+  const cancelLink = () => {
+    const m = linkMode;
+    setLinkMode(null);
+    requestAnimationFrame(() => {
+      const ta = ref.current;
+      if (!ta) return;
+      ta.focus();
+      if (m) ta.setSelectionRange(m.start, m.end);
+    });
+  };
+  const formatKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
+    const ta = e.currentTarget;
+    if (ta.selectionStart === ta.selectionEnd) return false; // nothing selected: leave the browser's shortcut alone
+    const k = e.key.toLowerCase();
+    const style: MdStyle | "link" | null = e.shiftKey
+      ? k === "x" ? "s" : k === "p" ? "sp" : k === "m" ? "code" : null
+      : k === "b" ? "b" : k === "i" ? "i" : k === "u" ? "u" : k === "k" ? "link" : null;
+    if (!style) return false;
+    e.preventDefault();
+    if (style === "link") startLink();
+    else applyEdit(toggleStyle(text, ta.selectionStart, ta.selectionEnd, style));
+    return true;
+  };
+  // the bar spans the whole composer row (the "+" / attach / sticker buttons beside the field too), so its seven
+  // buttons keep ≥36 px tap targets down to 280 px phones
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [barBox, setBarBox] = useState<{ left: number; width: number } | null>(null);
+  const barOpen = !!(sel || linkMode) && !disabled;
+  useLayoutEffect(() => {
+    if (!barOpen) return;
+    const measure = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      const row = (root.closest("[data-composer-row]") as HTMLElement | null) ?? root;
+      const a = root.getBoundingClientRect();
+      const b = row.getBoundingClientRect();
+      setBarBox({ left: b.left - a.left, width: b.width });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [barOpen]);
+  // the field gets wider when the sticker button steps aside (small phones) → re-measure its height
+  const hasText = !!text.trim();
+  useEffect(() => {
+    const id = requestAnimationFrame(grow);
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the field empties / fills
+  }, [hasText]);
   const isEditing = !!editing;
   const canSend = (isEditing || text.trim().length > 0) && !disabled && !sending;
 
@@ -126,13 +243,74 @@ export function ChatComposer({
     setSending(false);
     if (ok) {
       setText("");
+      setSel(null);
       if (ref.current) ref.current.style.height = "";
     }
     if (!panel) ref.current?.focus();
   };
 
   return (
-    <div data-testid="composer">
+    <div data-testid="composer" className="relative" ref={rootRef}>
+    {barOpen && (
+      <div
+        className="fmt-bar-in absolute inset-x-0 bottom-full z-30 mb-2 rounded-2xl bg-zinc-900 p-0.5 shadow-lg ring-1 ring-white/10"
+        style={barBox ? { left: barBox.left, right: "auto", width: barBox.width } : undefined}
+        data-testid="format-bar"
+        onPointerDown={(e) => !(e.target instanceof HTMLInputElement) && e.preventDefault()}
+        onMouseDown={(e) => !(e.target instanceof HTMLInputElement) && e.preventDefault()}
+      >
+        {linkMode ? (
+          <form
+            noValidate // "example.com" is fine here (safeHref adds https://); the browser's url check would block it
+            className="flex items-center gap-1 pl-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveLink();
+            }}
+          >
+            <Link2 className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden />
+            <input
+              autoFocus
+              type="url"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={linkUrl}
+              onChange={(e) => (setLinkUrl(e.target.value), setLinkErr(false))}
+              onKeyDown={(e) => e.key === "Escape" && (e.preventDefault(), e.stopPropagation(), cancelLink())}
+              placeholder={linkErr ? "http(s), mailto: or tel: only" : "Paste a link"}
+              aria-label="Link address"
+              aria-invalid={linkErr || undefined}
+              data-testid="format-link-input"
+              className={cn("h-10 min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-zinc-500 sm:text-[14px]", linkErr && "text-red-400 placeholder:text-red-400")}
+            />
+            <button type="submit" aria-label="Add link" data-testid="format-link-save" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-emerald-400 hover:bg-white/5">
+              <Check className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={cancelLink} aria-label="Cancel link" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/5">
+              <X className="h-5 w-5" />
+            </button>
+          </form>
+        ) : (
+          <div className="flex items-center justify-between" role="toolbar" aria-label="Formatting">
+            {FORMAT_BUTTONS.map((f) => (
+              <button
+                key={f.style}
+                type="button"
+                title={f.label}
+                aria-label={f.label}
+                data-testid={`format-${f.style}`}
+                onClick={() => (f.style === "link" ? startLink() : applyStyle(f.style))}
+                className="flex h-10 max-w-[52px] min-w-0 flex-1 basis-0 items-center justify-center rounded-xl text-zinc-300 transition hover:bg-white/5 hover:text-white active:bg-white/10"
+              >
+                <f.Icon className="h-[18px] w-[18px]" strokeWidth={f.style === "b" ? 2.8 : 2} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
     {editing && (
       <div className="edit-bar-in mb-2 flex items-center gap-2 rounded-xl border-l-2 border-emerald-500 bg-white/[0.04] py-1.5 pr-1 pl-2.5" data-testid="edit-bar">
         <Pencil className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
@@ -158,6 +336,7 @@ export function ChatComposer({
         submit();
       }}
       className="relative flex items-end gap-2"
+      data-has-text={text.trim() ? "1" : undefined}
     >
       {/* stickers (Telegram-style panel above the composer); sent through the same onSend path */}
       {!isEditing && <StickerButton onSend={onSend} disabled={disabled} compact={compact} />}
@@ -179,7 +358,14 @@ export function ChatComposer({
           disabled={disabled}
           placeholder={placeholder}
           enterKeyHint="send"
-          onBlur={() => onTypingStop?.()}
+          onBlur={() => {
+            onTypingStop?.();
+            setSel(null);
+          }}
+          onSelect={readSel}
+          onKeyUp={readSel}
+          onMouseUp={readSel}
+          onTouchEnd={() => requestAnimationFrame(readSel)}
           onFocus={() => panel && setPanel(false)}
           data-testid="composer-input"
           onPaste={(e) => {
@@ -198,6 +384,13 @@ export function ChatComposer({
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
           }}
           onKeyDown={(e) => {
+            if (formatKey(e)) return;
+            if (e.key === "Escape" && sel) {
+              e.preventDefault();
+              e.currentTarget.setSelectionRange(sel.end, sel.end);
+              setSel(null);
+              return;
+            }
             if (e.key === "Escape" && editing) {
               e.preventDefault();
               e.stopPropagation();
@@ -277,3 +470,13 @@ export function ChatComposer({
     </div>
   );
 }
+
+const FORMAT_BUTTONS: { style: MdStyle | "link"; label: string; Icon: typeof Bold }[] = [
+  { style: "b", label: "Bold (Ctrl+B)", Icon: Bold },
+  { style: "i", label: "Italic (Ctrl+I)", Icon: Italic },
+  { style: "u", label: "Underline (Ctrl+U)", Icon: Underline },
+  { style: "s", label: "Strikethrough (Ctrl+Shift+X)", Icon: Strikethrough },
+  { style: "sp", label: "Spoiler (Ctrl+Shift+P)", Icon: EyeOff },
+  { style: "code", label: "Monospace (Ctrl+Shift+M)", Icon: Code },
+  { style: "link", label: "Link (Ctrl+K)", Icon: Link2 },
+];

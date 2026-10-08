@@ -1,5 +1,6 @@
 "use client";
 
+import { plainText } from "@/lib/format/markdown";
 import { displayUser, useDeletedIds } from "@/lib/userDisplay";
 import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -192,7 +193,7 @@ export default function MessagesPage() {
                           ) : (
                             <>
                               {mine && <span className="text-zinc-500">You: </span>}
-                              {c.lastMessage.text}
+                              {plainText(c.lastMessage.text)}
                             </>
                           )}
                         </p>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useMemo, useRef } from "react";
+import { Fragment, memo, useMemo, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { linkify, type HashtagToken, type LinkToken, type MentionToken } from "@/lib/linkify";
 import { openLinkConfirm } from "./LinkConfirm";
@@ -18,7 +18,18 @@ export const LINK_REL = "noopener noreferrer nofollow ugc";
  * - #hashtags → accent span; tap = in-chat search (inside a conversation) or global search (titles, bios)
  * `links={false}` renders hashtags only (e.g. inside a card that is itself a link).
  */
-export const LinkifiedText = memo(function LinkifiedText({ text, tone = "default", links = true }: { text: string; tone?: "default" | "onAccent"; links?: boolean }) {
+export const LinkifiedText = memo(function LinkifiedText({
+  text,
+  tone = "default",
+  links = true,
+  renderMention,
+}: {
+  text: string;
+  tone?: "default" | "onAccent";
+  links?: boolean;
+  /** custom @mention rendering (group chats highlight mentions of me); default: tappable profile chip */
+  renderMention?: (t: MentionToken) => ReactNode;
+}) {
   const tokens = useMemo(() => linkify(text), [text]);
   if (!tokens.some((t) => t.type !== "text")) return <>{text}</>;
   return (
@@ -29,7 +40,7 @@ export const LinkifiedText = memo(function LinkifiedText({ text, tone = "default
         ) : t.type === "hashtag" ? (
           <HashtagChip key={i} t={t} tone={tone} />
         ) : t.type === "mention" ? (
-          <MentionChip key={i} t={t} tone={tone} />
+          renderMention ? <Fragment key={i}>{renderMention(t)}</Fragment> : <MentionChip key={i} t={t} tone={tone} />
         ) : links ? (
           <ChatLink key={i} t={t} tone={tone} />
         ) : (

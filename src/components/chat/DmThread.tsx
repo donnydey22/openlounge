@@ -41,6 +41,8 @@ import { CallMessageRow } from "../calls/CallMessageRow";
 import { startCall } from "../calls/CallProvider";
 import { DropInBanner } from "../rooms/DropInBanner";
 import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
+import { FormattedText } from "./FormattedText";
+import { LinkifiedText } from "./LinkifiedText";
 import { MentionPicker, MentionText, PinnedBar, ServiceRow, jumpToMessage, memberLine, senderPeer, useGroupInfo } from "../groups/GroupBits";
 import { MediaBubble, mediaActions } from "../media/MediaBubble";
 import { openViewer } from "../media/viewerStore";
@@ -1483,7 +1485,7 @@ export function DmThread({
             </span>
           )}
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2" data-composer-row>
         {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} />}
         {canAttach && <MediaAttach ctx={mediaCtx} disabled={messages === null} pasted={pastedFiles} onPastedConsumed={clearPasted} />}
         <div className="min-w-0 flex-1">
@@ -1767,7 +1769,7 @@ const MessageRow = memo(function MessageRow({
             <BigEmoji parts={parts} replay={interactNonce} onTap={(e, at) => onBigTap(m, e, at)} />
           ) : (
             <span key={editFlash} className={editFlash ? "edit-flash" : undefined}>
-              {group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text}
+              <BubbleText text={m.text} mine={mine} meUsername={group ? group.meUsername ?? "" : undefined} />
             </span>
           )}
           {!!m.editedAt && !sticker && (
@@ -1943,3 +1945,25 @@ function StatusLine({ m, latest, onRetry }: { m: Item; latest: boolean; onRetry:
     </div>
   );
 }
+
+/**
+ * Message text: Telegram-style formatting (FormattedText) over safe, tappable links / #tags / @mentions (LinkifiedText:
+ * http(s) / mailto / tel only, confirm sheet, system browser in the apps). Groups keep their @mention highlight.
+ * Tapping `code` copies it.
+ */
+const BubbleText = memo(function BubbleText({ text, mine, meUsername }: { text: string; mine: boolean; meUsername?: string }) {
+  const { toast } = useApp();
+  const tone = mine ? "onAccent" : "default";
+  const leaf = useCallback(
+    (t: string) => (
+      <LinkifiedText
+        text={t}
+        tone={tone}
+        renderMention={meUsername !== undefined ? (mt) => <MentionText text={mt.text} meUsername={meUsername || undefined} mine={mine} /> : undefined}
+      />
+    ),
+    [tone, meUsername, mine],
+  );
+  const onCopyCode = useCallback((code: string) => void copyText(code).then((ok) => toast(ok ? "Copied" : "Couldn't copy")), [toast]);
+  return <FormattedText text={text} leaf={leaf} tone={tone} onCopyCode={onCopyCode} />;
+});

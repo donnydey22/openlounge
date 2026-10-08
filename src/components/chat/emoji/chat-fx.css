@@ -59,3 +59,7 @@
 .fmt-bar-in { animation: fmt-bar-in 0.16s ease-out; }
 @keyframes fmt-bar-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .fmt-bar-in { animation: none; } }
+/* small phones (Fold cover 280, SE 320): the sticker button steps aside while typing so the field keeps room for words */
+@media (max-width: 359px) {
+  form[data-has-text] [data-testid="sticker-button"]:not([aria-expanded="true"]) { display: none !important; }
+}

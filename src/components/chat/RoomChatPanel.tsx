@@ -1,5 +1,7 @@
 "use client";
 
+import { FormattedText } from "./FormattedText";
+import { LinkifiedText } from "./LinkifiedText";
 import { DELETED_NAME, isDeletedId, useDeletedIds } from "@/lib/userDisplay";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Flag, Trash2, X } from "lucide-react";
@@ -29,6 +31,9 @@ export function softTime(ts: number) {
  * Light, Clubhouse-adjacent room chat: compact bubbles, first names, soft
  * timestamps. Deliberately secondary to the stage — no dense chrome.
  */
+
+const roomLeaf = (t: string) => <LinkifiedText text={t} />;
+
 export function RoomChatPanel({
   messages,
   meId,
@@ -170,7 +175,7 @@ export function RoomChatPanel({
                       <span className="text-[10px] text-zinc-500">{softTime(m.createdAt)}</span>
                     </div>
                   )}
-                  {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">{m.text}</p>}
+                  {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-snug text-zinc-100"><FormattedText text={m.text} leaf={roomLeaf} /></p>}
                   {!grouped && mine && <div className="mt-0.5 text-right text-[10px] leading-none text-zinc-500">{softTime(m.createdAt)}</div>}
                   {canAct && (
                     <div
