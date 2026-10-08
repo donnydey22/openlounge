@@ -27,3 +27,15 @@
   .emoji-panel-in { animation: fade-in 0.15s ease-out; }
   .msg-react-btn { transition: opacity 0.12s ease; transform: none; }
 }
+
+/* delete: Undo toast ring drains over the undo window; rows collapse after the dust */
+@keyframes undo-ring { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 56.55; } }
+.undo-ring { animation: undo-ring linear forwards; }
+@keyframes toast-in { from { transform: translate(-50%, 16px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+.toast-in { animation: toast-in 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
+/* select mode: the row's check circle */
+.sel-check { transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .undo-ring { animation: none; }
+  .toast-in { animation: fade-in 0.15s ease-out; }
+}

@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -17,8 +17,10 @@ import { ReactionChips } from "./emoji/ReactionChips";
 import { SponsoredSlot } from "@/components/sponsored/Sponsored";
 import { MessageActionOverlay, type MessageAction, type OverlayTarget } from "./emoji/MessageActionOverlay";
 import { ReactionFlight, type Flight } from "./emoji/ReactionFlight";
-import { burst } from "./emoji/effects";
-import { animate, haptic } from "./emoji/motion";
+import { burst, dust } from "./emoji/effects";
+import { DeleteDialog } from "./DeleteDialog";
+import { UNDO_MS, UndoToast } from "./UndoToast";
+import { animate, haptic, prefersReducedMotion } from "./emoji/motion";
 import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
@@ -297,6 +299,134 @@ export function DmThread({
         : undefined,
     [isGroup, me?.username, amAdmin, group?.pins, request, peerId, toast],
   );
+
+  // ---- delete (Telegram): dialog → dust + collapse → "Message deleted • Undo" for 5 s → committed on the server ----
+  const [delAsk, setDelAsk] = useState<Item[] | null>(null);
+  const [pendingDel, setPendingDel] = useState<{ items: Item[]; forEveryone: boolean; at: number } | null>(null);
+  const pendingRef = useRef(pendingDel);
+  pendingRef.current = pendingDel;
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const restoreItems = useCallback((items: Item[]) => {
+    setMessages((list) => {
+      if (!list) return list;
+      const have = new Set(list.map(keyOf));
+      const back = items.filter((m) => !have.has(keyOf(m)));
+      return back.length ? [...list, ...back].sort((a, b) => a.createdAt - b.createdAt) : list;
+    });
+  }, []);
+  const commitDelete = useCallback(
+    (p: { items: Item[]; forEveryone: boolean }) => {
+      const ids = p.items.filter((m) => !m.state).map((m) => m.id); // unsent bubbles only ever lived here
+      if (!ids.length) return;
+      const fail = (e: Error) => {
+        restoreItems(p.items);
+        toast(friendlyMessage(e, "Couldn't delete that message"));
+      };
+      if (isGroup) void Promise.all(ids.map((messageId) => request("group:deleteMessage", { id: peerId, messageId }))).catch(fail);
+      else void request("dm:delete", { peerId, messageIds: ids, forEveryone: p.forEveryone }).catch(fail);
+    },
+    [isGroup, peerId, request, toast, restoreItems],
+  );
+  // the undo window closes → commit; leaving the chat / closing the page commits right away
+  useEffect(() => {
+    if (!pendingDel) return;
+    const t = setTimeout(() => {
+      commitDelete(pendingDel);
+      setPendingDel((cur) => (cur === pendingDel ? null : cur));
+    }, Math.max(0, UNDO_MS - (Date.now() - pendingDel.at)));
+    return () => clearTimeout(t);
+  }, [pendingDel, commitDelete]);
+  useEffect(() => {
+    const flush = () => {
+      const p = pendingRef.current;
+      if (!p) return;
+      pendingRef.current = null;
+      commitDelete(p);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [commitDelete]);
+  // deleted elsewhere (the peer deleted for everyone, or I did on another device): drop it here too
+  useEffect(() => {
+    if (!socket || isGroup) return;
+    const onDeleted = (d: { conversationId: string; messageId: string }) =>
+      d.conversationId === peerId && setMessages((list) => (list && list.some((x) => x.id === d.messageId) ? list.filter((x) => x.id !== d.messageId) : list));
+    socket.on("conv:deleted", onDeleted);
+    return () => {
+      socket.off("conv:deleted", onDeleted);
+    };
+  }, [socket, isGroup, peerId]);
+  /** Telegram's exit: the bubble crumbles to dust, then the row folds away (transform / opacity, then one height) */
+  const animateOut = useCallback((items: Item[]) => {
+    const root = listRef.current;
+    if (!root || prefersReducedMotion()) return Promise.resolve();
+    const runs = items.slice(0, 12).map((m) => {
+      const row = root.querySelector<HTMLElement>(`[data-testid=dm-msg][data-mid="${CSS.escape(m.id)}"]`);
+      const b = row?.querySelector<HTMLElement>("[data-mid-bubble]");
+      if (!row || !b) return Promise.resolve();
+      const r = b.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < window.innerHeight) dust(r, row.dataset.mine === "1");
+      const fade = b.animate([{ opacity: 1, transform: "none", filter: "blur(0)" }, { opacity: 0, transform: "scale(0.92) translateX(8px)", filter: "blur(2px)" }], { duration: 220, easing: "ease-in", fill: "forwards" });
+      return fade.finished.then(() => {
+        const h = row.offsetHeight;
+        row.style.overflow = "hidden";
+        return row.animate([{ height: `${h}px`, opacity: 1 }, { height: "0px", opacity: 0 }], { duration: 160, easing: "cubic-bezier(0.4,0,0.2,1)", fill: "forwards" }).finished.then(() => undefined);
+      }).catch(() => undefined);
+    });
+    return Promise.all(runs).then(() => undefined);
+  }, []);
+  const confirmDelete = useCallback(
+    (forEveryone: boolean) => {
+      const items = delAsk;
+      setDelAsk(null);
+      setSelected(null);
+      if (!items?.length) return;
+      haptic("medium");
+      const prev = pendingRef.current;
+      if (prev) {
+        pendingRef.current = null;
+        setPendingDel(null);
+        commitDelete(prev);
+      }
+      void animateOut(items).then(() => {
+        const gone = new Set(items.map(keyOf));
+        setMessages((list) => (list ? list.filter((x) => !gone.has(keyOf(x))) : list));
+        setPendingDel({ items, forEveryone, at: Date.now() });
+      });
+    },
+    [delAsk, animateOut, commitDelete],
+  );
+  const undoDelete = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = null;
+    setPendingDel(null);
+    restoreItems(p.items);
+    haptic("light");
+  }, [restoreItems]);
+  /** may I delete this one (for me in 1:1; sender or admin in groups)? */
+  const canDelete = useCallback((m: Item) => (isGroup ? m.fromId === me?.id || !!groupRow?.amAdmin : true), [isGroup, me?.id, groupRow?.amAdmin]);
+  const toggleSelect = useCallback((m: Item) => {
+    setSelected((cur) => {
+      if (!cur) return cur;
+      const next = new Set(cur);
+      if (next.has(keyOf(m))) next.delete(keyOf(m));
+      else next.add(keyOf(m));
+      return next;
+    });
+    haptic("light");
+  }, []);
+  const selectedItems = useMemo(() => (selected && messages ? messages.filter((m) => selected.has(keyOf(m))) : []), [selected, messages]);
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelected(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]);
+  useEffect(() => setSelected(null), [peerId]);
   // ---- emoji reactions / big emoji / interactions ----
   const [overlay, setOverlay] = useState<{ m: Item; target: OverlayTarget } | null>(null);
   const [flights, setFlights] = useState<Flight[]>([]);
@@ -854,18 +984,11 @@ export function DmThread({
     }
     if (m.fromId !== me?.id && !m.state && !peer?.isBot)
       out.push({ key: "report", label: "Report", danger: true, icon: <Flag className="h-[18px] w-[18px]" />, onSelect: () => onReportMessage(m) });
-    if (groupRow && !m.state && (m.fromId === me?.id || groupRow.amAdmin))
-      out.push({
-        key: "delete",
-        label: "Delete for everyone",
-        danger: true,
-        icon: <Trash2 className="h-[18px] w-[18px]" />,
-        onSelect: () => {
-          if (window.confirm("Delete this message for everyone?")) groupRow.onDelete(m);
-        },
-      });
+    out.push({ key: "select", label: "Select", icon: <CheckCircle2 className="h-[18px] w-[18px]" />, onSelect: () => setSelected(new Set([keyOf(m)])) });
+    if (canDelete(m))
+      out.push({ key: "delete", label: "Delete", danger: true, icon: <Trash2 className="h-[18px] w-[18px]" />, onSelect: () => setDelAsk([m]) });
     return out;
-  }, [overlay, me?.id, peer?.isBot, toast, onReportMessage, groupRow]);
+  }, [overlay, me?.id, peer?.isBot, toast, onReportMessage, groupRow, canDelete]);
 
   // minute tick / foreground / timezone change → separators ("Today" → "Yesterday" at midnight) re-render
   const clockTick = useClockTick();
@@ -976,7 +1099,44 @@ export function DmThread({
 
   return (
     <div className={cn("flex flex-col", className)} data-testid="dm-thread">
-      <header data-app-header className="flex h-16 shrink-0 items-center gap-1 border-b border-white/5 px-2">
+      <header data-app-header className="relative flex h-16 shrink-0 items-center gap-1 border-b border-white/5 px-2">
+        {selected && (
+          <div className="fade-in absolute inset-0 z-20 flex items-center bg-zinc-950 px-2" data-testid="select-bar">
+            <button type="button" onClick={() => setSelected(null)} aria-label="Cancel selection" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-300 hover:bg-white/5">
+              <X className="h-5 w-5" />
+            </button>
+            <span className="ml-1 min-w-0 flex-1 truncate text-[16px] font-semibold text-zinc-100" data-testid="select-count">
+              {selectedItems.length} selected
+            </span>
+            <button
+              type="button"
+              disabled={!selectedItems.some((m) => (mediaActions(m, me?.id)?.copyText ?? m.text))}
+              onClick={() => {
+                const text = selectedItems
+                  .map((m) => (parseSticker(m.text) ? "" : mediaActions(m, me?.id)?.copyText ?? m.text))
+                  .filter(Boolean)
+                  .join("\n\n");
+                setSelected(null);
+                void copyText(text).then((ok) => toast(ok ? "Copied" : "Couldn't copy"));
+              }}
+              aria-label="Copy selected"
+              data-testid="select-copy"
+              className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-200 hover:bg-white/5 disabled:opacity-40"
+            >
+              <Copy className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              disabled={!selectedItems.length || !selectedItems.every(canDelete)}
+              onClick={() => setDelAsk(selectedItems)}
+              aria-label="Delete selected"
+              data-testid="select-delete"
+              className="flex h-10 w-10 items-center justify-center rounded-full text-red-400 hover:bg-red-500/10 disabled:opacity-40"
+            >
+              <Trash2 className="h-5 w-5" />
+            </button>
+          </div>
+        )}
         <button onClick={onBack} className="rounded-full p-2 text-zinc-300 hover:bg-white/5" aria-label={backStyle === "close" ? "Close" : "Back to messages"}>
           {backStyle === "close" ? <X className="h-5 w-5" /> : <ChevronLeft className="h-6 w-6" />}
         </button>
@@ -1196,6 +1356,9 @@ export function DmThread({
                   chipPlay={chipPlay[m.id] ?? null}
                   interactNonce={interact[m.id] ?? 0}
                   takeFlyFrom={takeFlyFrom}
+                  selecting={!!selected}
+                  selected={!!selected?.has(keyOf(m))}
+                  onSelect={toggleSelect}
                 />
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
@@ -1215,7 +1378,15 @@ export function DmThread({
             </>
           )}
         </div>
-        {unseenBelow > 0 && (
+        {pendingDel && (
+          <UndoToast
+            key={pendingDel.at}
+            startedAt={pendingDel.at}
+            label={pendingDel.items.length === 1 ? "Message deleted" : `${pendingDel.items.length} messages deleted`}
+            onUndo={undoDelete}
+          />
+        )}
+        {unseenBelow > 0 && !pendingDel && (
           <button
             onClick={scrollToBottom}
             className="fade-in absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 py-1.5 text-xs font-semibold text-zinc-100 shadow-lg ring-1 ring-white/10"
@@ -1287,6 +1458,16 @@ export function DmThread({
         </>
         )}
       </div>
+      {delAsk && (
+        <DeleteDialog
+          count={delAsk.length}
+          group={isGroup}
+          peerName={peer ? firstName(peer.name) : undefined}
+          canForEveryone={!isGroup && !peer?.deleted && delAsk.every((m) => m.fromId === me?.id && !m.state)}
+          onCancel={() => setDelAsk(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
       {overlay && (
         <MessageActionOverlay
           target={overlay.target}
@@ -1325,6 +1506,9 @@ const MessageRow = memo(function MessageRow({
   chipPlay,
   interactNonce,
   takeFlyFrom,
+  selecting,
+  selected,
+  onSelect,
 }: {
   m: Item;
   mine: boolean;
@@ -1352,6 +1536,10 @@ const MessageRow = memo(function MessageRow({
   chipPlay: string | null;
   interactNonce: number;
   takeFlyFrom: (clientId: string) => DOMRect | undefined;
+  /** multi-select mode: a tap toggles the row, long-press / reactions are off */
+  selecting?: boolean;
+  selected?: boolean;
+  onSelect?: (m: Item) => void;
 }) {
   const sticker = useMemo(() => parseSticker(m.text), [m.text]); // sticker message: large, no bubble
   const parts = useMemo(() => (sticker ? null : bigEmoji(m.text)), [m.text, sticker]);
@@ -1371,7 +1559,7 @@ const MessageRow = memo(function MessageRow({
   const open = () => bubble.current && onActions(m, bubble.current);
   const pressHandlers = {
     onPointerDown: (e: React.PointerEvent) => {
-      if (e.pointerType === "mouse" || !e.isPrimary) return;
+      if (e.pointerType === "mouse" || !e.isPrimary || selecting) return;
       cancel();
       press.current = {
         x: e.clientX,
@@ -1391,7 +1579,7 @@ const MessageRow = memo(function MessageRow({
     onPointerUp: (e: React.PointerEvent) => {
       const wasLong = press.current.fired;
       cancel();
-      if (e.pointerType === "mouse" || wasLong || parts || m.state) return;
+      if (e.pointerType === "mouse" || wasLong || parts || m.state || selecting) return;
       // double-tap → quick reaction (Telegram)
       const now = e.timeStamp;
       if (now - lastTap.current < 300) {
@@ -1411,6 +1599,7 @@ const MessageRow = memo(function MessageRow({
     },
     onContextMenu: (e: React.MouseEvent) => {
       e.preventDefault();
+      if (selecting) return;
       cancel();
       press.current.fired = false;
       open();
@@ -1440,7 +1629,37 @@ const MessageRow = memo(function MessageRow({
     : cn("rounded-[20px]", !first && "rounded-tl-md", !last && "rounded-bl-md");
   const hasReactions = !!m.reactions?.length;
   return (
-    <div data-testid="dm-msg" data-mine={mine ? "1" : "0"} data-mid={m.id}>
+    <div
+      data-testid="dm-msg"
+      data-mine={mine ? "1" : "0"}
+      data-mid={m.id}
+      data-selected={selecting ? (selected ? "1" : "0") : undefined}
+      className={cn("relative", selecting && "cursor-pointer", selected && "rounded-xl bg-emerald-500/[0.08]")}
+      onClickCapture={
+        selecting
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onSelect?.(m);
+            }
+          : undefined
+      }
+    >
+      {selecting && (
+        <span
+          aria-hidden
+          className={cn(
+            "sel-check pointer-events-none absolute bottom-1 left-0.5 z-[2] flex h-[22px] w-[22px] items-center justify-center rounded-full border-2",
+            selected ? "border-emerald-500 bg-emerald-500 text-zinc-950" : "border-zinc-500 bg-zinc-950/60",
+          )}
+        >
+          {selected && (
+            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.8">
+              <path d="M3 8.5l3.2 3L13 4.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
+      )}
       {sep && (
         <div className="mt-4 mb-2 text-center text-[11px] font-medium text-zinc-500" data-testid={newDay ? "dm-day" : "dm-gap"} title={formatFull(m.createdAt)}>
           {sep}
@@ -1451,14 +1670,14 @@ const MessageRow = memo(function MessageRow({
           {peer.name}
         </div>
       )}
-      <div className={cn("flex items-end gap-2", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]", hasReactions && "mb-0")}>
+      <div className={cn("flex items-end gap-2 transition-transform duration-200 motion-reduce:transition-none", mine ? "justify-end pl-12" : "justify-start pr-12", first ? "mt-2" : "mt-[3px]", hasReactions && "mb-0", selecting && !mine && "translate-x-7")}>
         {!mine && (
           <div className="w-7 shrink-0">
             {last && peer && <Avatar name={peer.name} color={peer.color} photo={peer.photoUrl} size="xs" />}
           </div>
         )}
         {mine && <Receipt m={m} onRetry={onRetry} />}
-        {mine && !m.state && <ReactButton onClick={open} />}
+        {mine && !m.state && !selecting && <ReactButton onClick={open} />}
         {m.media ? (
           <div ref={bubble} title={formatFull(m.createdAt)} data-testid="dm-bubble" data-ts={m.createdAt} data-mid-bubble={m.id} {...pressHandlers} className="msg-in flex min-w-0 max-w-full">
             <MediaBubble m={m} mine={mine} shape={shape} onRetry={onRetry} />
@@ -1492,7 +1711,7 @@ const MessageRow = memo(function MessageRow({
           )}
         </div>
         )}
-        {!mine && !m.state && <ReactButton onClick={open} />}
+        {!mine && !m.state && !selecting && <ReactButton onClick={open} />}
       </div>
       {hasReactions && (
         <ReactionChips
