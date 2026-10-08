@@ -1,7 +1,7 @@
 # Open Lounge media cache (generated at boot by entrypoint.sh from nginx.conf.template; do not edit the output).
 # Contract: /workspace/media/CACHE_CONTRACT.md (v1). Secrets are read by njs from the environment, never templated.
 load_module __MODULES_DIR__/ngx_http_js_module.so;
-worker_processes auto;
+worker_processes __WORKERS__;
 pid __TMP_DIR__/nginx.pid;
 error_log /dev/stderr warn;
 env MEDIA_SIGNING_SECRET;

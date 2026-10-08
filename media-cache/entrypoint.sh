@@ -12,6 +12,7 @@ log() { printf 'media-cache: %s\n' "$*" >&2; }
 : "${MEDIA_CACHE_MAX_SIZE:=400m}"
 : "${MEDIA_CACHE_MIN_FREE:=48m}"
 : "${MEDIA_CACHE_INACTIVE:=30d}"
+: "${MEDIA_CACHE_WORKERS:=2}"   # nginx workers: sendfile + cache make 2 plenty, and each one costs RAM (= money on Railway)
 APP_USER="${APP_USER:-nginx}"
 CONF_DIR="${NGINX_CONF_DIR:-/etc/nginx}"
 MODULES_DIR="${NGINX_MODULES_DIR:-/etc/nginx/modules}"
@@ -41,7 +42,7 @@ sig="${MEDIA_SIGNING_SECRET:-}"; [ "${#sig}" -ge 16 ] || log "WARNING: MEDIA_SIG
 sed -e "s#__PORT__#$PORT#g" -e "s#__INTERNAL_PORT__#$MEDIA_CACHE_INTERNAL_PORT#g" \
     -e "s#__ORIGIN_HOSTPORT__#$hostport#g" -e "s#__ORIGIN_HOST__#$host#g" -e "s#__ORIGIN_RESOLVE__#$resolve#g" \
     -e "s#__RESOLVER__#$resolvers#g" -e "s#__DATA_DIR__#$DATA_DIR#g" -e "s#__CONF_DIR__#$CONF_DIR#g" -e "s#__MODULES_DIR__#$MODULES_DIR#g" -e "s#__TMP_DIR__#$TMP_DIR#g" \
-    -e "s#__MAX_SIZE__#$MEDIA_CACHE_MAX_SIZE#g" -e "s#__MIN_FREE__#$MEDIA_CACHE_MIN_FREE#g" -e "s#__INACTIVE__#$MEDIA_CACHE_INACTIVE#g" \
+    -e "s#__MAX_SIZE__#$MEDIA_CACHE_MAX_SIZE#g" -e "s#__MIN_FREE__#$MEDIA_CACHE_MIN_FREE#g" -e "s#__INACTIVE__#$MEDIA_CACHE_INACTIVE#g" -e "s#__WORKERS__#$MEDIA_CACHE_WORKERS#g" \
     "$CONF_DIR/nginx.conf.template" > "$CONF_DIR/nginx.conf"
 
 mkdir -p "$TMP_DIR"

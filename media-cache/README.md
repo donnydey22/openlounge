@@ -51,7 +51,7 @@ browser ──https──▶ media-cache (nginx, Railway edge TLS)            op
 `PORT` (8080) · `DATA_DIR` (/data) · `MEDIA_ORIGIN_URL` (http://openlounge.railway.internal:8081) ·
 `MEDIA_SIGNING_SECRET` (required, ≥16 chars) · `MEDIA_CACHE_PURGE_SECRET` · `MEDIA_CACHE_INTERNAL_PORT` (8081) ·
 `MEDIA_CACHE_MAX_SIZE` (400m — the volume is 0.5 GB on the current plan) · `MEDIA_CACHE_MIN_FREE` (48m) ·
-`MEDIA_CACHE_INACTIVE` (30d) · `READYZ_REQUIRE_ORIGIN` (unset: an origin outage doesn't block a cache deploy).
+`MEDIA_CACHE_INACTIVE` (30d) · `MEDIA_CACHE_WORKERS` (2) · `READYZ_REQUIRE_ORIGIN` (unset: an origin outage doesn't block a cache deploy).
 
 On the app: `MEDIA_CACHE_PURGE_URL=http://media-cache.railway.internal:8081/_purge`,
 `MEDIA_CACHE_PURGE_SECRET=${{media-cache.MEDIA_CACHE_PURGE_SECRET}}`. The switch `MEDIA_CDN_BASE` stays unset until go.

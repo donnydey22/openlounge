@@ -93,7 +93,7 @@ async function main() {
   ok("processing rendition: origin re-asked after TTL (2 fetches)", (await originCount(pidx)) === 2, `origin=${await originCount(pidx)}`);
   const m2 = await get(`${pm}?${qp}`); await m2.text();
   ok("processing master: still HIT at 6 s (max-age=10)", xc(m2) === "HIT", xc(m2));
-  await sleep(4500);
+  await sleep(5500); // nginx keeps expiry at 1 s granularity: stay clear of the 10 s boundary
   const m3 = await get(`${pm}?${qp}`); await m3.text();
   ok("processing master: refreshed after 10 s", xc(m3) !== "HIT", xc(m3));
   // origin down: stale copy served instead of an error
