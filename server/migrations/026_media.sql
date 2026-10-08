@@ -1,4 +1,4 @@
--- 024: photos, videos, documents and voice notes in chats (+ Telegram-style self-destructing media). Additive, idempotent.
+-- 026: photos, videos, documents and voice notes in chats (+ Telegram-style self-destructing media). Additive, idempotent.
 -- Files live on the app volume at UPLOAD_DIR; this table holds their metadata. The DM row keeps a plain-text label
 -- ("📷 Photo") or the caption in dms.text, so inbox previews, pushes and older clients keep working.
 CREATE TABLE IF NOT EXISTS media (
