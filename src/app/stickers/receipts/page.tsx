@@ -60,7 +60,7 @@ export default function ReceiptsPage() {
               {list.map((r) => (
                 <li key={r.orderId} className="flex items-center justify-between gap-3 p-4">
                   <div className="min-w-0">
-                    <div className="truncate font-semibold">Open Lounge sticker pack: {r.packTitle}</div>
+                    <div className="truncate font-semibold">{r.packId.includes(":") ? r.packTitle : `Open Lounge sticker pack: ${r.packTitle}`}</div>
                     <div className="text-[12px] text-zinc-500">
                       {formatFull(r.capturedAt ?? r.createdAt)} · {r.fundingSource ? VIA[r.fundingSource] ?? r.fundingSource : "PayPal"} · {r.orderId}
                       {r.mode === "sandbox" && " · sandbox test"}

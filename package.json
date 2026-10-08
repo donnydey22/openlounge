@@ -29,7 +29,8 @@
     "test:invites": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/invites/*.test.ts",
     "test:groups": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/groups/*.test.ts",
     "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts",
-    "test:stickers": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/stickers/*.test.ts"
+    "test:stickers": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/stickers/*.test.ts",
+    "test:monet": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/monet/*.test.ts"
   },
   "engines": {
     "node": ">=20.9"

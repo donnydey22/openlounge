@@ -18,6 +18,7 @@ import { BadJson, BodyTooLarge, readJsonBody } from "../httpsec";
 import { sendMail } from "../authx/mailer";
 import { stickers } from "./service";
 import { UPLOAD_DIR, addSticker, createPack, removeSticker, updatePack } from "./admin";
+import { handleMonetRoute, initMonet, isMonetRoute } from "../monet/router";
 
 const PUBLIC_DIR = path.join(process.cwd(), "public", "sticker-files");
 const WELL_KNOWN = "/.well-known/apple-developer-merchantid-domain-association";
@@ -40,7 +41,7 @@ export function initStickers() {
       exists: (uid) => store.users.has(uid),
     };
     svc.mailer = (m) => sendMail(m);
-    initP = svc.init().catch((err) => {
+    initP = svc.init().then(() => initMonet().catch((e) => console.warn("[monet] init deferred:", (e as Error).message))).catch((err) => {
       console.error("[stickers] init failed", (err as Error).message);
       initP = null;
       throw err;
@@ -52,7 +53,7 @@ export function initStickers() {
 /** Paths this module answers (cheap prefix check for the server's router). */
 export function isStickerRoute(url: string) {
   const p = url.split("?")[0];
-  return p.startsWith("/sticker-files/") || p === WELL_KNOWN || p.startsWith("/api/stickers") || p === "/api/paypal/webhook" || p.startsWith("/api/admin/stickers");
+  return isMonetRoute(p) || p.startsWith("/sticker-files/") || p === WELL_KNOWN || p.startsWith("/api/stickers") || p === "/api/paypal/webhook" || p.startsWith("/api/admin/stickers");
 }
 
 const TYPES: Record<string, string> = { ".webp": "image/webp", ".png": "image/png", ".gif": "image/gif" };
@@ -120,6 +121,8 @@ export async function handleStickerRoute(req: IncomingMessage, res: ServerRespon
     if (url === WELL_KNOWN && (method === "GET" || method === "HEAD")) return appleAssociation(res);
 
     await initStickers();
+    // Premium / ads / creator accounts share this mount point and the sticker PayPal pipeline
+    if (isMonetRoute(url)) return handleMonetRoute(req, res);
     const svc = stickers();
 
     if (url === "/api/paypal/webhook" && method === "POST") {

@@ -10,6 +10,7 @@ import { AVATAR_PATH } from "@/lib/avatar-shape";
 import { AppShell } from "@/components/AppShell";
 import { LinkConfirmHost } from "@/components/chat/LinkConfirm";
 import { ChatSearchHost } from "@/components/search/ChatSearch";
+import { MonetBoot } from "@/components/premium/MonetBoot";
 import { CallProvider } from "@/components/calls/CallProvider";
 
 // Inside the Android/iPhone apps the page is an app screen: no pinch/double-tap zoom (which pans the whole UI).
@@ -54,6 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Toasts />
               <LinkConfirmHost />
               <ChatSearchHost />
+              <MonetBoot />
               <CallProvider>
                 <AppShell>
                   <AuthGate>{children}</AuthGate>

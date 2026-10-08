@@ -89,7 +89,8 @@ export class PayPalClient {
     return j;
   }
 
-  createOrder(o: { requestId: string; funding?: string; amountCents: number; currency: string; packId: string; userId: string; title: string; brand: string; returnUrl?: string; cancelUrl?: string }) {
+  createOrder(o: { requestId: string; funding?: string; amountCents: number; currency: string; packId: string; userId: string; title: string; itemName?: string; brand: string; returnUrl?: string; cancelUrl?: string }) {
+    const item = (o.itemName ?? `Open Lounge sticker pack: ${o.title}`).slice(0, 127);
     const value = (o.amountCents / 100).toFixed(2);
     return this.call<PayPalOrder>(
       "POST",
@@ -100,13 +101,13 @@ export class PayPalClient {
           {
             reference_id: o.packId,
             custom_id: `${o.userId}|${o.packId}`.slice(0, 127),
-            description: `Open Lounge sticker pack: ${o.title}`.slice(0, 127),
+            description: item,
             // Card statement = "PAYPAL *" + profile merchant descriptor + " " + soft_descriptor, cut at 22 chars (PayPal
             // Orders v2 docs). ASCII letters/digits/space/.-* only. PAYPAL_SOFT_DESCRIPTOR="" omits it (e.g. once the
             // profile descriptor itself reads OPENLOUNGE, to avoid "PAYPAL *OPENLOUNGE OPEN").
             ...(softDescriptor() ? { soft_descriptor: softDescriptor() } : {}),
             amount: { currency_code: o.currency, value, breakdown: { item_total: { currency_code: o.currency, value } } },
-            items: [{ name: `Open Lounge sticker pack: ${o.title}`.slice(0, 127), quantity: "1", sku: o.packId, category: "DIGITAL_GOODS", unit_amount: { currency_code: o.currency, value } }],
+            items: [{ name: item, quantity: "1", sku: o.packId.slice(0, 127), category: "DIGITAL_GOODS", unit_amount: { currency_code: o.currency, value } }],
           },
         ],
         // PayPal button: wallet experience context. Apple Pay / Google Pay attach their payment source client-side
@@ -133,6 +134,26 @@ export class PayPalClient {
 
   getOrder(orderId: string) {
     return this.call<PayPalOrder>("GET", `/v2/checkout/orders/${encodeURIComponent(orderId)}`);
+  }
+
+  // ---- Subscriptions API (Premium auto-renew). Plans are created by Donny in PayPal; ids come from env. ----
+  createSubscription(o: { planId: string; customId: string; requestId: string; brand: string; returnUrl: string; cancelUrl: string }) {
+    return this.call<{ id: string; status: string; links?: { rel: string; href: string }[] }>(
+      "POST",
+      "/v1/billing/subscriptions",
+      {
+        plan_id: o.planId,
+        custom_id: o.customId.slice(0, 127),
+        application_context: { brand_name: o.brand, shipping_preference: "NO_SHIPPING", user_action: "SUBSCRIBE_NOW", return_url: o.returnUrl, cancel_url: o.cancelUrl },
+      },
+      o.requestId,
+    );
+  }
+  getSubscription(id: string) {
+    return this.call<{ id: string; status: string; plan_id?: string; custom_id?: string; billing_info?: { next_billing_time?: string; last_payment?: { time?: string } } }>("GET", `/v1/billing/subscriptions/${encodeURIComponent(id)}`);
+  }
+  async cancelSubscription(id: string, reason: string) {
+    await this.call("POST", `/v1/billing/subscriptions/${encodeURIComponent(id)}/cancel`, { reason: reason.slice(0, 128) });
   }
 
   /** POST /v1/notifications/verify-webhook-signature → true only on verification_status SUCCESS. */

@@ -45,7 +45,9 @@ export async function createPack(svc: StickerService, by: string, body: Record<s
     emoji: str(body.emoji, 16) || "✨",
     category: str(body.category, 40) || "Other",
     description: str(body.description, 300),
-    priceCents: price || null,
+    // Premium exclusive packs are never sold separately
+    priceCents: body.premium === true ? null : price || null,
+    premium: body.premium === true,
     currency: "USD",
     published: false,
     cover: "",
@@ -72,6 +74,8 @@ export async function updatePack(svc: StickerService, by: string, id: string, bo
     if (!validPrice(price)) return fail(400, "Price must be Free, $0.99, $1.99 or $2.99");
     next.priceCents = price || null;
   }
+  if (body.premium !== undefined) next.premium = body.premium === true;
+  if (next.premium) next.priceCents = null; // Premium exclusives are never sold separately
   if (body.cover !== undefined && typeof body.cover === "string" && next.stickers.some((s) => s.id === body.cover)) next.cover = body.cover;
   if (body.order !== undefined && Array.isArray(body.order)) {
     const pos = new Map((body.order as unknown[]).map((x, i) => [String(x), i]));

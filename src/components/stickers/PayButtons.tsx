@@ -51,7 +51,11 @@ async function captureOrder(orderId: string) {
   return api<{ receipt: Receipt; mine: MyStickers; pending?: boolean }>("/checkout/capture", { body: { orderId } });
 }
 
-export function PayButtons({ pack, onPaid }: { pack: StickerPack; onPaid: (r: Receipt) => void }) {
+/** Anything sold through the shared PayPal checkout: a sticker pack, or a product ref like "premium:month". */
+export type Purchasable = Pick<StickerPack, "id" | "title" | "priceCents" | "currency"> & { label?: string };
+
+export function PayButtons({ pack, onPaid }: { pack: Purchasable; onPaid: (r: Receipt) => void }) {
+  const itemLabel = pack.label ?? `Open Lounge sticker pack: ${pack.title}`;
   const config = useStickers((s) => s.config);
   const ppRef = useRef<HTMLDivElement>(null);
   const gpRef = useRef<HTMLDivElement>(null);
@@ -63,7 +67,7 @@ export function PayButtons({ pack, onPaid }: { pack: StickerPack; onPaid: (r: Re
 
   const finish = (r: { receipt: Receipt; mine: MyStickers; pending?: boolean }) => {
     applyMine(r.mine);
-    if (r.pending) setError("Payment is processing. Your stickers unlock as soon as PayPal confirms.");
+    if (r.pending) setError(pack.label ? "Payment is processing. It unlocks as soon as PayPal confirms." : "Payment is processing. Your stickers unlock as soon as PayPal confirms.");
     else onPaid(r.receipt);
   };
 
@@ -178,7 +182,7 @@ export function PayButtons({ pack, onPaid }: { pack: StickerPack; onPaid: (r: Re
       currencyCode: pack.currency,
       requiredBillingContactFields: ["postalAddress"],
       total: { label: BRAND, type: "final", amount },
-      lineItems: [{ label: `Open Lounge sticker pack: ${pack.title}`, amount, type: "final" }],
+      lineItems: [{ label: itemLabel, amount, type: "final" }],
     });
     session.onvalidatemerchant = (event: any) =>
       ap
@@ -202,7 +206,7 @@ export function PayButtons({ pack, onPaid }: { pack: StickerPack; onPaid: (r: Re
   return (
     <div className="space-y-2.5" data-testid="pay-buttons">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-zinc-400">Open Lounge sticker pack: <span className="text-zinc-200">{pack.title}</span></span>
+        <span className="text-zinc-400">{pack.label ? <span className="text-zinc-200">{pack.label}</span> : <>Open Lounge sticker pack: <span className="text-zinc-200">{pack.title}</span></>}</span>
         <span className="font-semibold text-zinc-100">{formatPrice(pack.priceCents!, pack.currency)}</span>
       </div>
       {apple && (

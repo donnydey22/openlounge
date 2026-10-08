@@ -35,6 +35,8 @@ export interface StickerPack {
   currency: string;
   published: boolean;
   builtin?: boolean;
+  /** Open Lounge Premium exclusive: members get it free, nobody can buy it separately */
+  premium?: boolean;
   cover: string;
   attribution: Attribution | null;
   stickers: Sticker[];
@@ -44,7 +46,7 @@ export type PackSummary = Omit<StickerPack, "stickers"> & { count: number; previ
 
 /** Mirror Telegram: almost everything free, a few paid packs at small fixed tiers. */
 export const PRICE_TIERS = [99, 199, 299] as const;
-export const isFree = (p: { priceCents: number | null }) => !p.priceCents;
+export const isFree = (p: { priceCents: number | null; premium?: boolean }) => !p.premium && !p.priceCents;
 export const formatPrice = (cents: number, currency = "USD") =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
 

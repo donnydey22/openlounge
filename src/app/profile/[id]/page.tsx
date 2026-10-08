@@ -3,6 +3,7 @@
 import { DELETED_COLOR, DELETED_NAME, DELETED_PROFILE_TEXT, isDeletedUser, useDeletedIds } from "@/lib/userDisplay";
 import { SocialLinkChips } from "@/components/profile/SocialLinks";
 import { ShareProfileButton } from "@/components/ShareProfileButton";
+import { UserBadges } from "@/components/premium/UserBadges";
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -178,6 +179,7 @@ export default function ProfilePage() {
           <h1 className="line-clamp-3 text-[26px] leading-tight font-bold tracking-tight [overflow-wrap:anywhere]">{u.name}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[15px] text-zinc-400">
             <span className="max-w-full truncate">@{u.username}</span>
+            <UserBadges userId={u.id} />
             {online && (
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide text-emerald-400 uppercase">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Online

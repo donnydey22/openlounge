@@ -31,11 +31,14 @@ const readAs = (f: File, how: "text" | "dataurl") =>
     else fr.readAsDataURL(f);
   });
 
-function PriceSelect({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+function PriceSelect({ value, premium, onChange }: { value: number | null; premium?: boolean; onChange: (v: number | null, premium: boolean) => void }) {
   return (
     <select
-      value={value ?? 0}
-      onChange={(e) => onChange(Number(e.target.value) || null)}
+      value={premium ? -1 : (value ?? 0)}
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        onChange(v > 0 ? v : null, v === -1);
+      }}
       className="h-10 rounded-xl border border-white/10 bg-zinc-900 px-3 text-[16px] sm:text-sm"
       aria-label="Price"
       data-testid="admin-price"
@@ -46,6 +49,7 @@ function PriceSelect({ value, onChange }: { value: number | null; onChange: (v: 
           {formatPrice(t)}
         </option>
       ))}
+      <option value={-1}>★ Premium only</option>
     </select>
   );
 }
@@ -55,7 +59,7 @@ export default function AdminStickers() {
   const [packs, setPacks] = useState<PackSummary[] | null>(null);
   const [denied, setDenied] = useState(false);
   const [sel, setSel] = useState<StickerPack | null>(null);
-  const [form, setForm] = useState({ title: "", emoji: "✨", category: "", description: "", priceCents: null as number | null });
+  const [form, setForm] = useState({ title: "", emoji: "✨", category: "", description: "", priceCents: null as number | null, premium: false });
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -123,7 +127,7 @@ export default function AdminStickers() {
                   setBusy(true);
                   try {
                     const r = await admin<{ pack: StickerPack }>("/packs", "POST", form);
-                    setForm({ title: "", emoji: "✨", category: "", description: "", priceCents: null });
+                    setForm({ title: "", emoji: "✨", category: "", description: "", priceCents: null, premium: false });
                     setSel(r.pack);
                     void refresh();
                   } catch (err) {
@@ -136,7 +140,7 @@ export default function AdminStickers() {
                 <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Pack title" className="h-10 rounded-xl border border-white/10 bg-zinc-900 px-3 text-[16px] sm:text-sm" data-testid="admin-title" />
                 <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Category (e.g. Animals)" className="h-10 rounded-xl border border-white/10 bg-zinc-900 px-3 text-[16px] sm:text-sm" />
                 <input value={form.emoji} onChange={(e) => setForm({ ...form, emoji: e.target.value })} placeholder="Emoji" className="h-10 rounded-xl border border-white/10 bg-zinc-900 px-3 text-[16px] sm:text-sm" />
-                <PriceSelect value={form.priceCents} onChange={(v) => setForm({ ...form, priceCents: v })} />
+                <PriceSelect value={form.priceCents} premium={form.premium} onChange={(v, premium) => setForm({ ...form, priceCents: v, premium })} />
                 <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Description" className="h-10 rounded-xl border border-white/10 bg-zinc-900 px-3 text-[16px] sm:col-span-2 sm:text-sm" />
                 <button disabled={busy} className="flex h-10 items-center justify-center gap-1.5 rounded-full bg-emerald-500 font-semibold text-on-accent sm:col-span-2" data-testid="admin-create">
                   <Plus className="h-4 w-4" /> New pack (starts as a free draft)
@@ -151,7 +155,7 @@ export default function AdminStickers() {
                       <span className="min-w-0 truncate">
                         {p.emoji} <b>{p.title}</b> <span className="text-zinc-500">· {p.count} · {p.builtin ? "built-in (Noto, CC BY 4.0)" : p.published ? "published" : "draft"}</span>
                       </span>
-                      <span className="shrink-0 text-sm text-zinc-400">{p.priceCents ? formatPrice(p.priceCents) : "Free"}</span>
+                      <span className="shrink-0 text-sm text-zinc-400">{p.premium ? "★ Premium" : p.priceCents ? formatPrice(p.priceCents) : "Free"}</span>
                     </button>
                   </li>
                 ))}
@@ -174,7 +178,7 @@ function Editor({ pack, busy, onSave, onUpload, onRemove }: { pack: StickerPack;
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{pack.emoji} {pack.title}</h2>
         <div className="flex items-center gap-2">
-          <PriceSelect value={pack.priceCents} onChange={(v) => onSave({ priceCents: v })} />
+          <PriceSelect value={pack.priceCents} premium={pack.premium} onChange={(v, premium) => onSave({ priceCents: v, premium })} />
           <button type="button" onClick={() => onSave({ published: !pack.published })} className={cn("flex h-10 items-center gap-1.5 rounded-full px-4 text-sm font-semibold", pack.published ? "bg-white/10" : "bg-emerald-500 text-on-accent")} data-testid="admin-publish">
             {pack.published ? <><EyeOff className="h-4 w-4" /> Unpublish</> : <><Eye className="h-4 w-4" /> Publish</>}
           </button>

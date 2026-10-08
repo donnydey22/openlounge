@@ -205,6 +205,7 @@ export class PgStickerRepo implements StickerRepo {
         category: String(r.category),
         description: String(r.description),
         priceCents: num(r.price_cents),
+        premium: !!r.premium,
         currency: String(r.currency),
         published: !!r.published,
         cover: (r.cover as string) ?? "",
@@ -216,12 +217,12 @@ export class PgStickerRepo implements StickerRepo {
   async savePack(p: StickerPack, by: string | null) {
     const now = Date.now();
     await this.q(
-      `INSERT INTO sticker_packs (id, title, emoji, category, description, price_cents, currency, published, cover, attribution, stickers, created_by, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+      `INSERT INTO sticker_packs (id, title, emoji, category, description, price_cents, currency, published, cover, attribution, stickers, created_by, created_at, updated_at, premium)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14)
        ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title, emoji=EXCLUDED.emoji, category=EXCLUDED.category, description=EXCLUDED.description,
          price_cents=EXCLUDED.price_cents, currency=EXCLUDED.currency, published=EXCLUDED.published, cover=EXCLUDED.cover,
-         attribution=EXCLUDED.attribution, stickers=EXCLUDED.stickers, updated_at=EXCLUDED.updated_at`,
-      [p.id, p.title, p.emoji, p.category, p.description, p.priceCents, p.currency, p.published, p.cover, p.attribution ? JSON.stringify(p.attribution) : null, JSON.stringify(p.stickers), by, now],
+         attribution=EXCLUDED.attribution, stickers=EXCLUDED.stickers, updated_at=EXCLUDED.updated_at, premium=EXCLUDED.premium`,
+      [p.id, p.title, p.emoji, p.category, p.description, p.priceCents, p.currency, p.published, p.cover, p.attribution ? JSON.stringify(p.attribution) : null, JSON.stringify(p.stickers), by, now, !!p.premium],
     );
   }
   async mine(userId: string) {

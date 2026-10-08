@@ -33,6 +33,25 @@ export interface UserLookup {
   exists(userId: string): boolean;
 }
 
+/**
+ * Non-sticker products sold through the same PayPal checkout / webhook / receipt / restore pipeline
+ * (Premium, paid verification, …). Orders store the product ref in sticker_orders.pack_id as "<prefix>:<rest>".
+ * Handlers must be idempotent per order id (restore + webhooks may call fulfil more than once).
+ */
+export interface ProductHandler {
+  /** price + labels for a checkout; null = not purchasable by this user right now (error says why) */
+  quote(userId: string, ref: string): { ok: true; amountCents: number; currency: string; title: string } | { ok: false; status: number; error: string };
+  /** receipt label, e.g. "Open Lounge Premium (1 month)" */
+  title(ref: string): string;
+  fulfil(order: OrderRow): Promise<void>;
+  revoke(order: OrderRow): Promise<void>;
+  /** optional extra webhook events (e.g. BILLING.SUBSCRIPTION.*) — return true if handled */
+  webhook?(event: { id?: string; event_type?: string; resource?: Record<string, unknown> }): Promise<boolean>;
+  /** where receipts send people ("Manage" link) */
+  manageUrl?: string;
+}
+export const productPrefix = (ref: string) => (ref.includes(":") ? ref.split(":")[0] : null);
+
 export interface ServiceOptions {
   repo?: StickerRepo;
   env?: Record<string, string | undefined>;
@@ -50,6 +69,19 @@ export class StickerService {
   mailer: Mailer | null;
   users: UserLookup | null;
   ready = false;
+  private products = new Map<string, ProductHandler>();
+  /** premium perk: members own every premium-exclusive pack (set by server/premium) */
+  isPremium: (userId: string) => boolean = () => false;
+  /** Premium exclusive packs are only listed while Premium is switched on (PREMIUM_ENABLED) */
+  premiumVisible: () => boolean = () => false;
+
+  registerProduct(prefix: string, h: ProductHandler) {
+    this.products.set(prefix, h);
+  }
+  productOf(ref: string) {
+    const pre = productPrefix(ref);
+    return pre ? (this.products.get(pre) ?? null) : null;
+  }
 
   constructor(private opts: ServiceOptions = {}) {
     this.env = opts.env ?? process.env;
@@ -105,6 +137,7 @@ export class StickerService {
   pack(id: string, opts: { includeDrafts?: boolean } = {}) {
     const p = this.packs.get(id);
     if (!p || (!p.published && !opts.includeDrafts)) return null;
+    if (p.premium && !opts.includeDrafts && !this.premiumVisible()) return null;
     return p;
   }
 
@@ -115,7 +148,7 @@ export class StickerService {
 
   list(opts: { q?: string; category?: string; includeDrafts?: boolean } = {}) {
     const q = (opts.q ?? "").trim().toLowerCase();
-    let packs = [...this.packs.values()].filter((p) => opts.includeDrafts || p.published);
+    let packs = [...this.packs.values()].filter((p) => opts.includeDrafts || (p.published && (!p.premium || this.premiumVisible())));
     if (opts.category) packs = packs.filter((p) => p.category === opts.category);
     if (q)
       packs = packs.filter(
@@ -139,7 +172,7 @@ export class StickerService {
     if (!n) return [];
     const out: { packId: string; sticker: StickerPack["stickers"][number] }[] = [];
     for (const p of this.packs.values()) {
-      if (!p.published) continue;
+      if (!p.published || (p.premium && !this.premiumVisible())) continue;
       for (const s of p.stickers) if (s.emoji === q.trim() || s.keywords.some((k) => k.includes(n))) out.push({ packId: p.id, sticker: s });
       if (out.length >= limit) break;
     }
@@ -149,6 +182,7 @@ export class StickerService {
   owns(userId: string, packId: string) {
     const p = this.packs.get(packId);
     if (!p) return false;
+    if (p.premium) return this.isPremium(userId);
     return isFree(p) || !!this.ents.get(userId)?.has(packId);
   }
 
@@ -166,7 +200,8 @@ export class StickerService {
     if (!ref) return null;
     const p = this.packs.get(ref.packId);
     if (!p || !p.stickers.some((s) => s.id === ref.stickerId)) return "That sticker isn't available.";
-    if (!isFree(p) && !this.ents.get(userId)?.has(p.id)) return "Get this sticker pack to send it.";
+    if (p.premium && !this.isPremium(userId)) return "This sticker pack is for Open Lounge Premium members.";
+    if (!p.premium && !isFree(p) && !this.ents.get(userId)?.has(p.id)) return "Get this sticker pack to send it.";
     return null;
   }
 
@@ -179,7 +214,7 @@ export class StickerService {
       added: m.added.filter((id) => this.packs.get(id)?.published && this.owns(userId, id)),
       favorites: m.favorites.filter(live),
       recents: m.recents.filter(live),
-      owned: this.ownedPaid(userId),
+      owned: [...this.ownedPaid(userId), ...(this.isPremium(userId) ? [...this.packs.values()].filter((p) => p.premium && p.published).map((p) => p.id) : [])],
     };
   }
 
@@ -223,7 +258,7 @@ export class StickerService {
     return {
       orderId: o.id,
       packId: o.packId,
-      packTitle: this.packs.get(o.packId)?.title ?? o.packId,
+      packTitle: this.productOf(o.packId)?.title(o.packId) ?? this.packs.get(o.packId)?.title ?? o.packId,
       amountCents: o.amountCents,
       currency: o.currency,
       status: o.status,
@@ -239,8 +274,10 @@ export class StickerService {
     if (!this.paidEnabled || !this.paypal) return { ok: false as const, status: 503, error: "Paid stickers aren't available yet" };
     // Phone wrappers never start a purchase in-app (App Store 3.1.1 / Play Payments policy); see STORE_RULES.md.
     if (opts.wrapper) return { ok: false as const, status: 403, error: "Purchases happen on openlounge.app" };
+    if (typeof packId === "string" && this.productOf(packId)) return this.createProductCheckout(userId, packId, funding);
     const p = typeof packId === "string" ? this.pack(packId) : null;
     if (!p) return { ok: false as const, status: 404, error: "Sticker pack not found" };
+    if (p.premium) return { ok: false as const, status: 400, error: "This pack comes with Open Lounge Premium" };
     if (isFree(p)) return { ok: false as const, status: 400, error: "This pack is free" };
     if (this.owns(userId, p.id)) return { ok: false as const, status: 409, error: "You already own this pack" };
     const f = typeof funding === "string" && ["paypal", "apple_pay", "google_pay"].includes(funding) ? funding : "paypal";
@@ -271,13 +308,33 @@ export class StickerService {
     return { ok: true as const, orderId: order.id };
   }
 
+  private async createProductCheckout(userId: string, ref: string, funding: unknown) {
+    const h = this.productOf(ref)!;
+    const q = h.quote(userId, ref);
+    if (!q.ok) return q;
+    const f = typeof funding === "string" && ["paypal", "apple_pay", "google_pay"].includes(funding) ? funding : "paypal";
+    const requestId = `create-${userId}-${ref.replace(/[^\w-]/g, "_")}-${randomBytes(6).toString("hex")}`;
+    let order: PayPalOrder;
+    try {
+      order = await this.paypal!.createOrder({ requestId, funding: f, amountCents: q.amountCents, currency: q.currency, packId: ref, userId, title: q.title, itemName: q.title, brand: BRAND });
+    } catch (err) {
+      console.error("[billing] create order failed", (err as Error).message);
+      return { ok: false as const, status: 502, error: "Couldn't start checkout. Please try again." };
+    }
+    await this.repo.createOrder({ id: order.id, userId, packId: ref, amountCents: q.amountCents, currency: q.currency, status: "created", captureId: null, fundingSource: f, payerEmail: null, mode: this.paypal!.cfg.mode, createdAt: Date.now(), capturedAt: null, refundedAt: null, receiptSentAt: null });
+    return { ok: true as const, orderId: order.id };
+  }
+
   /** Mark an order paid (idempotent: only the first caller flips created→captured, grants and emails). */
   private async completeOrder(order: OrderRow, pp: PayPalOrder | null, captureId: string) {
     const funding = (pp && fundingOf(pp)) || order.fundingSource;
     const payerEmail = pp?.payer?.email_address ?? null;
     const flipped = await this.repo.transition(order.id, ["created", "failed"], { status: "captured", captureId, capturedAt: Date.now(), fundingSource: funding, payerEmail });
     const row = flipped ?? (await this.repo.getOrder(order.id))!;
-    if (row.status === "captured") {
+    if (row.status === "captured" && this.productOf(row.packId)) {
+      await this.productOf(row.packId)!.fulfil(row);
+      if (flipped) void this.sendReceipt(row);
+    } else if (row.status === "captured") {
       await this.repo.grant(row.userId, row.packId, row.id);
       this.own(row.userId, row.packId, true);
       await this.repo.setAdded(row.userId, row.packId, true);
@@ -321,6 +378,10 @@ export class StickerService {
   async restore(userId: string) {
     const orders = await this.repo.ordersOf(userId);
     for (const o of orders) {
+      if (o.status === "captured" && this.productOf(o.packId)) {
+        await this.productOf(o.packId)!.fulfil(o);
+        continue;
+      }
       if (o.status === "captured") {
         if (!this.ents.get(userId)?.has(o.packId)) {
           await this.repo.grant(userId, o.packId, o.id);
@@ -392,10 +453,19 @@ export class StickerService {
         if (o) {
           const status = event.event_type === "PAYMENT.CAPTURE.REFUNDED" ? "refunded" : "reversed";
           await this.repo.transition(o.id, ["captured", "created"], { status, refundedAt: Date.now() });
+          const prod = this.productOf(o.packId);
+          if (prod) {
+            await prod.revoke(o);
+            break;
+          }
           await this.repo.revoke(o.userId, o.packId, o.id);
           this.own(o.userId, o.packId, false);
           await this.repo.setAdded(o.userId, o.packId, false);
         }
+        break;
+      }
+      default: {
+        for (const h of this.products.values()) if (h.webhook && (await h.webhook(event))) break;
         break;
       }
       case "PAYMENT.CAPTURE.DENIED": {
@@ -416,6 +486,9 @@ export class StickerService {
       if (!to) return;
       // only the single caller that flipped created→captured gets here, so this sends exactly once
       const p = this.packs.get(o.packId);
+      const prod = this.productOf(o.packId);
+      const itemLabel = prod ? prod.title(o.packId) : `Open Lounge sticker pack: ${p?.title ?? o.packId}`;
+      const manage = prod?.manageUrl ? `${SITE}${prod.manageUrl}` : `${SITE}/stickers/receipts`;
       const price = formatPrice(o.amountCents, o.currency);
       const when = new Date(o.capturedAt ?? Date.now()).toUTCString();
       const via = o.fundingSource === "apple_pay" ? "Apple Pay (via PayPal)" : o.fundingSource === "google_pay" ? "Google Pay (via PayPal)" : "PayPal";
@@ -426,14 +499,14 @@ export class StickerService {
         ``,
         `Thanks for your purchase from Open Lounge.`,
         ``,
-        `Item: Open Lounge sticker pack: ${p?.title ?? o.packId}`,
+        `Item: ${itemLabel}`,
         `Seller: Open Lounge`,
         `Amount: ${price}`,
         `Paid with: ${via}`,
         `Order: ${o.id}`,
         `Date: ${when}`,
         ``,
-        `Your stickers are in My stickers on every device you sign in to. Restore purchases: ${SITE}/stickers/receipts`,
+        prod ? `Manage it here: ${manage}` : `Your stickers are in My stickers on every device you sign in to. Restore purchases: ${manage}`,
         `Questions or a refund: reply to this email.`,
         ``,
         `Open Lounge · ${SITE}`,
@@ -448,14 +521,14 @@ export class StickerService {
 <div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-0.02em">Your receipt${esc(sandbox)}</div>
 <div style="font-size:15px;line-height:22px;color:#047857;padding-top:6px">Thanks for your purchase from Open Lounge.</div></td></tr>
 <tr><td style="padding:12px 32px 8px"><table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px">
-${row("Item", `Open Lounge sticker pack: ${esc(p?.title ?? o.packId)}`)}${row("Amount", `<b>${esc(price)}</b>`)}${row("Paid with", esc(via))}${row("Seller", "Open Lounge")}${row("Order", esc(o.id))}${row("Date", esc(when))}
+${row("Item", esc(itemLabel))}${row("Amount", `<b>${esc(price)}</b>`)}${row("Paid with", esc(via))}${row("Seller", "Open Lounge")}${row("Order", esc(o.id))}${row("Date", esc(when))}
 </table></td></tr>
-<tr><td style="font-size:13px;line-height:20px;color:#52525b;padding:12px 32px 8px">Your stickers are in <b>My stickers</b> on every device you sign in to. <a href="${SITE}/stickers/receipts" style="color:#047857">Restore purchases</a>. Questions or a refund? Just reply to this email.</td></tr>
+<tr><td style="font-size:13px;line-height:20px;color:#52525b;padding:12px 32px 8px">${prod ? `<a href="${manage}" style="color:#047857">Manage it here</a>.` : `Your stickers are in <b>My stickers</b> on every device you sign in to. <a href="${manage}" style="color:#047857">Restore purchases</a>.`} Questions or a refund? Just reply to this email.</td></tr>
 <tr><td style="font-size:15px;line-height:22px;padding:12px 32px 28px">See you in the lounge,<br><span style="font-weight:600">The Open Lounge team</span></td></tr>
 </table>
 <p style="font-size:12px;line-height:18px;color:#71717a;margin:16px 0 0">Open Lounge · <a href="${SITE}" style="color:#71717a">openlounge.app</a> · <a href="${SITE}/terms" style="color:#71717a">Terms</a> · <a href="${SITE}/privacy" style="color:#71717a">Privacy</a></p>
 </td></tr></table></body></html>`;
-      const sent = await this.mailer({ to, subject: `Your Open Lounge receipt: ${p?.title ?? "Sticker pack"} (${price})`, text, html });
+      const sent = await this.mailer({ to, subject: `Your Open Lounge receipt: ${prod ? prod.title(o.packId) : (p?.title ?? "Sticker pack")} (${price})`, text, html });
       if (sent) await this.repo.update(o.id, { receiptSentAt: Date.now() });
     } catch (err) {
       console.error("[stickers] receipt email failed", (err as Error).message);

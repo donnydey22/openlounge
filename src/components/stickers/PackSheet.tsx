@@ -90,6 +90,14 @@ export function PackActions({ pack, onDone }: { pack: StickerPack; onDone?: () =
       </Link>
     );
 
+  if (!owned && pack.premium)
+    return inWrapper() ? (
+      <p className="py-2 text-center text-sm text-zinc-400" data-testid="premium-pack-note">Included with Open Lounge Premium.</p>
+    ) : (
+      <Link href="/premium" className="flex h-12 w-full items-center justify-center rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 font-semibold text-white" data-testid="premium-pack-cta">
+        ★ Included with Open Lounge Premium
+      </Link>
+    );
   if (!owned) {
     if (inWrapper())
       // App Store 3.1.1 / Google Play Payments: no in-app purchase flow in the store builds (see STORE_RULES.md)
