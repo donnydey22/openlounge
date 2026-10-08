@@ -815,7 +815,10 @@ export class MediaService {
           fs.rmSync(hlsDir, { recursive: true, force: true });
           if (row.files.hls) {
             // something was already published under this rev: move to a new one so caches never mix versions
-            row.rev = (row.rev ?? 1) + 1;
+            const oldRev = row.rev ?? 1;
+            row.rev = oldRev + 1;
+            // reprocess: the old version's URLs are dead at the origin; tell the media cache to drop its copies too
+            purgeCache([`/media/${row.id}/v${oldRev}/`]);
             const files = { ...row.files };
             delete files.hls;
             delete files.hlsLow;
