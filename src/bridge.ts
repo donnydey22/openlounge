@@ -82,14 +82,44 @@ export type BridgeRequest =
   | { __ol: 1; method: 'requestContacts' }
   | { __ol: 1; method: 'openAppSettings' }
   | { __ol: 1; method: 'requestNotificationPermission' }
-  | { __ol: 1; method: 'setBadge'; value: number };
+  | { __ol: 1; method: 'setBadge'; value: number }
   | { __ol: 1; method: 'phoneAuthStart'; value: { id: string; phone: string } }
-  | { __ol: 1; method: 'phoneAuthConfirm'; value: { id: string; code: string } };
+  | { __ol: 1; method: 'phoneAuthConfirm'; value: { id: string; code: string } }
+  | { __ol: 1; method: 'call'; value: PageCallMessage };
+
+/** Page → native call messages (NATIVE_SPEC.md §5), sent as plain {type:"call:*"} JSON (no __ol envelope). */
+export type PageCallMessage =
+  | { type: 'call:outgoing'; callId: string; name: string; video: boolean }
+  | { type: 'call:connected'; callId: string }
+  | { type: 'call:ended'; callId: string }
+  | { type: 'call:muted'; muted: boolean }
+  | { type: 'call:audioRoute'; speaker: boolean };
+
+const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function parseCallMessage(m: Record<string, unknown>): BridgeRequest | null {
+  const id = typeof m.callId === 'string' && CALL_ID.test(m.callId) ? m.callId : '';
+  const wrap = (value: PageCallMessage): BridgeRequest => ({ __ol: 1, method: 'call', value });
+  switch (m.type) {
+    case 'call:outgoing':
+      return id ? wrap({ type: 'call:outgoing', callId: id, name: typeof m.name === 'string' ? m.name.slice(0, 80) : '', video: m.video === true }) : null;
+    case 'call:connected':
+    case 'call:ended':
+      // callId may be missing on old pages; '' means "the current call"
+      return typeof m.callId === 'string' && !id ? null : wrap({ type: m.type, callId: id });
+    case 'call:muted':
+      return typeof m.muted === 'boolean' ? wrap({ type: 'call:muted', muted: m.muted }) : null;
+    case 'call:audioRoute':
+      return typeof m.speaker === 'boolean' ? wrap({ type: 'call:audioRoute', speaker: m.speaker }) : null;
+  }
+  return null;
+}
 
 export function parseBridgeMessage(data: string): BridgeRequest | null {
   try {
     if (typeof data !== 'string' || data.length > 200_000) return null;
     const m = JSON.parse(data) as Record<string, unknown>;
+    if (m && typeof m === 'object' && m.__ol === undefined && typeof m.type === 'string' && m.type.startsWith('call:')) return parseCallMessage(m);
     if (!m || m.__ol !== 1 || typeof m.method !== 'string') return null;
     switch (m.method) {
       case 'theme':
@@ -118,12 +148,12 @@ export function parseBridgeMessage(data: string): BridgeRequest | null {
           ? { __ol: 1, method: 'phoneAuthConfirm', value: { id: v.id, code: v.code } }
           : null;
       }
-      case 'requestContacts':
-      case 'openAppSettings':
       case 'setBadge':
         return typeof m.value === 'number' && Number.isFinite(m.value) && m.value >= 0
           ? { __ol: 1, method: 'setBadge', value: Math.min(9999, Math.floor(m.value)) }
           : null;
+      case 'requestContacts':
+      case 'openAppSettings':
       case 'requestNotificationPermission':
         return { __ol: 1, method: m.method } as BridgeRequest;
     }
@@ -178,7 +208,7 @@ export function audioResumeScript(reason: string): string {
 }catch(e){}})();true;`;
 }
 
-export function injectedBeforeContentLoaded(platform: string, appVersion: string): string {
+export function injectedBeforeContentLoaded(platform: string, appVersion: string, nativeCalls = false): string {
   return `(function(){
   try {
     if (window.OpenLoungeNative && window.OpenLoungeNative.__expo) return;
@@ -227,7 +257,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics', 'phoneAuth']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics', 'phoneAuth'${nativeCalls ? ", 'calls'" : ''}]),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
       getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
@@ -262,8 +292,16 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       // native Firebase phone verification (silent APNs, no web reCAPTCHA); results via window.__olPhoneAuth(json)
       phoneAuthAvailable: function () { return true; },
       phoneAuthStart: function (id, phone) { post({ __ol: 1, method: 'phoneAuthStart', value: { id: String(id), phone: String(phone) } }); },
-      phoneAuthConfirm: function (id, code) { post({ __ol: 1, method: 'phoneAuthConfirm', value: { id: String(id), code: String(code) } }); }
+      phoneAuthConfirm: function (id, code) { post({ __ol: 1, method: 'phoneAuthConfirm', value: { id: String(id), code: String(code) } }); },
+      // NATIVE_SPEC §5: raw JSON string messages ({type:"call:*"}), same transport as ReactNativeWebView.postMessage
+      postMessage: function (s) {
+        var bridge = window.ReactNativeWebView;
+        if (!bridge || typeof bridge.postMessage !== 'function') return false;
+        try { bridge.postMessage(String(s)); return true; } catch (e) { return false; }
+      }
     };
+    // build 18+: the page posts call:* messages and CallKit drives openlounge:native-call (engine.ts postNative)
+    if (${nativeCalls ? 'true' : 'false'}) { try { window.__olNativeCalls = 1; } catch (e) {} }
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
     // Remember AudioContexts so audio can be resumed after an interruption (see audioResumeScript).

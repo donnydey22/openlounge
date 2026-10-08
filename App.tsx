@@ -39,6 +39,16 @@ import { readContactsForPage } from './src/contacts';
 import { initPush, onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
 import { type LinkTarget, isNativeAuthStart, resolveIncomingLink } from './src/links';
 import * as Session from './src/sessionStore';
+import {
+  type CallAction,
+  acceptUrl,
+  accessFromSession,
+  forwardPageCallMessage,
+  nativeCallsAvailable,
+  postVoipToken,
+  startNativeCalls,
+  syncCallAuthFromSession,
+} from './src/calls';
 import { type Theme, loadTheme, saveTheme } from './src/themeStore';
 import { schemeOf } from './src/url';
 
@@ -84,7 +94,7 @@ function Shell() {
   const [sourceUri, setSourceUri] = useState(START_URL);
   const [kbHeight, setKbHeight] = useState(0);
 
-  const injected = useMemo(() => injectedBeforeContentLoaded(Platform.OS, APP_VERSION), []);
+  const injected = useMemo(() => injectedBeforeContentLoaded(Platform.OS, APP_VERSION, nativeCallsAvailable()), []);
 
   // ---- refs read from long-lived listeners ----
   const offlineRef = useRef(false);
@@ -343,6 +353,66 @@ function Shell() {
     };
   }, [pushReady, deliverPushToken, navigate]);
 
+  // ---------------- native call ringing (CallKit/PushKit, src/calls.ts) ----------------
+  const access = useRef<{ access: string; exp: number } | null>(null);
+  const voipToken = useRef('');
+  const voipSent = useRef({ key: '', at: 0 });
+  const appOrigin = () => {
+    try {
+      return new URL(isAppUrl(currentUrl.current) ? currentUrl.current : START_URL).origin;
+    } catch {
+      return START_URL;
+    }
+  };
+  // Register the PushKit token whenever both it and a fresh access token are known (sign-in, token rotation,
+  // new PushKit token); at most every 6 h for the same token+account.
+  const syncVoip = useCallback(() => {
+    const t = voipToken.current;
+    const a = access.current;
+    if (!t || !a || a.exp < Date.now() + 10_000) return;
+    const key = `${t}:${a.access.slice(0, 24)}`;
+    if (voipSent.current.key === key && Date.now() - voipSent.current.at < 6 * 3600_000) return;
+    voipSent.current = { key, at: Date.now() };
+    void postVoipToken(appOrigin(), t, a.access).then((st) => {
+      if (st < 200 || st >= 300) voipSent.current = { key: '', at: 0 }; // retry on the next rotation
+    });
+  }, []);
+  const onSessionChanged = useCallback(
+    (json: string | null) => {
+      syncCallAuthFromSession(json);
+      access.current = accessFromSession(json);
+      syncVoip();
+    },
+    [syncVoip],
+  );
+  const onCallAction = useCallback(
+    (a: CallAction, coldStart: boolean) => {
+      if (a.type === 'answer') {
+        navigate(acceptUrl(appOrigin(), a.callId)); // /call/<id>?accept=1: the web layer joins instantly
+        return;
+      }
+      if (coldStart || !everLoaded.current) return; // nothing to tell a page that isn't loaded
+      const detail = a.type === 'mute' ? { type: 'call:mute', muted: a.muted } : { type: a.type === 'decline' ? 'call:decline' : 'call:hangup' };
+      inject(nativeEventScript('openlounge:native-call', detail));
+    },
+    [navigate, inject],
+  );
+  useEffect(() => {
+    if (!nativeCallsAvailable()) return;
+    Session.getSession()
+      .then((json) => onSessionChanged(json))
+      .catch(() => {});
+    const { pending, stop } = startNativeCalls(
+      (a) => onCallAction(a, false),
+      (t) => {
+        voipToken.current = t;
+        syncVoip();
+      },
+    );
+    for (const a of pending) onCallAction(a, true);
+    return stop;
+  }, [onCallAction, onSessionChanged, syncVoip]);
+
   // Deep links: cold start + while running.
   useEffect(() => {
     Linking.getInitialURL()
@@ -436,6 +506,9 @@ function Shell() {
             })
             .catch(() => {});
           return;
+        case 'call':
+          forwardPageCallMessage(msg.value);
+          return;
         case 'phoneAuthStart':
         case 'phoneAuthConfirm': {
           const v = msg.value;
@@ -467,13 +540,22 @@ function Shell() {
           return void reply(msg.id, true, on);
         }
         if (msg.method === 'getSession') reply(msg.id, true, await Session.getSession());
-        else if (msg.method === 'setSession') reply(msg.id, true, await Session.setSession(msg.value));
-        else if (msg.method === 'clearSession') reply(msg.id, true, await Session.clearSession());
+        else if (msg.method === 'setSession') {
+          reply(msg.id, true, await Session.setSession(msg.value));
+          onSessionChanged(msg.value);
+        } else if (msg.method === 'clearSession') {
+          // sign-out: unregister this phone's PushKit token while the access token is still valid
+          const a = access.current;
+          if (voipToken.current && a && a.exp > Date.now() + 5_000) void postVoipToken(appOrigin(), voipToken.current, a.access, true);
+          voipSent.current = { key: '', at: 0 };
+          reply(msg.id, true, await Session.clearSession());
+          onSessionChanged(null);
+        }
       } catch (err) {
         reply(msg.id, false, null, err instanceof Error ? err.message : String(err));
       }
     },
-    [applyTheme, hideSplash, navigate, reply, runAuth, inject, deliverPushToken],
+    [applyTheme, hideSplash, navigate, reply, runAuth, inject, deliverPushToken, onSessionChanged],
   );
 
   // ---------------- link policy ----------------

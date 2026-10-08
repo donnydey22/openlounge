@@ -65,6 +65,25 @@ t(B.parseBridgeMessage('{"__ol":1,"method":"setSession"}'), null, 'setSession wi
 t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioSetEnabled","value":true}'), { __ol: 1, id: 'a', method: 'bioSetEnabled', value: true }, 'bio set');
 t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioSetEnabled","value":"yes"}'), null, 'bio set non-bool');
 t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioGetEnabled"}'), { __ol: 1, id: 'a', method: 'bioGetEnabled' }, 'bio get');
+t(B.parseBridgeMessage('{"__ol":1,"method":"requestContacts"}'), { __ol: 1, method: 'requestContacts' }, 'requestContacts (not swallowed by setBadge)');
+t(B.parseBridgeMessage('{"__ol":1,"method":"openAppSettings"}'), { __ol: 1, method: 'openAppSettings' }, 'openAppSettings');
+t(B.parseBridgeMessage('{"__ol":1,"method":"setBadge","value":3.7}'), { __ol: 1, method: 'setBadge', value: 3 }, 'setBadge');
+t(B.parseBridgeMessage('{"__ol":1,"method":"setBadge","value":-1}'), null, 'setBadge negative');
+t(B.parseBridgeMessage('{"type":"call:outgoing","callId":"c_1","name":"Ann","video":true}'), { __ol: 1, method: 'call', value: { type: 'call:outgoing', callId: 'c_1', name: 'Ann', video: true } }, 'call outgoing');
+t(B.parseBridgeMessage('{"type":"call:connected","callId":"c_1"}'), { __ol: 1, method: 'call', value: { type: 'call:connected', callId: 'c_1' } }, 'call connected');
+t(B.parseBridgeMessage('{"type":"call:ended"}'), { __ol: 1, method: 'call', value: { type: 'call:ended', callId: '' } }, 'call ended no id');
+t(B.parseBridgeMessage('{"type":"call:ended","callId":"../x"}'), null, 'call ended bad id');
+t(B.parseBridgeMessage('{"type":"call:muted","muted":true}'), { __ol: 1, method: 'call', value: { type: 'call:muted', muted: true } }, 'call muted');
+t(B.parseBridgeMessage('{"type":"call:audioRoute","speaker":false}'), { __ol: 1, method: 'call', value: { type: 'call:audioRoute', speaker: false } }, 'audio route');
+t(B.parseBridgeMessage('{"type":"call:audioRoute","speaker":"no"}'), null, 'audio route non-bool');
+t(B.parseBridgeMessage('{"type":"call:explode"}'), null, 'unknown call type');
+t(B.parseBridgeMessage('{"__ol":1,"type":"call:ended"}'), null, 'enveloped call msg ignored');
+{
+  const js = B.injectedBeforeContentLoaded('ios', '0.3.1', true);
+  t(/__olNativeCalls = 1/.test(js) && /if \(true\)/.test(js) && /'calls'\]/.test(js), true, 'native calls flag on');
+  const off = B.injectedBeforeContentLoaded('ios', '0.3.1');
+  t(/if \(false\)/.test(off) && !/'calls'\]/.test(off), true, 'native calls flag off by default');
+}
 {
   const { shouldLock } = require(path.join(root, 'src/lockPolicy.ts'));
   t(shouldLock(false, 0, 1e6), false, 'lock off');
@@ -72,7 +91,7 @@ t(B.parseBridgeMessage('{"__ol":1,"id":"a","method":"bioGetEnabled"}'), { __ol: 
   t(shouldLock(true, 1000, 61000), false, '60s exactly no lock');
   t(shouldLock(true, 1000, 61001), true, '>60s locks');
 }
-for (const js of [B.injectedBeforeContentLoaded('ios', '0.2.3'), B.audioResumeScript('x'), B.keyboardScript(true, 300, 250), B.nativeEventScript('a', { b: 1 })]) {
+for (const js of [B.injectedBeforeContentLoaded('ios', '0.2.3'), B.injectedBeforeContentLoaded('ios', '0.3.1', true), B.audioResumeScript('x'), B.keyboardScript(true, 300, 250), B.nativeEventScript('a', { b: 1 })]) {
   new Function(js); // syntax check
 }
 console.log(failed ? `${failed} FAILED` : 'bridge/link checks: all OK');

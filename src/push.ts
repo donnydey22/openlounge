@@ -4,6 +4,13 @@
 // modules are required lazily inside initPush(), which App.tsx calls only after the WebView's first load finished
 // (+1.5 s). Every call is wrapped so a missing/broken native module or missing Firebase config just disables push.
 
+import { endNativeCall } from './calls';
+
+/** call_cancel {callId, reason} (caller hung up / answered elsewhere) → stop the CallKit ring (NATIVE_SPEC §1). */
+function endRingingCall(data: Record<string, unknown> | undefined) {
+  if (data?.type === 'call_cancel' && typeof data.callId === 'string') endNativeCall(data.callId, typeof data.reason === 'string' ? data.reason : '');
+}
+
 export type PushTokenListener = (token: string) => void;
 
 type Messaging = typeof import('@react-native-firebase/messaging');
@@ -69,10 +76,21 @@ export function initPush(): boolean {
     M.setBackgroundMessageHandler(M.getMessaging(), async (m) => {
       try {
         if (m.data?.clear === '1' && typeof m.data.tag === 'string') await clearDelivered(m.data.tag);
+        endRingingCall(m.data);
       } catch {}
     });
   } catch (e) {
     log('setBackgroundMessageHandler', e);
+  }
+  try {
+    // foreground data messages: only call_cancel matters here (the page shows everything else itself)
+    msgMod.onMessage(msgMod.getMessaging(), (m) => {
+      try {
+        endRingingCall(m.data);
+      } catch {}
+    });
+  } catch (e) {
+    log('onMessage', e);
   }
   return available;
 }
