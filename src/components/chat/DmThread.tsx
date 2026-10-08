@@ -14,6 +14,7 @@ import "./emoji/chat-fx.css";
 import { bigEmoji, preloadQuickReactions } from "@/lib/emoji/assets";
 import { BigEmoji, bigEmojiSize } from "./emoji/BigEmoji";
 import { ReactionChips } from "./emoji/ReactionChips";
+import { SponsoredSlot } from "@/components/sponsored/Sponsored";
 import { MessageActionOverlay, type MessageAction, type OverlayTarget } from "./emoji/MessageActionOverlay";
 import { ReactionFlight, type Flight } from "./emoji/ReactionFlight";
 import { burst } from "./emoji/effects";
@@ -1199,6 +1200,8 @@ export function DmThread({
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
               ); })}
+              {/* sponsored message in large groups: one per view, after the last message (server-gated, OFF by default) */}
+              {isGroup && messages.length > 0 && <SponsoredSlot placement="groups" chat={peerId} className="my-2" />}
               {peerTyping && typingPeer && (
                 <div className="msg-in mt-2 flex items-end gap-2" data-testid="dm-typing">
                   <Avatar name={typingPeer.name} color={typingPeer.color} photo={typingPeer.photoUrl} size="xs" />
