@@ -20,6 +20,7 @@ import { BlockedAccounts } from "@/components/settings/BlockedAccounts";
 import { useSafety } from "@/lib/safety";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "@/lib/support";
 import { MonetSettingsRows } from "@/components/premium/MonetSettingsRows";
+import { DataSaverRow } from "@/components/media/DataSaverRow";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
@@ -100,6 +101,7 @@ export default function SettingsPage() {
               <Bell className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Notifications</span>
               <ChevronRight className="h-4 w-4 text-zinc-500" />
             </Link>
+            <DataSaverRow />
             <MonetSettingsRows signedIn={!!me} />
             <BlockedAccounts meId={me?.id} toast={toast} />
             <Link href="/invite" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">
