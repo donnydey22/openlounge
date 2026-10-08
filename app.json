@@ -22,8 +22,8 @@
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Open Lounge uses your microphone so you can speak in rooms.",
-        "NSCameraUsageDescription": "Open Lounge uses your camera only when you choose to take a photo, for example for your profile picture.",
+        "NSMicrophoneUsageDescription": "Open Lounge uses your microphone so you can speak in live rooms, drop-in chats and calls. Audio is only sent while you’re speaking on stage or in a call.",
+        "NSCameraUsageDescription": "Open Lounge uses your camera when you turn on video in a call or take a photo, for example for your profile picture.",
         "NSPhotoLibraryUsageDescription": "Open Lounge lets you pick a photo, for example for your profile picture.",
         "UIBackgroundModes": [
           "audio",
@@ -31,7 +31,7 @@
         ],
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": false,
-        "NSContactsUsageDescription": "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime.",
+        "NSContactsUsageDescription": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on “Tell me when contacts join”, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "privacyManifests": {
@@ -140,6 +140,14 @@
             ]
           },
           {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeProductInteraction",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
             "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeDeviceID",
             "NSPrivacyCollectedDataTypeLinked": true,
             "NSPrivacyCollectedDataTypeTracking": false,
@@ -202,7 +210,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "Open Lounge checks which of your contacts are already members so you can follow them. Numbers are sent only as one-way codes, are never shared, and you can delete them anytime."
+          "contactsPermission": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on “Tell me when contacts join”, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime."
         }
       ],
       "expo-localization",
