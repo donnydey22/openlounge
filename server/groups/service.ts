@@ -42,6 +42,8 @@ export interface StoreLike {
   saveSoon(): void;
   /** combined DM + group unread badge for a user */
   unreadDmCount(userId: string): number;
+  /** per-user inbox state (pin) — shared with 1:1 chats, keyed (userId, gid) for groups */
+  chatPrefs?: { get(userId: string, peerId: string): { pinnedAt: number | null } | undefined; set(userId: string, peerId: string, patch: { pinnedAt: number | null }): void };
 }
 
 export interface GroupEmitter {
@@ -126,6 +128,7 @@ export class GroupService {
   private unindexMember(gid: string, userId: string) {
     this.members.get(gid)?.delete(userId);
     this.byUser.get(userId)?.delete(gid);
+    if (this.store.chatPrefs?.get(userId, gid)?.pinnedAt) this.store.chatPrefs.set(userId, gid, { pinnedAt: null }); // a re-join starts unpinned
   }
   member(gid: string, userId: string) {
     return this.members.get(gid)?.get(userId) ?? null;
@@ -800,6 +803,7 @@ export class GroupService {
         muted: me.muted,
         mentioned: this.mentionedSince(userId, gid),
         updatedAt: Math.max(last?.createdAt ?? 0, me.joinedAt),
+        pinnedAt: this.store.chatPrefs?.get(userId, gid)?.pinnedAt ?? undefined,
       });
     }
     return out;

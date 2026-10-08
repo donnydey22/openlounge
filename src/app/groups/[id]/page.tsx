@@ -17,7 +17,7 @@ import { Switch } from "@/components/Switch";
 import { ReportSheet } from "@/components/safety/ReportSheet";
 import { GroupScreen, Row, Section } from "@/components/groups/GroupScreen";
 import { MemberPicker } from "@/components/groups/MemberPicker";
-import { memberLine, useGroupInfo } from "@/components/groups/GroupBits";
+import { LeaveSheet, memberLine, successorName, useGroupInfo } from "@/components/groups/GroupBits";
 
 const ROLE_LABEL = { owner: "owner", admin: "admin", member: "" } as const;
 
@@ -217,13 +217,6 @@ function inviteHint(invites?: GroupInvite[]) {
   return n ? `${n} active link${n === 1 ? "" : "s"}` : "Create a link anyone can join with";
 }
 
-function successorName(members: GroupMember[], meId?: string) {
-  const others = members.filter((m) => m.id !== meId);
-  if (!others.length) return null;
-  const admins = others.filter((m) => m.role === "admin").sort((a, b) => a.joinedAt - b.joinedAt);
-  return (admins[0] ?? [...others].sort((a, b) => a.joinedAt - b.joinedAt)[0]).name;
-}
-
 type MemberAction = "message" | "profile" | "admin" | "dismiss" | "transfer" | "remove";
 
 function MemberSheet({ member, onClose, myRole, onAction }: { member: GroupMember | null; onClose: () => void; myRole: GroupMember["role"]; onAction: (a: MemberAction, m: GroupMember) => void }) {
@@ -278,34 +271,6 @@ function SheetButton({ icon, label, onClick, danger, testId }: { icon: React.Rea
     >
       {icon} <span className="min-w-0 flex-1 truncate">{label}</span>
     </button>
-  );
-}
-
-function LeaveSheet({ open, onClose, isOwner, successor, onLeave }: { open: boolean; onClose: () => void; isOwner: boolean; successor: string | null; onLeave: () => void }) {
-  return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title="Leave group?"
-      footer={
-        <div className="flex gap-2">
-          <button onClick={onClose} className="h-11 flex-1 rounded-full border border-white/15 text-sm font-semibold text-zinc-200 hover:bg-white/5">
-            Cancel
-          </button>
-          <button onClick={onLeave} className="h-11 flex-1 rounded-full bg-red-500 text-sm font-semibold text-white hover:bg-red-400" data-testid="group-leave-confirm">
-            Leave
-          </button>
-        </div>
-      }
-    >
-      <p className="text-sm text-zinc-400">
-        {isOwner && successor
-          ? `You're the owner. ${successor} will become the owner when you leave (or transfer ownership to someone else first from the member list).`
-          : isOwner
-            ? "You're the last member — the group will be closed."
-            : "You won't get messages from this group anymore. An admin or an invite link can add you back."}
-      </p>
-    </Sheet>
   );
 }
 

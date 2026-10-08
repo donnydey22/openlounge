@@ -89,11 +89,14 @@ export function ChatRowMenu({
   onClose,
   onRemove,
   onChanged,
+  removeText,
 }: {
   chat: { peer: { id: string; name: string; deleted?: boolean }; pinned: boolean; unread: number } | null;
   onClose: () => void;
   onRemove: () => void;
   onChanged: (r: ChatActionResult) => void;
+  /** override the destructive item's label (group rows: "Leave group") */
+  removeText?: string;
 }) {
   const act = useChatAction();
   const { toast } = useApp();
@@ -128,7 +131,7 @@ export function ChatRowMenu({
           }}
           data-testid="chat-remove"
         >
-          <Trash2 className="h-4 w-4" /> {removeLabel(!!chat.peer.deleted)}
+          <Trash2 className="h-4 w-4" /> {removeText ?? removeLabel(!!chat.peer.deleted)}
         </button>
       </div>
     </Sheet>

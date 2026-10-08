@@ -14,7 +14,7 @@ import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 import { ChatRowMenu, RemoveChatConfirm, SwipeRow, removeLabel, sortPinned } from "@/components/chat/ChatActions";
-import { GroupInboxRow, mergeInbox, useGroupInbox } from "@/components/groups/GroupBits";
+import { GroupInboxRow, InboxLeaveGroup, mergeInbox, useGroupInbox } from "@/components/groups/GroupBits";
 
 export default function MessagesPage() {
   useDeletedIds(); // re-render when someone deletes their account (live ghost)
@@ -47,6 +47,7 @@ export default function MessagesPage() {
   // inbox actions (long-press / right-click / swipe): pin, mark read, remove ("Delete chat for me")
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [removing, setRemoving] = useState<PublicUser | null>(null);
+  const [leaving, setLeaving] = useState<string | null>(null); // group rows: swipe / menu → leave
   const dropRow = useCallback((peerId: string) => setConversations((list) => list && list.filter((c) => c.peer.id !== peerId)), []);
   useEffect(() => {
     if (!socket) return;
@@ -156,7 +157,7 @@ export default function MessagesPage() {
         ) : (
           <ul data-testid="dm-conversations">
             {sortPinned(mergeInbox(conversations, groupInbox.rows)).map((c0) => {
-              if ("group" in c0) return <GroupInboxRow key={c0.id} r={c0} meId={me?.id} typingName={groupInbox.typing[c0.id]} onOpen={groupInbox.markOpened} />;
+              if ("group" in c0) return <GroupInboxRow key={c0.id} r={c0} meId={me?.id} typingName={groupInbox.typing[c0.id]} onOpen={groupInbox.markOpened} onMenu={setMenuFor} onLeave={setLeaving} />;
               const peer = displayUser(c0.peer);
               // deleted accounts never show unread (the server clears them too)
               const c = { ...c0, peer, unread: peer.deleted ? 0 : c0.unread };
@@ -208,6 +209,17 @@ export default function MessagesPage() {
       </main>
       <NewMessageSheet open={composing} onClose={() => setComposing(false)} />
       {(() => {
+        const g = menuFor ? groupInbox.rows?.find((x) => x.id === menuFor) : undefined;
+        if (g)
+          return (
+            <ChatRowMenu
+              chat={{ peer: { id: g.id, name: g.group.title }, pinned: !!g.pinnedAt, unread: g.unread }}
+              removeText="Leave group"
+              onClose={() => setMenuFor(null)}
+              onRemove={() => setLeaving(g.id)}
+              onChanged={() => {}}
+            />
+          );
         const c = menuFor ? conversations?.find((x) => x.peer.id === menuFor) : undefined;
         const peer = c ? displayUser(c.peer) : null;
         return (
@@ -220,6 +232,7 @@ export default function MessagesPage() {
         );
       })()}
       <RemoveChatConfirm peer={removing} onClose={() => setRemoving(null)} onRemoved={dropRow} />
+      <InboxLeaveGroup gid={leaving} onClose={() => setLeaving(null)} />
     </>
   );
 }

@@ -1941,8 +1941,12 @@ export class Store {
    *  thread and its messages from my inbox in one go (a newer message brings the chat back). Works on deleted accounts.
    */
   chatAction(userId: string, peerId: string, action: unknown) {
-    if (isGroupId(peerId) || peerId === userId) return { ok: false as const, error: "Not a direct chat" };
-    if (!this.users.has(peerId) && !this.isDeletedUser(peerId)) return { ok: false as const, error: "Chat not found" };
+    if (peerId === userId) return { ok: false as const, error: "Not a direct chat" };
+    if (isGroupId(peerId)) {
+      // groups: pin / unpin / mark read (leaving is group:leave, not "remove")
+      if (!this.groups?.canAccess(userId, peerId)) return { ok: false as const, error: "Group not found" };
+      if (action !== "pin" && action !== "unpin" && action !== "read") return { ok: false as const, error: "Unknown action" };
+    } else if (!this.users.has(peerId) && !this.isDeletedUser(peerId)) return { ok: false as const, error: "Chat not found" };
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
     let unreadChanged = false;
     switch (action) {

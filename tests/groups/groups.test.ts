@@ -291,3 +291,33 @@ test("in-app banner flags (notify / mention / title), conv:read on the reader's 
   const outsider = await D.client.req("dropin:start", { peerId: g2 });
   assert.equal(outsider.ok, false);
 });
+
+test("inbox actions on group rows: pin / unpin / mark read via dm:chat; leave clears the pin; non-members rejected", async () => {
+  const g = await A.client.req("group:create", { title: "Pinnable " + uniq(), memberIds: [id(B)] });
+  assert.equal(g.ok, true, JSON.stringify(g));
+  const pg = g.group.id as string;
+  await A.client.req("dm:send", { to: pg, text: "unread for Ryan" });
+  await sleep(150);
+  const pin = await B.client.req("dm:chat", { peerId: pg, action: "pin" });
+  assert.equal(pin.ok, true, JSON.stringify(pin));
+  assert.equal(pin.pinned, true);
+  await sleep(100);
+  assert.ok(ev.B.some((e) => e.ev === "dm:chat-state" && e.data.peerId === pg && e.data.pinned === true), "my devices hear the pin");
+  let row = (await B.client.req("conv:list")).items.find((x: any) => x.id === pg);
+  assert.ok(row.pinnedAt > 0, "conv:list carries pinnedAt for group rows");
+  assert.ok(row.unread > 0);
+  const read = await B.client.req("dm:chat", { peerId: pg, action: "read" });
+  assert.equal(read.ok, true);
+  await sleep(100);
+  assert.ok(ev.B.some((e) => e.ev === "conv:read" && e.data.conversationId === pg));
+  row = (await B.client.req("conv:list")).items.find((x: any) => x.id === pg);
+  assert.equal(row.unread, 0);
+  const rm = await B.client.req("dm:chat", { peerId: pg, action: "remove" });
+  assert.equal(rm.ok, false, "groups are left, not hidden");
+  const outsider = await C.client.req("dm:chat", { peerId: pg, action: "pin" });
+  assert.equal(outsider.ok, false);
+  assert.equal((await B.client.req("group:leave", { id: pg })).ok, true);
+  assert.equal((await A.client.req("group:addMembers", { id: pg, userIds: [id(B)] })).ok, true);
+  row = (await B.client.req("conv:list")).items.find((x: any) => x.id === pg);
+  assert.ok(row && !row.pinnedAt, "a re-join starts unpinned");
+});

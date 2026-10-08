@@ -14,6 +14,9 @@ import { formatListTime } from "@/lib/time";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { TypingLabel } from "../chat/TypingDots";
+import { Sheet } from "../Sheet";
+import { SwipeRow } from "../chat/ChatActions";
+import { friendlyMessage } from "@/lib/errors";
 
 /** A sender as the PublicUser-shaped "peer" DM bubbles expect (avatar next to their messages). */
 export function senderPeer(m: DirectMessage, members?: Map<string, GroupMember>): PublicUser {
@@ -266,6 +269,11 @@ export function useGroupInbox() {
         return list;
       });
     };
+    // inbox pin / unpin from this or another of my devices (dm:chat with a group id)
+    const onChatState = (st: { peerId: string; pinned: boolean }) =>
+      isGroupId(st.peerId) &&
+      setRows((list) => list?.map((x) => (x.id !== st.peerId || !!x.pinnedAt === st.pinned ? x : { ...x, pinnedAt: st.pinned ? Date.now() : undefined })) ?? list);
+    socket.on("dm:chat-state", onChatState);
     socket.on("dm:message", onMsg);
     socket.on("group:update", onUpdate);
     socket.on("group:removed", onRemoved);
@@ -275,6 +283,7 @@ export function useGroupInbox() {
     socket.on("conv:deleted", onDeleted);
     const t = timers.current;
     return () => {
+      socket.off("dm:chat-state", onChatState);
       socket.off("dm:message", onMsg);
       socket.off("group:update", onUpdate);
       socket.off("group:removed", onRemoved);
@@ -296,7 +305,23 @@ export function toSummary(g: GroupInfo | GroupSummary): GroupSummary {
 }
 
 /** One group row in the inbox: avatar, title, "Maya: hey" preview, time, unread / @ badges, mute icon. */
-export const GroupInboxRow = memo(function GroupInboxRow({ r, meId, typingName, onOpen }: { r: GroupRowItem; meId?: string; typingName?: string; onOpen?: (gid: string) => void }) {
+export const GroupInboxRow = memo(function GroupInboxRow({
+  r,
+  meId,
+  typingName,
+  onOpen,
+  onMenu,
+  onLeave,
+}: {
+  r: GroupRowItem;
+  meId?: string;
+  typingName?: string;
+  onOpen?: (gid: string) => void;
+  /** long-press / right-click (the shared inbox ChatRowMenu) */
+  onMenu?: (gid: string) => void;
+  /** swipe left → "Leave" */
+  onLeave?: (gid: string) => void;
+}) {
   const lm = r.lastMessage;
   const mine = lm?.fromId === meId;
   // my own service events read "You pinned …" (the stored text uses my name)
@@ -307,8 +332,7 @@ export const GroupInboxRow = memo(function GroupInboxRow({ r, meId, typingName, 
       : lm.text.startsWith("[sticker:")
         ? "Sticker"
         : lm.text;
-  return (
-    <li className="cv-auto [contain-intrinsic-size:auto_72px]">
+  const link = (
       <Link
         href={`/messages/${r.id}`}
         onClick={() => onOpen?.(r.id)}
@@ -353,9 +377,20 @@ export const GroupInboxRow = memo(function GroupInboxRow({ r, meId, typingName, 
                 {r.unread > 99 ? "99+" : r.unread}
               </span>
             )}
+            {!!r.pinnedAt && !r.unread && <Pin className="h-3.5 w-3.5 shrink-0 rotate-45 text-zinc-500" aria-label="Pinned" data-testid="group-row-pinned" />}
           </div>
         </div>
       </Link>
+  );
+  return (
+    <li className="cv-auto [contain-intrinsic-size:auto_72px]">
+      {onMenu ? (
+        <SwipeRow onMenu={() => onMenu(r.id)} onRemove={() => onLeave?.(r.id)} removeText="Leave" testId="group-row-swipe">
+          {link}
+        </SwipeRow>
+      ) : (
+        link
+      )}
     </li>
   );
 });
@@ -404,4 +439,60 @@ export function mergeInbox<C extends { lastMessage: { createdAt: number } }>(dms
   if (!groups?.length) return dms;
   const at = (x: C | GroupRowItem) => ("group" in x ? (x as GroupRowItem).lastMessage?.createdAt ?? (x as GroupRowItem).updatedAt : (x as C).lastMessage.createdAt);
   return [...dms, ...groups].sort((a, b) => at(b) - at(a));
+}
+
+/** who becomes owner when the owner leaves (server: oldest admin, else oldest member) */
+export function successorName(members: GroupMember[], meId?: string) {
+  const others = members.filter((m) => m.id !== meId);
+  if (!others.length) return null;
+  const admins = others.filter((m) => m.role === "admin").sort((a, b) => a.joinedAt - b.joinedAt);
+  return (admins[0] ?? [...others].sort((a, b) => a.joinedAt - b.joinedAt)[0]).name;
+}
+
+export function LeaveSheet({ open, onClose, isOwner, successor, onLeave }: { open: boolean; onClose: () => void; isOwner: boolean; successor: string | null; onLeave: () => void }) {
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Leave group?"
+      footer={
+        <div className="flex gap-2">
+          <button onClick={onClose} className="h-11 flex-1 rounded-full border border-white/15 text-sm font-semibold text-zinc-200 hover:bg-white/5">
+            Cancel
+          </button>
+          <button onClick={onLeave} className="h-11 flex-1 rounded-full bg-red-500 text-sm font-semibold text-white hover:bg-red-400" data-testid="group-leave-confirm">
+            Leave
+          </button>
+        </div>
+      }
+    >
+      <p className="text-sm text-zinc-400">
+        {isOwner && successor
+          ? `You're the owner. ${successor} will become the owner when you leave (or transfer ownership to someone else first from the member list).`
+          : isOwner
+            ? "You're the last member — the group will be closed."
+            : "You won't get messages from this group anymore. An admin or an invite link can add you back."}
+      </p>
+    </Sheet>
+  );
+}
+
+/** Leave from the inbox (swipe / long-press): loads the group to show the right owner/successor copy. */
+export function InboxLeaveGroup({ gid, onClose }: { gid: string | null; onClose: () => void }) {
+  const { request, toast, me } = useApp();
+  const { group } = useGroupInfo(gid);
+  const isOwner = group?.myRole === "owner";
+  return (
+    <LeaveSheet
+      open={!!gid}
+      onClose={onClose}
+      isOwner={isOwner}
+      successor={isOwner && group ? successorName(group.members, me?.id) : null}
+      onLeave={() => {
+        if (!gid) return;
+        onClose();
+        request("group:leave", { id: gid }).catch((e: unknown) => toast(friendlyMessage(e, "Couldn't leave the group")));
+      }}
+    />
+  );
 }

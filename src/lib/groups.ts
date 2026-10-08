@@ -80,7 +80,7 @@ export interface GroupInfo extends GroupSummary {
 /** One inbox row (conv:list). */
 export type InboxItem =
   | { type: "dm"; id: string; peer: PublicUser; lastMessage: ConvMessage; unread: number }
-  | { type: "group"; id: string; group: GroupSummary; lastMessage: ConvMessage | null; unread: number; muted: boolean; mentioned: boolean; updatedAt: number };
+  | { type: "group"; id: string; group: GroupSummary; lastMessage: ConvMessage | null; unread: number; muted: boolean; mentioned: boolean; updatedAt: number; pinnedAt?: number };
 
 /** Invite link preview (no membership needed). */
 export interface InvitePreview {
