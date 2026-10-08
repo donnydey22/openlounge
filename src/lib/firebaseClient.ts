@@ -55,6 +55,7 @@ export async function sendPhoneCode(e164: string, containerId: string): Promise<
   const native = hasNativePhoneAuth();
   const watch = native ? null : watchChallenge();
   const cc = dialCode(e164);
+  pending = { t0, watch, cc, native };
   try {
     const s = native ? await nativeSendPhoneCode(e164, codeMessage) : wrap(await sendWebPhoneCode(e164, containerId));
     reportPhoneEvent({ stage: "send", outcome: "ok", ms: Date.now() - t0, challenge: !!watch?.stop(), path: native ? "native" : "web", cc });
@@ -64,10 +65,20 @@ export async function sendPhoneCode(e164: string, containerId: string): Promise<
     throw e;
   } finally {
     lastErrorCode = "";
+    pending = null;
   }
 }
 
 let lastErrorCode = "";
+let pending: { t0: number; watch: ReturnType<typeof watchChallenge> | null; cc: string; native: boolean } | null = null;
+
+/** The send never finished (page closed / app backgrounded for good / they left): record how far it got. */
+export function reportPendingSend(reason: string) {
+  if (!pending) return;
+  const p = pending;
+  pending = null;
+  reportPhoneEvent({ stage: "abandon", outcome: reason, ms: Date.now() - p.t0, challenge: !!p.watch?.stop(), path: p.native ? "native" : "web", cc: p.cc });
+}
 const dialCode = (e164: string) => {
   const d = e164.replace(/\D/g, "");
   return d.startsWith("1") ? "+1" : `+${d.slice(0, 2)}`;
