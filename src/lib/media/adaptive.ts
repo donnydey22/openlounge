@@ -50,6 +50,29 @@ const hasMse = () =>
     (window as unknown as { MediaSource: { isTypeSupported: (t: string) => boolean } }).MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401f,mp4a.40.2"')) ||
     "ManagedMediaSource" in window);
 
+/**
+ * Throughput actually seen on this page for media files (Resource Timing; our media responses send
+ * Timing-Allow-Origin so this works through the media cache too). Median of the recent non-cached transfers; null
+ * when nothing was measured yet. Small images under-estimate (TCP slow start), which errs on the safe side.
+ */
+export function measuredBps(): number | null {
+  if (typeof performance === "undefined" || !performance.getEntriesByType) return null;
+  const xs = (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter((e) => /\/media\/|\/api\/media\/f\//.test(e.name) && e.encodedBodySize > 2000 && e.transferSize > 0 && e.responseEnd - e.requestStart > 20)
+    .slice(-6)
+    .map((e) => (e.encodedBodySize * 8) / ((e.responseEnd - e.requestStart) / 1000));
+  if (!xs.length) return null;
+  xs.sort((a, b) => a - b);
+  return Math.round(xs[Math.floor(xs.length / 2)]);
+}
+
+/** Warm the hls.js chunk (tile pointerdown / hover) so the viewer doesn't wait for it after the tap. */
+let hlsP: Promise<unknown> | null = null;
+export function prefetchPlayer() {
+  if (typeof window === "undefined" || hlsP || isAppleWebKit() || !hasMse()) return;
+  hlsP = import("hls.js/light").catch(() => (hlsP = null));
+}
+
 // ---------- one video at a time ----------
 let current: HTMLVideoElement | null = null;
 export const PLAYBACK_EVENT = "openlounge:video-playback";
@@ -68,7 +91,11 @@ export const exclusivePlaying = () => !!current && !current.paused;
 /** Attach the best source to `video`. Returns a detach function (destroys hls.js, stops stats). */
 export function attachAdaptive(video: HTMLVideoElement, src: AdaptiveSources, opts: { id: string; onFatal?: () => void } = { id: "" }) {
   const net = networkHint();
-  const stats: PlaybackStats = { id: opts.id, engine: "mp4", startedAt: performance.now(), ttffMs: null, switches: [], stalls: 0, stallMs: 0, startHeight: null, slow: net.slow };
+  const seen = measuredBps();
+  // best guess of the link: what media loads on this page actually achieved, else the Network Information API
+  const estimate = seen ?? (net.estimateBps && (navigator as unknown as { connection?: unknown }).connection ? net.estimateBps : null);
+  const slow = net.slow || (estimate !== null && estimate < 1_200_000);
+  const stats: PlaybackStats = { id: opts.id, engine: "mp4", startedAt: performance.now(), ttffMs: null, switches: [], stalls: 0, stallMs: 0, startHeight: null, slow };
   (window.__olVideoStats ??= []).push(stats);
   if (window.__olVideoStats.length > 50) window.__olVideoStats.shift();
   let destroyed = false;
@@ -121,7 +148,8 @@ export function attachAdaptive(video: HTMLVideoElement, src: AdaptiveSources, op
 
   if (src.hls && isAppleWebKit() && nativeHls(video)) {
     stats.engine = "native-hls";
-    video.src = net.slow && src.hlsLow ? src.hlsLow : src.hls;
+    // native HLS starts on the master's first entry: 240p-first when the link is slow or unknown on cellular
+    video.src = (slow || (estimate === null && net.cellular)) && src.hlsLow ? src.hlsLow : src.hls;
   } else if (src.hls && hasMse()) {
     stats.engine = "hls.js";
     void import("hls.js/light")
@@ -133,8 +161,8 @@ export function attachAdaptive(video: HTMLVideoElement, src: AdaptiveSources, op
           capLevelToPlayerSize: true,
           // start low on slow / cellular / Save-Data; otherwise let the bandwidth estimate decide from 360p
           startLevel: -1,
-          abrEwmaDefaultEstimate: net.estimateBps,
-          testBandwidth: !net.slow,
+          abrEwmaDefaultEstimate: estimate ?? 500_000,
+          testBandwidth: false,
           maxBufferLength: 30,
           maxMaxBufferLength: 30,
           backBufferLength: 10,
@@ -152,8 +180,13 @@ export function attachAdaptive(video: HTMLVideoElement, src: AdaptiveSources, op
             heights.forEach((ht, i) => (ht <= target && ht >= heights[best] ? (best = i) : null));
             return best;
           };
-          if (net.slow || net.cellular) h.startLevel = pick(240);
-          else h.startLevel = pick(360);
+          // start: the highest rung (≤ 360p) the link sustains with headroom; unknown link → 240p (fastest first
+          // frame, the ABR climbs within a few seconds); slow / Save-Data → 240p
+          let start = pick(240);
+          if (!slow && estimate !== null) {
+            d.levels.forEach((l, i) => (l.height <= 360 && l.bitrate * 1.4 <= estimate && l.height >= d.levels[start].height ? (start = i) : null));
+          }
+          h.startLevel = start;
           if (net.saver) h.autoLevelCapping = pick(360);
         });
         h.on(Hls.Events.LEVEL_SWITCHED, (_e, d) => {

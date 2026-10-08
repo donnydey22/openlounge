@@ -46,7 +46,8 @@ import { cancelMedia, useOutbox } from "@/lib/media/outbox";
 import { getUrls, markPlayed, openViewOnce } from "@/lib/media/client";
 import { cycleRate, pauseVoice, playVoice, registerVoice, seekVoice, useVoiceState } from "@/lib/media/player";
 import { inNativeApp, mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabilities";
-import { PLAYBACK_EVENT, exclusivePlaying } from "@/lib/media/adaptive";
+import { PLAYBACK_EVENT, exclusivePlaying, measuredBps, prefetchPlayer } from "@/lib/media/adaptive";
+import { networkHint } from "@/lib/dataSaver";
 import { useInView, useMediaUrls, useTick } from "./hooks";
 import { CountdownRing, ProgressRing } from "./Rings";
 import { openViewer } from "./viewerStore";
@@ -225,6 +226,8 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
       tabIndex={0}
       aria-label={a.viewOnce ? "View once photo" : isVideo ? (a.gif ? "GIF" : `Video, ${formatDuration(a.durMs ?? 0)}`) : "Photo"}
       onClick={open}
+      onPointerDown={isVideo && !a.gif ? prefetchPlayer : undefined}
+      onPointerEnter={isVideo && !a.gif ? prefetchPlayer : undefined}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}
       data-testid={`media-${a.kind}`}
       className="relative w-full cursor-pointer overflow-hidden bg-zinc-900 select-none [-webkit-touch-callout:none]"
@@ -608,7 +611,8 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
     if (list.length > 200) list.shift();
   };
   const bust = (u: string) => (attempt && !local ? `${u}${u.includes("?") ? "&" : "?"}r=${attempt}` : u);
-  const sizes = saveData() ? "160px" : `${width}px`;
+  // data saver or a slow link → the 320px candidates; otherwise the tile's CSS width (DPR picks 640 on phones)
+  const sizes = saveData() || networkHint().slow || (measuredBps() ?? Infinity) < 600_000 ? "160px" : `${width}px`;
   const img = (
     <img
       src={bust(src)}

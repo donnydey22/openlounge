@@ -592,7 +592,8 @@ function VideoStage({
           loop={!!a.gif}
           preload="metadata"
           className="max-h-full max-w-full"
-          style={{ aspectRatio: a.w && a.h ? `${a.w}/${a.h}` : undefined }}
+          // real on-screen size from the first frame: hls.js caps the rendition to it (no 300×150 default box)
+          style={{ aspectRatio: a.w && a.h ? `${a.w}/${a.h}` : undefined, width: a.w && a.h ? `min(100vw, calc(100dvh * ${(a.w / a.h).toFixed(4)}))` : "100vw" }}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
           onWaiting={() => setWaiting(true)}
