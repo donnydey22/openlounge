@@ -83,7 +83,7 @@ function ReviewCard({ r, act }: { r: VerificationRequest; act: (b: Record<string
         <span className="font-semibold">{r.legalName}</span>
         {r.businessName && <span className="text-zinc-300">{r.businessName}</span>}
         <span className="rounded-full bg-white/5 px-2 text-xs capitalize">{r.kind}</span>
-        <span className="text-xs text-zinc-500">{r.country} · paid {formatPrice(r.feeCents, "USD")} · {new Date(r.createdAt).toLocaleString()}</span>
+        <span className="text-xs text-zinc-500">{r.country} · {r.feeCents ? `paid ${formatPrice(r.feeCents, "USD")}` : "fee waived"} · {new Date(r.createdAt).toLocaleString()}</span>
       </div>
       <div className="mt-1 text-xs text-zinc-400">
         User <a className="underline" href={`/profile/${r.userId}`}>{r.userId}</a>
@@ -100,7 +100,7 @@ function ReviewCard({ r, act }: { r: VerificationRequest; act: (b: Record<string
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button onClick={() => act({ op: "approve", id: r.id })} className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-black" data-testid="creator-approve"><Check className="h-4 w-4" /> Approve</button>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason (shown to them)" className="min-w-0 flex-1 rounded-full border border-white/10 bg-zinc-900 px-3 py-1.5 text-sm" />
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason (shown to them)" className="order-last min-w-0 basis-full rounded-full sm:order-none sm:basis-auto sm:flex-1 border border-white/10 bg-zinc-900 px-3 py-1.5 text-sm" />
         <button onClick={() => (note.trim() ? act({ op: "reject", id: r.id, note }) : toast("Add a reason"))} className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-3 py-1.5 text-sm text-rose-200" data-testid="creator-reject"><X className="h-4 w-4" /> Reject</button>
       </div>
       <p className="mt-2 text-xs text-zinc-500">Rejecting doesn&apos;t refund automatically — refund in PayPal if needed (the badge is removed on refund).</p>
