@@ -2,6 +2,7 @@ import { Ghost, MicOff } from "lucide-react";
 import { DELETED_COLOR, isDeletedName } from "@/lib/userDisplay";
 import { cn, initials } from "@/lib/utils";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
+import { AvatarPhoto } from "./AvatarPhoto";
 
 const SIZES = {
   xs: "h-7 w-7 text-[10px]",
@@ -148,8 +149,7 @@ export function Avatar({
         {ghost ? (
           <Ghost className="relative z-[1] h-[55%] w-[55%] text-white/80" aria-hidden />
         ) : photo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={photo} alt="" className="openlounge-hex absolute inset-0 h-full w-full object-cover" draggable={false} />
+          <AvatarPhoto src={photo} name={name} />
         ) : (
           <span className="relative z-[1]">{initials(name)}</span>
         )}

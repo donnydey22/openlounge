@@ -51,7 +51,7 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: "/((?!_next/static|icons|brand|downloads/).*)",
+        source: "/((?!_next/static|icons|brand|downloads/|lp/img/|sp/img/).*)", // lp/sp images: versioned/content-keyed URLs set their own immutable caching
         headers: [
           {
             key: "Cache-Control",
