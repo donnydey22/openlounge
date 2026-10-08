@@ -47,3 +47,15 @@
 @media (prefers-reduced-motion: reduce) {
   .edit-bar-in, .edit-flash { animation: none; }
 }
+/* ||spoiler||: blurred under a soft veil until tapped; the reveal unblurs */
+.md-spoiler { border-radius: 4px; cursor: pointer; background: rgba(127, 127, 127, 0.28); transition: background-color 0.3s ease; -webkit-user-select: none; user-select: none; }
+.md-spoiler > span { filter: blur(5px); opacity: 0.85; transition: filter 0.35s ease, opacity 0.35s ease; }
+.md-spoiler[data-open] { background: transparent; cursor: auto; -webkit-user-select: text; user-select: text; }
+.md-spoiler[data-open] > span { filter: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .md-spoiler, .md-spoiler > span { transition: none; }
+}
+/* formatting toolbar above the composer */
+.fmt-bar-in { animation: fmt-bar-in 0.16s ease-out; }
+@keyframes fmt-bar-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fmt-bar-in { animation: none; } }
