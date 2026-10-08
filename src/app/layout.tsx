@@ -7,6 +7,11 @@ import { Notifier } from "@/components/Notifier";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { THEME_COLORS, themeInitScript } from "@/lib/theme";
 import { AVATAR_PATH } from "@/lib/avatar-shape";
+import { AppShell } from "@/components/AppShell";
+
+// Inside the Android/iPhone apps the page is an app screen: no pinch/double-tap zoom (which pans the whole UI).
+// The public website keeps zoom for accessibility; fields are 16px on touch devices so focus never zooms anyway.
+const appViewportScript = `try{if(/OpenLounge(iOS|Android|Expo)/.test(navigator.userAgent)){document.documentElement.setAttribute('data-native-app','');var f=function(){var m=document.querySelector('meta[name=viewport]');if(!m)return false;if(m.content.indexOf('maximum-scale')<0)m.content+=', maximum-scale=1, user-scalable=no';return true};if(!f())document.addEventListener('DOMContentLoaded',f)}}catch(e){}`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_PUBLIC_ORIGIN || "https://openlounge.app"),
@@ -29,8 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script dangerouslySetInnerHTML={{ __html: appViewportScript }} />
       </head>
-      <body className="min-h-dvh font-sans antialiased">
+      <body className="font-sans antialiased">
         {/* Clubhouse-style squircle clip for avatars — one defs for the whole app */}
         <svg width={0} height={0} className="absolute" aria-hidden>
           <defs>
@@ -43,7 +49,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AppProvider>
             <Notifier>
               <Toasts />
-              <AuthGate>{children}</AuthGate>
+              <AppShell>
+                <AuthGate>{children}</AuthGate>
+              </AppShell>
             </Notifier>
           </AppProvider>
         </ThemeProvider>

@@ -29,6 +29,7 @@ import { OPEN_DM_EVENT } from "@/lib/notify";
 import { InviteToRoomSheet } from "@/components/rooms/InviteToRoomSheet";
 import { DropInStatus } from "@/components/rooms/DropInStatus";
 import { markAudio } from "@/hooks/useLiveKitAudio";
+import { useScrollLock } from "@/lib/scrollLock";
 
 type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
 
@@ -288,6 +289,7 @@ export default function RoomPage() {
   // Desktop shows chat as a side panel; mobile opens it as a drawer.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const chatVisible = isDesktop || chatOpen;
+  useScrollLock((chatOpen && !isDesktop) || !!dmPeer); // drawers pin the stage behind them
   const chatVisibleRef = useRef(chatVisible);
   chatVisibleRef.current = chatVisible;
   const meId = me?.id;
@@ -412,7 +414,7 @@ export default function RoomPage() {
               <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" /> <span title={`Started ${formatFull(room.createdAt)}`}>Live · {timeAgo(room.createdAt)}</span>
             </span>
           </div>
-          <h1 className="text-xl font-bold leading-snug">{room.title}</h1>
+          <h1 className="text-xl font-bold leading-snug [overflow-wrap:anywhere]">{room.title}</h1>
           {room.private && (
             <div className="mt-1 flex items-center gap-1 text-xs text-zinc-500" data-testid="room-private">
               <Lock className="h-3 w-3" /> {room.dropin ? "Private drop-in audio chat" : "Invite only"}
@@ -420,7 +422,7 @@ export default function RoomPage() {
           )}
           {room.dropin && <DropInStatus room={room} meId={me?.id} audio={audio.status} />}
           {room.description && (
-            <button onClick={() => setShowDesc((v) => !v)} className={cn("mt-2 block text-left text-sm text-zinc-400", !showDesc && "line-clamp-2")}>
+            <button onClick={() => setShowDesc((v) => !v)} className={cn("mt-2 block w-full max-w-full text-left text-sm text-zinc-400 [overflow-wrap:anywhere]", !showDesc && "line-clamp-2")}>
               {room.description}
             </button>
           )}
@@ -534,11 +536,11 @@ export default function RoomPage() {
             <p className="mb-2 text-center text-xs text-amber-400">{audio.micError} — others see you as unmuted, but no audio is being sent.</p>
           )}
           <ReactionBar open={reactOpen} onPick={sendReaction} onClose={() => setReactOpen(false)} />
-          <div className="flex items-center justify-between rounded-full border border-white/5 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur">
-            <button onClick={leave} className="shrink-0 whitespace-nowrap rounded-full bg-zinc-800 px-4 py-3 text-sm font-semibold text-red-300 transition hover:bg-zinc-700 sm:px-5">
-              ✌️ Leave quietly
+          <div className="flex min-w-0 items-center justify-between gap-2 rounded-full border border-white/5 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur max-[359px]:gap-1.5 max-[359px]:p-1.5">
+            <button onClick={leave} className="shrink-0 whitespace-nowrap rounded-full bg-zinc-800 px-4 py-3 text-sm font-semibold text-red-300 transition hover:bg-zinc-700 max-[359px]:px-3 sm:px-5">
+              ✌️ Leave<span className="max-[359px]:hidden"> quietly</span>
             </button>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 max-[359px]:gap-1.5 max-[359px]:[&>button]:p-3">
               <button
                 onClick={() => setReactOpen((v) => !v)}
                 className={cn(
@@ -637,10 +639,10 @@ export default function RoomPage() {
 
       {/* mobile: chat drawer (non-blocking for host controls — close it to get back to the stage) */}
       {chatOpen && !isDesktop && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center" role="dialog" aria-modal aria-label="Room chat">
+        <div className="ol-vv-fixed fixed inset-x-0 z-50 flex items-end justify-center" role="dialog" aria-modal aria-label="Room chat">
           <div className="fade-in absolute inset-0 bg-black/25" onClick={() => setChatOpen(false)} />
           <RoomChatPanel
-            className="sheet-in relative h-[62dvh] w-full max-w-2xl overflow-hidden rounded-t-3xl border border-white/5 bg-zinc-900 pb-[env(safe-area-inset-bottom)] shadow-2xl"
+            className="sheet-in relative h-[min(62dvh,calc(var(--ol-vvh,100dvh)-env(safe-area-inset-top,0px)-8px))] w-full max-w-2xl overflow-hidden rounded-t-3xl border border-white/5 bg-zinc-900 pb-[env(safe-area-inset-bottom)] shadow-2xl"
             messages={chat}
             meId={me?.id}
             hostId={room.hostId}
@@ -697,13 +699,13 @@ export default function RoomPage() {
 
       {/* DM drawer: message someone without leaving the room */}
       {dmPeer && (
-        <div className="fixed inset-0 z-[55] flex items-end justify-center sm:items-center" role="dialog" aria-modal aria-label="Direct message">
+        <div className="ol-vv-fixed fixed inset-x-0 z-[55] flex items-end justify-center sm:items-center" role="dialog" aria-modal aria-label="Direct message">
           <div className="fade-in absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={() => setDmPeer(null)} />
           <DmThread
             peerId={dmPeer}
             backStyle="close"
             onBack={() => setDmPeer(null)}
-            className="sheet-in relative h-[85dvh] w-full max-w-lg overflow-hidden rounded-t-3xl border border-white/5 bg-zinc-900 shadow-2xl sm:h-[75dvh] sm:rounded-3xl"
+            className="sheet-in relative h-[min(85dvh,calc(var(--ol-vvh,100dvh)-env(safe-area-inset-top,0px)-8px))] w-full max-w-lg overflow-hidden rounded-t-3xl border border-white/5 bg-zinc-900 shadow-2xl sm:h-[75dvh] sm:rounded-3xl"
           />
         </div>
       )}

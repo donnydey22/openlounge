@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useScrollLock } from "@/lib/scrollLock";
 
 const ANDROID = {
   file: "/downloads/openlounge-0.2.9.apk",
@@ -26,6 +27,7 @@ function Sha({ value }: { value: string }) {
 
 export function DownloadHub() {
   const [open, setOpen] = useState(false);
+  useScrollLock(open);
   const tabRef = useRef<HTMLButtonElement>(null);
   const firstRef = useRef<HTMLAnchorElement>(null);
 
@@ -43,7 +45,7 @@ export function DownloadHub() {
   }, [open]);
 
   return (
-    <main className="relative flex min-h-dvh items-center justify-center overflow-hidden p-6">
+    <main className="relative flex min-h-dvh items-center justify-center overflow-hidden overflow-x-clip p-6">
       <img src="/downloads/qr.png" alt="QR code to openlounge.app/download" width={984} height={984} className="aspect-square h-auto w-64 max-w-[80vw] rounded-3xl bg-white object-contain md:w-80" data-testid="download-qr" />
 
       {open && <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setOpen(false)} aria-hidden="true" />}

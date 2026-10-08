@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
+import { lockAppScroll } from "@/lib/scrollLock";
 
 /** Mobile-style bottom sheet (centered dialog on larger screens). */
 export function Sheet({
@@ -48,8 +49,7 @@ export function Sheet({
     fit();
     vv?.addEventListener("resize", fit, { passive: true });
     vv?.addEventListener("scroll", fit, { passive: true });
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden"; // no background page jump while the sheet is open
+    const unlock = lockAppScroll(); // background (app shell) can't scroll or jump while the sheet is open
     const onFocus = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) setTimeout(() => t.scrollIntoView({ block: "nearest", behavior: "smooth" }), 300);
@@ -58,7 +58,7 @@ export function Sheet({
     return () => {
       vv?.removeEventListener("resize", fit);
       vv?.removeEventListener("scroll", fit);
-      document.body.style.overflow = prevOverflow;
+      unlock();
       el?.removeEventListener("focusin", onFocus);
     };
   }, [open]);
