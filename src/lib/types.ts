@@ -63,6 +63,12 @@ export interface RoomState {
   /** User currently holding speaking priority on stage (null = none). */
   podiumUserId: string | null;
   participants: Participant[];
+  /** invite-only room (drop-in audio chats): hidden from the hallway, only invited people can join */
+  private?: boolean;
+  /** Clubhouse-style drop-in audio chat started from a DM (private, ends as soon as it's empty) */
+  dropin?: boolean;
+  /** drop-ins: invited people who haven't joined yet */
+  invited?: { id: string; name: string; color: string; photoUrl: string | null }[];
 }
 
 export interface RoomSummary {
@@ -149,6 +155,33 @@ export interface DirectMessage {
   fromPhotoUrl?: string | null;
   /** Sender-generated id echoed back so an optimistic bubble is replaced in place (no flicker / duplicate) */
   clientId?: string;
+  /** Rich message kind: a live audio room invite card or a drop-in audio chat (absent = plain text) */
+  kind?: DmKind;
+  /** room the invite card points at (kind set) */
+  roomId?: string;
+}
+
+export const DM_KINDS = ["room_invite", "dropin"] as const;
+export type DmKind = (typeof DM_KINDS)[number];
+
+/**
+ * Live state of an audio room as shown on an in-chat invite / link card ("room:card" events, "room:cards" request).
+ * Computed per viewer (canJoin). Unknown / cleaned-up rooms come back as { ended: true }.
+ */
+export interface RoomCard {
+  roomId: string;
+  title: string;
+  topic: string;
+  ended: boolean;
+  private: boolean;
+  dropin: boolean;
+  /** can this viewer join (public room, or invited to a private one) */
+  canJoin: boolean;
+  createdAt: number | null;
+  hosts: { id: string; name: string; color: string; photoUrl: string | null }[];
+  speakers: { id: string; name: string; color: string; photoUrl: string | null }[];
+  speakerCount: number;
+  listenerCount: number;
 }
 
 export interface ConversationSummary {

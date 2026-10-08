@@ -160,6 +160,27 @@ export class Notifier {
     );
   }
 
+  /** a room invite / drop-in card arrived in a DM: the push opens the room itself (one tap to join) */
+  async roomInviteDm(roomId: string, roomTitle: string, actorId: string, targetId: string, kind: "room_invite" | "dropin") {
+    if (this.d.isForeground(targetId)) return "skip:foreground" as Outcome; // the in-app DM banner shows it
+    const name = this.d.userName(actorId) ?? "Someone";
+    const dropin = kind === "dropin";
+    return this.deliver(
+      targetId,
+      "roomInvite",
+      {
+        type: dropin ? "dropIn" : "roomInviteDm",
+        title: dropin ? `🎙️ ${name} is live` : `🎙️ ${name} invited you`,
+        body: dropin ? "Drop-in audio chat. Tap to join" : `Join “${roomTitle}”`,
+        channel: "rooms",
+        tag: `room:${roomId}`,
+        url: `/room/${roomId}`,
+        data: { roomId, peerId: actorId },
+      },
+      { dedupeKey: `dminvite:${roomId}:${actorId}` },
+    );
+  }
+
   /** someone started a room: their followers (followedRoom) + people recently in their rooms (recentRoom) */
   async roomStarted(roomId: string, roomTitle: string, hostId: string) {
     const name = this.d.userName(hostId) ?? "Someone";

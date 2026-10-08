@@ -4,7 +4,7 @@
 
 import type { Ack, DirectMessage, Role } from "../src/lib/types";
 import type { Conn, WsHub } from "./ws";
-import { closeLiveKitRoom, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
+import { closeLiveKitRoom, createJoinToken, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
 import { OtpService, normalizePhone } from "./otp";
 import { dropTicket, getTicket, issueTicket } from "./authx/signup";
@@ -16,6 +16,12 @@ import { bg, push, setForegroundCheck } from "./push";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
 const TYPING_MAX_PER_10S = 20; // typing + typing_stop frames per socket per 10s
+/** in-chat room cards: live updates per room are coalesced to at most one push per this window */
+const CARD_COALESCE_MS = 250;
+const CARD_WATCHERS_MAX = 2_000; // per room
+const INVITE_MAX_RECIPIENTS = 20; // per room:inviteDm request
+const CARDS_MAX_PER_REQUEST = 30;
+const ROOM_ID = /^[\w-]{1,64}$/;
 
 /**
  * Firebase Phone Auth: verify the ID token, then the same find-or-create-by-E.164 path as the OTP flow.
@@ -71,6 +77,32 @@ export function registerRealtime(io: WsHub) {
   let listTimer: NodeJS.Timeout | null = null;
   const roomTimers = new Map<string, NodeJS.Timeout>();
 
+  // In-chat room cards (invite cards, drop-in cards, pasted room links): users who have a card for a room on screen
+  // (or in a DM) get "room:card" pushes with its live state — listeners, speaker faces, Ended — coalesced per room.
+  const cardWatchers = new Map<string, Set<string>>();
+  const cardTimers = new Map<string, NodeJS.Timeout>();
+  const watchCard = (roomId: string, ...userIds: string[]) => {
+    if (!store.rooms.has(roomId)) return;
+    let set = cardWatchers.get(roomId);
+    if (!set) cardWatchers.set(roomId, (set = new Set()));
+    for (const u of userIds) if (set.size < CARD_WATCHERS_MAX) set.add(u);
+  };
+  const pushCards = (roomId: string) => {
+    const set = cardWatchers.get(roomId);
+    if (!set) return;
+    for (const uid of set) io.to(`user:${uid}`).emit("room:card", store.roomCard(roomId, uid));
+  };
+  const scheduleCards = (roomId: string) => {
+    if (!cardWatchers.has(roomId) || cardTimers.has(roomId)) return;
+    cardTimers.set(
+      roomId,
+      setTimeout(() => {
+        cardTimers.delete(roomId);
+        pushCards(roomId);
+      }, CARD_COALESCE_MS),
+    );
+  };
+
   // Keep LiveKit permissions in sync with stage roles (and enforce host mutes).
   const lastSeen = new Map<string, Map<string, { role: Role; muted: boolean }>>();
   const syncLiveKit = (roomId: string, participants: { userId: string; role: Role; muted: boolean; isBot: boolean }[]) => {
@@ -92,6 +124,7 @@ export function registerRealtime(io: WsHub) {
 
   store.attach({
     roomChanged(roomId) {
+      scheduleCards(roomId);
       // coalesce bursts of changes into one broadcast
       if (roomTimers.has(roomId)) return;
       roomTimers.set(
@@ -113,6 +146,11 @@ export function registerRealtime(io: WsHub) {
       }, 400);
     },
     roomEnded(roomId) {
+      // cards flip to "Ended" right away (no coalescing), then nobody needs updates for this room any more
+      clearTimeout(cardTimers.get(roomId));
+      cardTimers.delete(roomId);
+      pushCards(roomId);
+      cardWatchers.delete(roomId);
       io.to(`room:${roomId}`).emit("room:ended", { roomId });
       io.clearChannel(`room:${roomId}`);
       lastSeen.delete(roomId);
@@ -159,7 +197,9 @@ export function registerRealtime(io: WsHub) {
       // deliver to every tab of both participants (sender's other tabs stay in sync)
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
-      bg(push()?.dm(msg));
+      // room invite / drop-in cards: a "join the room" push (opens the room) instead of a plain DM push
+      if (msg.kind && msg.roomId) bg(push()?.roomInviteDm(msg.roomId, store.rooms.get(msg.roomId)?.title ?? "", msg.fromId, msg.toId, msg.kind));
+      else bg(push()?.dm(msg));
     },
     dmTyping(fromId, toId) {
       io.to(`user:${toId}`).emit("dm:typing", { from: fromId });
@@ -379,7 +419,7 @@ export function registerRealtime(io: WsHub) {
     );
 
     socket.on("room:join", ({ roomId }: { roomId: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => {
+      authed(ack, async (userId) => {
         // leave channels for any other rooms
         for (const r of socket.rooms) if (r.startsWith("room:") && r !== `room:${roomId}`) socket.leave(r);
         const res = store.join(roomId, userId, socket.id);
@@ -392,7 +432,17 @@ export function registerRealtime(io: WsHub) {
         const rec = store.rooms.get(roomId);
         if (rec && rec.hostId !== userId)
           bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, userId));
-        ack({ ok: true, room: store.roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled } });
+        // the LiveKit join token rides on the ack (saves the /api/livekit/token round trip on the way into a room);
+        // the client still falls back to the HTTP endpoint when it's missing or for reconnects
+        let lk: { url: string; token: string } | null = null;
+        if (livekit.enabled) {
+          const role = store.roleOf(roomId, userId);
+          if (role)
+            lk = await createJoinToken({ roomId, userId, name: store.publicUser(userId)?.name ?? "Member", canPublish: role !== "listener" })
+              .then((token) => ({ url: livekit.url, token }))
+              .catch(() => null);
+        }
+        ack({ ok: true, room: store.roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled, ...(lk ?? {}) } });
       }),
     );
 
@@ -544,6 +594,60 @@ export function registerRealtime(io: WsHub) {
     };
     socket.on("dm:typing", (d: { to: string }) => relayTyping(d?.to, "dm:typing"));
     socket.on("dm:typing_stop", (d: { to: string }) => relayTyping(d?.to, "dm:typing_stop"));
+
+    // ----- audio rooms in DMs -----
+    // Invite DM contacts to a live room: one rich invite card per recipient (blocks + rate limits in the store).
+    socket.on("room:inviteDm", ({ roomId, to }: { roomId: string; to?: string[] }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const ids = [...new Set((Array.isArray(to) ? to : []).filter((x) => typeof x === "string" && ROOM_ID.test(x)))];
+        if (!ids.length) return ack({ ok: false, error: "Pick someone to invite" });
+        if (ids.length > INVITE_MAX_RECIPIENTS) return ack({ ok: false, error: `Invite up to ${INVITE_MAX_RECIPIENTS} people at a time` });
+        const results: { to: string; ok: boolean; error?: string; messageId?: string }[] = [];
+        for (const target of ids) {
+          const r = store.sendRoomInvite(userId, target, roomId);
+          results.push(r.ok ? { to: target, ok: true, messageId: r.message.id } : { to: target, ok: false, error: r.error });
+          if (r.ok) watchCard(roomId, userId, target);
+        }
+        const sent = results.filter((r) => r.ok).length;
+        if (!sent) return ack({ ok: false, error: results[0]?.error ?? "Couldn't send the invite", results } as never);
+        presence.activity(userId);
+        ack({ ok: true, sent, results, card: store.roomCard(roomId, userId) });
+      }),
+    );
+
+    // Drop-in audio chat from a DM: a private room only the two of you can join, announced with a card in the DM.
+    socket.on("dropin:start", ({ peerId }: { peerId: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const r = store.startDropIn(userId, peerId);
+        if (!r.ok) return ack(r);
+        watchCard(r.roomId, userId, peerId);
+        presence.activity(userId);
+        ack({ ok: true, roomId: r.roomId, message: r.message, reused: r.reused, card: store.roomCard(r.roomId, userId) });
+      }),
+    );
+
+    // Live state for the cards on screen (invite cards + pasted openlounge.app/room links); subscribes this user to
+    // "room:card" updates for rooms that are still open. Unknown rooms come back as ended.
+    socket.on("room:cards", ({ roomIds }: { roomIds?: string[] }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const ids = [...new Set((Array.isArray(roomIds) ? roomIds : []).filter((x) => typeof x === "string" && ROOM_ID.test(x)))].slice(0, CARDS_MAX_PER_REQUEST);
+        const cards = ids.map((id) => {
+          const c = store.roomCard(id, userId);
+          if (!c.ended) watchCard(id, userId);
+          return c;
+        });
+        // the LiveKit origin lets a visible card pre-connect (DNS + TLS) before the tap on Join
+        ack({ ok: true, cards, audioUrl: livekit.enabled ? livekit.url : null });
+      }),
+    );
+
+    // The live room I'm in right now (DM "+" → "Invite to the room you're in").
+    socket.on("room:current", (_: unknown, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        const roomId = store.currentRoomOf(userId);
+        ack({ ok: true, card: roomId ? store.roomCard(roomId, userId) : null });
+      }),
+    );
 
     // ----- users & follows -----
     socket.on("user:get", ({ userId }: { userId: string }, ack: AckFn = noop) => {

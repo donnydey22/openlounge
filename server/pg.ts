@@ -12,6 +12,7 @@ import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
 import type { ReportRecord } from "./moderation";
+import type { DmKind } from "../src/lib/types";
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type EmailOtpBackend, type EmailOtpRow, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
 
 type SessionRow = {
@@ -258,8 +259,8 @@ export class PgPersistence implements Persistence {
       q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
       q<{ follower_id: string; followee_id: string }>("SELECT follower_id, followee_id FROM follows ORDER BY created_at, follower_id, followee_id"),
       q<{ id: string; title: string; topic: string; description: string; host_id: string; created_at: number }>("SELECT * FROM rooms ORDER BY created_at, id"),
-      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null; client_id: string | null }>(
-        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id FROM dms ORDER BY created_at, id",
+      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null; client_id: string | null; kind: string | null; room_id: string | null }>(
+        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id FROM dms ORDER BY created_at, id",
       ),
       q<SessionRow>("SELECT * FROM sessions"),
       q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
@@ -295,7 +296,7 @@ export class PgPersistence implements Persistence {
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
-      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}) })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}), ...(m.kind && m.room_id ? { kind: m.kind as DmKind, roomId: m.room_id } : {}) })),
       sessions: sessions.map(sessionFromRow),
       dmReads: {},
       identities: identities.map((i) => ({
@@ -359,7 +360,7 @@ export class PgPersistence implements Persistence {
     }
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
-      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId)]);
+      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId), tn(m.kind), tn(m.roomId)]);
     for (const s of db.sessions ?? [])
       if (humans.has(s.userId))
         out.sessions.set(s.tokenHash, [
@@ -463,11 +464,11 @@ export class PgPersistence implements Persistence {
       if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
       if (up.dms.length)
         await client.query(
-          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id)
-           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[], $10::text[])
+          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id)
+           SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[])
            ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color,
              read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id)`,
-          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => col(up.dms, i)),
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => col(up.dms, i)),
         );
       // sessions
       if (del.sessions.length) await client.query("DELETE FROM sessions WHERE token_hash = ANY($1::text[])", [del.sessions]);

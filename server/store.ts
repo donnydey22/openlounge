@@ -20,6 +20,7 @@ import type {
   RoomSummary,
   UserProfile,
 } from "../src/lib/types";
+import type { DmKind, RoomCard } from "../src/lib/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -79,6 +80,12 @@ interface RoomRecord {
   participants: Map<string, ParticipantRecord>;
   /** In-room chat, kept for the life of the room (memory only, capped) */
   chat: ChatMessage[];
+  /** invite-only (drop-in audio chats): hidden from the hallway, never persisted, only `allowed` users can join */
+  private?: boolean;
+  /** drop-in audio chat started from a DM: ends DROPIN_EMPTY_TTL_MS after the last person leaves */
+  dropin?: boolean;
+  /** private rooms: who may join (host + invited people) */
+  allowed?: Set<string>;
 }
 
 export interface StoreEvents {
@@ -104,6 +111,11 @@ export interface StoreEvents {
 // DATA_DIR (persistence.ts) lets a host mount a persistent volume (e.g. Railway volume at /data) — avatars live there.
 const AWAY_GRACE_MS = 45_000; // keep your seat during a refresh / network switch / app backgrounding (LiveKit audio keeps playing)
 const EMPTY_ROOM_TTL_MS = 5 * 60_000; // user rooms with no humans end after 5 min
+/** drop-in audio chats end this soon after the last person leaves (or if nobody ever joins) */
+export const DROPIN_EMPTY_TTL_MS = Number(process.env.DROPIN_EMPTY_TTL_MS || 20_000);
+/** room invite cards sent per user per 10 min; drop-ins started per user per 10 min */
+const INVITE_MAX_PER_10MIN = Number(process.env.ROOM_INVITE_MAX_PER_10MIN || 40);
+const DROPIN_MAX_PER_10MIN = Number(process.env.DROPIN_MAX_PER_10MIN || 6);
 const MAX_BOT_SPEAKERS = 4;
 const DM_HISTORY_PER_CONVERSATION = 1000;
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
@@ -160,6 +172,8 @@ export class Store {
   private blockRate = new Map<string, number[]>();
   private chatRate = new Map<string, number[]>(); // userId -> recent send timestamps
   private reactionRate = new Map<string, number[]>(); // userId -> recent reaction timestamps
+  private inviteRate = new Map<string, number[]>(); // userId -> recent room-invite card sends
+  private dropinRate = new Map<string, number[]>(); // userId -> recent drop-in starts
   private awayTimers = new Map<string, NodeJS.Timeout>();
   /** Connections whose app/tab is backgrounded (client "presence:visible" false) → seat shows as "away" */
   private hiddenSockets = new Set<string>();
@@ -366,7 +380,7 @@ export class Store {
         [...this.follows.entries()].filter(([k]) => !k.startsWith("bot-")).map(([k, v]) => [k, [...v]]),
       ),
       rooms: [...this.rooms.values()]
-        .filter((r) => !r.seeded && !r.ended)
+        .filter((r) => !r.seeded && !r.ended && !r.private)
         .map(({ id, title, topic, description, hostId, createdAt }) => ({ id, title, topic, description, hostId, createdAt })),
       dms: [...this.dms.values()].flat(),
       dmReads: Object.fromEntries([...this.dmReads.entries()].map(([k, v]) => [k, Object.fromEntries(v)])),
@@ -1079,6 +1093,20 @@ export class Store {
       ended: r.ended,
       seeded: r.seeded,
       podiumUserId: r.podiumUserId && r.participants.has(r.podiumUserId) ? r.podiumUserId : null,
+      ...(r.private ? { private: true } : {}),
+      ...(r.dropin ? { dropin: true } : {}),
+      // drop-ins: who was invited but isn't here yet ("Ringing Bea…"); only room members ever receive room state
+      ...(r.dropin
+        ? {
+            invited: [...(r.allowed ?? [])]
+              .filter((id) => !r.participants.has(id) && this.users.has(id))
+              .slice(0, 8)
+              .map((id) => {
+                const u = this.users.get(id)!;
+                return { id, name: u.name, color: u.color, photoUrl: this.photoUrl(u) };
+              }),
+          }
+        : {}),
       participants: [...r.participants.values()].map((p) => {
         const u = this.users.get(p.userId);
         return {
@@ -1102,7 +1130,7 @@ export class Store {
 
   listRooms(): RoomSummary[] {
     return [...this.rooms.values()]
-      .filter((r) => !r.ended)
+      .filter((r) => !r.ended && !r.private) // invite-only rooms never show in the hallway
       .map((r) => {
         const parts = [...r.participants.values()];
         const speakers = parts
@@ -1132,7 +1160,8 @@ export class Store {
       });
   }
 
-  createRoom(hostId: string, input: { title?: string; topic?: string; description?: string }) {
+  /** `opts` is server-side only (drop-in audio chats); never pass client input through it. */
+  createRoom(hostId: string, input: { title?: string; topic?: string; description?: string }, opts: { private?: boolean; dropin?: boolean; allowed?: string[] } = {}) {
     const topic = TOPICS.includes(input.topic as never) ? (input.topic as string) : "Other";
     // Clubhouse-style: title is optional — always create a room on "Let's go".
     const t0 = clean(input.title, 80);
@@ -1154,10 +1183,12 @@ export class Store {
       podiumUserId: hostId,
       participants: new Map(),
       chat: [],
+      ...(opts.private || opts.dropin ? { private: true, allowed: new Set([hostId, ...(opts.allowed ?? [])]) } : {}),
+      ...(opts.dropin ? { dropin: true } : {}),
     };
     this.rooms.set(room.id, room);
-    this.scheduleSave();
-    if (DEMO_SEED) this.scheduleBotAudience(room.id);
+    if (!room.private) this.scheduleSave();
+    if (DEMO_SEED && !room.private) this.scheduleBotAudience(room.id);
     this.events?.roomsListChanged();
     return { ok: true as const, roomId: room.id };
   }
@@ -1210,6 +1241,7 @@ export class Store {
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false as const, error: "Room not found" };
     if (room.ended) return { ok: false as const, error: "This room has ended" };
+    if (room.private && !this.canJoinPrivate(room, userId)) return { ok: false as const, error: "This audio chat is invite-only" };
 
     // one seat per user: leave any other room first
     for (const other of this.rooms.values()) {
@@ -1233,8 +1265,9 @@ export class Store {
       }
       p = {
         userId,
-        role: becomesHost ? "host" : "listener",
-        muted: true,
+        // drop-in audio chats are a conversation, not a stage: everyone invited talks, mic live from the start
+        role: becomesHost ? "host" : room.dropin ? "speaker" : "listener",
+        muted: !room.dropin,
         handRaised: false,
         handRaisedAt: null,
         speaking: false,
@@ -1822,7 +1855,7 @@ export class Store {
     return { ok: true as const, message: msg };
   }
 
-  private appendDm(fromId: string, toId: string, text: string, clientId?: string) {
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind: DmKind; roomId: string }) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -1838,6 +1871,7 @@ export class Store {
       createdAt: Math.max(Date.now(), (list[list.length - 1]?.createdAt ?? 0) + 1),
       readAt: null,
       ...(clientId ? { clientId } : {}),
+      ...(extra ? { kind: extra.kind, roomId: extra.roomId } : {}),
     };
     list.push(msg);
     if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
@@ -1845,6 +1879,130 @@ export class Store {
     this.scheduleSave();
     this.events?.dmMessage(msg);
     return msg;
+  }
+
+  // ---------- audio rooms in DMs: invite cards + drop-in audio chats ----------
+
+  private canJoinPrivate(room: RoomRecord, userId: string) {
+    if (!room.allowed?.has(userId)) return false;
+    // a block between you and the host (or whoever invited you) shuts the door
+    return !this.isBlockedEither(room.hostId, userId);
+  }
+
+  /** Live state for an in-chat card, as `viewerId` sees it. Unknown (cleaned-up / pre-restart) rooms → ended. */
+  roomCard(roomId: string, viewerId: string | null): RoomCard {
+    const r = this.rooms.get(roomId);
+    if (!r || r.ended || (r.private && (!viewerId || !r.allowed?.has(viewerId))))
+      return {
+        roomId,
+        title: r && !r.private ? r.title : "",
+        topic: r?.topic ?? "",
+        ended: !r || r.ended,
+        private: !!r?.private,
+        dropin: !!r?.dropin,
+        canJoin: false,
+        createdAt: r?.createdAt ?? null,
+        hosts: [],
+        speakers: [],
+        speakerCount: 0,
+        listenerCount: 0,
+      };
+    const face = (id: string) => {
+      const u = this.users.get(id);
+      return { id, name: u?.name ?? "Someone", color: u?.color ?? "#64748B", photoUrl: u ? this.photoUrl(u) : null };
+    };
+    const parts = [...r.participants.values()];
+    const stage = parts.filter((p) => p.role !== "listener").sort((a, b) => (a.role === "host" ? -1 : b.role === "host" ? 1 : a.joinedAt - b.joinedAt));
+    const hostIds = stage.filter((p) => p.role === "host").map((p) => p.userId);
+    return {
+      roomId,
+      title: r.title,
+      topic: r.topic,
+      ended: false,
+      private: !!r.private,
+      dropin: !!r.dropin,
+      canJoin: !viewerId ? false : r.private ? this.canJoinPrivate(r, viewerId) : !this.isBlockedEither(r.hostId, viewerId),
+      createdAt: r.createdAt,
+      hosts: (hostIds.length ? hostIds : [r.hostId]).slice(0, 3).map(face),
+      speakers: stage.slice(0, 5).map((p) => face(p.userId)),
+      speakerCount: stage.length,
+      listenerCount: parts.length - stage.length,
+    };
+  }
+
+  /** The (live) room this user currently has a seat in, if any. */
+  currentRoomOf(userId: string): string | null {
+    for (const r of this.rooms.values()) if (!r.ended && r.participants.has(userId)) return r.id;
+    return null;
+  }
+
+  /**
+   * Send a live room invite card in the DM from → to. Public rooms: anyone may share. Private rooms: only someone in
+   * the room (or its host); the recipient is added to the room's guest list. Same blocks + rate limits as DMs; the
+   * same live room invited twice to the same person returns the existing card instead of a duplicate.
+   */
+  sendRoomInvite(fromId: string, toId: string, roomId: string, kind: DmKind = "room_invite") {
+    if (fromId === toId) return { ok: false as const, error: "You can't invite yourself" };
+    const from = this.users.get(fromId);
+    if (!from || from.isBot) return { ok: false as const, error: "Not signed in" };
+    if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
+    if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to invite them." };
+    if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't invite this account." };
+    const room = this.rooms.get(roomId);
+    if (!room || room.ended) return { ok: false as const, error: "This room has ended" };
+    if (room.private && !room.participants.has(fromId) && room.hostId !== fromId) return { ok: false as const, error: "Join the audio chat to invite people" };
+    const key = conversationId(fromId, toId);
+    const recent = this.dms.get(key) ?? [];
+    for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--) {
+      const m = recent[i];
+      if (m.roomId === roomId && m.fromId === fromId && m.kind) {
+        room.allowed?.add(toId);
+        return { ok: true as const, message: m, duplicate: true };
+      }
+    }
+    if (this.slidingLimit(this.inviteRate, fromId, 10 * 60_000, INVITE_MAX_PER_10MIN)) return { ok: false as const, error: "Slow down a little 🙂" };
+    room.allowed?.add(toId);
+    const text = kind === "dropin" ? "🎙️ Started a drop-in audio chat. Tap to join" : `🎙️ Join me in “${room.title}”`;
+    const msg = this.appendDm(fromId, toId, text, undefined, { kind, roomId });
+    this.markDmRead(fromId, toId);
+    this.events?.roomChanged(roomId); // card watchers refresh
+    return { ok: true as const, message: msg, duplicate: false };
+  }
+
+  /** An active drop-in between exactly these two people (to reuse instead of starting a second one). */
+  activeDropIn(a: string, b: string): string | null {
+    for (const r of this.rooms.values()) if (r.dropin && !r.ended && r.allowed?.has(a) && r.allowed?.has(b) && (r.hostId === a || r.hostId === b)) return r.id;
+    return null;
+  }
+
+  /**
+   * Start (or rejoin) a private drop-in audio chat with `peerId` from their DM: creates an invite-only room both of
+   * them may join and posts the drop-in card in the DM. Blocks and a per-user rate limit apply.
+   */
+  startDropIn(fromId: string, peerId: string) {
+    if (fromId === peerId) return { ok: false as const, error: "You can't start a chat with yourself" };
+    const from = this.users.get(fromId);
+    const peer = this.users.get(peerId);
+    if (!from || from.isBot) return { ok: false as const, error: "Not signed in" };
+    if (!peer) return { ok: false as const, error: "User not found" };
+    if (this.isBlocked(fromId, peerId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to talk." };
+    if (this.isBlocked(peerId, fromId)) return { ok: false as const, blocked: true, error: "You can't start a chat with this account." };
+    const existing = this.activeDropIn(fromId, peerId);
+    if (existing) {
+      const m = [...(this.dms.get(conversationId(fromId, peerId)) ?? [])].reverse().find((x) => x.roomId === existing && x.kind === "dropin") ?? null;
+      return { ok: true as const, roomId: existing, message: m, reused: true };
+    }
+    if (this.slidingLimit(this.dropinRate, fromId, 10 * 60_000, DROPIN_MAX_PER_10MIN)) return { ok: false as const, error: "Slow down a little 🙂 Try again in a few minutes." };
+    const first = (n: string) => n.split(" ")[0] || n;
+    const created = this.createRoom(fromId, { title: `${first(from.name)} & ${first(peer.name)}`, topic: "Other", description: "Drop-in audio chat" }, { dropin: true, allowed: [peerId] });
+    if (!created.ok) return created;
+    const sent = this.sendRoomInvite(fromId, peerId, created.roomId, "dropin");
+    if (!sent.ok) {
+      const r = this.rooms.get(created.roomId);
+      if (r) this.finish(r);
+      return sent;
+    }
+    return { ok: true as const, roomId: created.roomId, message: sent.message, reused: false };
   }
 
   private botReplyPending = new Set<string>();
@@ -1883,7 +2041,7 @@ export class Store {
         if (room.endedAt && now - room.endedAt > 30 * 60_000) this.rooms.delete(room.id);
         continue;
       }
-      if (!room.seeded && room.emptySince && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
+      if (!room.seeded && room.emptySince && now - room.emptySince > (room.dropin ? DROPIN_EMPTY_TTL_MS : EMPTY_ROOM_TTL_MS)) {
         this.finish(room);
         continue;
       }

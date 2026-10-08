@@ -18,6 +18,11 @@ import { TypingLabel } from "./TypingDots";
 import { dayDiff, formatClock, formatDaySeparator, formatFull, formatListTime, serverNow, useClockTick } from "@/lib/time";
 import { FollowButton } from "../UserRow";
 import { usePresence } from "@/hooks/usePresence";
+import { useRoomCards } from "@/hooks/useRoomCards";
+import { roomIdsInText } from "@/lib/roomLinks";
+import { RoomCardRow, RoomLinkCards } from "../rooms/RoomJoinCard";
+import { DmRoomActions } from "../rooms/DmRoomActions";
+import { DropInBanner } from "../rooms/DropInBanner";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -515,6 +520,32 @@ export function DmThread({
     return -1;
   }, [messages, me]);
 
+  // audio room cards: invite / drop-in messages + pasted openlounge.app/room links → live state over the socket
+  const linkIds = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const x of messages ?? []) if (!x.kind) {
+      const ids = roomIdsInText(x.text);
+      if (ids.length) m.set(keyOf(x), ids);
+    }
+    return m;
+  }, [messages]);
+  const cardIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const x of messages ?? []) if (x.kind && x.roomId) set.add(x.roomId);
+    for (const ids of linkIds.values()) for (const id of ids) set.add(id);
+    return [...set];
+  }, [messages, linkIds]);
+  const roomCards = useRoomCards(socket, connected, cardIds);
+  const latestDropIn = useMemo(() => {
+    for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) if (messages![i].kind === "dropin" && messages![i].roomId) return messages![i].roomId!;
+    return null;
+  }, [messages]);
+  const onCardSent = useCallback((m: DirectMessage) => {
+    stickToBottom.current = true;
+    smoothNext.current = true;
+    setMessages((list) => mergeMessages(list ?? [], [m]));
+  }, []);
+
   if (isSelf || error) {
     return (
       <div className={cn("flex flex-col items-center justify-center gap-3 px-6 text-center text-zinc-400", className)}>
@@ -633,6 +664,7 @@ export function DmThread({
         </>
       )}
 
+      {latestDropIn && !hiddenPeer && <DropInBanner card={roomCards.get(latestDropIn) ?? null} meId={me?.id} peerId={peerId} />}
       <div className="relative min-h-0 flex-1">
         <div
           ref={listRef}
@@ -675,7 +707,23 @@ export function DmThread({
                   Show earlier messages
                 </button>
               )}
-              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return (
+              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return m.kind && m.roomId ? (
+                <RoomCardRow
+                  key={keyOf(m)}
+                  roomId={m.roomId}
+                  card={roomCards.get(m.roomId) ?? null}
+                  kind={m.kind}
+                  mine={m.fromId === me?.id}
+                  sep={sep}
+                  sepTitle={formatFull(m.createdAt)}
+                  first={first}
+                  last={last}
+                  peer={peer}
+                  fromName={m.fromName}
+                  pending={!!m.state}
+                />
+              ) : (
+                <div key={keyOf(m)}>
                 <MessageRow
                   key={keyOf(m)}
                   m={m}
@@ -691,6 +739,8 @@ export function DmThread({
                   onRetry={retry}
                   onReport={onReportMessage}
                 />
+                {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
+                </div>
               ); })}
               {peerTyping && peer && (
                 <div className="msg-in mt-2 flex items-end gap-2" data-testid="dm-typing">
@@ -738,6 +788,9 @@ export function DmThread({
             </span>
           )}
         </div>
+        <div className="flex items-end gap-2">
+        {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} />}
+        <div className="min-w-0 flex-1">
         <ChatComposer
           onSend={send}
           onTyping={onTyping}
@@ -746,6 +799,8 @@ export function DmThread({
           placeholder={peer ? `Message ${firstName(peer.name)}…` : "Message…"}
           autoFocus
         />
+        </div>
+        </div>
         </>
         )}
       </div>

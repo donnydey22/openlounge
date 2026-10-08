@@ -19,6 +19,23 @@ import type { LocalAudioTrack, Participant as LkParticipant, RemoteTrack, Room }
 type LiveKit = typeof import("livekit-client");
 let lk: LiveKit | null = null;
 const loadLiveKit = () => (lk ? Promise.resolve(lk) : import("livekit-client").then((m) => (lk = m)));
+/** Fetch + compile the LiveKit client ahead of time (a joinable room card is on screen / Join is pressed). */
+export function prewarmLiveKit() {
+  if (typeof window === "undefined" || lk) return;
+  const idle = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  const go = () => void loadLiveKit().catch(() => {});
+  if (idle) idle(go, { timeout: 1500 });
+  else setTimeout(go, 200);
+}
+
+/** Connect-time marks (performance.measure) for the join → audio path; read in tests / devtools. */
+export const markAudio = (name: string) => {
+  try {
+    performance.mark(`ol:${name}`);
+  } catch {
+    /* old WebView */
+  }
+};
 import { authFetch } from "@/lib/auth";
 import { setActiveAudioRoom, unlockAudio } from "@/lib/audioUnlock";
 
@@ -32,8 +49,11 @@ export function useLiveKitAudio({
   joined,
   isSpeaker,
   muted,
+  prefetched,
 }: {
   roomId: string;
+  /** LiveKit url + token that came with the room:join ack (skips one HTTP round trip); used once */
+  prefetched?: { url: string; token: string } | null;
   /** server says LiveKit is configured */
   enabled: boolean;
   /** we have a seat in the room */
@@ -55,6 +75,8 @@ export function useLiveKitAudio({
   const want = useRef({ isSpeaker, muted });
   want.current = { isSpeaker, muted };
   const micChain = useRef<Promise<void>>(Promise.resolve());
+  const prefetchedRef = useRef(prefetched ?? null);
+  if (prefetched && prefetchedRef.current?.token !== prefetched.token) prefetchedRef.current = prefetched;
 
   // connect / disconnect
   useEffect(() => {
@@ -100,19 +122,28 @@ export function useLiveKitAudio({
       setStatus("connecting");
       setError(null);
       try {
+        markAudio("audio-start");
         const lkLoad = loadLiveKit();
+        // token from the join ack (one-shot) → no extra round trip; otherwise (reconnects) the HTTP endpoint,
         // access token attached; a 401 refreshes silently and retries once
-        const res = await authFetch("/api/livekit/token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomId }),
-        });
-        const body = ((await res.json().catch(() => null)) ?? { ok: false }) as { ok: boolean; url?: string; token?: string; error?: string; configured?: boolean };
-        if (cancelled) return;
-        if (res.status === 503 || body.configured === false) {
-          setStatus("unavailable");
-          return;
+        const pre = prefetchedRef.current;
+        prefetchedRef.current = null;
+        let body: { ok: boolean; url?: string; token?: string; error?: string; configured?: boolean };
+        if (pre?.token && pre.url) body = { ok: true, url: pre.url, token: pre.token };
+        else {
+          const res = await authFetch("/api/livekit/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roomId }),
+          });
+          body = ((await res.json().catch(() => null)) ?? { ok: false }) as typeof body;
+          if (cancelled) return;
+          if (res.status === 503 || body.configured === false) {
+            setStatus("unavailable");
+            return;
+          }
         }
+        markAudio("audio-token");
         if (!body.ok || !body.url || !body.token) throw new Error("audio token");
         const LK = await lkLoad;
         if (cancelled) return;
@@ -128,6 +159,7 @@ export function useLiveKitAudio({
         });
         if (cancelled) return room.disconnect();
         setActiveAudioRoom(room);
+        markAudio("audio-connected");
         setStatus("connected");
         // try to start playback right away (works if the user already tapped); else show the banner
         await room.startAudio().catch(() => {});

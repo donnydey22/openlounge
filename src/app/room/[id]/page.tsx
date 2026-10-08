@@ -4,7 +4,7 @@ import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronDown, Flag, Hand, Link2, Loader2, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, Volume2 } from "lucide-react";
+import { ChevronDown, Flag, Hand, Link2, Loader2, Lock, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, UserPlus, Volume2 } from "lucide-react";
 import { ROOM_CHAT_HISTORY, type ChatMessage, type Participant, type RoomPresenceEvent, type RoomReaction, type RoomState } from "@/lib/types";
 import { TOPIC_EMOJI, cn, timeAgo } from "@/lib/utils";
 import { formatFull, serverNow, useClockTick } from "@/lib/time";
@@ -26,6 +26,9 @@ import { ReactionBar } from "@/components/room/ReactionBar";
 import { ReactionBurst } from "@/components/room/ReactionBurst";
 import { useNotifier } from "@/components/Notifier";
 import { OPEN_DM_EVENT } from "@/lib/notify";
+import { InviteToRoomSheet } from "@/components/rooms/InviteToRoomSheet";
+import { DropInStatus } from "@/components/rooms/DropInStatus";
+import { markAudio } from "@/hooks/useLiveKitAudio";
 
 type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
 
@@ -47,6 +50,8 @@ export default function RoomPage() {
   const [blockTarget, setBlockTarget] = useState<{ id: string; name: string } | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [lkPrefetched, setLkPrefetched] = useState<{ url: string; token: string } | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [showDesc, setShowDesc] = useState(false);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
@@ -66,11 +71,14 @@ export default function RoomPage() {
     leftRef.current = false;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    request<{ room: RoomState; chat: ChatMessage[]; audio: { enabled: boolean } }>("room:join", { roomId })
+    markAudio("room-join-req");
+    request<{ room: RoomState; chat: ChatMessage[]; audio: { enabled: boolean; url?: string; token?: string } }>("room:join", { roomId })
       .then((res) => {
         if (cancelled) return;
+        markAudio("room-joined");
         setRoom(res.room);
         setChat(res.chat ?? []);
+        if (res.audio?.url && res.audio?.token) setLkPrefetched({ url: res.audio.url, token: res.audio.token });
         setAudioEnabled(!!res.audio?.enabled);
         setJoined(true);
       })
@@ -164,6 +172,7 @@ export default function RoomPage() {
   const audio = useLiveKitAudio({
     roomId,
     enabled: audioEnabled,
+    prefetched: lkPrefetched,
     joined: joined && !!meP,
     isSpeaker: !!meP && meP.role !== "listener",
     muted: meP?.muted ?? true,
@@ -379,6 +388,9 @@ export default function RoomPage() {
         </button>
         <div className="flex items-center gap-1">
           {!connected && <span className="mr-2 text-xs text-amber-400 animate-pulse">Reconnecting…</span>}
+          <button onClick={() => setInviteOpen(true)} className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-emerald-400 hover:bg-white/5" aria-label="Invite people" data-testid="room-invite">
+            <UserPlus className="h-5 w-5" /> <span className="hidden min-[380px]:inline">Invite</span>
+          </button>
           <button onClick={() => setMenuOpen(true)} className="rounded-full p-2.5 text-zinc-300 hover:bg-white/5" aria-label="Room menu">
             <MoreHorizontal className="h-5 w-5" />
           </button>
@@ -401,6 +413,12 @@ export default function RoomPage() {
             </span>
           </div>
           <h1 className="text-xl font-bold leading-snug">{room.title}</h1>
+          {room.private && (
+            <div className="mt-1 flex items-center gap-1 text-xs text-zinc-500" data-testid="room-private">
+              <Lock className="h-3 w-3" /> {room.dropin ? "Private drop-in audio chat" : "Invite only"}
+            </div>
+          )}
+          {room.dropin && <DropInStatus room={room} meId={me?.id} audio={audio.status} />}
           {room.description && (
             <button onClick={() => setShowDesc((v) => !v)} className={cn("mt-2 block text-left text-sm text-zinc-400", !showDesc && "line-clamp-2")}>
               {room.description}
@@ -714,6 +732,8 @@ export default function RoomPage() {
           </ul>
         )}
       </Sheet>
+
+      <InviteToRoomSheet roomId={roomId} open={inviteOpen} onClose={() => setInviteOpen(false)} exclude={new Set(participants.map((p) => p.userId))} />
 
       {/* room menu */}
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title="Room">
