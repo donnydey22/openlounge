@@ -66,6 +66,12 @@ export function MessageActionOverlay({
     clone.style.width = `${geo.rect.width}px`;
     clone.style.animation = "none";
     lift.current?.appendChild(clone);
+    // horizontal scrollers (album carousel) don't clone their scroll position: copy it so the snapshot shows the same page
+    const scrollers = el.querySelectorAll<HTMLElement>("[data-hscroll]");
+    clone.querySelectorAll<HTMLElement>("[data-hscroll]").forEach((c, i) => {
+      c.style.scrollSnapType = "none";
+      c.scrollLeft = scrollers[i]?.scrollLeft ?? 0;
+    });
     el.style.visibility = "hidden";
     return () => {
       el.style.visibility = "";
