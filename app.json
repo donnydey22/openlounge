@@ -201,6 +201,7 @@
       "./plugins/withSafeFirebaseConfigure.js",
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
+      "@react-native-firebase/auth",
       [
         "expo-notifications",
         {
@@ -234,7 +235,8 @@
         {
           "faceIDPermission": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
         }
-      ]
+      ],
+      "./plugins/withFirebasePhoneAuthScheme.js"
     ],
     "extra": {
       "startUrl": "https://openlounge.app",
