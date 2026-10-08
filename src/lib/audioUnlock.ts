@@ -56,7 +56,11 @@ export function primedAudioElement(): HTMLAudioElement | null {
   return elPrimed ? el : null;
 }
 
-const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+const SILENT_WAV_B64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+// a blob: URL, not data: — the CSP's media-src allows 'self' blob: only (data: was refused on WebKit / Firefox)
+let silentUrl: string | null = null;
+const silentWav = () =>
+  (silentUrl ??= URL.createObjectURL(new Blob([Uint8Array.from(atob(SILENT_WAV_B64), (c) => c.charCodeAt(0))], { type: "audio/wav" })));
 
 export function unlockAudio(): void {
   if (typeof window === "undefined") return;
@@ -80,7 +84,7 @@ export function unlockAudio(): void {
       el.preload = "auto";
     }
     if (!elPrimed && el.paused) {
-      el.src = SILENT_WAV;
+      el.src = silentWav();
       el.muted = true;
       const p = el.play();
       const ok = () => {

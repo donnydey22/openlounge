@@ -172,9 +172,12 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
   const posterSrc = mode === "hover" || mode === "static" ? (seen ? asset.poster : null) : asset.poster;
 
   // "once": a fresh object URL per play (first visible, then every replay bump)
-  const wantPlay = mode === "once" && visible && (replay > 0 || (autoPlay && !played.current));
+  // (the trigger must not flip when `played` is set, or the cleanup would revoke the URL mid-play while the image —
+  // or the long-press overlay's snapshot of it — still needs it: net::ERR_FILE_NOT_FOUND)
+  const trigger = mode === "once" && visible && (replay > 0 || autoPlay) ? replay : -1;
   useEffect(() => {
-    if (mode !== "once" || !wantPlay || prefersReducedMotion()) return;
+    if (trigger < 0 || prefersReducedMotion()) return;
+    if (trigger === 0 && played.current) return;
     played.current = true;
     let url: string | null = null;
     let done: ReturnType<typeof setTimeout> | null = null;
@@ -187,6 +190,9 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
         setOnceUrl(url);
         done = setTimeout(() => {
           setOnceUrl(null);
+          const u = url!;
+          url = null;
+          setTimeout(() => URL.revokeObjectURL(u), 1000);
           endRef.current?.();
         }, Math.max(800, asset.durationMs));
       })
@@ -194,9 +200,13 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
     return () => {
       cancelled = true;
       if (done) clearTimeout(done);
-      if (url) setTimeout(() => URL.revokeObjectURL(url!), 1000);
+      if (url) {
+        const u = url;
+        setOnceUrl((cur) => (cur === u ? null : cur)); // stop showing it before it's revoked
+        setTimeout(() => URL.revokeObjectURL(u), 1000);
+      }
     };
-  }, [mode, wantPlay, replay, asset.src, asset.durationMs]);
+  }, [trigger, asset.src, asset.durationMs]);
 
   const reducedNow = prefersReducedMotion();
   const animSrc =
