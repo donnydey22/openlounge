@@ -539,9 +539,34 @@ const otpHash = (key: string, code: string) => createHmac("sha256", deriveKey("e
 const BAD_CODE = "That code isn't right. Check the email and try again.";
 const DEAD_CODE = "That code has expired. Request a new one.";
 
+const maskEmail = (e: string) => {
+  const [local, domain] = e.split("@");
+  return `${local.slice(0, 1)}•••@${domain}`;
+};
+const maskPhone = (p: string) => `•••${p.slice(-4)}`;
+
+/**
+ * Sign-in code by ONE identifier: an email, or a screen name (→ that account's address on file; the address itself
+ * is never returned, only masked). Screen names are public, so saying which channel exists reveals nothing private.
+ */
+function codeTarget(body: Record<string, unknown>): { email: string | null; byName: boolean; userId: string | null; phoneMasked: string | null } {
+  if (typeof body.identifier !== "string") return { email: normalizeEmail(body.email), byName: false, userId: null, phoneMasked: null };
+  const id = body.identifier.trim().slice(0, 254);
+  if (id.includes("@") && !id.startsWith("@")) return { email: normalizeEmail(id), byName: false, userId: null, phoneMasked: null };
+  const uid = userByScreenName(id);
+  const phone = uid ? store.users.get(uid)?.phone ?? null : null;
+  return { email: uid ? mailAddressOf(uid) : null, byName: true, userId: uid, phoneMasked: phone ? maskPhone(phone) : null };
+}
+
 async function emailCodeStart(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>, linkUserId: string | null) {
   if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
-  const email = normalizeEmail(body.email);
+  const target = linkUserId ? { email: normalizeEmail(body.email), byName: false, userId: null, phoneMasked: null } : codeTarget(body);
+  if (target.byName && !target.email) {
+    if (!allow(`emailcode:ip:${clientIp(req)}`, LIMITS.emailCodeIp)) return tooMany(res);
+    // no address on file (or no such name): tell them which other way works, if any
+    return json(res, 200, { ok: true, sent: false, channel: target.phoneMasked ? "phone" : null, masked: target.phoneMasked });
+  }
+  const email = target.email;
   if (!email) return json(res, 400, { ok: false, error: "Enter a valid email address." });
   if (linkUserId) {
     const existing = store.findIdentity("email", email);
@@ -560,13 +585,13 @@ async function emailCodeStart(req: IncomingMessage, res: ServerResponse, body: R
   if (linkUserId) await store.flush().catch(() => {}); // the row references users(id)
   await store.emailOtp.put({ key, email, purpose, userId: linkUserId, codeHash: otpHash(key, code), createdAt: now, expiresAt: now + EMAIL_CODE_TTL_MS });
   await safeSendMail(emailCodeMail(email, code, !!linkUserId, !linkUserId && !!store.findIdentity("email", email)?.verified));
-  json(res, 200, { ok: true, sent: true, email, resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
+  json(res, 200, { ok: true, sent: true, channel: "email", ...(target.byName ? { masked: maskEmail(email) } : { email, masked: maskEmail(email) }), resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
 }
 
 /** Checks the code (one attempt). ok → the code is spent. */
 async function checkEmailCode(req: IncomingMessage, body: Record<string, unknown>, linkUserId: string | null): Promise<{ ok: true; email: string } | { ok: false; status: number; error: string; attemptsLeft?: number }> {
   if (!allow(`emailverify:ip:${clientIp(req)}`, LIMITS.emailVerifyIp)) return { ok: false, status: 429, error: "Too many attempts. Please wait a few minutes and try again." };
-  const email = normalizeEmail(body.email);
+  const email = linkUserId ? normalizeEmail(body.email) : codeTarget(body).email;
   const code = str(body.code, 20).replace(/\s/g, "");
   if (!email) return { ok: false, status: 400, error: "Enter a valid email address." };
   if (!/^\d{6}$/.test(code)) return { ok: false, status: 400, error: "Enter the 6-digit code." };
@@ -592,6 +617,13 @@ async function emailCodeVerify(req: IncomingMessage, res: ServerResponse, body: 
   if (!emailEnabled()) return json(res, 404, { ok: false, error: "Not found" });
   const c = await checkEmailCode(req, body, null);
   if (!c.ok) return json(res, c.status, { ok: false, error: c.error, ...(c.attemptsLeft !== undefined ? { attemptsLeft: c.attemptsLeft } : {}) });
+  // by screen name: the code went to THAT account's address on file → sign that account in (never a new account,
+  // even when the address is only a verified Google/Apple email rather than an email identity)
+  const t = codeTarget(body);
+  if (t.byName && t.userId && t.email === c.email) {
+    await store.flush().catch(() => {});
+    return json(res, 200, { ...sessionBody(t.userId, req, body.device), provider: "email" });
+  }
   // the code proved the inbox → a verified email; same linking rules as Google/Apple and the email link
   const r = resolveSignIn(store, { provider: "email", subject: c.email, email: c.email, emailVerified: true });
   if (r.kind === "existing") {

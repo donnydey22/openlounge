@@ -37,6 +37,17 @@ async function auth() {
 }
 let recaptchaConfigLoaded = false;
 
+/** Warm-up on the sign-in screens: load the SDK, init auth + reCAPTCHA config so "Continue" sends instantly. */
+export async function warmPhoneAuth(): Promise<void> {
+  if (hasNativePhoneAuth()) return;
+  try {
+    await auth();
+    await import("firebase/auth");
+  } catch {
+    /* best effort */
+  }
+}
+
 /** Sends the SMS. `containerId` is an (empty) element id for the invisible reCAPTCHA. */
 export async function sendPhoneCode(e164: string, containerId: string): Promise<PhoneSession> {
   // Installed apps: native Firebase phone auth (Play Integrity / silent APNs) — no web reCAPTCHA at all.

@@ -219,9 +219,21 @@ export function loadSharedCreds(): Creds | null {
   return read(localStorage);
 }
 
+// "Keep me signed in on this device" (default on). Off = this tab only: no localStorage / native store / cookie copy.
+const KEEP_KEY = "openlounge:keep";
+export function keepSignedIn(): boolean {
+  if (typeof window === "undefined") return true;
+  return get(sessionStorage, KEEP_KEY) !== "0";
+}
+export function setKeepSignedIn(on: boolean) {
+  if (typeof window === "undefined") return;
+  set(sessionStorage, KEEP_KEY, on ? null : "0");
+}
+
 export function saveCreds(c: Creds) {
   const stamped = { ...c, savedAt: Date.now() };
   writeTo(sessionStorage, stamped);
+  if (!keepSignedIn()) return;
   writeTo(localStorage, stamped);
   toNative(stamped);
 }

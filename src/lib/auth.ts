@@ -3,7 +3,7 @@
 // ("this refresh token is invalid / expired / revoked") signs someone out; network trouble, timeouts,
 // 5xx and unexpected responses are retried quietly and never clear the session.
 
-import { clearToken, loadCreds, loadSharedCreds, saveCreds, type Creds } from "./session";
+import { clearToken, keepSignedIn, loadCreds, loadSharedCreds, saveCreds, type Creds } from "./session";
 import type { Me } from "./types";
 
 /** refresh a little before the access token actually expires */
@@ -219,7 +219,7 @@ export async function logout(all = false) {
  */
 export async function persistSessionCookie(): Promise<void> {
   const c = loadCreds();
-  if (!c) return;
+  if (!c || !keepSignedIn()) return; // "Keep me signed in" off: no durable cookie copy
   try {
     await postJson("/api/auth/persist", { refreshToken: c.refresh }, {}, 8_000);
   } catch {

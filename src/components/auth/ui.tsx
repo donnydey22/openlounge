@@ -42,18 +42,21 @@ export function PrimaryButton({
   disabled,
   busy,
   type = "button",
+  "data-testid": testId,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   busy?: boolean;
   type?: "button" | "submit";
+  "data-testid"?: string;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled || busy}
+      data-testid={testId}
       className="flex w-full items-center justify-center gap-2 h-[52px] rounded-full bg-emerald-500 text-[17px] font-semibold text-on-accent shadow-lg shadow-emerald-500/20 transition duration-200 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-40 disabled:shadow-none"
     >
       {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : children}

@@ -18,7 +18,7 @@ import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
 import { biometricAuthenticate, biometricsBridge, quickSignInReady } from "@/lib/biometrics";
-import { forgetParked, readParked, unparkSession, type ParkedSession } from "@/lib/session";
+import { forgetParked, keepSignedIn, readParked, setKeepSignedIn, unparkSession, type ParkedSession } from "@/lib/session";
 import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult, type SignInResult } from "@/lib/authApi";
 import type { PhoneSession } from "@/lib/firebaseClient";
 
@@ -76,6 +76,12 @@ export function AuthFlow() {
   // SMS trouble (error / timeout / no text) → offer "Email me a code instead"
   const [smsTrouble, setSmsTrouble] = useState(false);
   const sendAttempt = useRef(0);
+  const [sending, setSending] = useState(false);
+  const [codeStatus, setCodeStatus] = useState<CodeStatus>("idle");
+  // email code by identifier (screen name → masked address on file)
+  const [codeIdentifier, setCodeIdentifier] = useState<string | null>(null);
+  const [codeMasked, setCodeMasked] = useState<string | null>(null);
+  const [keep, setKeep] = useState(() => (typeof window === "undefined" ? true : keepSignedIn()));
 
   // phone + code
   const [country, setCountry] = useState(COUNTRIES[0]);
@@ -84,6 +90,7 @@ export function AuthFlow() {
   const [code, setCode] = useState("");
   const [demoCode, setDemoCode] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
+  const resendEnd = useRef(0);
   const [ticket, setTicket] = useState(entry.pending?.ticket ?? "");
   // "Already have an account?": the pending Google/Apple/email identity waiting for phone proof
   const [linkCode, setLinkCode] = useState(entry.pending?.linkCode ?? "");
@@ -98,6 +105,14 @@ export function AuthFlow() {
       .then((c) => setAuthCfg({ firebase: !!c.firebase, demoOtp: c.demoOtp !== false }))
       .catch(() => setAuthCfg({ firebase: false, demoOtp: true }));
   }, [connected, authCfg, request]);
+
+  useEffect(() => setCountry(detectCountry()), []);
+  // prefetch the Firebase SDK + reCAPTCHA config while they're on the sign-in screens, so Continue is instant
+  useEffect(() => {
+    if (!authCfg?.firebase || !["welcome", "phone", "signin"].includes(step)) return;
+    const t = setTimeout(() => void import("@/lib/firebaseClient").then((m) => m.warmPhoneAuth()), 300);
+    return () => clearTimeout(t);
+  }, [authCfg?.firebase, step]);
 
   // profile
   const [firstName, setFirstName] = useState(entry.pending?.firstName ?? "");
@@ -123,69 +138,104 @@ export function AuthFlow() {
   // resend countdown
   useEffect(() => {
     if (resendIn <= 0) return;
-    const t = setTimeout(() => setResendIn((n) => n - 1), 1000);
-    return () => clearTimeout(t);
+    // from a wall-clock deadline: timers stall while the app is backgrounded (reading the SMS in Messages) or throttled
+    const tick = () => setResendIn(Math.max(0, Math.ceil((resendEnd.current - Date.now()) / 1000)));
+    const t = setTimeout(tick, 1000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [resendIn]);
+  const startResend = (sec: number) => {
+    resendEnd.current = Date.now() + sec * 1000;
+    setResendIn(sec);
+  };
 
   const digits = national.replace(/\D/g, "");
   const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
 
-  async function sendCode() {
-    if (busy) return;
+  /** Stripe-Link style: Continue → the code screen appears at once ("Sending…"), the SMS goes out behind it. */
+  async function sendCode(override?: { e164: string }) {
+    if (sending) return;
     const attempt = ++sendAttempt.current;
-    setBusy(true);
+    const e164 = override?.e164 ?? `+${(country.dial + digits).replace(/\D/g, "")}`;
+    perfMark("ol-send-tap");
+    setSending(true);
     setError(null);
     setSmsTrouble(false);
+    setPhoneE164(e164);
+    setCode("");
+    setCodeStatus("idle");
+    setDemoCode(null);
+    setStep("code");
+    requestAnimationFrame(() => perfMeasure("tap→code screen", "ol-send-tap"));
     // Slow send (reCAPTCHA image challenge, flaky network): offer email after a few seconds but KEEP waiting —
-    // a hard timeout here used to abort while the person was still solving the challenge (and then the text
-    // arrived with no code screen to type it into).
+    // a hard timeout used to abort while the person was still solving the challenge (then the text arrived with
+    // no code screen to type it into).
     const soft = setTimeout(() => sendAttempt.current === attempt && setSmsTrouble(true), SMS_SOFT_MS);
     try {
       if (authCfg?.firebase) {
-        const e164 = `+${(country.dial + digits).replace(/\D/g, "")}`;
         const { sendPhoneCode } = await import("@/lib/firebaseClient");
         const session = await withTimeout(sendPhoneCode(e164, "recaptcha-container"), SMS_SEND_TIMEOUT_MS, "We couldn't send the text. Try again, or get a code by email instead.");
-        if (sendAttempt.current !== attempt) return; // they switched to email meanwhile
+        if (sendAttempt.current !== attempt) return; // they switched to email / edited the number meanwhile
         confirmation.current = session;
-        setPhoneE164(e164);
-        setDemoCode(null);
-        setResendIn(30);
-        setCode("");
-        go("code");
+        startResend(30);
+        perfMeasure("tap→code sent", "ol-send-tap");
         // Android native instant verification: no code to type — continue straight away.
-        if (confirmation.current.instantToken) setTimeout(() => void verify("000000"), 0);
+        if (session.instantToken) setTimeout(() => void verify("000000"), 0);
         return;
       }
-      const res = await request<{ phone: string; demoCode?: string; resendIn: number }>("auth:requestCode", { phone: country.dial + digits });
+      const res = await request<{ phone: string; demoCode?: string; resendIn: number }>("auth:requestCode", { phone: e164 });
       if (sendAttempt.current !== attempt) return;
       setPhoneE164(res.phone);
       setDemoCode(res.demoCode ?? null);
-      setResendIn(res.resendIn);
-      setCode("");
-      go("code");
+      startResend(res.resendIn);
     } catch (e) {
       if (sendAttempt.current !== attempt) return;
       setError((e as Error).message);
       setSmsTrouble(true);
     } finally {
       clearTimeout(soft);
-      if (sendAttempt.current === attempt) setBusy(false);
+      if (sendAttempt.current === attempt) setSending(false);
     }
+  }
+
+  /** "Wrong number? Edit" — abandon the pending send and go back to the number */
+  function editNumber() {
+    sendAttempt.current++;
+    setSending(false);
+    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => m.resetPhoneVerifier());
+    go("phone");
   }
 
   /** leave the SMS path for an emailed code (a pending send is abandoned, its result ignored) */
   function switchToEmail() {
     sendAttempt.current++;
-    setBusy(false);
+    setSending(false);
     if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => m.resetPhoneVerifier());
     go("emailCode");
   }
 
+  // code completed while "Sending…" → verify as soon as the send resolves
+  useEffect(() => {
+    if (step === "code" && !sending && code.length === 6 && codeStatus === "idle" && confirmation.current) void verify(code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sending]);
+
   // on the code screen: no text after a while → show the email option too
   useEffect(() => {
     if (step !== "code") return;
+    const end = Date.now() + SMS_WAIT_MS;
+    const check = () => Date.now() >= end - 50 && setSmsTrouble(true);
     const t = setTimeout(() => setSmsTrouble(true), SMS_WAIT_MS);
-    return () => clearTimeout(t);
+    const i = setInterval(check, 1000); // wall clock: survives throttled / suspended timers
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      clearTimeout(t);
+      clearInterval(i);
+      document.removeEventListener("visibilitychange", check);
+    };
   }, [step, phoneE164]);
 
   async function signIn() {
@@ -228,6 +278,8 @@ export function AuthFlow() {
     if (value.length !== 6 || busy) return;
     setBusy(true);
     setError(null);
+    setCodeStatus("verifying");
+    perfMark("ol-code-entered");
     try {
       type VerifyRes = ({ status: "existing"; token: string } & SessionPayload) | { status: "new"; ticket: string };
       let res: VerifyRes;
@@ -253,9 +305,11 @@ export function AuthFlow() {
       } else {
         res = await request<VerifyRes>("auth:verifyCode", { phone: phoneE164, code: value });
       }
+      await verified();
       if (res.status === "existing") {
         markSuggestLink();
         completeLogin(res.token, res);
+        perfMeasure("code→home", "ol-code-entered");
         toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
       } else {
         setTicket(res.ticket);
@@ -263,20 +317,44 @@ export function AuthFlow() {
       }
     } catch (e) {
       setError((e as Error).message);
+      setCodeStatus("error");
       setCode("");
     } finally {
       setBusy(false);
     }
   }
 
-  async function sendEmailCode() {
+  /** green check + haptic for a beat, then in */
+  async function verified() {
+    setCodeStatus("success");
+    haptic("success");
+    await new Promise((r) => setTimeout(r, 220));
+  }
+
+  /** email code: to the typed email, or (from the sign-in screen) to a screen name's address on file */
+  async function sendEmailCode(byIdentifier?: string | null) {
     if (busy) return;
     setBusy(true);
     setError(null);
+    const ident = byIdentifier === undefined ? codeIdentifier : byIdentifier;
     try {
-      const r = await authPost<{ email: string; resendIn: number }>("/auth/email/code/start", { email: email.trim() });
-      setResendIn(r.resendIn ?? 60);
+      const r = await authPost<{ sent: boolean; channel: "email" | "phone" | null; masked?: string | null; resendIn?: number }>(
+        "/auth/email/code/start",
+        ident ? { identifier: ident } : { email: email.trim() },
+      );
+      if (!r.sent) {
+        setError(
+          r.channel === "phone"
+            ? `This account signs in with its phone number (${r.masked}). Tap "Text me a code instead".`
+            : "We couldn't send a code for that screen name. Check it, or sign in with your phone number or email.",
+        );
+        return;
+      }
+      setCodeIdentifier(ident ?? null);
+      setCodeMasked(r.masked ?? null);
+      startResend(r.resendIn ?? 60);
       setCode("");
+      setCodeStatus("idle");
       go("emailOtp");
     } catch (e) {
       setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
@@ -289,12 +367,17 @@ export function AuthFlow() {
     if (value.length !== 6 || busy) return;
     setBusy(true);
     setError(null);
+    setCodeStatus("verifying");
+    perfMark("ol-code-entered");
     try {
-      const res = await authPost<SignInResult>("/auth/email/code/verify", { email: email.trim(), code: value });
+      const res = await authPost<SignInResult>("/auth/email/code/verify", codeIdentifier ? { identifier: codeIdentifier, code: value } : { email: email.trim(), code: value });
       if (res.status === "existing") {
+        await verified();
         completeLogin(res.token, res, { resumeSocket: true });
+        perfMeasure("code→home", "ol-code-entered");
         toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
       } else if (res.status === "new") {
+        await verified();
         setMethod("email");
         setTicket(res.ticket);
         setLinkCode(res.linkCode ?? "");
@@ -302,6 +385,7 @@ export function AuthFlow() {
       } else throw new AuthFormError("Something went wrong. Please try again.");
     } catch (e) {
       setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+      setCodeStatus("error");
       setCode("");
     } finally {
       setBusy(false);
@@ -326,9 +410,12 @@ export function AuthFlow() {
 
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const idTrim = identifier.trim();
-  const idIsEmail = idTrim.includes("@") && !idTrim.startsWith("@");
-  const idOk = idIsEmail ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(idTrim) : USERNAME_RE.test(idTrim.replace(/^@/, "").toLowerCase());
-  const quickMatch = !!parked && !idIsEmail && idTrim.replace(/^@/, "").toLowerCase() === parked.username.toLowerCase();
+  // explicit identifier detection: + or digits → phone · has @ and a domain → email · anything else → screen name (@ optional)
+  const idPhone = /^\+|^[\d\s().-]+$/.test(idTrim) && /\d/.test(idTrim) ? parsePhoneIdentifier(idTrim, country) : null;
+  const idIsPhone = /^\+|^[\d\s().-]+$/.test(idTrim) && /\d/.test(idTrim);
+  const idIsEmail = !idIsPhone && idTrim.includes("@") && !idTrim.startsWith("@");
+  const idOk = idIsPhone ? !!idPhone : idIsEmail ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(idTrim) : USERNAME_RE.test(idTrim.replace(/^@/, "").toLowerCase());
+  const quickMatch = !!parked && !idIsEmail && !idIsPhone && idTrim.replace(/^@/, "").toLowerCase() === parked.username.toLowerCase();
 
   // live username availability
   useEffect(() => {
@@ -531,6 +618,7 @@ export function AuthFlow() {
           </div>
           <ErrorText>{error}</ErrorText>
           {smsTrouble && !linking && <EmailFallback onClick={switchToEmail} />}
+          <KeepSignedIn on={keep} onChange={(v) => { setKeep(v); setKeepSignedIn(v); }} />
           <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">
             By entering your number, you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>, including our zero-tolerance policy for objectionable content and abusive behavior. We&apos;ll text you a 6-digit code.
           </p>
@@ -542,8 +630,8 @@ export function AuthFlow() {
             </p>
           )}
           <Footer>
-            <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={busy}>
-              Next <ArrowRight className="h-4 w-4" />
+            <PrimaryButton type="submit" disabled={digits.length < 6 || !connected} busy={sending} data-testid="phone-continue">
+              Continue
             </PrimaryButton>
             {!linking && <ProviderButtons onEmail={() => go("emailCode")} />}
             {linking ? null : mode !== "signin" ? (
@@ -569,7 +657,7 @@ export function AuthFlow() {
           className="contents"
           onSubmit={(e) => {
             e.preventDefault();
-            if (emailOk) sendEmailCode();
+            if (emailOk) sendEmailCode(null);
           }}
         >
           <div className="mt-8">
@@ -592,48 +680,59 @@ export function AuthFlow() {
 
   if (step === "emailOtp") {
     return (
-      <Shell stepKey={step} onBack={() => go("emailCode")}>
-        <Title sub={`Sent to ${email.trim()}`}>Enter the code we just emailed you</Title>
+      <Shell stepKey={step} onBack={() => go(codeIdentifier ? "signin" : "emailCode")}>
+        <Title sub={`Code sent to ${codeMasked ?? email.trim()}`}>Check your email</Title>
         <CodeInput
           value={code}
+          status={codeStatus}
           disabled={busy}
           onChange={(v) => {
             setCode(v);
+            if (codeStatus === "error") setCodeStatus("idle");
             if (v.length === 6) verifyEmailCode(v);
           }}
         />
-        <ErrorText>{error}</ErrorText>
-        <div className="mt-6 text-center text-sm text-zinc-500">
-          Didn&apos;t get it? Check spam, or{" "}
-          {resendIn > 0 ? (
-            <span>resend in {resendIn}s</span>
-          ) : (
-            <button onClick={sendEmailCode} className="font-semibold text-sky-400 hover:underline">
-              tap to resend
-            </button>
-          )}
+        <div role="alert" aria-live="polite">
+          <ErrorText>{error}</ErrorText>
         </div>
-        <Footer>
-          <PrimaryButton onClick={() => verifyEmailCode(code)} disabled={code.length !== 6} busy={busy}>
-            Verify <ArrowRight className="h-4 w-4" />
-          </PrimaryButton>
-        </Footer>
+        <div className="mt-6 flex flex-col items-center gap-2 text-sm text-zinc-500">
+          <span>
+            Not there? Check spam, or{" "}
+            {resendIn > 0 ? (
+              <span className="tabular-nums">resend in {fmtCountdown(resendIn)}</span>
+            ) : (
+              <button type="button" onClick={() => sendEmailCode()} className="font-semibold text-sky-400 hover:underline">
+                Resend
+              </button>
+            )}
+          </span>
+          <button type="button" onClick={() => go(codeIdentifier ? "signin" : "emailCode")} className="text-sky-400 hover:underline">
+            Wrong {codeIdentifier ? "account" : "email"}? Edit
+          </button>
+        </div>
       </Shell>
     );
   }
 
   if (step === "signin" || step === "email") {
     // enabled as soon as both fields have text, so Enter / Go always gives feedback (validation message) instead of nothing
-    const canSubmit = !!idTrim && (!!password || quickMatch);
+    const canSubmit = !!idTrim && (idIsPhone || !!password || quickMatch);
     return (
       <Shell stepKey="signin" onBack={() => go("welcome")}>
-        <Title sub="Use your email or screen name.">Welcome back!</Title>
+        <Title sub="Use your phone number, email or screen name.">Welcome back!</Title>
         <form
           className="contents"
           noValidate
           onSubmit={(e) => {
             e.preventDefault();
-            if (!idOk) return setError(idTrim ? "Enter a valid email or screen name (3–20 letters, numbers or _)." : "Enter your email or screen name.");
+            if (idIsPhone) {
+              if (!idPhone) return setError("Enter a full phone number, like +1 423 555 0100.");
+              setCountry(idPhone.country);
+              setNational(idPhone.national);
+              setMode("signin");
+              return void sendCode({ e164: idPhone.e164 });
+            }
+            if (!idOk) return setError(idTrim ? "Enter a valid email or screen name (3–20 letters, numbers or _)." : "Enter your phone, email or screen name.");
             if (quickMatch && !password) return void quickSignIn();
             if (!password) return setError("Enter your password.");
             void signIn();
@@ -650,8 +749,8 @@ export function AuthFlow() {
               autoCorrect="off"
               spellCheck={false}
               enterKeyHint="next"
-              aria-label="Email or screen name"
-              placeholder="Email or screen name"
+              aria-label="Phone, email or screen name"
+              placeholder="Phone, email or screen name"
               value={identifier}
               onChange={(v) => {
                 setIdentifier(v);
@@ -660,7 +759,7 @@ export function AuthFlow() {
               maxLength={254}
               data-testid="signin-identifier"
             />
-            <PasswordInput
+            {!idIsPhone && <PasswordInput
               autoFocus={!!identifier && !quickMatch}
               name="password"
               id="signin-password"
@@ -674,7 +773,7 @@ export function AuthFlow() {
                 setError(null);
               }}
               data-testid="signin-password"
-            />
+            />}
           </div>
           <div role="alert" aria-live="polite">
             <ErrorText>{error}</ErrorText>
@@ -690,8 +789,8 @@ export function AuthFlow() {
                 <Fingerprint className="h-5 w-5" /> Sign in with Face ID / fingerprint
               </PrimaryButton>
             ) : (
-              <PrimaryButton type="submit" disabled={!canSubmit} busy={busy}>
-                Sign in <ArrowRight className="h-4 w-4" />
+              <PrimaryButton type="submit" disabled={!canSubmit} busy={busy || sending}>
+                {idIsPhone ? "Text me a code" : "Sign in"} <ArrowRight className="h-4 w-4" />
               </PrimaryButton>
             )}
             {parked && quickMatch && (
@@ -721,8 +820,11 @@ export function AuthFlow() {
               type="button"
               onClick={() => {
                 if (idIsEmail) setEmail(idTrim);
+                // screen name or email typed → code to the address on file (masked); otherwise ask for an email
+                if (idTrim && idOk && !idIsPhone) return void sendEmailCode(idTrim);
                 go("emailCode");
               }}
+              data-testid="signin-email-code"
               className="mt-3 w-full text-center text-sm font-semibold text-sky-400 hover:underline"
             >
               Email me a code instead →
@@ -784,10 +886,13 @@ export function AuthFlow() {
 
   if (step === "code") {
     return (
-      <Shell stepKey={step} onBack={() => go("phone")}>
-        <Title sub={`Sent to ${phoneE164}`}>Enter the code we just texted you</Title>
+      <Shell stepKey={step} onBack={editNumber}>
+        <Title sub={sending ? "Sending…" : error && !confirmation.current && !demoCode ? `Couldn't text ${maskTail(phoneE164)}` : `Code sent to ${maskTail(phoneE164)}`}>
+          Enter the 6-digit code
+        </Title>
         {demoCode && (
           <button
+            type="button"
             onClick={() => {
               setCode(demoCode);
               verify(demoCode);
@@ -802,29 +907,36 @@ export function AuthFlow() {
         )}
         <CodeInput
           value={code}
+          status={sending ? "sending" : codeStatus}
           disabled={busy}
           onChange={(v) => {
             setCode(v);
-            if (v.length === 6) verify(v);
+            if (codeStatus === "error") setCodeStatus("idle");
+            if (v.length === 6 && !sending) verify(v); // typed/autofilled before the send finished → verified when it does
+
           }}
         />
-        <ErrorText>{error}</ErrorText>
-        <div className="mt-6 text-center text-sm text-zinc-500">
-          Didn&apos;t receive it?{" "}
-          {resendIn > 0 ? (
-            <span>Resend in {resendIn}s</span>
-          ) : (
-            <button type="button" onClick={sendCode} className="font-semibold text-sky-400 hover:underline">
-              Tap to resend
-            </button>
+        <div role="alert" aria-live="polite">
+          <ErrorText>{error}</ErrorText>
+        </div>
+        <div className="mt-6 flex flex-col items-center gap-2 text-sm text-zinc-500">
+          {!sending && (
+            <span>
+              Didn&apos;t get it?{" "}
+              {resendIn > 0 ? (
+                <span className="tabular-nums">Resend in {fmtCountdown(resendIn)}</span>
+              ) : (
+                <button type="button" onClick={() => sendCode({ e164: phoneE164 })} className="font-semibold text-sky-400 hover:underline">
+                  Resend
+                </button>
+              )}
+            </span>
           )}
+          <button type="button" onClick={editNumber} className="text-sky-400 hover:underline" data-testid="edit-number">
+            Wrong number? Edit
+          </button>
         </div>
         {smsTrouble && !linking && <EmailFallback onClick={switchToEmail} />}
-        <Footer>
-          <PrimaryButton onClick={() => verify(code)} disabled={code.length !== 6} busy={busy}>
-            Verify <ArrowRight className="h-4 w-4" />
-          </PrimaryButton>
-        </Footer>
       </Shell>
     );
   }
@@ -1082,42 +1194,163 @@ function EmailFallback({ onClick }: { onClick: () => void }) {
       data-testid="sms-email-fallback"
       className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 py-3 text-[15px] font-semibold text-zinc-100 hover:bg-white/5"
     >
-      <Mail className="h-4 w-4" /> Send code to email instead
+      <Mail className="h-4 w-4" /> Email me a code instead
     </button>
   );
 }
 
-/** Six boxes backed by one hidden input (works with SMS autofill / paste). */
-function CodeInput({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
+type CodeStatus = "idle" | "sending" | "verifying" | "success" | "error";
+
+/**
+ * Six boxes backed by ONE hidden input (autocomplete="one-time-code" + inputmode numeric + pattern → iOS Safari /
+ * WKWebView SMS autofill, Android keyboard suggestion, paste of the whole code). Typing advances, Backspace goes
+ * back (it's one string). Auto-submits on the 6th digit (parent's onChange). Spinner while verifying, green check
+ * on success, shake + clear + refocus on a wrong code.
+ */
+function CodeInput({ value, onChange, disabled, status = "idle" }: { value: string; onChange: (v: string) => void; disabled?: boolean; status?: CodeStatus }) {
   const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => ref.current?.focus(), []);
+  const boxes = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (status === "verifying" || status === "success") return;
+    ref.current?.focus({ preventScroll: true });
+  }, [status]);
+  useEffect(() => {
+    if (status !== "error") return;
+    haptic("error");
+    boxes.current?.animate?.(
+      [{ transform: "translateX(0)" }, { transform: "translateX(-10px)" }, { transform: "translateX(9px)" }, { transform: "translateX(-6px)" }, { transform: "translateX(4px)" }, { transform: "translateX(0)" }],
+      { duration: 380, easing: "ease-out" },
+    );
+    ref.current?.focus({ preventScroll: true });
+  }, [status]);
+  // keep the boxes above the on-screen keyboard
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) return;
+    const onResize = () => focused && boxes.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
+  }, [focused]);
+  const busy = status === "verifying" || status === "sending";
+  const tone = status === "success" ? "border-emerald-500 text-emerald-400" : status === "error" ? "border-red-500/70" : "";
   return (
-    <div className="relative mt-8" onClick={() => ref.current?.focus()}>
+    <div className="relative mt-8" onClick={() => ref.current?.focus()} data-testid="code-boxes" data-status={status}>
       <input
         ref={ref}
+        type="text"
         inputMode="numeric"
+        pattern="[0-9]*"
         autoComplete="one-time-code"
+        enterKeyHint="done"
         aria-label="Verification code"
         disabled={disabled}
         value={value}
+        maxLength={6}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
-        className="absolute inset-0 text-base opacity-0"
+        onPaste={(e) => {
+          const t = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+          if (t) {
+            e.preventDefault();
+            onChange(t);
+          }
+        }}
+        className="absolute inset-0 z-10 w-full cursor-text text-base caret-transparent opacity-0"
       />
-      <div className="flex justify-center gap-2" aria-hidden>
+      <div ref={boxes} className="flex justify-center gap-2" aria-hidden>
         {Array.from({ length: 6 }).map((_, i) => (
           <div
             key={i}
             className={cn(
-              "flex h-14 w-11 items-center justify-center rounded-xl border bg-zinc-900 font-mono text-2xl font-semibold",
-              i === value.length ? "border-emerald-500" : "border-white/10",
+              "relative flex h-14 w-[min(2.9rem,13vw)] items-center justify-center rounded-xl border bg-zinc-900 font-mono text-2xl font-semibold transition-colors duration-150",
+              tone || (focused && i === Math.min(value.length, 5) && !busy ? "border-emerald-500" : "border-white/10"),
+              busy && "opacity-60",
             )}
           >
-            {value[i] ?? ""}
+            {status === "success" && i === 5 ? <Check className="h-6 w-6 text-emerald-400" /> : value[i] ?? ""}
           </div>
         ))}
       </div>
+      {busy && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center" data-testid="code-spinner">
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />
+        </div>
+      )}
     </div>
   );
+}
+
+function KeepSignedIn({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 text-sm text-zinc-400" data-testid="keep-signed-in">
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-emerald-500" />
+      Keep me signed in on this device
+    </label>
+  );
+}
+
+function haptic(kind: "success" | "error") {
+  try {
+    const n = (window as unknown as { OpenLoungeNative?: { haptic?: (t: string) => void } }).OpenLoungeNative;
+    if (n?.haptic) return n.haptic(kind === "success" ? "success" : "error");
+    navigator.vibrate?.(kind === "success" ? 18 : [30, 40, 30]);
+  } catch {
+    /* no haptics */
+  }
+}
+
+const maskTail = (e164: string) => (e164 ? `••• ${e164.replace(/\D/g, "").slice(-4)}` : "your phone");
+const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+// Sign-in speed measurements (Performance timeline + window.__olAuthTiming for tests/QA)
+function perfMark(name: string) {
+  try {
+    performance.mark(name);
+  } catch {
+    /* old engines */
+  }
+}
+function perfMeasure(label: string, from: string) {
+  try {
+    const m = performance.measure(label, from);
+    const w = window as unknown as { __olAuthTiming?: Record<string, number> };
+    (w.__olAuthTiming ??= {})[label] = Math.round(m.duration);
+  } catch {
+    /* old engines */
+  }
+}
+
+/** "+1 423 316 9050" / "4233169050" / "(423) 316-9050" → E.164 using the dial codes we know (else the current country). */
+function parsePhoneIdentifier(raw: string, current: (typeof COUNTRIES)[number]): { e164: string; country: (typeof COUNTRIES)[number]; national: string } | null {
+  const t = raw.trim();
+  if (!/^\+?[\d\s().-]+$/.test(t)) return null;
+  const d = t.replace(/\D/g, "");
+  if (d.length < 7 || d.length > 15) return null;
+  if (t.startsWith("+")) {
+    const c = [...COUNTRIES].sort((a, b) => b.dial.length - a.dial.length).find((x) => d.startsWith(x.dial.slice(1)));
+    if (!c) return null;
+    return { e164: `+${d}`, country: c, national: d.slice(c.dial.length - 1) };
+  }
+  const nat = current.dial === "+1" && d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  return { e164: `+${current.dial.slice(1)}${nat}`, country: current, national: nat };
+}
+
+/** Country from the device locale (en-US → US), else the first entry. */
+function detectCountry(): (typeof COUNTRIES)[number] {
+  try {
+    for (const l of navigator.languages ?? [navigator.language]) {
+      const region = (Intl as unknown as { Locale?: new (s: string) => { maximize(): { region?: string } } }).Locale
+        ? new (Intl as unknown as { Locale: new (s: string) => { maximize(): { region?: string } } }).Locale(l).maximize().region
+        : l.split("-")[1];
+      const c = region && COUNTRIES.find((x) => x.code === region.toUpperCase());
+      if (c) return c;
+    }
+  } catch {
+    /* fall through */
+  }
+  return COUNTRIES[0];
 }
 
 function PhotoPicker({
