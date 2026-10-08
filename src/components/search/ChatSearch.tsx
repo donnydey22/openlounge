@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, List, MessageSquare, Search, User, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { useApp } from "@/components/AppProvider";
 import { normalizeTag } from "@/lib/linkify";
 import { isEmptyQuery, parseSearchQuery } from "@/lib/searchQuery";
 import { hxGet, searchUrl, useHx, type HxMember, type HxMessage, type HxResults } from "@/lib/searchClient";
@@ -36,15 +37,19 @@ export function openHashtag(tag: string) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const threadRoot = () => (document.querySelector('[data-testid="dm-thread"]') as HTMLElement | null) ?? (document.querySelector("#app-scroll") as HTMLElement | null);
 
-function findBubble(m: HxMessage): HTMLElement | null {
-  // DM + group threads mark each message row with data-mid ([data-testid=dm-msg]; group service rows too)
-  const byId = document.querySelector(
-    `[data-message-id="${CSS.escape(m.id)}"], [data-testid="dm-msg"][data-mid="${CSS.escape(m.id)}"], [data-testid="group-service"][data-mid="${CSS.escape(m.id)}"]`,
-  ) as HTMLElement | null;
+type JumpTarget = { id: string; text?: string; at?: number; chat?: { id: string } };
+
+function findBubble(m: JumpTarget): HTMLElement | null {
+  const id = CSS.escape(m.id);
+  // the bubble itself (flash hugs its shape), else the row: DM + group threads mark each message row with data-mid
+  // ([data-testid=dm-msg]; group service rows too)
+  const byId =
+    (document.querySelector(`[data-mid-bubble="${id}"]`) as HTMLElement | null) ??
+    (document.querySelector(`[data-message-id="${id}"], [data-testid="dm-msg"][data-mid="${id}"], [data-testid="group-service"][data-mid="${id}"]`) as HTMLElement | null);
   if (byId) return byId;
-  // fallback for renderers without data-message-id: the smallest element whose text is exactly this message
+  // fallback for renderers without message-id attributes: the smallest element whose text is exactly this message
   const root = threadRoot();
-  if (!root) return null;
+  if (!root || !m.text) return null;
   const want = m.text.replace(/…$/, "").trim().slice(0, 120);
   if (want.length < 2) return null;
   let best: HTMLElement | null = null;
@@ -55,24 +60,87 @@ function findBubble(m: HxMessage): HTMLElement | null {
   return best;
 }
 
-async function jumpToMessage(m: HxMessage) {
+/** The thread's own "Load earlier messages" control (DmThread renders it while older history exists). */
+function loadEarlierButton(): HTMLButtonElement | null {
+  const root = threadRoot();
+  if (!root) return null;
+  for (const b of root.querySelectorAll<HTMLButtonElement>("button")) if (/^(Load earlier messages|Loading…)$/.test(b.textContent?.trim() ?? "")) return b;
+  return null;
+}
+/** Oldest message time currently rendered (bubbles carry data-ts), to stop paging once we're past the target. */
+function oldestRendered(): number {
+  let min = Infinity;
+  for (const el of document.querySelectorAll<HTMLElement>("[data-ts]")) min = Math.min(min, Number(el.dataset.ts) || Infinity);
+  return min;
+}
+
+/** Find the message in the open thread, paging older history in as needed (up to ~40 pages), then scroll + flash it. */
+export async function jumpToMessage(m: JumpTarget, o: { pages?: number } = {}): Promise<boolean> {
   let el = findBubble(m);
   if (!el) {
-    // ask the thread to load history around it (the chat renderer listens), then wait for it to appear
-    window.dispatchEvent(new CustomEvent("openlounge:load-message", { detail: { chat: m.chat.id, id: m.id, at: m.at } }));
-    for (let i = 0; i < 25 && !el; i++) {
-      await sleep(160);
+    // let a renderer that supports it load history around the message; otherwise page back with its own control
+    window.dispatchEvent(new CustomEvent("openlounge:load-message", { detail: { chat: m.chat?.id, id: m.id, at: m.at } }));
+    for (let page = 0, idle = 0; !el && page < (o.pages ?? 40) && idle < 12; ) {
+      await sleep(150);
       el = findBubble(m);
+      if (el) break;
+      const btn = loadEarlierButton();
+      if (!btn) { idle++; continue; } // history fully loaded (or not rendered yet)
+      if (m.at && oldestRendered() < m.at - 1000 && !btn.disabled && btn.textContent?.trim() !== "Loading…") {
+        idle++; // we're already older than the target and it isn't here: it was deleted
+        if (idle > 3) break;
+        continue;
+      }
+      if (btn.textContent?.trim() === "Loading…") continue;
+      btn.click();
+      page++;
+      idle = 0;
+      for (let i = 0; i < 40 && loadEarlierButton()?.textContent?.trim() === "Loading…"; i++) await sleep(100);
     }
   }
   if (!el) return false;
+  // the thread restores its scroll anchor a frame after older history lands; scroll after that, not into the race
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+  const target = el;
+  setTimeout(() => {
+    // late layout shifts (images, header, pinned bar) can push it off-screen: settle it once more without animation
+    const r = target.getBoundingClientRect();
+    if (target.isConnected && (r.bottom < 0 || r.top > window.innerHeight)) target.scrollIntoView({ block: "center" });
+  }, 700);
   el.classList.remove("ol-flash");
   void el.offsetWidth; // restart the animation
   el.classList.add("ol-flash");
-  setTimeout(() => el?.classList.remove("ol-flash"), 1600);
+  const flashed = el;
+  setTimeout(() => flashed.classList.remove("ol-flash"), 2000);
   return true;
+}
+
+/** /messages/<chat>?m=<message id> (search results, shared links): once the thread renders, jump to that message. */
+function useDeepLinkJump(pathname: string | null, toast: (message: string) => void) {
+  useEffect(() => {
+    const chat = chatFromPath(pathname ?? undefined);
+    const id = chat ? new URLSearchParams(window.location.search).get("m") : null;
+    if (!chat || !id) return;
+    let cancelled = false;
+    void (async () => {
+      // wait for the thread's first history render (bubbles or the empty-state header), then let it pin to the bottom
+      for (let i = 0; i < 80 && !cancelled && !document.querySelector("[data-mid-bubble], [data-ts]"); i++) await sleep(100);
+      await sleep(250);
+      if (cancelled) return;
+      const ok = await jumpToMessage({ id, chat: { id: chat } });
+      if (cancelled) return;
+      const u = new URL(window.location.href);
+      u.searchParams.delete("m"); // a reload or back/forward shouldn't jump again
+      window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash);
+      if (!ok) toast("That message is no longer available");
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per thread navigation
+  }, [pathname]);
 }
 
 type HighlightCtor = new (...ranges: Range[]) => unknown;
@@ -130,6 +198,8 @@ export function ChatSearchHost() {
   const [more, setMore] = useState<HxMessage[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const { toast } = useApp();
+  useDeepLinkJump(pathname, toast);
 
   // open requests
   useEffect(() => {
