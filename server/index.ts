@@ -50,6 +50,12 @@ async function main() {
       res.writeHead(308, { Location: www, "Cache-Control": "public, max-age=3600" }).end();
       return;
     }
+    // legal page aliases (store listings / old links): 301 to the canonical pages, query string kept
+    const legal = /^\/(privacy-policy|terms-of-service)\/?(\?.*)?$/.exec(req.url ?? "");
+    if (legal) {
+      res.writeHead(301, { Location: (legal[1] === "privacy-policy" ? "/privacy" : "/terms") + (legal[2] ?? ""), "Cache-Control": "public, max-age=86400" }).end();
+      return;
+    }
     for (const [k, v] of Object.entries(secHeaders)) res.setHeader(k, v);
     metrics.inc("http_requests_total");
     inFlight++;
