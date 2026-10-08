@@ -38,6 +38,7 @@ export const markAudio = (name: string) => {
 };
 import { authFetch } from "@/lib/auth";
 import { setActiveAudioRoom, unlockAudio } from "@/lib/audioUnlock";
+import { LIVEKIT_RTC_CONFIG } from "@/lib/livekitIce";
 
 const MIC_OPTIONS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
@@ -153,9 +154,7 @@ export function useLiveKitAudio({
         await room.connect(body.url, body.token, {
           autoSubscribe: true,
           peerConnectionTimeout: 20_000,
-          rtcConfig: {
-            iceTransportPolicy: "all",
-          },
+          rtcConfig: LIVEKIT_RTC_CONFIG,
         });
         if (cancelled) return room.disconnect();
         setActiveAudioRoom(room);
