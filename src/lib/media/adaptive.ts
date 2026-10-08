@@ -69,7 +69,9 @@ export function measuredBps(): number | null {
 /** Warm the hls.js chunk (tile pointerdown / hover) so the viewer doesn't wait for it after the tap. */
 let hlsP: Promise<unknown> | null = null;
 export function prefetchPlayer(): Promise<unknown> | undefined {
-  if (typeof window === "undefined" || isAppleWebKit() || !hasMse()) return;
+  if (typeof window === "undefined" || !hasMse()) return;
+  // same rule as attachAdaptive: only Apple WebKit *with* native HLS skips hls.js (WebKit elsewhere uses it)
+  if (isAppleWebKit() && nativeHls(document.createElement("video"))) return;
   if (hlsP) return hlsP;
   hlsP = import("hls.js/light").catch(() => (hlsP = null));
   return hlsP;
