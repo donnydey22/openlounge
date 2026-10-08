@@ -9,7 +9,9 @@ import UIKit
 //
 //   VoIP push (PushKit) ─▶ report a CallKit incoming call IMMEDIATELY (iOS kills/throttles apps that don't)
 //   CallKit Answer      ─▶ JS opens https://openlounge.app/call/<id>?accept=1 in the WebView
-//   CallKit Decline     ─▶ POST /api/calls/<id>/decline natively (works with the WebView not loaded)
+//   CallKit Decline     ─▶ POST /api/calls/<id>/decline natively (works with the WebView not loaded). Build 19: with
+//                          the push's per-call decline token (X-Call-Decline-Token: call+callee scoped, expires with
+//                          the ring, single-use), so Decline works even when the 1-hour session has expired.
 //   CallKit End/Mute    ─▶ JS injects openlounge:native-call {call:hangup | call:mute}
 //   page call:*         ─▶ mirror into CallKit (outgoing call, connected, ended, muted) + audio route
 //
@@ -26,6 +28,7 @@ final class OLCall {
   var answeredInPage = false
   var ended = false
   var expiresAt: Date?
+  var declineToken: String?
   var expiryTimer: Timer?
   var pollTimer: Timer?
 
@@ -70,8 +73,17 @@ enum OLCallAuth {
 
 public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
   public static let shared = OLCallManager()
+  #if targetEnvironment(simulator)
+  // Simulator CI only: SIMCTL_CHILD_OL_SIM_API_BASE=http://127.0.0.1:8787 points native calls at the CI decline server.
+  private static var base: URL {
+    if let s = ProcessInfo.processInfo.environment["OL_SIM_API_BASE"], s.hasPrefix("http://127.0.0.1:"), let u = URL(string: s) { return u }
+    return URL(string: "https://openlounge.app")!
+  }
+  #else
   private static let base = URL(string: "https://openlounge.app")!
+  #endif
   private static let idPattern = "^[A-Za-z0-9_-]{1,64}$"
+  private static let declineTokenPattern = "^v1\\.[A-Za-z0-9_-]{8,500}\\.[A-Za-z0-9_-]{20,100}$"
 
   private var started = false
   private var registry: PKPushRegistry?
@@ -121,6 +133,20 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
                              "video": "0", "expiresAt": String(exp)], completion: {})
       }
     }
+    #if targetEnvironment(simulator)
+    // Simulator CI only: the CI sim has no CallKit host UI, so drive the native Decline request directly with the
+    // push's decline token and NO session (nothing signed in): first → 200, the replay → 409.
+    let env = ProcessInfo.processInfo.environment
+    if let tok = env["OL_SIM_DECLINE_TOKEN"], !tok.isEmpty {
+      let cid = env["OL_SIM_DECLINE_CALL"] ?? "simdecline1"
+      for delay in [4.0, 9.0] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+          NSLog("[OLCalls] sim: native decline with the push's decline token (session: %@)", OLCallAuth.fresh() == nil ? "none" : "fresh")
+          self.declineOnServer(cid, declineToken: tok)
+        }
+      }
+    }
+    #endif
   }
 
   func attach(_ m: OpenLoungeCallsModule) {
@@ -210,6 +236,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     let video = d["video"] == "1" || d["video"] == "true"
     var expires: Date?
     if let e = d["expiresAt"], let ms = Double(e), ms > 0 { expires = Date(timeIntervalSince1970: ms / 1000) }
+    let declineToken = d["declineToken"].flatMap { $0.range(of: Self.declineTokenPattern, options: .regularExpression) != nil ? $0 : nil }
 
     let update = CXCallUpdate()
     let handle = (d["callerId"] ?? "").isEmpty ? name : d["callerId"]!
@@ -233,6 +260,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     let uuid = UUID()
     let c = OLCall(callId: ok ? callId : "", uuid: uuid, incoming: true, video: video)
     c.expiresAt = expires
+    c.declineToken = declineToken
     if !stale && !busy { calls[uuid] = c }
 
     provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
@@ -248,7 +276,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
         NSLog("[OLCalls] incoming call reported (stale=%d busy=%d)", stale ? 1 : 0, busy ? 1 : 0)
         if stale || busy {
           self.provider?.reportCall(with: uuid, endedAt: nil, reason: busy ? .unanswered : .remoteEnded)
-          if busy { self.declineOnServer(callId) } // already in a call → reject as busy
+          if busy { self.declineOnServer(callId, declineToken: declineToken) } // already in a call → reject as busy
           return
         }
         self.armRinging(c)
@@ -316,16 +344,20 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     endRinging(c, reason: r)
   }
 
-  private func declineOnServer(_ callId: String) {
+  /// Sends the per-call decline token (works with no session) and the access token too when it's fresh (the server
+  /// falls back to the session if the token is refused). Any 2xx/4xx answer is final: 409 = already declined/answered.
+  private func declineOnServer(_ callId: String, declineToken: String?) {
     guard Self.valid(callId) else { return }
-    guard let t = OLCallAuth.fresh() else {
-      NSLog("[OLCalls] decline not sent: no fresh access token (the caller's ring times out instead)")
+    let t = OLCallAuth.fresh()
+    if t == nil && declineToken == nil {
+      NSLog("[OLCalls] decline not sent: no decline token and no fresh access token (the caller's ring times out instead)")
       return
     }
     var req = URLRequest(url: Self.base.appendingPathComponent("api/calls/\(callId)/decline"))
     req.httpMethod = "POST"
     req.timeoutInterval = 15
-    req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+    if let dt = declineToken { req.setValue(dt, forHTTPHeaderField: "X-Call-Decline-Token") }
+    if let t = t { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     req.httpBody = Data("{}".utf8)
     var bg = UIBackgroundTaskIdentifier.invalid
@@ -334,7 +366,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     }
     bg = UIApplication.shared.beginBackgroundTask(withName: "openlounge-decline") { finish() }
     URLSession.shared.dataTask(with: req) { _, resp, _ in
-      NSLog("[OLCalls] decline → %d", (resp as? HTTPURLResponse)?.statusCode ?? 0)
+      NSLog("[OLCalls] decline → %d (%@)", (resp as? HTTPURLResponse)?.statusCode ?? 0, declineToken != nil ? (t != nil ? "decline token + session" : "decline token") : "session")
       DispatchQueue.main.async { finish() }
     }.resume()
   }
@@ -366,7 +398,8 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     stopTimers(c)
     calls[action.callUUID] = nil
     if c.incoming && !c.answered {
-      declineOnServer(c.callId)
+      declineOnServer(c.callId, declineToken: c.declineToken)
+      c.declineToken = nil // single-use
       emit(["type": "decline", "callId": c.callId])
     } else {
       emit(["type": "hangup", "callId": c.callId])
