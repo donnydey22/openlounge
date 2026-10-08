@@ -5,7 +5,7 @@
   "description": "Open Lounge — a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
   "scripts": {
     "dev": "tsx server/index.ts",
-    "build": "next build",
+    "build": "next build && node scripts/legacy-chunks.mjs",
     "start": "cross-env NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "reset-data": "node -e \"const fs=require('fs');fs.rmSync('data/db.json',{force:true});fs.rmSync('data/avatars',{recursive:true,force:true});console.log('demo data reset')\"",
@@ -64,5 +64,14 @@
     "@types/ws": "^8.18.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
-  }
+  },
+  "browserslist": [
+    "chrome >= 69",
+    "and_chr >= 69",
+    "safari >= 12",
+    "ios_saf >= 12",
+    "firefox >= 78",
+    "edge >= 79",
+    "samsung >= 10"
+  ]
 }

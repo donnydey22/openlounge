@@ -11,6 +11,7 @@ import { AppShell } from "@/components/AppShell";
 import { LinkConfirmHost } from "@/components/chat/LinkConfirm";
 import { ChatSearchHost } from "@/components/search/ChatSearch";
 import { MonetBoot } from "@/components/premium/MonetBoot";
+import { legacyPolyfills } from "@/lib/legacyPolyfills";
 import { CallProvider } from "@/components/calls/CallProvider";
 
 // Inside the Android/iPhone apps the page is an app screen: no pinch/double-tap zoom (which pans the whole UI).
@@ -37,6 +38,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
+        {/* first: runtime polyfills for old Android WebViews (Chrome 69+), before any bundle runs */}
+        <script dangerouslySetInnerHTML={{ __html: legacyPolyfills }} />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <script dangerouslySetInnerHTML={{ __html: appViewportScript }} />
       </head>
