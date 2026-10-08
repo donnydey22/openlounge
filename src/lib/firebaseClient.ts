@@ -51,8 +51,48 @@ export async function warmPhoneAuth(): Promise<void> {
 /** Sends the SMS. `containerId` is an (empty) element id for the invisible reCAPTCHA. */
 export async function sendPhoneCode(e164: string, containerId: string): Promise<PhoneSession> {
   // Installed apps: native Firebase phone auth (Play Integrity / silent APNs) — no web reCAPTCHA at all.
-  if (hasNativePhoneAuth()) return nativeSendPhoneCode(e164, codeMessage);
-  return wrap(await sendWebPhoneCode(e164, containerId));
+  const t0 = Date.now();
+  const native = hasNativePhoneAuth();
+  const watch = native ? null : watchChallenge();
+  const cc = dialCode(e164);
+  try {
+    const s = native ? await nativeSendPhoneCode(e164, codeMessage) : wrap(await sendWebPhoneCode(e164, containerId));
+    reportPhoneEvent({ stage: "send", outcome: "ok", ms: Date.now() - t0, challenge: !!watch?.stop(), path: native ? "native" : "web", cc });
+    return s;
+  } catch (e) {
+    reportPhoneEvent({ stage: "send", outcome: lastErrorCode || "error", ms: Date.now() - t0, challenge: !!watch?.stop(), path: native ? "native" : "web", cc });
+    throw e;
+  } finally {
+    lastErrorCode = "";
+  }
+}
+
+let lastErrorCode = "";
+const dialCode = (e164: string) => {
+  const d = e164.replace(/\D/g, "");
+  return d.startsWith("1") ? "+1" : `+${d.slice(0, 2)}`;
+};
+
+/** Was Google's image challenge (bframe popup) ever visible during this send? */
+function watchChallenge() {
+  let seen = false;
+  const i = setInterval(() => {
+    document.querySelectorAll<HTMLIFrameElement>('iframe[src*="/bframe"]').forEach((f) => {
+      const box = f.closest("body > div") as HTMLElement | null;
+      if (box && getComputedStyle(box).visibility !== "hidden" && f.getBoundingClientRect().height > 100) seen = true;
+    });
+  }, 400);
+  return { stop: () => (clearInterval(i), seen) };
+}
+
+/** Anonymous phone-auth diagnostics (no phone number): see server/authx/routes.ts phoneEvent. */
+export function reportPhoneEvent(ev: { stage: "send" | "confirm" | "abandon" | "fallback"; outcome: string; ms?: number; challenge?: boolean; path?: "web" | "native"; cc?: string }) {
+  try {
+    const body = JSON.stringify({ path: hasNativePhoneAuth() ? "native" : "web", ...ev, outcome: ev.outcome.toLowerCase().replace(/[^a-z0-9/_-]/g, "-").slice(0, 60) });
+    void fetch("/api/auth/phone/event", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true, cache: "no-store" }).catch(() => {});
+  } catch {
+    /* diagnostics are best effort */
+  }
 }
 
 function wrap(c: ConfirmationResult): PhoneSession {
@@ -113,11 +153,15 @@ export function confirmPhoneCode(s: PhoneSession, code: string): Promise<string>
 async function confirmWeb(c: ConfirmationResult, code: string): Promise<string> {
   try {
     const cred = await c.confirm(code);
+    reportPhoneEvent({ stage: "confirm", outcome: "ok" });
     const token = await cred.user.getIdToken();
     void (await auth()).signOut(); // our own session takes over; Firebase is only the verifier
     return token;
   } catch (e) {
-    throw new Error(phoneError(e));
+    const msg = phoneError(e);
+    reportPhoneEvent({ stage: "confirm", outcome: lastErrorCode || "error" });
+    lastErrorCode = "";
+    throw new Error(msg);
   }
 }
 
@@ -127,6 +171,7 @@ function phoneError(e: unknown): string {
 }
 
 function codeMessage(code: string): string {
+  if (code) lastErrorCode = code.replace(/^auth\//, "");
   if (code.includes("billing-not-enabled")) return "Phone sign-in is temporarily unavailable. Please try again soon.";
   if (code.includes("unauthorized-domain")) return "Phone sign-in isn't enabled for this site yet. Please try again soon.";
   if (code.includes("invalid-app-credential")) return "We couldn't verify this device. Refresh the page and try again.";

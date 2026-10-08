@@ -204,16 +204,16 @@ export function AuthFlow() {
   /** "Wrong number? Edit" — abandon the pending send and go back to the number */
   function editNumber() {
     sendAttempt.current++;
+    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => (sending && m.reportPhoneEvent({ stage: "abandon", outcome: "edit-number" }), m.resetPhoneVerifier()));
     setSending(false);
-    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => m.resetPhoneVerifier());
     go("phone");
   }
 
   /** leave the SMS path for an emailed code (a pending send is abandoned, its result ignored) */
   function switchToEmail() {
     sendAttempt.current++;
+    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => (m.reportPhoneEvent({ stage: "fallback", outcome: sending ? "while-sending" : confirmation.current ? "after-sent" : "after-error" }), m.resetPhoneVerifier()));
     setSending(false);
-    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => m.resetPhoneVerifier());
     go("emailCode");
   }
 

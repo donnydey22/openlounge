@@ -652,11 +652,33 @@ async function emailCodeLinkVerify(req: IncomingMessage, res: ServerResponse, bo
   json(res, 200, { ok: true, status: "linked", provider: "email", email: c.email, identities: describeIdentities(store, userId) });
 }
 
+/**
+ * Client-side Firebase phone-auth outcomes (the SMS send happens browser → Google, so the server never sees why a
+ * text didn't arrive). Anonymous diagnostics: stage, Firebase error code, duration, whether a reCAPTCHA challenge
+ * was shown, web/native, country dial code and a coarse platform. Never the phone number.
+ */
+function phoneEvent(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) {
+  if (!allow(`phoneevent:ip:${clientIp(req)}`, { max: 30, windowMs: 10 * 60_000 })) return json(res, 200, { ok: true });
+  const pick = <T extends string>(v: unknown, ok: readonly T[]): T | "other" => (ok.includes(v as T) ? (v as T) : "other");
+  const ua = String(req.headers["user-agent"] ?? "");
+  const ev = {
+    stage: pick(body.stage, ["send", "confirm", "abandon", "fallback"] as const),
+    outcome: typeof body.outcome === "string" && /^[a-z0-9/_-]{1,60}$/.test(body.outcome) ? body.outcome : "other",
+    ms: Math.max(0, Math.min(600_000, Math.round(Number(body.ms) || 0))),
+    challenge: body.challenge === true,
+    path: pick(body.path, ["web", "native"] as const),
+    cc: typeof body.cc === "string" && /^\+\d{1,4}$/.test(body.cc) ? body.cc : null,
+    platform: /OpenLounge|wv\)/.test(ua) ? (/iPhone|iPad/.test(ua) ? "ios-app" : "android-app") : /iPhone|iPad/.test(ua) ? "ios-web" : /Android/.test(ua) ? "android-web" : "desktop",
+  };
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "phone auth event", ...ev }));
+  json(res, 200, { ok: true });
+}
+
 // ---------- router ----------
 
 /** Paths handled here (both /auth/* and /api/auth/*). */
 export const UNIFIED_AUTH_PATH =
-  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link|code\/(?:start|verify|link\/(?:start|verify)))|password\/(?:forgot|reset)|(?:google|apple)\/(?:start|callback))$/;
+  /^\/(?:api\/)?auth\/(providers|exchange|identities|identities\/remove|link\/(?:start|phone)|email\/(?:signup|login|verify|link|code\/(?:start|verify|link\/(?:start|verify)))|password\/(?:forgot|reset)|phone\/event|(?:google|apple)\/(?:start|callback))$/;
 
 /** Top-level browser navigations (redirect responses; not subject to the CORS check — Apple posts from appleid.apple.com). */
 export function isNavigationRoute(path: string) {
@@ -736,6 +758,8 @@ export async function handleAuthApi(req: IncomingMessage, res: ServerResponse, p
     }
     case "/auth/link/phone":
       return await linkPhone(req, res, body), true;
+    case "/auth/phone/event":
+      return phoneEvent(req, res, body), true;
     case "/auth/link/start": {
       const userId = await authed(req);
       if (!userId) return json(res, 401, { ok: false, reason: "invalid" }), true;
