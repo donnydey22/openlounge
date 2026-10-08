@@ -1,5 +1,6 @@
 "use client";
 
+import { RoomBranding } from "@/components/creator/RoomBranding";
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -406,6 +407,7 @@ export default function RoomPage() {
         <RoomEventFeed events={onStage ? presenceFeed.filter((e) => e.type !== "join") : presenceFeed} />
         <div className="relative rounded-[2rem] border border-white/5 bg-zinc-900/70 px-5 pt-6 pb-8 shadow-2xl" style={{ marginTop: "calc(var(--ol-banner-h) + var(--ol-banner-gap))" }}>
           <ReactionBurst reactions={burstReactions} />
+          <RoomBranding hostId={room.hostId} />
           <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
             <span>
               {TOPIC_EMOJI[room.topic] ?? "✨"} {room.topic}
