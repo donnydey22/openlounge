@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useApp } from "@/components/AppProvider";
 import { callEngine } from "@/lib/calls/engine";
+import { installAudioUnlock } from "@/lib/audioUnlock";
 import { useCall } from "./useCall";
 
 // the call UI (and livekit-client inside the engine's dynamic import) only loads when a call exists
@@ -19,6 +20,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     callEngine?.bind(socket, meId);
   }, [socket, meId]);
+
+  // unlock the shared AudioContext on the first tap anywhere (and after iOS interruptions) so an incoming call's
+  // ringtone can play even though it arrives over the WebSocket, outside any gesture
+  useEffect(() => installAudioUnlock(), []);
 
   useEffect(() => {
     if (connected && meId) void callEngine?.resume();

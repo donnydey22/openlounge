@@ -10,7 +10,7 @@ import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
 import { native } from "@/lib/native";
 import { unlockAudio } from "@/lib/audioUnlock";
-import { playBusy, playConnected, playHangup, playRingback, playRingtone, stopTones, unlockTones } from "./tones";
+import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -209,7 +209,6 @@ export class CallEngine {
   // ---------- outgoing ----------
   async start(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, video: boolean) {
     if (this.busy) return { ok: false, error: "You're already in a call" };
-    unlockTones();
     unlockAudio();
     buzz("light");
     this.clearEnd();
@@ -230,6 +229,8 @@ export class CallEngine {
       callee: { id: peer.id, name: peer.name, color: peer.color, photoUrl: peer.photoUrl, username: peer.username },
     };
     this.set({ ...initial(), call: optimistic, role: "caller", ui: "outgoing", camOn: video, v: this.s.v + 1 });
+    // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
+    playRingback({ video, untilMs: optimistic.expiresAt + 2000 });
     void loadLK().catch(() => {});
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip
     this.preMic = this.acquireMic();
@@ -251,6 +252,7 @@ export class CallEngine {
       return { ok: false, error: r.error };
     }
     if (this.s.ui !== "outgoing") return { ok: true }; // hung up while the request was in flight
+    if (ringing() !== "outgoing") playRingback({ video, untilMs: r.call.expiresAt + 2000 });
     this.media = r.media ?? null;
     this.set({ call: r.call });
     if (!this.media) {
@@ -275,7 +277,7 @@ export class CallEngine {
     this.metricSent = false;
     this.set({ ...initial(), call, role: "callee", ui: "incoming", v: this.s.v + 1 });
     void this.req("call:ack", { callId: call.id }).catch(() => {});
-    playRingtone();
+    playRingtone({ video: call.video, untilMs: call.expiresAt + 2000 });
     mark("ring");
     // pre-warm: LiveKit client + signalling connection + mic (only if already permitted: no prompt before Accept)
     void loadLK()
@@ -294,7 +296,6 @@ export class CallEngine {
   async accept(withVideo = false) {
     const call = this.s.call;
     if (!call || this.s.ui !== "incoming") return;
-    unlockTones();
     unlockAudio();
     stopTones();
     buzz("medium");
@@ -354,7 +355,7 @@ export class CallEngine {
     const role = this.s.role;
     if (call.phase === "ringing" && role === "caller" && this.s.ui === "outgoing") {
       this.set({ call });
-      playRingback();
+      if (ringing() !== "outgoing") playRingback({ video: call.video, untilMs: call.expiresAt + 2000 }); // already ringing since the tap
       return;
     }
     if (call.phase === "active") {
