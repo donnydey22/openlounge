@@ -208,10 +208,10 @@ export function MessageActionOverlay({
               type="button"
               data-action={a.key}
               onClick={() => close(a.onSelect)}
-              className={cn("flex w-full items-center gap-3 px-4 text-left text-[15px] hover:bg-white/[0.06] active:bg-white/10", a.danger ? "text-red-400" : "text-zinc-100")}
+              className={cn("flex w-full items-center px-4 text-left text-[15px] hover:bg-white/[0.06] active:bg-white/10", a.danger ? "text-red-400" : "text-zinc-100")}
               style={{ height: ITEM_H }}
             >
-              <span className="flex h-5 w-5 items-center justify-center opacity-90">{a.icon}</span>
+              <span className="mr-3 flex h-5 w-5 items-center justify-center opacity-90">{a.icon}</span>
               {a.label}
             </button>
           ))}

@@ -68,7 +68,7 @@ const Cell = memo(function Cell({
       data-emoji={e}
       data-kind={kind}
       onClick={() => onPick(e)}
-      className="relative flex aspect-square items-center justify-center rounded-xl transition-transform duration-150 hover:bg-white/[0.06] active:scale-90 motion-reduce:transition-none"
+      className="relative flex aspect-square h-11 items-center justify-center rounded-xl transition-transform duration-150 hover:bg-white/[0.06] active:scale-90 motion-reduce:transition-none"
     >
       {kind === "static" ? (
         <span className="leading-none" style={{ fontSize: Math.round(size * 0.82) }} aria-hidden>
@@ -214,7 +214,7 @@ export function EmojiPicker({
   return (
     <div className={cn("flex flex-col overflow-hidden", className)} style={{ height }} data-testid="emoji-picker" data-compact={compact || undefined}>
       <div className={compact ? "flex min-w-0 items-center" : "contents"}>
-      <div className={cn("flex shrink-0 items-center gap-1", compact ? "pt-1.5 pl-2" : "px-3 pt-2")} role="tablist" aria-label="Emoji sets">
+      <div className={cn("flex shrink-0 items-center", compact ? "pt-1.5 pl-2" : "px-3 pt-2")} role="tablist" aria-label="Emoji sets">
         {(
           [
             ["emoji", "Emoji"],
@@ -229,7 +229,7 @@ export function EmojiPicker({
             data-testid={`emoji-tab-${k}`}
             onClick={() => setTab(k)}
             className={cn(
-              "flex h-8 items-center rounded-full px-3 text-xs font-semibold transition-colors",
+              "mr-1 flex h-8 items-center rounded-full px-3 text-xs font-semibold transition-colors",
               tab === k ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300",
             )}
           >
@@ -239,8 +239,8 @@ export function EmojiPicker({
         ))}
       </div>
       <div className={cn("flex min-w-0 items-center gap-2 pt-1.5 pb-1.5", compact ? "flex-1 pr-3 pl-1" : "px-3")}>
-        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-full bg-white/[0.06] px-3 text-zinc-400 focus-within:ring-1 focus-within:ring-emerald-500/50">
-          <Search className="h-4 w-4 shrink-0" />
+        <label className="flex h-9 min-w-0 flex-1 items-center rounded-full bg-white/[0.06] px-3 text-zinc-400 focus-within:ring-1 focus-within:ring-emerald-500/50">
+          <Search className="mr-2 h-4 w-4 shrink-0" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -251,7 +251,7 @@ export function EmojiPicker({
             data-testid="emoji-search"
           />
           {q && (
-            <button type="button" onClick={() => setQ("")} aria-label="Clear search" className="rounded-full p-0.5 hover:text-zinc-200">
+            <button type="button" onClick={() => setQ("")} aria-label="Clear search" className="ml-2 rounded-full p-0.5 hover:text-zinc-200">
               <X className="h-3.5 w-3.5" />
             </button>
           )}
@@ -263,7 +263,7 @@ export function EmojiPicker({
           !gcat || !cat ? (
             <div className={cn(grid, "pt-2")}>
               {Array.from({ length: 32 }, (_, i) => (
-                <div key={i} className="m-1.5 aspect-square animate-pulse rounded-full bg-white/[0.05]" />
+                <div key={i} className="m-1.5 aspect-square h-8 animate-pulse rounded-full bg-white/[0.05]" />
               ))}
             </div>
           ) : gResults ? (
@@ -338,7 +338,7 @@ export function EmojiPicker({
         ) : !cat ? (
           <div className={cn(grid, "pt-2")}>
             {Array.from({ length: 32 }, (_, i) => (
-              <div key={i} className="m-1.5 aspect-square animate-pulse rounded-full bg-white/[0.05]" />
+              <div key={i} className="m-1.5 aspect-square h-8 animate-pulse rounded-full bg-white/[0.05]" />
             ))}
           </div>
         ) : results ? (
@@ -405,9 +405,9 @@ export function EmojiPicker({
 
 function GHead({ label, count, animated }: { label: string; count: number; animated?: boolean }) {
   return (
-    <h3 className="flex items-center gap-1.5 px-4 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
+    <h3 className="flex items-center px-4 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
       {label}
-      <span className="font-normal normal-case text-zinc-600">{count}</span>
+      <span className="ml-1.5 font-normal normal-case text-zinc-600">{count}</span>
       {animated ? (
         <span className="ml-auto rounded-full bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium normal-case tracking-normal text-emerald-400">animated</span>
       ) : (

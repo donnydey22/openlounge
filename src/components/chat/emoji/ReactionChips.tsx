@@ -59,14 +59,14 @@ const Chip = memo(function Chip({ c, arriving, play, onToggle, messageId, live }
       aria-pressed={c.mine}
       aria-label={`${c.emoji} ${c.count}${c.mine ? ", you reacted" : ""}`}
       className={cn(
-        "flex h-7 items-center gap-1 rounded-full pr-2.5 pl-1 text-[12.5px] font-semibold tabular-nums shadow-sm ring-1 transition-colors duration-150 active:scale-95",
+        "m-0.5 flex h-7 items-center rounded-full pr-2.5 pl-1 text-[12.5px] font-semibold tabular-nums shadow-sm ring-1 transition-colors duration-150 active:scale-95",
         c.mine ? "bg-emerald-500 text-on-accent ring-emerald-300/40" : "bg-zinc-800/95 text-zinc-200 ring-white/10 hover:bg-zinc-700",
       )}
     >
       <span className={cn("transition-opacity duration-100", arriving && "opacity-0")}>
         <AnimatedEmoji emoji={c.emoji} size={20} mode={play ? "once" : "static"} replay={play} autoPlay={false} />
       </span>
-      <span data-count className="inline-block min-w-[0.5rem]">
+      <span data-count className="ml-1 inline-block min-w-[0.5rem]">
         {c.count}
       </span>
     </button>
@@ -100,7 +100,7 @@ export const ReactionChips = memo(function ReactionChips({
   if (!chips.length) return null;
   const [playEmoji, playNonce] = playKey ? playKey.split("|") : [null, "0"];
   return (
-    <div className={cn("relative z-[1] -mt-1.5 flex flex-wrap gap-1", mine ? "justify-end pr-1" : "justify-start pl-9")} data-testid="dm-reactions">
+    <div className={cn("relative z-[1] -mt-2 flex flex-wrap", mine ? "justify-end pr-0.5" : "justify-start pl-[34px]")} data-testid="dm-reactions">
       {chips.map((c) => (
         <Chip key={c.emoji} c={c} arriving={arriving === c.emoji} play={playEmoji === c.emoji ? Number(playNonce) : 0} onToggle={onToggle} messageId={messageId} live={live} />
       ))}
