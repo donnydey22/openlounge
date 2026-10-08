@@ -2,8 +2,8 @@
 
 import { createPortal } from "react-dom";
 
-import { lazy, Suspense, useRef, useState } from "react";
-import { Keyboard, SendHorizontal, Smile } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Check, Keyboard, Pencil, SendHorizontal, Smile, X } from "lucide-react";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
@@ -26,6 +26,9 @@ export function ChatComposer({
   above,
   idleAction,
   onPasteFiles,
+  editing,
+  onEditSave,
+  onEditCancel,
 }: {
   onSend: (text: string) => Promise<boolean>;
   onTyping?: () => void;
@@ -46,12 +49,44 @@ export function ChatComposer({
   idleAction?: React.ReactNode;
   /** files pasted into the field (screenshots, copied images) */
   onPasteFiles?: (files: File[]) => void;
+  /** Telegram-style edit mode: the field holds this message's text; send saves (onEditSave), X / Esc cancels */
+  editing?: { id: string; text: string } | null;
+  /** save an edit; return false to keep edit mode open (failed) */
+  onEditSave?: (text: string) => Promise<boolean>;
+  /** leave edit mode (X, Esc, or an empty / unchanged save) */
+  onEditCancel?: () => void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [panel, setPanel] = useState(false);
   const panelH = useEmojiPanelHeight(!!emojiPanel && panel); // fits landscape phones / follows the keyboard
+  // edit mode: park the draft, load the message text, put the caret at the end; restore the draft when it ends
+  const draftRef = useRef<string | null>(null);
+  const editId = editing?.id ?? null;
+  useEffect(() => {
+    const ta = ref.current;
+    const grow = () => {
+      if (!ta) return;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+    };
+    if (editId && editing) {
+      if (draftRef.current === null) draftRef.current = text;
+      setText(editing.text);
+      requestAnimationFrame(() => {
+        if (!ta) return;
+        grow();
+        ta.focus();
+        ta.setSelectionRange(editing.text.length, editing.text.length);
+      });
+    } else if (draftRef.current !== null) {
+      setText(draftRef.current);
+      draftRef.current = null;
+      requestAnimationFrame(grow);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the message being edited only
+  }, [editId]);
   const insert = (emoji: string) => {
     const ta = ref.current;
     const start = ta?.selectionStart ?? text.length;
@@ -65,10 +100,21 @@ export function ChatComposer({
       ta.setSelectionRange(pos, pos);
     });
   };
-  const canSend = text.trim().length > 0 && !disabled && !sending;
+  const isEditing = !!editing;
+  const canSend = (isEditing || text.trim().length > 0) && !disabled && !sending;
 
   const submit = async () => {
     if (!canSend) return;
+    if (editing) {
+      const next = text.trim();
+      // empty or unchanged = cancel (never sends an empty edit)
+      if (!next || next === editing.text.trim()) return onEditCancel?.();
+      setSending(true);
+      const ok = (await onEditSave?.(next)) ?? false;
+      setSending(false);
+      if (ok) onEditCancel?.();
+      return;
+    }
     setSending(true);
     onTypingStop?.();
     const ok = await onSend(text.trim());
@@ -82,6 +128,25 @@ export function ChatComposer({
 
   return (
     <div data-testid="composer">
+    {editing && (
+      <div className="edit-bar-in mb-2 flex items-center gap-2 rounded-xl border-l-2 border-emerald-500 bg-white/[0.04] py-1.5 pr-1 pl-2.5" data-testid="edit-bar">
+        <Pencil className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="text-[12px] font-semibold text-emerald-400">Edit message</div>
+          <div className="truncate text-[13px] text-zinc-400">{editing.text}</div>
+        </div>
+        <button
+          type="button"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => onEditCancel?.()}
+          aria-label="Cancel editing"
+          data-testid="edit-cancel"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/5 hover:text-zinc-100"
+        >
+          <X className="h-[18px] w-[18px]" />
+        </button>
+      </div>
+    )}
     <form
       onSubmit={(e) => {
         e.preventDefault();
@@ -90,7 +155,7 @@ export function ChatComposer({
       className="relative flex items-end gap-2"
     >
       {/* stickers (Telegram-style panel above the composer); sent through the same onSend path */}
-      <StickerButton onSend={onSend} disabled={disabled} compact={compact} />
+      {!isEditing && <StickerButton onSend={onSend} disabled={disabled} compact={compact} />}
       <div className="relative min-w-0 flex-1">
         {above && (
           <div className="absolute inset-x-0 bottom-full z-20">
@@ -128,6 +193,12 @@ export function ChatComposer({
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
           }}
           onKeyDown={(e) => {
+            if (e.key === "Escape" && editing) {
+              e.preventDefault();
+              e.stopPropagation();
+              onEditCancel?.();
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
@@ -166,7 +237,7 @@ export function ChatComposer({
           </span>
         )}
       </div>
-      {idleAction && !text.trim() && !disabled ? (
+      {idleAction && !isEditing && !text.trim() && !disabled ? (
         idleAction
       ) : (
       <button
@@ -175,14 +246,15 @@ export function ChatComposer({
         // keep focus (and the mobile keyboard) in the textarea when tapping send
         onPointerDown={(e) => e.preventDefault()}
         onMouseDown={(e) => e.preventDefault()}
-        aria-label="Send message"
+        aria-label={isEditing ? "Save edit" : "Send message"}
+        data-testid={isEditing ? "edit-save" : undefined}
         className={cn(
           "flex shrink-0 items-center justify-center rounded-full transition",
           compact ? "h-[38px] w-[38px]" : "h-[42px] w-[42px]",
           canSend ? "bg-emerald-500 text-on-accent hover:bg-emerald-400" : "bg-zinc-800 text-zinc-500",
         )}
       >
-        <SendHorizontal className="h-[18px] w-[18px]" />
+        {isEditing ? <Check className="h-5 w-5" /> : <SendHorizontal className="h-[18px] w-[18px]" />}
       </button>
       )}
     </form>

@@ -4,12 +4,12 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
 import { useSafety, type ReportTarget } from "@/lib/safety";
-import type { DirectMessage, DmReaction, DmReactionEvent, DmReadReceipt, PublicUser } from "@/lib/types";
+import { MESSAGE_EDIT_WINDOW_MS, type DirectMessage, type DmReaction, type DmReactionEvent, type DmReadReceipt, type MessageEditedEvent, type PublicUser } from "@/lib/types";
 import "./emoji/chat-fx.css";
 import { bigEmoji, preloadQuickReactions } from "@/lib/emoji/assets";
 import { BigEmoji, bigEmojiSize } from "./emoji/BigEmoji";
@@ -66,6 +66,10 @@ type Item = DirectMessage & {
   /** failed because it stalled offline / timed out (not rejected): re-sent automatically on reconnect too */
   autoRetry?: boolean;
 };
+
+/** Edit is offered on my own sent plain-text messages (no stickers, media, invite / call cards) within the window. */
+const canEdit = (m: Item, meId?: string) =>
+  !!meId && m.fromId === meId && !m.state && !m.kind && !m.call && !m.media && !m.attachments?.length && !parseSticker(m.text) && serverNow() - m.createdAt < MESSAGE_EDIT_WINDOW_MS;
 
 /** A send still unacknowledged after this long shows the quiet retry affordance instead of "Sending…". */
 const SEND_STALL_MS = 12_000;
@@ -299,6 +303,45 @@ export function DmThread({
         : undefined,
     [isGroup, me?.username, amAdmin, group?.pins, request, peerId, toast],
   );
+
+  // ---- edit (Telegram): "Edit" in the menu → the composer holds the text → ✓ saves (optimistic, reverted on error) ----
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [flashEdit, setFlashEdit] = useState<Record<string, number>>({});
+  const applyEdit = useCallback((messageId: string, patch: { text: string; editedAt?: number; editCount?: number }) => {
+    setMessages((list) => (list && list.some((x) => x.id === messageId) ? list.map((x) => (x.id === messageId ? { ...x, ...patch } : x)) : list));
+    setFlashEdit((f) => ({ ...f, [messageId]: (f[messageId] ?? 0) + 1 }));
+  }, []);
+  const saveEdit = useCallback(
+    async (text: string) => {
+      const cur = editing && messagesRef.current?.find((x) => x.id === editing.id);
+      if (!cur) return true;
+      const before = { text: cur.text, editedAt: cur.editedAt, editCount: cur.editCount };
+      applyEdit(cur.id, { text, editedAt: serverNow(), editCount: (cur.editCount ?? 0) + 1 });
+      try {
+        const r = await request<{ message: { text: string; editedAt: number | null; editCount: number } }>("dm:edit", { chatId: peerId, messageId: cur.id, text });
+        applyEdit(cur.id, { text: r.message.text, editedAt: r.message.editedAt ?? undefined, editCount: r.message.editCount || undefined });
+        return true;
+      } catch (e) {
+        setMessages((list) => (list ? list.map((x) => (x.id === cur.id ? { ...x, ...before } : x)) : list));
+        toast(friendlyMessage(e, "Couldn't edit that message"));
+        return false;
+      }
+    },
+    [editing, applyEdit, request, peerId, toast],
+  );
+  useEffect(() => setEditing(null), [peerId]);
+  useEffect(() => {
+    if (editing && messages && !messages.some((x) => x.id === editing.id)) setEditing(null); // deleted meanwhile
+  }, [editing, messages]);
+  // edits from the other side / my other devices (1:1: keyed by the other person; groups: the group id)
+  useEffect(() => {
+    if (!socket) return;
+    const onEdited = (d: MessageEditedEvent) => d.conversationId === peerId && applyEdit(d.messageId, { text: d.text, editedAt: d.editedAt, editCount: d.editCount });
+    socket.on("message_edited", onEdited);
+    return () => {
+      socket.off("message_edited", onEdited);
+    };
+  }, [socket, peerId, applyEdit]);
 
   // ---- delete (Telegram): dialog → dust + collapse → "Message deleted • Undo" for 5 s → committed on the server ----
   const [delAsk, setDelAsk] = useState<Item[] | null>(null);
@@ -984,6 +1027,8 @@ export function DmThread({
     }
     if (m.fromId !== me?.id && !m.state && !peer?.isBot)
       out.push({ key: "report", label: "Report", danger: true, icon: <Flag className="h-[18px] w-[18px]" />, onSelect: () => onReportMessage(m) });
+    if (canEdit(m, me?.id))
+      out.push({ key: "edit", label: "Edit", icon: <Pencil className="h-[18px] w-[18px]" />, onSelect: () => (setSelected(null), setEditing({ id: m.id, text: m.text })) });
     out.push({ key: "select", label: "Select", icon: <CheckCircle2 className="h-[18px] w-[18px]" />, onSelect: () => setSelected(new Set([keyOf(m)])) });
     if (canDelete(m))
       out.push({ key: "delete", label: "Delete", danger: true, icon: <Trash2 className="h-[18px] w-[18px]" />, onSelect: () => setDelAsk([m]) });
@@ -1359,6 +1404,7 @@ export function DmThread({
                   selecting={!!selected}
                   selected={!!selected?.has(keyOf(m))}
                   onSelect={toggleSelect}
+                  editFlash={flashEdit[m.id] ?? 0}
                 />
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
@@ -1441,6 +1487,9 @@ export function DmThread({
         <div className="min-w-0 flex-1">
         <ChatComposer
           onSend={send}
+          editing={editing}
+          onEditSave={saveEdit}
+          onEditCancel={() => setEditing(null)}
           idleAction={canAttach ? <MediaVoiceButton ctx={mediaCtx} disabled={messages === null} /> : undefined}
           onPasteFiles={canAttach ? setPastedFiles : undefined}
           onTyping={onTyping}
@@ -1509,6 +1558,7 @@ const MessageRow = memo(function MessageRow({
   selecting,
   selected,
   onSelect,
+  editFlash = 0,
 }: {
   m: Item;
   mine: boolean;
@@ -1540,6 +1590,8 @@ const MessageRow = memo(function MessageRow({
   selecting?: boolean;
   selected?: boolean;
   onSelect?: (m: Item) => void;
+  /** bumps when this message was edited live (crossfade the new text) */
+  editFlash?: number;
 }) {
   const sticker = useMemo(() => parseSticker(m.text), [m.text]); // sticker message: large, no bubble
   const parts = useMemo(() => (sticker ? null : bigEmoji(m.text)), [m.text, sticker]);
@@ -1707,7 +1759,18 @@ const MessageRow = memo(function MessageRow({
           ) : parts ? (
             <BigEmoji parts={parts} replay={interactNonce} onTap={(e, at) => onBigTap(m, e, at)} />
           ) : (
-            group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text
+            <span key={editFlash} className={editFlash ? "edit-flash" : undefined}>
+              {group ? <MentionText text={m.text} meUsername={group.meUsername} mine={mine} /> : m.text}
+            </span>
+          )}
+          {!!m.editedAt && !sticker && (
+            <span
+              className={cn("ml-1.5 inline-block align-baseline text-[11px] leading-none select-none", mine && !parts ? "opacity-70" : "text-zinc-500", parts && "block text-center")}
+              title={`Edited ${formatFull(m.editedAt)}`}
+              data-testid="dm-edited"
+            >
+              edited
+            </span>
           )}
         </div>
         )}

@@ -39,3 +39,11 @@
   .undo-ring { animation: none; }
   .toast-in { animation: fade-in 0.15s ease-out; }
 }
+/* message editing: the "Edit message" bar slides up over the composer; the edited text crossfades in the bubble */
+@keyframes edit-bar-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.edit-bar-in { animation: edit-bar-in 0.2s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes edit-flash { from { opacity: 0.35; filter: blur(1.5px); } to { opacity: 1; filter: none; } }
+.edit-flash { animation: edit-flash 0.32s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .edit-bar-in, .edit-flash { animation: none; }
+}
