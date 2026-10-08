@@ -212,6 +212,8 @@ export interface CallInfo {
   expiresAt: number;
   caller: CallPeer;
   callee: CallPeer;
+  /** active call: participants currently without a connection (inside the reconnect grace) */
+  offline?: string[];
 }
 /** What a participant needs to connect media: LiveKit URL + token (pre-created at ring time). */
 export interface CallMedia {

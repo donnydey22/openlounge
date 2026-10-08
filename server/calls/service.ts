@@ -17,6 +17,14 @@ export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
 export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", 60_000);
 /** caller lost their socket while it was still ringing → cancel after this */
 export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
+/**
+ * Mid-call reconnect grace: an ACTIVE call survives either participant losing every WebSocket for this long
+ * (tunnel, elevator, Wi-Fi → cellular). 45 s because LiveKit's own client retry schedule (resume with ICE restart, then
+ * full rejoin) runs ≈ 44–52 s and its server keeps a dropped participant ≈ 20 s for a resume; most real drops are
+ * < 30 s; and past ~45 s the other person is better served by "Call ended · connection lost" + one-tap call back
+ * than by more silence. The heartbeat notices a dead socket within ~10–20 s, so the wall-clock budget is ~55–65 s.
+ */
+export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", 45_000);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 const ENDED_KEEP_MS = 10 * 60_000; // ended calls answer call:get ("Call ended") for a while
 const METRIC_KEEP = 500;
@@ -61,6 +69,8 @@ interface CallRec {
   timer: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
+  /** active call: when each participant lost their last socket (reconnect grace) */
+  goneSince: Map<string, number>;
 }
 
 export type StartResult =
@@ -115,6 +125,7 @@ export class CallService {
       expiresAt: c.createdAt + CALL_RING_TIMEOUT_MS,
       caller: this.d.peer(c.callerId) ?? anon(c.callerId),
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
+      ...(c.goneSince?.size ? { offline: [...c.goneSince.keys()] } : {}),
     };
   }
 
@@ -173,6 +184,7 @@ export class CallService {
       timer: null,
       pushed: false,
       orphanSince: null,
+      goneSince: new Map(),
     };
     this.calls.set(c.id, c);
     if (this.isBusy(calleeId)) {
@@ -315,7 +327,7 @@ export class CallService {
     if (c && (c.phase === "calling" || c.phase === "ringing")) this.finish(c, "missed");
   }
 
-  private finish(c: CallRec, outcome: CallOutcome, opts: { by?: string; silentToCallee?: boolean } = {}) {
+  private finish(c: CallRec, outcome: CallOutcome, opts: { by?: string; silentToCallee?: boolean; reason?: string } = {}) {
     if (c.phase === "ended") return;
     const wasRinging = c.phase !== "active";
     c.phase = "ended";
@@ -325,7 +337,7 @@ export class CallService {
     c.timer = null;
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;
-    if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null });
+    if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
     else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
     this.d.closeMedia(c.id);
@@ -348,7 +360,29 @@ export class CallService {
         } else c.orphanSince = null;
         continue;
       }
-      // active and neither side has a socket (both apps killed): end it
+      // active: each side may drop off (no socket) for CALL_RECONNECT_GRACE_MS; the other side is told so it can
+      // show "Bea is reconnecting…". Past the grace the call ends as completed (duration kept), never as missed.
+      let lost: string | null = null;
+      for (const u of [c.callerId, c.calleeId]) {
+        const other = u === c.callerId ? c.calleeId : c.callerId;
+        if (!this.d.isConnected(u)) {
+          if (!c.goneSince.has(u)) {
+            c.goneSince.set(u, now);
+            this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_RECONNECT_GRACE_MS });
+            this.d.log?.("call peer offline", { callId: c.id });
+          } else if (now - c.goneSince.get(u)! > CALL_RECONNECT_GRACE_MS) lost ??= u;
+        } else if (c.goneSince.has(u)) {
+          this.d.log?.("call peer back", { callId: c.id, offlineMs: now - c.goneSince.get(u)! });
+          c.goneSince.delete(u);
+          this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: true });
+        }
+      }
+      if (lost) {
+        this.d.log?.("call lost", { callId: c.id });
+        this.finish(c, "completed", { by: lost, reason: "connection_lost" });
+        continue;
+      }
+      // belt and braces: neither side has a socket (both apps killed)
       if (!this.d.isConnected(c.callerId) && !this.d.isConnected(c.calleeId)) {
         c.orphanSince ??= now;
         if (now - c.orphanSince > CALL_ORPHAN_MS) this.finish(c, "completed");
