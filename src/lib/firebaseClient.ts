@@ -68,12 +68,30 @@ async function sendWebPhoneCode(e164: string, containerId: string): Promise<Conf
   try {
     return await signInWithPhoneNumber(a, e164, verifier);
   } catch (e) {
-    verifier.clear();
+    try {
+      verifier?.clear();
+    } catch {
+      /* reset by resetPhoneVerifier */
+    }
     verifier = null;
     throw new Error(phoneError(e));
   } finally {
     document.documentElement.classList.remove("ol-recaptcha-active");
   }
+}
+
+/** Abandon a pending web send (they chose email instead): drop the verifier and any open reCAPTCHA challenge. */
+export function resetPhoneVerifier() {
+  try {
+    verifier?.clear();
+  } catch {
+    /* already gone */
+  }
+  verifier = null;
+  document.querySelectorAll(".ol-recaptcha-host").forEach((el) => el.remove());
+  // Google appends the challenge popup (bframe) straight to <body>, outside our host
+  document.querySelectorAll('iframe[src*="recaptcha/api2/bframe"],iframe[src*="recaptcha/enterprise/bframe"]').forEach((f) => f.closest("body > div")?.remove());
+  document.documentElement.classList.remove("ol-recaptcha-active");
 }
 
 /** Confirms the 6-digit code; returns a Firebase ID token for the server (then signs out of Firebase locally). */

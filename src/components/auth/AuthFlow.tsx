@@ -75,6 +75,7 @@ export function AuthFlow() {
   }, []);
   // SMS trouble (error / timeout / no text) → offer "Email me a code instead"
   const [smsTrouble, setSmsTrouble] = useState(false);
+  const sendAttempt = useRef(0);
 
   // phone + code
   const [country, setCountry] = useState(COUNTRIES[0]);
@@ -131,15 +132,21 @@ export function AuthFlow() {
 
   async function sendCode() {
     if (busy) return;
+    const attempt = ++sendAttempt.current;
     setBusy(true);
     setError(null);
     setSmsTrouble(false);
+    // Slow send (reCAPTCHA image challenge, flaky network): offer email after a few seconds but KEEP waiting —
+    // a hard timeout here used to abort while the person was still solving the challenge (and then the text
+    // arrived with no code screen to type it into).
+    const soft = setTimeout(() => sendAttempt.current === attempt && setSmsTrouble(true), SMS_SOFT_MS);
     try {
       if (authCfg?.firebase) {
         const e164 = `+${(country.dial + digits).replace(/\D/g, "")}`;
         const { sendPhoneCode } = await import("@/lib/firebaseClient");
-        // reCAPTCHA / SMS can hang (blocked script, flaky network): never spin forever
-        confirmation.current = await withTimeout(sendPhoneCode(e164, "recaptcha-container"), SMS_SEND_TIMEOUT_MS, "We couldn't send the text. Try again, or get a code by email instead.");
+        const session = await withTimeout(sendPhoneCode(e164, "recaptcha-container"), SMS_SEND_TIMEOUT_MS, "We couldn't send the text. Try again, or get a code by email instead.");
+        if (sendAttempt.current !== attempt) return; // they switched to email meanwhile
+        confirmation.current = session;
         setPhoneE164(e164);
         setDemoCode(null);
         setResendIn(30);
@@ -150,17 +157,28 @@ export function AuthFlow() {
         return;
       }
       const res = await request<{ phone: string; demoCode?: string; resendIn: number }>("auth:requestCode", { phone: country.dial + digits });
+      if (sendAttempt.current !== attempt) return;
       setPhoneE164(res.phone);
       setDemoCode(res.demoCode ?? null);
       setResendIn(res.resendIn);
       setCode("");
       go("code");
     } catch (e) {
+      if (sendAttempt.current !== attempt) return;
       setError((e as Error).message);
       setSmsTrouble(true);
     } finally {
-      setBusy(false);
+      clearTimeout(soft);
+      if (sendAttempt.current === attempt) setBusy(false);
     }
+  }
+
+  /** leave the SMS path for an emailed code (a pending send is abandoned, its result ignored) */
+  function switchToEmail() {
+    sendAttempt.current++;
+    setBusy(false);
+    if (authCfg?.firebase) void import("@/lib/firebaseClient").then((m) => m.resetPhoneVerifier());
+    go("emailCode");
   }
 
   // on the code screen: no text after a while → show the email option too
@@ -512,7 +530,7 @@ export function AuthFlow() {
             />
           </div>
           <ErrorText>{error}</ErrorText>
-          {smsTrouble && !linking && <EmailFallback onClick={() => go("emailCode")} />}
+          {smsTrouble && !linking && <EmailFallback onClick={switchToEmail} />}
           <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">
             By entering your number, you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>, including our zero-tolerance policy for objectionable content and abusive behavior. We&apos;ll text you a 6-digit code.
           </p>
@@ -801,7 +819,7 @@ export function AuthFlow() {
             </button>
           )}
         </div>
-        {smsTrouble && !linking && <EmailFallback onClick={() => go("emailCode")} />}
+        {smsTrouble && !linking && <EmailFallback onClick={switchToEmail} />}
         <Footer>
           <PrimaryButton onClick={() => verify(code)} disabled={code.length !== 6} busy={busy}>
             Verify <ArrowRight className="h-4 w-4" />
@@ -1033,10 +1051,12 @@ export function AuthFlow() {
 
 // ---------------- building blocks ----------------
 
-/** reCAPTCHA + SMS send budget on the web (native shells have their own 120 s timeout). */
-const SMS_SEND_TIMEOUT_MS = 25_000;
+/** Last-resort cap on a send that never settles (the challenge itself can take a while to solve). */
+const SMS_SEND_TIMEOUT_MS = 180_000;
+/** Send still pending after this long → show "Send code to email instead" next to the spinner. */
+const SMS_SOFT_MS = 12_000;
 /** No text after this long on the code screen → also offer the email code. */
-const SMS_WAIT_MS = 20_000;
+const SMS_WAIT_MS = 30_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -1062,7 +1082,7 @@ function EmailFallback({ onClick }: { onClick: () => void }) {
       data-testid="sms-email-fallback"
       className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 py-3 text-[15px] font-semibold text-zinc-100 hover:bg-white/5"
     >
-      <Mail className="h-4 w-4" /> Email me a code instead
+      <Mail className="h-4 w-4" /> Send code to email instead
     </button>
   );
 }

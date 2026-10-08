@@ -44,7 +44,8 @@ import { dropTicket, issueTicket } from "./signup";
 import { verifyPhoneIdToken } from "../firebase";
 import { normalizePhone } from "../otp";
 import { bg, push } from "../push";
-import { alreadyRegisteredMail, emailCodeMail, resetPasswordMail, sendMail, verifyEmailMail } from "./mailer";
+import { alreadyRegisteredMail, emailCodeMail, resetPasswordMail, verifyEmailMail } from "./mailer";
+import { safeSendMail } from "./mailGuard";
 
 type OAuthProvider = "google" | "apple";
 const isProd = () => process.env.NODE_ENV === "production";
@@ -406,12 +407,12 @@ async function emailSignup(req: IncomingMessage, res: ServerResponse, body: Reco
   // per-email budget: beyond it we quietly send nothing (the response is identical either way)
   if (!allow(`signup:email:${email}`, LIMITS.signupEmail)) return json(res, 200, generic);
   if (existing) {
-    await sendMail(alreadyRegisteredMail(email, `${base}/?signin=email`, `${base}/forgot-password`));
+    await safeSendMail(alreadyRegisteredMail(email, `${base}/?signin=email`, `${base}/forgot-password`));
     return json(res, 200, generic);
   }
   const passwordHash = await hashPassword(body.password as string);
   const token = await createCode("verify_email", { email, passwordHash, userId: linkUserId }, VERIFY_TTL_MS);
-  await sendMail(verifyEmailMail(email, `${base}/verify-email?token=${token}`, !!linkUserId));
+  await safeSendMail(verifyEmailMail(email, `${base}/verify-email?token=${token}`, !!linkUserId));
   json(res, 200, generic);
 }
 
@@ -501,7 +502,7 @@ async function forgotPassword(req: IncomingMessage, res: ServerResponse, body: R
     const now = Date.now();
     await store.flush(); // the reset row references users(id)
     await store.oneTime.put("reset", { hash: sha256(token), purpose: "reset", userId, email, createdAt: now, expiresAt: now + RESET_TTL_MS });
-    await sendMail(resetPasswordMail(email, `${publicBaseUrl(req.headers.host)}/reset-password?token=${token}`, !!store.passwordHashOf(userId)));
+    await safeSendMail(resetPasswordMail(email, `${publicBaseUrl(req.headers.host)}/reset-password?token=${token}`, !!store.passwordHashOf(userId)));
   }
   json(res, 200, generic);
 }
@@ -558,7 +559,7 @@ async function emailCodeStart(req: IncomingMessage, res: ServerResponse, body: R
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   if (linkUserId) await store.flush().catch(() => {}); // the row references users(id)
   await store.emailOtp.put({ key, email, purpose, userId: linkUserId, codeHash: otpHash(key, code), createdAt: now, expiresAt: now + EMAIL_CODE_TTL_MS });
-  await sendMail(emailCodeMail(email, code, !!linkUserId, !linkUserId && !!store.findIdentity("email", email)?.verified));
+  await safeSendMail(emailCodeMail(email, code, !!linkUserId, !linkUserId && !!store.findIdentity("email", email)?.verified));
   json(res, 200, { ok: true, sent: true, email, resendIn: EMAIL_CODE_COOLDOWN_MS / 1000, expiresIn: EMAIL_CODE_TTL_MS / 1000 });
 }
 
