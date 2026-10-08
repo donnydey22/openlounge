@@ -241,7 +241,7 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
       style={{ aspectRatio: String(box.ar) }}
     >
       {/* blurred placeholder: the tile has its final size from the first frame (no layout shift) */}
-      {a.ph && <img src={a.ph} alt="" aria-hidden className={cn("absolute inset-0 h-full w-full scale-110 object-cover blur-xl", viewOnceLocked && "blur-2xl")} draggable={false} />}
+      {a.ph && <img src={a.ph} alt="" aria-hidden decoding="sync" className={cn("absolute inset-0 h-full w-full scale-110 object-cover blur-xl", viewOnceLocked && "blur-2xl")} draggable={false} />}
       {!viewOnceLocked && src && (
         <ThumbImage a={a} urls={urls} src={src} local={local} width={box.width} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")} />
       )}
@@ -567,7 +567,7 @@ const AlbumPage = memo(function AlbumPage({
       data-testid="album-page"
       className="relative h-full w-full shrink-0 cursor-pointer snap-center overflow-hidden [scroll-snap-stop:always]"
     >
-      {a.ph && <img src={a.ph} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" draggable={false} />}
+      {a.ph && <img src={a.ph} alt="" aria-hidden decoding="sync" className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" draggable={false} />}
       {src && (
         <ThumbImage a={a} urls={urls} src={src} local={local} width={330} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full transition-opacity duration-200 motion-reduce:transition-none", fit, loaded || local ? "opacity-100" : "opacity-0")} />
       )}

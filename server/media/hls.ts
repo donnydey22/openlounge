@@ -77,14 +77,15 @@ export async function encodeRungs(src: string, hlsDir: string, rungs: number[], 
       "-c:v", "libx264", "-preset", "veryfast",
       "-profile:v", s.high ? "high" : "main", "-level:v", "3.1",
       "-crf", "23", "-maxrate", `${s.v}k`, "-bufsize", `${s.v * 2}k`,
-      // closed GOP, IDR exactly every 2 s on the same timestamps in every rendition → aligned switch points
-      "-g", "300", "-keyint_min", "1", "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*2)",
+      // closed GOP, IDRs on the same timestamps in every rendition → aligned switch points: 0, 1 s (short first
+      // segment → faster first frame on slow links), then every 2 s (2, 4, 6, …)
+      "-g", "300", "-keyint_min", "1", "-sc_threshold", "0", "-force_key_frames", `expr:if(lt(n_forced,2),gte(t,n_forced),gte(t,(n_forced-1)*2))`,
       "-fpsmax", "30",
       ...(p.audio ? ["-c:a", "aac", "-b:a", `${s.a}k`, "-ac", "2", "-ar", "48000"] : []),
       "-threads", String(FFMPEG_THREADS),
       "-map_metadata", "-1", "-map_chapters", "-1",
-      // 2 s parts (one GOP each); regroup() then joins them into ~4 s segments after a short 2 s first one
-      "-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "vod",
+      // one GOP per part (1 s, 1 s, then 2 s each); regroup() joins them into a 1 s first segment, then ~4 s ones
+      "-f", "hls", "-hls_time", "1", "-hls_list_size", "0", "-hls_playlist_type", "vod",
       "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments",
       "-hls_fmp4_init_filename", "init.mp4",
       "-hls_segment_filename", path.join(out, "p_%05d.m4s"),
@@ -98,8 +99,14 @@ export async function encodeRungs(src: string, hlsDir: string, rungs: number[], 
   for (const rr of rungs) regroup(path.join(hlsDir, `r${rr}`));
 }
 
+/** first segment length (s): the bytes a slow link must fetch before the first frame */
+export const HLS_FIRST_SEG_S = 1;
+/** later segments end on multiples of this (s) */
+export const HLS_SEG_S = 4;
+
 /**
- * Join the 2 s fMP4 parts into segments: the first stays ~2 s (fast first frame), then pairs → ~4 s.
+ * Join the fMP4 parts (one GOP each) into segments ending on fixed timeline boundaries: the first at 1 s (fast first
+ * frame), then every 4 s (1→4, 4→8, …). Boundaries are absolute, so every rendition cuts at the same timestamps.
  * fMP4 fragments (moof+mdat) concatenate into a valid CMAF segment; every segment still starts on an IDR.
  */
 export function regroup(dir: string) {
@@ -111,14 +118,26 @@ export function regroup(dir: string) {
     else if (l && !l.startsWith("#")) parts.push({ dur, file: l });
   }
   const groups: { dur: number; files: string[] }[] = [];
-  parts.forEach((p, i) => {
-    const last = groups[groups.length - 1];
-    if (i === 0 || !last || last.files.length >= 2 || groups.length === 1) groups.push({ dur: p.dur, files: [p.file] });
-    else {
-      last.dur += p.dur;
-      last.files.push(p.file);
+  let open: { dur: number; files: string[] } | null = null;
+  let end = 0;
+  let boundary = HLS_FIRST_SEG_S;
+  for (const p of parts) {
+    if (!open) groups.push((open = { dur: 0, files: [] }));
+    open.dur += p.dur;
+    open.files.push(p.file);
+    end += p.dur;
+    if (end >= boundary - 0.1) {
+      open = null;
+      while (boundary <= end + 0.1) boundary = boundary < HLS_SEG_S ? HLS_SEG_S : boundary + HLS_SEG_S;
     }
-  });
+  }
+  // a sliver at the very end (< 1 s) rides on the previous segment instead of costing its own request
+  const tail = groups[groups.length - 1];
+  if (groups.length > 2 && tail.dur < 1) {
+    groups.pop();
+    groups[groups.length - 1].dur += tail.dur;
+    groups[groups.length - 1].files.push(...tail.files);
+  }
   const out = ["#EXTM3U", "#EXT-X-VERSION:7", `#EXT-X-TARGETDURATION:${Math.max(1, Math.ceil(Math.max(...groups.map((g) => g.dur), 1) - 0.001))}`, "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-INDEPENDENT-SEGMENTS", '#EXT-X-MAP:URI="init.mp4"'];
   groups.forEach((g, i) => {
     const name = `seg_${String(i).padStart(5, "0")}.m4s`;

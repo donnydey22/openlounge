@@ -456,7 +456,8 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   const plText = await pl.text();
   assert.match(plText, new RegExp(`#EXT-X-MAP:URI="init\\.mp4\\?${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
   const durs = [...plText.matchAll(/#EXTINF:([\d.]+)/g)].map((x) => Number(x[1]));
-  assert.ok(durs[0] <= 2.1 && durs[1] >= 3.9, durs.join(","));
+  // 1 s first segment, then segments ending on 4 s boundaries (1→4, 4→8, …)
+  assert.ok(durs[0] <= 1.1 && Math.abs(durs[1] - 3) < 0.15 && (durs.length < 4 || Math.abs(durs[2] - 4) < 0.15), durs.join(","));
   const seg = await fetch(`${base}${prefix}r240/seg_00001.m4s?${q}`, { headers: { range: "bytes=0-99" } });
   assert.equal(seg.status, 206);
   assert.equal(seg.headers.get("content-type"), "video/iso.segment");
