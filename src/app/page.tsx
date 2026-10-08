@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { RoomCard } from "@/components/RoomCard";
+import { SponsoredSlot } from "@/components/sponsored/Sponsored";
 import { CreateRoomSheet } from "@/components/CreateRoomSheet";
 import { useApp } from "@/components/AppProvider";
 import { TOPIC_EMOJI, cn, firstName } from "@/lib/utils";
@@ -59,6 +60,7 @@ export default function HallwayPage() {
               It&apos;s quiet in here. Start a room and get the conversation going.
             </div>
           )}
+          {roomsLoaded && <SponsoredSlot placement="rooms" />}
         </div>
       </main>
 
