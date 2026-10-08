@@ -27,7 +27,8 @@
     "test:store": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/store-compliance/*.test.ts",
     "test:invites": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/invites/*.test.ts",
     "test:groups": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/groups/*.test.ts",
-    "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts"
+    "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts",
+    "test:stickers": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/stickers/*.test.ts"
   },
   "engines": {
     "node": ">=20.9"
@@ -38,6 +39,7 @@
     "firebase-admin": "^14.5.0",
     "livekit-client": "^2.22.3",
     "livekit-server-sdk": "^2.19.1",
+    "lottie-web": "^5.13.0",
     "lucide-react": "^1.52.0",
     "next": "^16.3.8",
     "nodemailer": "^7.0.13",

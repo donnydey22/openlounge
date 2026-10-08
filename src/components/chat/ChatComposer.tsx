@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { SendHorizontal } from "lucide-react";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { StickerButton } from "../stickers/StickerButton";
 
 /** Single-line-feel composer: Enter sends, Shift+Enter adds a newline. */
 export function ChatComposer({
@@ -49,8 +50,10 @@ export function ChatComposer({
         e.preventDefault();
         submit();
       }}
-      className="flex items-end gap-2"
+      className="relative flex items-end gap-2"
     >
+      {/* stickers (Telegram-style panel above the composer); sent through the same onSend path */}
+      <StickerButton onSend={onSend} disabled={disabled} compact={compact} />
       <div className="relative flex-1">
         <textarea
           ref={ref}

@@ -15,6 +15,7 @@ import { demoOtpEnabled, firebaseConfigured } from "./firebase";
 import { log, metrics, requestContext } from "./log";
 import { BadJson, BodyTooLarge, RateLimiter, clientIp, requestId, securityHeaders, sendJson, wwwRedirect } from "./httpsec";
 import { isTransientPgError } from "./pg";
+import { handleStickerRoute, initStickers, isStickerRoute } from "./stickers/api";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
@@ -25,6 +26,8 @@ async function main() {
   await store.init();
   logProviderStatus();
   initPush();
+  // sticker library (catalog + PayPal); non-fatal: chat works without it
+  void initStickers().catch(() => {});
   startDeletionQueue(); // store compliance: operator-initiated account deletions (account_deletion_requests)
   log.info("phone auth", { firebase: firebaseConfigured(), demoOtp: demoOtpEnabled() });
 
@@ -82,6 +85,12 @@ async function main() {
       const tok = process.env.METRICS_TOKEN;
       if ((tok && bearer(req) !== tok) || (!tok && !dev)) return json(res, 404, { ok: false, error: "Not found" });
       res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4", "Cache-Control": "no-store" }).end(metrics.prometheus());
+      return;
+    }
+    // sticker library: assets, catalog API, PayPal webhook, Apple Pay domain file (server/stickers/api.ts)
+    if (isStickerRoute(req.url ?? "")) {
+      if ((req.url ?? "").startsWith("/api/") && limited(req, res, "api")) return;
+      void handleStickerRoute(req, res);
       return;
     }
     // uploaded profile photos: /avatars/<userId>?v=<version>

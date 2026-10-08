@@ -6,6 +6,7 @@ import type { Ack, DirectMessage, Role } from "../src/lib/types";
 import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, createJoinToken, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
+import { stickers } from "./stickers/service";
 import { isGroupId } from "./conversation";
 import { attachGroupHandlers, groupHistory, groupMessage, groupTyping, groups, wireGroups } from "./groups";
 import { OtpService, normalizePhone } from "./otp";
@@ -526,6 +527,8 @@ export function registerRealtime(io: WsHub) {
     socket.on("chat:send", ({ roomId, text }: { roomId: string; text: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         if (store.socketOf(roomId, userId) !== socket.id) return ack({ ok: false, error: "Join the room to chat" });
+        const stickerErr = stickers().sendError(userId, text); // paid sticker packs: buyers only
+        if (stickerErr) return ack({ ok: false, error: stickerErr });
         ack(store.sendChat(roomId, userId, text));
       }),
     );
@@ -558,6 +561,8 @@ export function registerRealtime(io: WsHub) {
     socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         presence.activity(userId);
+        const stickerErr = stickers().sendError(userId, text); // paid sticker packs: buyers only
+        if (stickerErr) return ack({ ok: false, error: stickerErr });
         ack(store.sendDm(userId, to, text, clientId));
       }),
     );

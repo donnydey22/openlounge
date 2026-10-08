@@ -1,0 +1,2638 @@
+{
+ "generatedAt": "2026-10-08T04:19:09.692Z",
+ "packs": [
+  {
+   "id": "noto-faces",
+   "title": "Faces",
+   "emoji": "😀",
+   "category": "Emotions",
+   "description": "Big animated faces for every mood.",
+   "priceCents": 0,
+   "currency": "USD",
+   "published": true,
+   "builtin": true,
+   "cover": "1f600",
+   "attribution": {
+    "text": "Animated emoji from Noto Emoji by Google, licensed under CC BY 4.0. Resized and repackaged as stickers by Open Lounge.",
+    "author": "Google (Noto Emoji)",
+    "source": "https://googlefonts.github.io/noto-emoji-animation/",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+   },
+   "stickers": [
+    {
+     "id": "1f600",
+     "emoji": "😀",
+     "keywords": [
+      "smile"
+     ],
+     "format": "lottie",
+     "file": "noto/1f600.b93b4e7f34.json.gz",
+     "poster": "noto/1f600.b93b4e7f34.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3710
+    },
+    {
+     "id": "1f603",
+     "emoji": "😃",
+     "keywords": [
+      "smile with big eyes"
+     ],
+     "format": "lottie",
+     "file": "noto/1f603.abe14c4811.json.gz",
+     "poster": "noto/1f603.abe14c4811.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4305
+    },
+    {
+     "id": "1f604",
+     "emoji": "😄",
+     "keywords": [
+      "grin"
+     ],
+     "format": "lottie",
+     "file": "noto/1f604.1e4231ba43.json.gz",
+     "poster": "noto/1f604.1e4231ba43.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5800
+    },
+    {
+     "id": "1f601",
+     "emoji": "😁",
+     "keywords": [
+      "grinning"
+     ],
+     "format": "lottie",
+     "file": "noto/1f601.7da983e240.json.gz",
+     "poster": "noto/1f601.7da983e240.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7895
+    },
+    {
+     "id": "1f606",
+     "emoji": "😆",
+     "keywords": [
+      "laughing"
+     ],
+     "format": "lottie",
+     "file": "noto/1f606.0b9be8bee6.json.gz",
+     "poster": "noto/1f606.0b9be8bee6.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3428
+    },
+    {
+     "id": "1f605",
+     "emoji": "😅",
+     "keywords": [
+      "grin sweat"
+     ],
+     "format": "lottie",
+     "file": "noto/1f605.51c188f920.json.gz",
+     "poster": "noto/1f605.51c188f920.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8848
+    },
+    {
+     "id": "1f602",
+     "emoji": "😂",
+     "keywords": [
+      "joy"
+     ],
+     "format": "lottie",
+     "file": "noto/1f602.ae47940548.json.gz",
+     "poster": "noto/1f602.ae47940548.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5093
+    },
+    {
+     "id": "1f923",
+     "emoji": "🤣",
+     "keywords": [
+      "rofl"
+     ],
+     "format": "lottie",
+     "file": "noto/1f923.da5832ec41.json.gz",
+     "poster": "noto/1f923.da5832ec41.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 14028
+    },
+    {
+     "id": "1f62d",
+     "emoji": "😭",
+     "keywords": [
+      "loudly crying"
+     ],
+     "format": "lottie",
+     "file": "noto/1f62d.9f8b1a1809.json.gz",
+     "poster": "noto/1f62d.9f8b1a1809.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 16193
+    },
+    {
+     "id": "1f609",
+     "emoji": "😉",
+     "keywords": [
+      "wink"
+     ],
+     "format": "lottie",
+     "file": "noto/1f609.2ac8b005d0.json.gz",
+     "poster": "noto/1f609.2ac8b005d0.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4121
+    },
+    {
+     "id": "1f618",
+     "emoji": "😘",
+     "keywords": [
+      "kissing heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f618.20be88735e.json.gz",
+     "poster": "noto/1f618.20be88735e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10444
+    },
+    {
+     "id": "1f970",
+     "emoji": "🥰",
+     "keywords": [
+      "heart face",
+      "3 hearts"
+     ],
+     "format": "lottie",
+     "file": "noto/1f970.c9fc242ce2.json.gz",
+     "poster": "noto/1f970.c9fc242ce2.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4933
+    },
+    {
+     "id": "1f60d",
+     "emoji": "😍",
+     "keywords": [
+      "heart eyes"
+     ],
+     "format": "lottie",
+     "file": "noto/1f60d.2351f64984.json.gz",
+     "poster": "noto/1f60d.2351f64984.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4334
+    },
+    {
+     "id": "1f929",
+     "emoji": "🤩",
+     "keywords": [
+      "star struck"
+     ],
+     "format": "lottie",
+     "file": "noto/1f929.11faaec0e8.json.gz",
+     "poster": "noto/1f929.11faaec0e8.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5594
+    },
+    {
+     "id": "1f973",
+     "emoji": "🥳",
+     "keywords": [
+      "partying face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f973.6cc02b10d9.json.gz",
+     "poster": "noto/1f973.6cc02b10d9.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10147
+    },
+    {
+     "id": "1fae0",
+     "emoji": "🫠",
+     "keywords": [
+      "melting"
+     ],
+     "format": "lottie",
+     "file": "noto/1fae0.5d071c2340.json.gz",
+     "poster": "noto/1fae0.5d071c2340.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 20103
+    },
+    {
+     "id": "1f643",
+     "emoji": "🙃",
+     "keywords": [
+      "upside down face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f643.b419f68a5c.json.gz",
+     "poster": "noto/1f643.b419f68a5c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 1776
+    },
+    {
+     "id": "1f972",
+     "emoji": "🥲",
+     "keywords": [
+      "happy cry"
+     ],
+     "format": "lottie",
+     "file": "noto/1f972.f49be49669.json.gz",
+     "poster": "noto/1f972.f49be49669.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5255
+    },
+    {
+     "id": "1f979",
+     "emoji": "🥹",
+     "keywords": [
+      "holding back tears"
+     ],
+     "format": "lottie",
+     "file": "noto/1f979.3c4b04865f.json.gz",
+     "poster": "noto/1f979.3c4b04865f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7723
+    },
+    {
+     "id": "1f60a",
+     "emoji": "😊",
+     "keywords": [
+      "blush"
+     ],
+     "format": "lottie",
+     "file": "noto/1f60a.81b63e6a41.json.gz",
+     "poster": "noto/1f60a.81b63e6a41.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4140
+    },
+    {
+     "id": "1f60f",
+     "emoji": "😏",
+     "keywords": [
+      "smirk"
+     ],
+     "format": "lottie",
+     "file": "noto/1f60f.cae3d27a29.json.gz",
+     "poster": "noto/1f60f.cae3d27a29.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4449
+    },
+    {
+     "id": "1f60b",
+     "emoji": "😋",
+     "keywords": [
+      "yum"
+     ],
+     "format": "lottie",
+     "file": "noto/1f60b.a5bdb14e87.json.gz",
+     "poster": "noto/1f60b.a5bdb14e87.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4930
+    },
+    {
+     "id": "1f61c",
+     "emoji": "😜",
+     "keywords": [
+      "winky tongue"
+     ],
+     "format": "lottie",
+     "file": "noto/1f61c.d5a841a958.json.gz",
+     "poster": "noto/1f61c.d5a841a958.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8794
+    },
+    {
+     "id": "1f92a",
+     "emoji": "🤪",
+     "keywords": [
+      "zany face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f92a.69a5566d3e.json.gz",
+     "poster": "noto/1f92a.69a5566d3e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 9346
+    },
+    {
+     "id": "1f97a",
+     "emoji": "🥺",
+     "keywords": [
+      "pleading"
+     ],
+     "format": "lottie",
+     "file": "noto/1f97a.5836f90b9c.json.gz",
+     "poster": "noto/1f97a.5836f90b9c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3523
+    },
+    {
+     "id": "1f62c",
+     "emoji": "😬",
+     "keywords": [
+      "grimacing"
+     ],
+     "format": "lottie",
+     "file": "noto/1f62c.621e5e1ae1.json.gz",
+     "poster": "noto/1f62c.621e5e1ae1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5078
+    },
+    {
+     "id": "1fae1",
+     "emoji": "🫡",
+     "keywords": [
+      "salute"
+     ],
+     "format": "lottie",
+     "file": "noto/1fae1.8867659c2a.json.gz",
+     "poster": "noto/1fae1.8867659c2a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6343
+    },
+    {
+     "id": "1f914",
+     "emoji": "🤔",
+     "keywords": [
+      "thinking face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f914.46405d972a.json.gz",
+     "poster": "noto/1f914.46405d972a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7574
+    },
+    {
+     "id": "1f92b",
+     "emoji": "🤫",
+     "keywords": [
+      "shushing face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f92b.6a0f5f035c.json.gz",
+     "poster": "noto/1f92b.6a0f5f035c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6894
+    },
+    {
+     "id": "1fae2",
+     "emoji": "🫢",
+     "keywords": [
+      "hand over mouth"
+     ],
+     "format": "lottie",
+     "file": "noto/1fae2.a33b29ae32.json.gz",
+     "poster": "noto/1fae2.a33b29ae32.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4538
+    },
+    {
+     "id": "1f971",
+     "emoji": "🥱",
+     "keywords": [
+      "yawn"
+     ],
+     "format": "lottie",
+     "file": "noto/1f971.679d7d3e87.json.gz",
+     "poster": "noto/1f971.679d7d3e87.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5641
+    },
+    {
+     "id": "1f917",
+     "emoji": "🤗",
+     "keywords": [
+      "hug face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f917.feeec5c571.json.gz",
+     "poster": "noto/1f917.feeec5c571.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8031
+    },
+    {
+     "id": "1fae3",
+     "emoji": "🫣",
+     "keywords": [
+      "peeking"
+     ],
+     "format": "lottie",
+     "file": "noto/1fae3.7f649a4c94.json.gz",
+     "poster": "noto/1fae3.7f649a4c94.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 27608
+    },
+    {
+     "id": "1f631",
+     "emoji": "😱",
+     "keywords": [
+      "screaming"
+     ],
+     "format": "lottie",
+     "file": "noto/1f631.159c6e0537.json.gz",
+     "poster": "noto/1f631.159c6e0537.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8428
+    },
+    {
+     "id": "1f928",
+     "emoji": "🤨",
+     "keywords": [
+      "raised eyebrow"
+     ],
+     "format": "lottie",
+     "file": "noto/1f928.ccf4e8c223.json.gz",
+     "poster": "noto/1f928.ccf4e8c223.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2746
+    },
+    {
+     "id": "1f644",
+     "emoji": "🙄",
+     "keywords": [
+      "rolling eyes"
+     ],
+     "format": "lottie",
+     "file": "noto/1f644.2a77c3ae12.json.gz",
+     "poster": "noto/1f644.2a77c3ae12.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3019
+    },
+    {
+     "id": "1f624",
+     "emoji": "😤",
+     "keywords": [
+      "triumph"
+     ],
+     "format": "lottie",
+     "file": "noto/1f624.c862cad0b9.json.gz",
+     "poster": "noto/1f624.c862cad0b9.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13547
+    },
+    {
+     "id": "1f621",
+     "emoji": "😡",
+     "keywords": [
+      "rage"
+     ],
+     "format": "lottie",
+     "file": "noto/1f621.7233c926fc.json.gz",
+     "poster": "noto/1f621.7233c926fc.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7588
+    },
+    {
+     "id": "1f92f",
+     "emoji": "🤯",
+     "keywords": [
+      "mind blown",
+      "exploding head"
+     ],
+     "format": "lottie",
+     "file": "noto/1f92f.553f013142.json.gz",
+     "poster": "noto/1f92f.553f013142.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 21091
+    },
+    {
+     "id": "1f974",
+     "emoji": "🥴",
+     "keywords": [
+      "woozy"
+     ],
+     "format": "lottie",
+     "file": "noto/1f974.f26c7353a6.json.gz",
+     "poster": "noto/1f974.f26c7353a6.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4306
+    },
+    {
+     "id": "1f975",
+     "emoji": "🥵",
+     "keywords": [
+      "hot face",
+      "sweat face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f975.e1e7d07f56.json.gz",
+     "poster": "noto/1f975.e1e7d07f56.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6646
+    },
+    {
+     "id": "1f976",
+     "emoji": "🥶",
+     "keywords": [
+      "cold face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f976.dd0727e4ad.json.gz",
+     "poster": "noto/1f976.dd0727e4ad.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6066
+    },
+    {
+     "id": "1f634",
+     "emoji": "😴",
+     "keywords": [
+      "sleep"
+     ],
+     "format": "lottie",
+     "file": "noto/1f634.1fa14c3065.json.gz",
+     "poster": "noto/1f634.1fa14c3065.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3599
+    },
+    {
+     "id": "1f60e",
+     "emoji": "😎",
+     "keywords": [
+      "sunglasses face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f60e.17ca3ea161.json.gz",
+     "poster": "noto/1f60e.17ca3ea161.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4007
+    },
+    {
+     "id": "1f913",
+     "emoji": "🤓",
+     "keywords": [
+      "nerd face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f913.1923f6720d.json.gz",
+     "poster": "noto/1f913.1923f6720d.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4658
+    },
+    {
+     "id": "1f607",
+     "emoji": "😇",
+     "keywords": [
+      "halo",
+      "innocent"
+     ],
+     "format": "lottie",
+     "file": "noto/1f607.5727bf7aa8.json.gz",
+     "poster": "noto/1f607.5727bf7aa8.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6724
+    },
+    {
+     "id": "1f920",
+     "emoji": "🤠",
+     "keywords": [
+      "cowboy"
+     ],
+     "format": "lottie",
+     "file": "noto/1f920.a0b05b924c.json.gz",
+     "poster": "noto/1f920.a0b05b924c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11312
+    },
+    {
+     "id": "1f921",
+     "emoji": "🤡",
+     "keywords": [
+      "clown"
+     ],
+     "format": "lottie",
+     "file": "noto/1f921.246c5aab97.json.gz",
+     "poster": "noto/1f921.246c5aab97.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4806
+    },
+    {
+     "id": "1f47b",
+     "emoji": "👻",
+     "keywords": [
+      "ghost"
+     ],
+     "format": "lottie",
+     "file": "noto/1f47b.87e7bc24a3.json.gz",
+     "poster": "noto/1f47b.87e7bc24a3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 32113
+    },
+    {
+     "id": "1f480",
+     "emoji": "💀",
+     "keywords": [
+      "skull"
+     ],
+     "format": "lottie",
+     "file": "noto/1f480.e0ce80dfbd.json.gz",
+     "poster": "noto/1f480.e0ce80dfbd.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 31286
+    },
+    {
+     "id": "1f916",
+     "emoji": "🤖",
+     "keywords": [
+      "robot"
+     ],
+     "format": "lottie",
+     "file": "noto/1f916.62c2d17f5d.json.gz",
+     "poster": "noto/1f916.62c2d17f5d.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10472
+    },
+    {
+     "id": "1f4a9",
+     "emoji": "💩",
+     "keywords": [
+      "poop"
+     ],
+     "format": "lottie",
+     "file": "noto/1f4a9.6f3eb56cdd.json.gz",
+     "poster": "noto/1f4a9.6f3eb56cdd.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17578
+    }
+   ]
+  },
+  {
+   "id": "noto-love",
+   "title": "Hearts & Love",
+   "emoji": "❤️",
+   "category": "Love",
+   "description": "Hearts that beat, glow, grow and mend.",
+   "priceCents": 0,
+   "currency": "USD",
+   "published": true,
+   "builtin": true,
+   "cover": "2764_fe0f",
+   "attribution": {
+    "text": "Animated emoji from Noto Emoji by Google, licensed under CC BY 4.0. Resized and repackaged as stickers by Open Lounge.",
+    "author": "Google (Noto Emoji)",
+    "source": "https://googlefonts.github.io/noto-emoji-animation/",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+   },
+   "stickers": [
+    {
+     "id": "2764_fe0f",
+     "emoji": "❤️",
+     "keywords": [
+      "red heart"
+     ],
+     "format": "lottie",
+     "file": "noto/2764_fe0f.7925790edd.json.gz",
+     "poster": "noto/2764_fe0f.7925790edd.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1837
+    },
+    {
+     "id": "1f9e1",
+     "emoji": "🧡",
+     "keywords": [
+      "orange heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f9e1.60c71e85f7.json.gz",
+     "poster": "noto/1f9e1.60c71e85f7.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1804
+    },
+    {
+     "id": "1f49b",
+     "emoji": "💛",
+     "keywords": [
+      "yellow heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f49b.b4b11d7a3b.json.gz",
+     "poster": "noto/1f49b.b4b11d7a3b.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1807
+    },
+    {
+     "id": "1f49a",
+     "emoji": "💚",
+     "keywords": [
+      "green heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f49a.c3c6a518c8.json.gz",
+     "poster": "noto/1f49a.c3c6a518c8.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1820
+    },
+    {
+     "id": "1fa75",
+     "emoji": "🩵",
+     "keywords": [
+      "light blue heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1fa75.baae218b3a.json.gz",
+     "poster": "noto/1fa75.baae218b3a.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1830
+    },
+    {
+     "id": "1f499",
+     "emoji": "💙",
+     "keywords": [
+      "blue heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f499.7bb692b312.json.gz",
+     "poster": "noto/1f499.7bb692b312.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1824
+    },
+    {
+     "id": "1f49c",
+     "emoji": "💜",
+     "keywords": [
+      "purple heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f49c.3ee57f002a.json.gz",
+     "poster": "noto/1f49c.3ee57f002a.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1826
+    },
+    {
+     "id": "1f5a4",
+     "emoji": "🖤",
+     "keywords": [
+      "black heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f5a4.fd896bdc50.json.gz",
+     "poster": "noto/1f5a4.fd896bdc50.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1795
+    },
+    {
+     "id": "1f90d",
+     "emoji": "🤍",
+     "keywords": [
+      "white heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f90d.95bb429263.json.gz",
+     "poster": "noto/1f90d.95bb429263.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1790
+    },
+    {
+     "id": "1fa77",
+     "emoji": "🩷",
+     "keywords": [
+      "pink heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1fa77.743a30fb7f.json.gz",
+     "poster": "noto/1fa77.743a30fb7f.webp",
+     "w": 800,
+     "h": 800,
+     "bytes": 1824
+    },
+    {
+     "id": "1f498",
+     "emoji": "💘",
+     "keywords": [
+      "cupid"
+     ],
+     "format": "lottie",
+     "file": "noto/1f498.8ee4ea0abc.json.gz",
+     "poster": "noto/1f498.8ee4ea0abc.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13980
+    },
+    {
+     "id": "1f49d",
+     "emoji": "💝",
+     "keywords": [
+      "gift heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f49d.db3cc51ee1.json.gz",
+     "poster": "noto/1f49d.db3cc51ee1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17357
+    },
+    {
+     "id": "1f496",
+     "emoji": "💖",
+     "keywords": [
+      "sparkling heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f496.71614ccf8c.json.gz",
+     "poster": "noto/1f496.71614ccf8c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3017
+    },
+    {
+     "id": "1f497",
+     "emoji": "💗",
+     "keywords": [
+      "heart grow"
+     ],
+     "format": "lottie",
+     "file": "noto/1f497.2c455dfc8c.json.gz",
+     "poster": "noto/1f497.2c455dfc8c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2205
+    },
+    {
+     "id": "1f493",
+     "emoji": "💓",
+     "keywords": [
+      "beating heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f493.99152264b8.json.gz",
+     "poster": "noto/1f493.99152264b8.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3150
+    },
+    {
+     "id": "1f49e",
+     "emoji": "💞",
+     "keywords": [
+      "revolving hearts"
+     ],
+     "format": "lottie",
+     "file": "noto/1f49e.a403e97d02.json.gz",
+     "poster": "noto/1f49e.a403e97d02.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5093
+    },
+    {
+     "id": "1f495",
+     "emoji": "💕",
+     "keywords": [
+      "two hearts"
+     ],
+     "format": "lottie",
+     "file": "noto/1f495.0dd10406ed.json.gz",
+     "poster": "noto/1f495.0dd10406ed.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2580
+    },
+    {
+     "id": "1f48c",
+     "emoji": "💌",
+     "keywords": [
+      "love letter"
+     ],
+     "format": "lottie",
+     "file": "noto/1f48c.0c79fbd861.json.gz",
+     "poster": "noto/1f48c.0c79fbd861.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5917
+    },
+    {
+     "id": "2763_fe0f",
+     "emoji": "❣️",
+     "keywords": [
+      "heart exclamation point"
+     ],
+     "format": "lottie",
+     "file": "noto/2763_fe0f.a3ddf0e7d1.json.gz",
+     "poster": "noto/2763_fe0f.a3ddf0e7d1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3897
+    },
+    {
+     "id": "2764_fe0f_200d_1fa79",
+     "emoji": "❤️‍🩹",
+     "keywords": [
+      "bandaged heart"
+     ],
+     "format": "lottie",
+     "file": "noto/2764_fe0f_200d_1fa79.8ca93af1b9.json.gz",
+     "poster": "noto/2764_fe0f_200d_1fa79.8ca93af1b9.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11936
+    },
+    {
+     "id": "1f494",
+     "emoji": "💔",
+     "keywords": [
+      "broken heart"
+     ],
+     "format": "lottie",
+     "file": "noto/1f494.b0589f638a.json.gz",
+     "poster": "noto/1f494.b0589f638a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10736
+    },
+    {
+     "id": "2764_fe0f_200d_1f525",
+     "emoji": "❤️‍🔥",
+     "keywords": [
+      "fire heart"
+     ],
+     "format": "lottie",
+     "file": "noto/2764_fe0f_200d_1f525.79b906bbe3.json.gz",
+     "poster": "noto/2764_fe0f_200d_1f525.79b906bbe3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7881
+    },
+    {
+     "id": "1f48b",
+     "emoji": "💋",
+     "keywords": [
+      "kiss"
+     ],
+     "format": "lottie",
+     "file": "noto/1f48b.5167edee09.json.gz",
+     "poster": "noto/1f48b.5167edee09.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4122
+    },
+    {
+     "id": "1fac2",
+     "emoji": "🫂",
+     "keywords": [
+      "hugging"
+     ],
+     "format": "lottie",
+     "file": "noto/1fac2.7003f6146c.json.gz",
+     "poster": "noto/1fac2.7003f6146c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8003
+    },
+    {
+     "id": "1faf6",
+     "emoji": "🫶",
+     "keywords": [
+      "heart hands"
+     ],
+     "format": "lottie",
+     "file": "noto/1faf6.6b8e215461.json.gz",
+     "poster": "noto/1faf6.6b8e215461.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5856
+    },
+    {
+     "id": "1f339",
+     "emoji": "🌹",
+     "keywords": [
+      "rose"
+     ],
+     "format": "lottie",
+     "file": "noto/1f339.f5f1e7c3b6.json.gz",
+     "poster": "noto/1f339.f5f1e7c3b6.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10796
+    },
+    {
+     "id": "1f490",
+     "emoji": "💐",
+     "keywords": [
+      "bouquet",
+      "flowers"
+     ],
+     "format": "lottie",
+     "file": "noto/1f490.1de5a1d4b5.json.gz",
+     "poster": "noto/1f490.1de5a1d4b5.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13762
+    },
+    {
+     "id": "1f63b",
+     "emoji": "😻",
+     "keywords": [
+      "heart eyes cat"
+     ],
+     "format": "lottie",
+     "file": "noto/1f63b.7f14735493.json.gz",
+     "poster": "noto/1f63b.7f14735493.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6936
+    }
+   ]
+  },
+  {
+   "id": "noto-hands",
+   "title": "Hands",
+   "emoji": "👋",
+   "category": "Gestures",
+   "description": "Waves, claps, thumbs and high fives.",
+   "priceCents": 0,
+   "currency": "USD",
+   "published": true,
+   "builtin": true,
+   "cover": "1f44b",
+   "attribution": {
+    "text": "Animated emoji from Noto Emoji by Google, licensed under CC BY 4.0. Resized and repackaged as stickers by Open Lounge.",
+    "author": "Google (Noto Emoji)",
+    "source": "https://googlefonts.github.io/noto-emoji-animation/",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+   },
+   "stickers": [
+    {
+     "id": "1f44b",
+     "emoji": "👋",
+     "keywords": [
+      "wave"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44b.11f8511c92.json.gz",
+     "poster": "noto/1f44b.11f8511c92.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11666
+    },
+    {
+     "id": "1f44d",
+     "emoji": "👍",
+     "keywords": [
+      "thumbs up",
+      "+1"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44d.a5803c4978.json.gz",
+     "poster": "noto/1f44d.a5803c4978.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11732
+    },
+    {
+     "id": "1f44e",
+     "emoji": "👎",
+     "keywords": [
+      "thumbs down"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44e.3c491a560e.json.gz",
+     "poster": "noto/1f44e.3c491a560e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11691
+    },
+    {
+     "id": "1f44f",
+     "emoji": "👏",
+     "keywords": [
+      "clap"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44f.fc1d22422a.json.gz",
+     "poster": "noto/1f44f.fc1d22422a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 37359
+    },
+    {
+     "id": "1f64c",
+     "emoji": "🙌",
+     "keywords": [
+      "raising hands",
+      "hooray"
+     ],
+     "format": "lottie",
+     "file": "noto/1f64c.a7f2d88118.json.gz",
+     "poster": "noto/1f64c.a7f2d88118.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13459
+    },
+    {
+     "id": "1faf6",
+     "emoji": "🫶",
+     "keywords": [
+      "heart hands"
+     ],
+     "format": "lottie",
+     "file": "noto/1faf6.6b8e215461.json.gz",
+     "poster": "noto/1faf6.6b8e215461.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5856
+    },
+    {
+     "id": "1f64f",
+     "emoji": "🙏",
+     "keywords": [
+      "folded hands",
+      "please",
+      "pray",
+      "hope",
+      "wish",
+      "thank you",
+      "high five"
+     ],
+     "format": "lottie",
+     "file": "noto/1f64f.96c6f33baf.json.gz",
+     "poster": "noto/1f64f.96c6f33baf.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11257
+    },
+    {
+     "id": "1f91d",
+     "emoji": "🤝",
+     "keywords": [
+      "handshake"
+     ],
+     "format": "lottie",
+     "file": "noto/1f91d.78d7d6671e.json.gz",
+     "poster": "noto/1f91d.78d7d6671e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10960
+    },
+    {
+     "id": "1f4aa",
+     "emoji": "💪",
+     "keywords": [
+      "muscle",
+      "flex",
+      "bicep",
+      "strong"
+     ],
+     "format": "lottie",
+     "file": "noto/1f4aa.92a4037694.json.gz",
+     "poster": "noto/1f4aa.92a4037694.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 21013
+    },
+    {
+     "id": "270c_fe0f",
+     "emoji": "✌️",
+     "keywords": [
+      "victory",
+      "v",
+      "peace hand"
+     ],
+     "format": "lottie",
+     "file": "noto/270c_fe0f.59e418cb62.json.gz",
+     "poster": "noto/270c_fe0f.59e418cb62.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15711
+    },
+    {
+     "id": "1f91e",
+     "emoji": "🤞",
+     "keywords": [
+      "crossed fingers"
+     ],
+     "format": "lottie",
+     "file": "noto/1f91e.084a804ef1.json.gz",
+     "poster": "noto/1f91e.084a804ef1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 25926
+    },
+    {
+     "id": "1f91f",
+     "emoji": "🤟",
+     "keywords": [
+      "love you gesture"
+     ],
+     "format": "lottie",
+     "file": "noto/1f91f.89e71680eb.json.gz",
+     "poster": "noto/1f91f.89e71680eb.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15462
+    },
+    {
+     "id": "1f918",
+     "emoji": "🤘",
+     "keywords": [
+      "metal",
+      "horns"
+     ],
+     "format": "lottie",
+     "file": "noto/1f918.f15c9784c2.json.gz",
+     "poster": "noto/1f918.f15c9784c2.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 16703
+    },
+    {
+     "id": "1f919",
+     "emoji": "🤙",
+     "keywords": [
+      "call me hand"
+     ],
+     "format": "lottie",
+     "file": "noto/1f919.b689f5abfc.json.gz",
+     "poster": "noto/1f919.b689f5abfc.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8782
+    },
+    {
+     "id": "1f44c",
+     "emoji": "👌",
+     "keywords": [
+      "ok"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44c.6f8ad3f6e6.json.gz",
+     "poster": "noto/1f44c.6f8ad3f6e6.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12479
+    },
+    {
+     "id": "1f90c",
+     "emoji": "🤌",
+     "keywords": [
+      "pinched fingers"
+     ],
+     "format": "lottie",
+     "file": "noto/1f90c.3dd4f88e4b.json.gz",
+     "poster": "noto/1f90c.3dd4f88e4b.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15679
+    },
+    {
+     "id": "1f90f",
+     "emoji": "🤏",
+     "keywords": [
+      "pinch"
+     ],
+     "format": "lottie",
+     "file": "noto/1f90f.f5d2328043.json.gz",
+     "poster": "noto/1f90f.f5d2328043.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12276
+    },
+    {
+     "id": "1faf5",
+     "emoji": "🫵",
+     "keywords": [
+      "pointing"
+     ],
+     "format": "lottie",
+     "file": "noto/1faf5.56c85b12ce.json.gz",
+     "poster": "noto/1faf5.56c85b12ce.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7281
+    },
+    {
+     "id": "1f449",
+     "emoji": "👉",
+     "keywords": [
+      "point right"
+     ],
+     "format": "lottie",
+     "file": "noto/1f449.3696f0747c.json.gz",
+     "poster": "noto/1f449.3696f0747c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4350
+    },
+    {
+     "id": "1f448",
+     "emoji": "👈",
+     "keywords": [
+      "point left"
+     ],
+     "format": "lottie",
+     "file": "noto/1f448.b304d94706.json.gz",
+     "poster": "noto/1f448.b304d94706.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4352
+    },
+    {
+     "id": "1f446",
+     "emoji": "👆",
+     "keywords": [
+      "point up"
+     ],
+     "format": "lottie",
+     "file": "noto/1f446.46aadca75e.json.gz",
+     "poster": "noto/1f446.46aadca75e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4357
+    },
+    {
+     "id": "1f447",
+     "emoji": "👇",
+     "keywords": [
+      "point down"
+     ],
+     "format": "lottie",
+     "file": "noto/1f447.cba1be7343.json.gz",
+     "poster": "noto/1f447.cba1be7343.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4359
+    },
+    {
+     "id": "261d_fe0f",
+     "emoji": "☝️",
+     "keywords": [
+      "index finger"
+     ],
+     "format": "lottie",
+     "file": "noto/261d_fe0f.3761cca6cf.json.gz",
+     "poster": "noto/261d_fe0f.3761cca6cf.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4762
+    },
+    {
+     "id": "270a",
+     "emoji": "✊",
+     "keywords": [
+      "raised fist"
+     ],
+     "format": "lottie",
+     "file": "noto/270a.88a9151ffe.json.gz",
+     "poster": "noto/270a.88a9151ffe.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4664
+    },
+    {
+     "id": "1f44a",
+     "emoji": "👊",
+     "keywords": [
+      "fist",
+      "bump"
+     ],
+     "format": "lottie",
+     "file": "noto/1f44a.f1ef7cd434.json.gz",
+     "poster": "noto/1f44a.f1ef7cd434.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4329
+    },
+    {
+     "id": "1f91c",
+     "emoji": "🤜",
+     "keywords": [
+      "fist rightwards"
+     ],
+     "format": "lottie",
+     "file": "noto/1f91c.7dbe3648e5.json.gz",
+     "poster": "noto/1f91c.7dbe3648e5.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5448
+    },
+    {
+     "id": "1f91b",
+     "emoji": "🤛",
+     "keywords": [
+      "fist leftwards"
+     ],
+     "format": "lottie",
+     "file": "noto/1f91b.39de5ce7fd.json.gz",
+     "poster": "noto/1f91b.39de5ce7fd.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5455
+    },
+    {
+     "id": "270b",
+     "emoji": "✋",
+     "keywords": [
+      "raised hand"
+     ],
+     "format": "lottie",
+     "file": "noto/270b.8a27165cc4.json.gz",
+     "poster": "noto/270b.8a27165cc4.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3125
+    },
+    {
+     "id": "1f596",
+     "emoji": "🖖",
+     "keywords": [
+      "vulcan",
+      "prosper",
+      "spock"
+     ],
+     "format": "lottie",
+     "file": "noto/1f596.d5c9707cbb.json.gz",
+     "poster": "noto/1f596.d5c9707cbb.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10678
+    },
+    {
+     "id": "1f450",
+     "emoji": "👐",
+     "keywords": [
+      "open hands"
+     ],
+     "format": "lottie",
+     "file": "noto/1f450.364296ca88.json.gz",
+     "poster": "noto/1f450.364296ca88.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 16604
+    },
+    {
+     "id": "1f932",
+     "emoji": "🤲",
+     "keywords": [
+      "palms up"
+     ],
+     "format": "lottie",
+     "file": "noto/1f932.d011985156.json.gz",
+     "poster": "noto/1f932.d011985156.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17166
+    },
+    {
+     "id": "270d_fe0f",
+     "emoji": "✍️",
+     "keywords": [
+      "writing hand"
+     ],
+     "format": "lottie",
+     "file": "noto/270d_fe0f.c7e34b6a9f.json.gz",
+     "poster": "noto/270d_fe0f.c7e34b6a9f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11316
+    },
+    {
+     "id": "1f933",
+     "emoji": "🤳",
+     "keywords": [
+      "selfie"
+     ],
+     "format": "lottie",
+     "file": "noto/1f933.7090d9b449.json.gz",
+     "poster": "noto/1f933.7090d9b449.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13373
+    },
+    {
+     "id": "1f485",
+     "emoji": "💅",
+     "keywords": [
+      "nail care"
+     ],
+     "format": "lottie",
+     "file": "noto/1f485.301b6694cf.json.gz",
+     "poster": "noto/1f485.301b6694cf.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10879
+    }
+   ]
+  },
+  {
+   "id": "noto-animals",
+   "title": "Animals",
+   "emoji": "🦊",
+   "category": "Animals",
+   "description": "Lions, foxes, penguins, octopuses and friends.",
+   "priceCents": 0,
+   "currency": "USD",
+   "published": true,
+   "builtin": true,
+   "cover": "1f981",
+   "attribution": {
+    "text": "Animated emoji from Noto Emoji by Google, licensed under CC BY 4.0. Resized and repackaged as stickers by Open Lounge.",
+    "author": "Google (Noto Emoji)",
+    "source": "https://googlefonts.github.io/noto-emoji-animation/",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+   },
+   "stickers": [
+    {
+     "id": "1f981",
+     "emoji": "🦁",
+     "keywords": [
+      "lion face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f981.41ba731436.json.gz",
+     "poster": "noto/1f981.41ba731436.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 22677
+    },
+    {
+     "id": "1f43a",
+     "emoji": "🐺",
+     "keywords": [
+      "wolf"
+     ],
+     "format": "lottie",
+     "file": "noto/1f43a.411acae1c2.json.gz",
+     "poster": "noto/1f43a.411acae1c2.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 13896
+    },
+    {
+     "id": "1f43b",
+     "emoji": "🐻",
+     "keywords": [
+      "bear face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f43b.c13460b71f.json.gz",
+     "poster": "noto/1f43b.c13460b71f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2947
+    },
+    {
+     "id": "1f43c",
+     "emoji": "🐼",
+     "keywords": [
+      "panda"
+     ],
+     "format": "lottie",
+     "file": "noto/1f43c.7017ef70d1.json.gz",
+     "poster": "noto/1f43c.7017ef70d1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4762
+    },
+    {
+     "id": "1f98a",
+     "emoji": "🦊",
+     "keywords": [
+      "fox face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f98a.d0dd209d98.json.gz",
+     "poster": "noto/1f98a.d0dd209d98.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8140
+    },
+    {
+     "id": "1f42e",
+     "emoji": "🐮",
+     "keywords": [
+      "cow face"
+     ],
+     "format": "lottie",
+     "file": "noto/1f42e.4c2dcf113e.json.gz",
+     "poster": "noto/1f42e.4c2dcf113e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3728
+    },
+    {
+     "id": "1f984",
+     "emoji": "🦄",
+     "keywords": [
+      "unicorn"
+     ],
+     "format": "lottie",
+     "file": "noto/1f984.5f9c7fd759.json.gz",
+     "poster": "noto/1f984.5f9c7fd759.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 33732
+    },
+    {
+     "id": "1f409",
+     "emoji": "🐉",
+     "keywords": [
+      "dragon"
+     ],
+     "format": "lottie",
+     "file": "noto/1f409.7323f9903a.json.gz",
+     "poster": "noto/1f409.7323f9903a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 60195
+    },
+    {
+     "id": "1f996",
+     "emoji": "🦖",
+     "keywords": [
+      "t rex"
+     ],
+     "format": "lottie",
+     "file": "noto/1f996.0c991d58ad.json.gz",
+     "poster": "noto/1f996.0c991d58ad.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 20005
+    },
+    {
+     "id": "1f422",
+     "emoji": "🐢",
+     "keywords": [
+      "turtle"
+     ],
+     "format": "lottie",
+     "file": "noto/1f422.a441cf9a83.json.gz",
+     "poster": "noto/1f422.a441cf9a83.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7917
+    },
+    {
+     "id": "1f438",
+     "emoji": "🐸",
+     "keywords": [
+      "frog"
+     ],
+     "format": "lottie",
+     "file": "noto/1f438.60318fd309.json.gz",
+     "poster": "noto/1f438.60318fd309.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11719
+    },
+    {
+     "id": "1f407",
+     "emoji": "🐇",
+     "keywords": [
+      "rabbit"
+     ],
+     "format": "lottie",
+     "file": "noto/1f407.9bd44687bc.json.gz",
+     "poster": "noto/1f407.9bd44687bc.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10970
+    },
+    {
+     "id": "1f429",
+     "emoji": "🐩",
+     "keywords": [
+      "poodle"
+     ],
+     "format": "lottie",
+     "file": "noto/1f429.99cc7c0fb3.json.gz",
+     "poster": "noto/1f429.99cc7c0fb3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 21974
+    },
+    {
+     "id": "1f415",
+     "emoji": "🐕",
+     "keywords": [
+      "dog"
+     ],
+     "format": "lottie",
+     "file": "noto/1f415.dc99a89fcb.json.gz",
+     "poster": "noto/1f415.dc99a89fcb.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12946
+    },
+    {
+     "id": "1f416",
+     "emoji": "🐖",
+     "keywords": [
+      "pig"
+     ],
+     "format": "lottie",
+     "file": "noto/1f416.091b9ee6cd.json.gz",
+     "poster": "noto/1f416.091b9ee6cd.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17815
+    },
+    {
+     "id": "1f405",
+     "emoji": "🐅",
+     "keywords": [
+      "tiger"
+     ],
+     "format": "lottie",
+     "file": "noto/1f405.fe3d334d4c.json.gz",
+     "poster": "noto/1f405.fe3d334d4c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 68924
+    },
+    {
+     "id": "1f412",
+     "emoji": "🐒",
+     "keywords": [
+      "monkey"
+     ],
+     "format": "lottie",
+     "file": "noto/1f412.03f69c637b.json.gz",
+     "poster": "noto/1f412.03f69c637b.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 27412
+    },
+    {
+     "id": "1f9a5",
+     "emoji": "🦥",
+     "keywords": [
+      "sloth"
+     ],
+     "format": "lottie",
+     "file": "noto/1f9a5.9022145d93.json.gz",
+     "poster": "noto/1f9a5.9022145d93.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10973
+    },
+    {
+     "id": "1f99d",
+     "emoji": "🦝",
+     "keywords": [
+      "raccoon"
+     ],
+     "format": "lottie",
+     "file": "noto/1f99d.f26c93171a.json.gz",
+     "poster": "noto/1f99d.f26c93171a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 39436
+    },
+    {
+     "id": "1f994",
+     "emoji": "🦔",
+     "keywords": [
+      "hedgehog"
+     ],
+     "format": "lottie",
+     "file": "noto/1f994.18724ebc2f.json.gz",
+     "poster": "noto/1f994.18724ebc2f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 34090
+    },
+    {
+     "id": "1f9a6",
+     "emoji": "🦦",
+     "keywords": [
+      "otter"
+     ],
+     "format": "lottie",
+     "file": "noto/1f9a6.500b4f729d.json.gz",
+     "poster": "noto/1f9a6.500b4f729d.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12744
+    },
+    {
+     "id": "1f987",
+     "emoji": "🦇",
+     "keywords": [
+      "bat"
+     ],
+     "format": "lottie",
+     "file": "noto/1f987.374dcb4f46.json.gz",
+     "poster": "noto/1f987.374dcb4f46.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7504
+    },
+    {
+     "id": "1f426",
+     "emoji": "🐦",
+     "keywords": [
+      "bird"
+     ],
+     "format": "lottie",
+     "file": "noto/1f426.0a97c63589.json.gz",
+     "poster": "noto/1f426.0a97c63589.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 23360
+    },
+    {
+     "id": "1f423",
+     "emoji": "🐣",
+     "keywords": [
+      "hatching chick"
+     ],
+     "format": "lottie",
+     "file": "noto/1f423.b1d8d6be6e.json.gz",
+     "poster": "noto/1f423.b1d8d6be6e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7112
+    },
+    {
+     "id": "1f425",
+     "emoji": "🐥",
+     "keywords": [
+      "hatched chick"
+     ],
+     "format": "lottie",
+     "file": "noto/1f425.cc7b0608f7.json.gz",
+     "poster": "noto/1f425.cc7b0608f7.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6561
+    },
+    {
+     "id": "1f989",
+     "emoji": "🦉",
+     "keywords": [
+      "owl"
+     ],
+     "format": "lottie",
+     "file": "noto/1f989.1a27538246.json.gz",
+     "poster": "noto/1f989.1a27538246.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8104
+    },
+    {
+     "id": "1f9a9",
+     "emoji": "🦩",
+     "keywords": [
+      "flamingo"
+     ],
+     "format": "lottie",
+     "file": "noto/1f9a9.3abaf70283.json.gz",
+     "poster": "noto/1f9a9.3abaf70283.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 9036
+    },
+    {
+     "id": "1f99a",
+     "emoji": "🦚",
+     "keywords": [
+      "peacock"
+     ],
+     "format": "lottie",
+     "file": "noto/1f99a.c0175c317c.json.gz",
+     "poster": "noto/1f99a.c0175c317c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 23826
+    },
+    {
+     "id": "1f426_200d_1f525",
+     "emoji": "🐦‍🔥",
+     "keywords": [
+      "phoenix"
+     ],
+     "format": "lottie",
+     "file": "noto/1f426_200d_1f525.e91bbd66b3.json.gz",
+     "poster": "noto/1f426_200d_1f525.e91bbd66b3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 146811
+    },
+    {
+     "id": "1f427",
+     "emoji": "🐧",
+     "keywords": [
+      "penguin"
+     ],
+     "format": "lottie",
+     "file": "noto/1f427.9cada87e32.json.gz",
+     "poster": "noto/1f427.9cada87e32.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17408
+    },
+    {
+     "id": "1f9ad",
+     "emoji": "🦭",
+     "keywords": [
+      "seal"
+     ],
+     "format": "lottie",
+     "file": "noto/1f9ad.bed95ca64d.json.gz",
+     "poster": "noto/1f9ad.bed95ca64d.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 99226
+    },
+    {
+     "id": "1f988",
+     "emoji": "🦈",
+     "keywords": [
+      "shark"
+     ],
+     "format": "lottie",
+     "file": "noto/1f988.842c2d7435.json.gz",
+     "poster": "noto/1f988.842c2d7435.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 23905
+    },
+    {
+     "id": "1f42c",
+     "emoji": "🐬",
+     "keywords": [
+      "dolphin"
+     ],
+     "format": "lottie",
+     "file": "noto/1f42c.e26ab5e62c.json.gz",
+     "poster": "noto/1f42c.e26ab5e62c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 17540
+    },
+    {
+     "id": "1f433",
+     "emoji": "🐳",
+     "keywords": [
+      "whale"
+     ],
+     "format": "lottie",
+     "file": "noto/1f433.f59dd1a3e5.json.gz",
+     "poster": "noto/1f433.f59dd1a3e5.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15503
+    },
+    {
+     "id": "1f421",
+     "emoji": "🐡",
+     "keywords": [
+      "blowfish"
+     ],
+     "format": "lottie",
+     "file": "noto/1f421.7c1f5234cc.json.gz",
+     "poster": "noto/1f421.7c1f5234cc.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 16724
+    },
+    {
+     "id": "1f980",
+     "emoji": "🦀",
+     "keywords": [
+      "crab"
+     ],
+     "format": "lottie",
+     "file": "noto/1f980.1ff26c30d9.json.gz",
+     "poster": "noto/1f980.1ff26c30d9.webp",
+     "w": 512,
+     "h": 512,
+     "bytes": 15459
+    },
+    {
+     "id": "1f419",
+     "emoji": "🐙",
+     "keywords": [
+      "octopus"
+     ],
+     "format": "lottie",
+     "file": "noto/1f419.af0d14faa0.json.gz",
+     "poster": "noto/1f419.af0d14faa0.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 41042
+    },
+    {
+     "id": "1fabc",
+     "emoji": "🪼",
+     "keywords": [
+      "jellyfish"
+     ],
+     "format": "lottie",
+     "file": "noto/1fabc.27061fe7c0.json.gz",
+     "poster": "noto/1fabc.27061fe7c0.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 25573
+    },
+    {
+     "id": "1f40c",
+     "emoji": "🐌",
+     "keywords": [
+      "snail"
+     ],
+     "format": "lottie",
+     "file": "noto/1f40c.db6f9bc723.json.gz",
+     "poster": "noto/1f40c.db6f9bc723.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7114
+    },
+    {
+     "id": "1f41d",
+     "emoji": "🐝",
+     "keywords": [
+      "bee"
+     ],
+     "format": "lottie",
+     "file": "noto/1f41d.eb91da9a30.json.gz",
+     "poster": "noto/1f41d.eb91da9a30.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 46366
+    },
+    {
+     "id": "1f98b",
+     "emoji": "🦋",
+     "keywords": [
+      "butterfly"
+     ],
+     "format": "lottie",
+     "file": "noto/1f98b.f99e150524.json.gz",
+     "poster": "noto/1f98b.f99e150524.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 49679
+    },
+    {
+     "id": "1f63a",
+     "emoji": "😺",
+     "keywords": [
+      "smiley cat"
+     ],
+     "format": "lottie",
+     "file": "noto/1f63a.ff7d038809.json.gz",
+     "poster": "noto/1f63a.ff7d038809.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4254
+    },
+    {
+     "id": "1f639",
+     "emoji": "😹",
+     "keywords": [
+      "joy cat"
+     ],
+     "format": "lottie",
+     "file": "noto/1f639.15aea60c50.json.gz",
+     "poster": "noto/1f639.15aea60c50.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10587
+    },
+    {
+     "id": "1f648",
+     "emoji": "🙈",
+     "keywords": [
+      "see no evil monkey"
+     ],
+     "format": "lottie",
+     "file": "noto/1f648.6314f533f3.json.gz",
+     "poster": "noto/1f648.6314f533f3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10668
+    },
+    {
+     "id": "1f649",
+     "emoji": "🙉",
+     "keywords": [
+      "hear no evil monkey"
+     ],
+     "format": "lottie",
+     "file": "noto/1f649.ddd2a33df3.json.gz",
+     "poster": "noto/1f649.ddd2a33df3.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11263
+    },
+    {
+     "id": "1f64a",
+     "emoji": "🙊",
+     "keywords": [
+      "speak no evil monkey"
+     ],
+     "format": "lottie",
+     "file": "noto/1f64a.6e236dbc96.json.gz",
+     "poster": "noto/1f64a.6e236dbc96.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 10062
+    }
+   ]
+  },
+  {
+   "id": "noto-party",
+   "title": "Celebrations",
+   "emoji": "🎉",
+   "category": "Celebrations",
+   "description": "Confetti, cake, fireworks and trophies.",
+   "priceCents": 0,
+   "currency": "USD",
+   "published": true,
+   "builtin": true,
+   "cover": "1f389",
+   "attribution": {
+    "text": "Animated emoji from Noto Emoji by Google, licensed under CC BY 4.0. Resized and repackaged as stickers by Open Lounge.",
+    "author": "Google (Noto Emoji)",
+    "source": "https://googlefonts.github.io/noto-emoji-animation/",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+   },
+   "stickers": [
+    {
+     "id": "1f389",
+     "emoji": "🎉",
+     "keywords": [
+      "party popper"
+     ],
+     "format": "lottie",
+     "file": "noto/1f389.eab1fd7070.json.gz",
+     "poster": "noto/1f389.eab1fd7070.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12241
+    },
+    {
+     "id": "1f38a",
+     "emoji": "🎊",
+     "keywords": [
+      "confetti ball"
+     ],
+     "format": "lottie",
+     "file": "noto/1f38a.b4a3261995.json.gz",
+     "poster": "noto/1f38a.b4a3261995.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 16468
+    },
+    {
+     "id": "1f388",
+     "emoji": "🎈",
+     "keywords": [
+      "balloon"
+     ],
+     "format": "lottie",
+     "file": "noto/1f388.ffd2d23c73.json.gz",
+     "poster": "noto/1f388.ffd2d23c73.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 3467
+    },
+    {
+     "id": "1f382",
+     "emoji": "🎂",
+     "keywords": [
+      "birthday cake"
+     ],
+     "format": "lottie",
+     "file": "noto/1f382.4caa1f1394.json.gz",
+     "poster": "noto/1f382.4caa1f1394.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 12486
+    },
+    {
+     "id": "1f381",
+     "emoji": "🎁",
+     "keywords": [
+      "wrapped gift"
+     ],
+     "format": "lottie",
+     "file": "noto/1f381.7c8172f12a.json.gz",
+     "poster": "noto/1f381.7c8172f12a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8013
+    },
+    {
+     "id": "1f386",
+     "emoji": "🎆",
+     "keywords": [
+      "fireworks"
+     ],
+     "format": "lottie",
+     "file": "noto/1f386.1da59d537d.json.gz",
+     "poster": "noto/1f386.1da59d537d.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 19565
+    },
+    {
+     "id": "1fa85",
+     "emoji": "🪅",
+     "keywords": [
+      "piñata"
+     ],
+     "format": "lottie",
+     "file": "noto/1fa85.97129382b9.json.gz",
+     "poster": "noto/1fa85.97129382b9.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 42562
+    },
+    {
+     "id": "1faa9",
+     "emoji": "🪩",
+     "keywords": [
+      "mirror ball",
+      "disco ball"
+     ],
+     "format": "lottie",
+     "file": "noto/1faa9.64c3f1e2a5.json.gz",
+     "poster": "noto/1faa9.64c3f1e2a5.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15429
+    },
+    {
+     "id": "1f3c6",
+     "emoji": "🏆",
+     "keywords": [
+      "trophy"
+     ],
+     "format": "lottie",
+     "file": "noto/1f3c6.3270e7b560.json.gz",
+     "poster": "noto/1f3c6.3270e7b560.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7456
+    },
+    {
+     "id": "1f947",
+     "emoji": "🥇",
+     "keywords": [
+      "gold medal",
+      "1st place medal"
+     ],
+     "format": "lottie",
+     "file": "noto/1f947.b21c3b2d6c.json.gz",
+     "poster": "noto/1f947.b21c3b2d6c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4407
+    },
+    {
+     "id": "1f451",
+     "emoji": "👑",
+     "keywords": [
+      "crown"
+     ],
+     "format": "lottie",
+     "file": "noto/1f451.242b70a867.json.gz",
+     "poster": "noto/1f451.242b70a867.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 26937
+    },
+    {
+     "id": "1f942",
+     "emoji": "🥂",
+     "keywords": [
+      "clinking glasses"
+     ],
+     "format": "lottie",
+     "file": "noto/1f942.3e85e7f8bb.json.gz",
+     "poster": "noto/1f942.3e85e7f8bb.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 11759
+    },
+    {
+     "id": "1f37e",
+     "emoji": "🍾",
+     "keywords": [
+      "bottle with popping cork"
+     ],
+     "format": "lottie",
+     "file": "noto/1f37e.f9c0c1ead9.json.gz",
+     "poster": "noto/1f37e.f9c0c1ead9.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6378
+    },
+    {
+     "id": "1f37b",
+     "emoji": "🍻",
+     "keywords": [
+      "clinking beer mugs"
+     ],
+     "format": "lottie",
+     "file": "noto/1f37b.56257c6532.json.gz",
+     "poster": "noto/1f37b.56257c6532.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15733
+    },
+    {
+     "id": "2728",
+     "emoji": "✨",
+     "keywords": [
+      "sparkles"
+     ],
+     "format": "lottie",
+     "file": "noto/2728.60b0b7e80f.json.gz",
+     "poster": "noto/2728.60b0b7e80f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2610
+    },
+    {
+     "id": "1f31f",
+     "emoji": "🌟",
+     "keywords": [
+      "glowing star"
+     ],
+     "format": "lottie",
+     "file": "noto/1f31f.6a2654898e.json.gz",
+     "poster": "noto/1f31f.6a2654898e.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 9170
+    },
+    {
+     "id": "1f525",
+     "emoji": "🔥",
+     "keywords": [
+      "fire",
+      "burn",
+      "lit"
+     ],
+     "format": "lottie",
+     "file": "noto/1f525.96199d8e8f.json.gz",
+     "poster": "noto/1f525.96199d8e8f.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 7087
+    },
+    {
+     "id": "1f4af",
+     "emoji": "💯",
+     "keywords": [
+      "100",
+      "one hundred",
+      "hundred",
+      "points"
+     ],
+     "format": "lottie",
+     "file": "noto/1f4af.8e48b464d7.json.gz",
+     "poster": "noto/1f4af.8e48b464d7.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 18785
+    },
+    {
+     "id": "1f4a5",
+     "emoji": "💥",
+     "keywords": [
+      "collision"
+     ],
+     "format": "lottie",
+     "file": "noto/1f4a5.0045d69883.json.gz",
+     "poster": "noto/1f4a5.0045d69883.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6489
+    },
+    {
+     "id": "26a1",
+     "emoji": "⚡",
+     "keywords": [
+      "electricity",
+      "zap",
+      "lightning"
+     ],
+     "format": "lottie",
+     "file": "noto/26a1.9a746760de.json.gz",
+     "poster": "noto/26a1.9a746760de.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15866
+    },
+    {
+     "id": "1f308",
+     "emoji": "🌈",
+     "keywords": [
+      "rainbow"
+     ],
+     "format": "lottie",
+     "file": "noto/1f308.e750f60661.json.gz",
+     "poster": "noto/1f308.e750f60661.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 1786
+    },
+    {
+     "id": "1f680",
+     "emoji": "🚀",
+     "keywords": [
+      "rocket"
+     ],
+     "format": "lottie",
+     "file": "noto/1f680.2b6daf24ce.json.gz",
+     "poster": "noto/1f680.2b6daf24ce.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 9365
+    },
+    {
+     "id": "1f48e",
+     "emoji": "💎",
+     "keywords": [
+      "gem stone"
+     ],
+     "format": "lottie",
+     "file": "noto/1f48e.7d72e50d37.json.gz",
+     "poster": "noto/1f48e.7d72e50d37.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4960
+    },
+    {
+     "id": "1f4b8",
+     "emoji": "💸",
+     "keywords": [
+      "money with wings"
+     ],
+     "format": "lottie",
+     "file": "noto/1f4b8.7dd190458a.json.gz",
+     "poster": "noto/1f4b8.7dd190458a.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 15096
+    },
+    {
+     "id": "1f483",
+     "emoji": "💃",
+     "keywords": [
+      "dancer woman"
+     ],
+     "format": "lottie",
+     "file": "noto/1f483.73926f3891.json.gz",
+     "poster": "noto/1f483.73926f3891.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 76124
+    },
+    {
+     "id": "1f3b6",
+     "emoji": "🎶",
+     "keywords": [
+      "musical notes"
+     ],
+     "format": "lottie",
+     "file": "noto/1f3b6.33223731fb.json.gz",
+     "poster": "noto/1f3b6.33223731fb.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 2596
+    },
+    {
+     "id": "1f3b8",
+     "emoji": "🎸",
+     "keywords": [
+      "guitar"
+     ],
+     "format": "lottie",
+     "file": "noto/1f3b8.7df88786c5.json.gz",
+     "poster": "noto/1f3b8.7df88786c5.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5483
+    },
+    {
+     "id": "1f941",
+     "emoji": "🥁",
+     "keywords": [
+      "drum"
+     ],
+     "format": "lottie",
+     "file": "noto/1f941.c254375dee.json.gz",
+     "poster": "noto/1f941.c254375dee.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 5623
+    },
+    {
+     "id": "1fa84",
+     "emoji": "🪄",
+     "keywords": [
+      "wand"
+     ],
+     "format": "lottie",
+     "file": "noto/1fa84.a3084fcf8c.json.gz",
+     "poster": "noto/1fa84.a3084fcf8c.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 8987
+    },
+    {
+     "id": "1f52e",
+     "emoji": "🔮",
+     "keywords": [
+      "crystal ball"
+     ],
+     "format": "lottie",
+     "file": "noto/1f52e.69c9525f98.json.gz",
+     "poster": "noto/1f52e.69c9525f98.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 6434
+    },
+    {
+     "id": "1f3af",
+     "emoji": "🎯",
+     "keywords": [
+      "direct hit",
+      "target"
+     ],
+     "format": "lottie",
+     "file": "noto/1f3af.ae36f71945.json.gz",
+     "poster": "noto/1f3af.ae36f71945.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 4964
+    },
+    {
+     "id": "1f3c1",
+     "emoji": "🏁",
+     "keywords": [
+      "chequered flag"
+     ],
+     "format": "lottie",
+     "file": "noto/1f3c1.df96c8b1b1.json.gz",
+     "poster": "noto/1f3c1.df96c8b1b1.webp",
+     "w": 1024,
+     "h": 1024,
+     "bytes": 40984
+    }
+   ]
+  }
+ ]
+}

@@ -51,6 +51,13 @@ export function buildCsp(env: Record<string, string | undefined> = process.env, 
     ],
     "frame-src": ["https://*.firebaseapp.com", "https://accounts.google.com", "https://appleid.apple.com", "https://www.google.com/recaptcha/", "https://recaptcha.google.com", "https://www.recaptcha.net"],
   };
+  // Paid stickers: PayPal JS SDK + Apple Pay / Google Pay via PayPal (only when the paid flag is on)
+  if (/^(1|true|yes)$/i.test(env.STICKERS_PAID_ENABLED ?? "")) {
+    d["script-src"].push("https://*.paypal.com", "https://*.paypalobjects.com", "https://applepay.cdn-apple.com", "https://pay.google.com");
+    d["connect-src"].push("https://*.paypal.com", "https://*.paypalobjects.com", "https://pay.google.com", "https://google.com");
+    d["frame-src"].push("https://*.paypal.com", "https://pay.google.com");
+    d["img-src"].push("https://*.paypal.com", "https://*.paypalobjects.com");
+  }
   if (!dev) d["upgrade-insecure-requests"] = [];
   if (env.CSP_REPORT_URI) d["report-uri"] = [env.CSP_REPORT_URI];
   return Object.entries(d)
@@ -62,7 +69,10 @@ export function securityHeaders(env: Record<string, string | undefined> = proces
   const h: Record<string, string> = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "microphone=(self), camera=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    "Permissions-Policy": `microphone=(self), camera=(), geolocation=(), payment=${
+      // paid stickers: Google Pay / Payment Request (incl. inside PayPal's frames) only when the paid flag is on
+      /^(1|true|yes)$/i.test(env.STICKERS_PAID_ENABLED ?? "") ? '(self "https://pay.google.com" "https://www.paypal.com" "https://www.sandbox.paypal.com")' : "()"
+    }, usb=(), interest-cohort=()`,
     "X-Frame-Options": "DENY",
     "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
   };

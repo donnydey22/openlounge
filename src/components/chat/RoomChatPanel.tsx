@@ -8,6 +8,8 @@ import { cn, firstName } from "@/lib/utils";
 import { formatClock, serverNow, useClockTick } from "@/lib/time";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { StickerMessage } from "../stickers/StickerMessage";
+import { parseSticker } from "@/lib/stickers/token";
 
 const GROUP_WINDOW_MS = 2 * 60_000;
 
@@ -124,6 +126,7 @@ export function RoomChatPanel({
             const prev = messages[i - 1];
             const grouped = !!prev && prev.authorId === m.authorId && m.createdAt - prev.createdAt < GROUP_WINDOW_MS;
             const mine = m.authorId === meId;
+            const sticker = parseSticker(m.text); // sticker message: large, no bubble
             const canDelete = mine || canModerate;
             const canReport = !mine && !!onReport && !m.authorIsBot;
             const canAct = canDelete || canReport;
@@ -144,7 +147,7 @@ export function RoomChatPanel({
                   onClick={() => canAct && setSelected((s) => (s === m.id ? null : m.id))}
                   className={cn(
                     "group relative max-w-[82%] px-3 py-1.5",
-                    mine ? "rounded-2xl rounded-br-md bg-emerald-500/15" : "rounded-2xl rounded-bl-md bg-zinc-800/70",
+                    sticker ? "bg-transparent !px-0" : mine ? "rounded-2xl rounded-br-md bg-emerald-500/15" : "rounded-2xl rounded-bl-md bg-zinc-800/70",
                     canAct && "cursor-pointer",
                   )}
                 >
@@ -167,7 +170,7 @@ export function RoomChatPanel({
                       <span className="text-[10px] text-zinc-500">{softTime(m.createdAt)}</span>
                     </div>
                   )}
-                  <p className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">{m.text}</p>
+                  {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">{m.text}</p>}
                   {!grouped && mine && <div className="mt-0.5 text-right text-[10px] leading-none text-zinc-500">{softTime(m.createdAt)}</div>}
                   {canAct && (
                     <div

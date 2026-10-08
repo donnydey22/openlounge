@@ -15,6 +15,8 @@ import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { StickerMessage } from "../stickers/StickerMessage";
+import { parseSticker } from "@/lib/stickers/token";
 import { TypingLabel } from "./TypingDots";
 import { dayDiff, formatClock, formatDaySeparator, formatFull, formatListTime, serverNow, useClockTick } from "@/lib/time";
 import { FollowButton } from "../UserRow";
@@ -847,6 +849,7 @@ const MessageRow = memo(function MessageRow({
   onReport?: (m: Item) => void;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
+  const sticker = parseSticker(m.text); // sticker message: large, no bubble
   void clockTick;
   // long-press (touch) or right-click shows the full local date-time + UTC under the bubble for a few seconds
   const [showFull, setShowFull] = useState(false);
@@ -906,14 +909,16 @@ const MessageRow = memo(function MessageRow({
           className={cn(
             "min-w-0 text-[15px] leading-[1.35] whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
             "msg-in",
-            emoji
+            sticker
+              ? "px-0"
+              : emoji
               ? "px-1 text-[40px] leading-tight"
               : cn("px-3.5 py-2", shape, mine ? "bg-emerald-500 text-on-accent" : "dm-theirs bg-zinc-800 text-zinc-100"),
             m.state === "sending" && "opacity-70",
             m.state === "failed" && "opacity-60",
           )}
         >
-          {m.text}
+          {sticker ? <StickerMessage sticker={sticker} pending={m.state === "sending"} /> : m.text}
         </div>
       </div>
       {showFull && (
