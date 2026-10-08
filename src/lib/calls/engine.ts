@@ -8,7 +8,8 @@
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
-import { native } from "@/lib/native";
+import { native, nativePlatform } from "@/lib/native";
+import { currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
 import { unlockAudio } from "@/lib/audioUnlock";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 
@@ -481,14 +482,9 @@ export class CallEngine {
       dynacast: true,
       audioCaptureDefaults: MIC,
       videoCaptureDefaults: { resolution: LK.VideoPresets.h720.resolution, facingMode: "user" },
-      publishDefaults: {
-        dtx: true, // Opus discontinuous transmission: near-zero bitrate in silence
-        red: true, // redundant audio packets (FEC-style resilience on lossy links)
-        audioPreset: LK.AudioPresets.speech,
-        simulcast: true,
-        videoCodec: "vp8",
-        videoSimulcastLayers: [LK.VideoPresets.h180, LK.VideoPresets.h360],
-      },
+      // videoPolicy: Opus speech + DTX + RED at high priority; H.264 on capable phones (VP8 backup) else VP8;
+      // simulcast q 180p/15fps/150k, h 360p/24fps/400k, f 1.2M/30fps
+      publishDefaults: publishDefaults(LK, currentCodecChoice(nativePlatform())),
     });
   }
 
@@ -549,11 +545,11 @@ export class CallEngine {
         if (mic && this.room === room) {
           this.micTrack = mic;
           if (this.s.muted) await mic.mute();
-          await room.localParticipant.publishTrack(mic, { source: LK.Track.Source.Microphone, dtx: true, red: true });
+          await room.localParticipant.publishTrack(mic, { ...micPublishOptions(), source: LK.Track.Source.Microphone });
         }
         if (this.s.camOn) {
           const cam = await this.ensureCamPreview();
-          if (cam && this.room === room) await room.localParticipant.publishTrack(cam, { source: LK.Track.Source.Camera, simulcast: true });
+          if (cam && this.room === room) await publishCamera(LK, room, cam, currentCodecChoice(nativePlatform()));
         }
         // never block "connected" on playback unlock / device enumeration (WebKit can leave play() pending without a gesture)
         void Promise.race([room.startAudio(), new Promise((r) => setTimeout(r, 1500))])
@@ -921,7 +917,7 @@ export class CallEngine {
       if (room?.state === "connected" && lk) {
         const pub = room.localParticipant.getTrackPublication(lk.Track.Source.Camera);
         if (pub?.track) await (pub.track as LocalVideoTrack).unmute();
-        else await room.localParticipant.publishTrack(cam, { source: lk.Track.Source.Camera, simulcast: true }).catch(() => {});
+        else await publishCamera(lk, room, cam, currentCodecChoice(nativePlatform())).catch(() => {});
       }
     } else {
       this.set({ camOn: false });
