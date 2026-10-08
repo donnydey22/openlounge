@@ -20,7 +20,7 @@ export class MediaError extends Error {
 }
 
 // ---------- a tiny job queue (ffmpeg: 1 at a time) ----------
-class Queue {
+export class Queue {
   private running = 0;
   private waiting: (() => void)[] = [];
   constructor(private max: number) {}
@@ -41,7 +41,7 @@ class Queue {
 export const ffQueue = new Queue(1);
 const imgQueue = new Queue(2);
 
-function run(cmd: string, args: string[], opts: { timeoutMs?: number; stdout?: boolean } = {}): Promise<{ code: number; out: Buffer; err: string }> {
+export function run(cmd: string, args: string[], opts: { timeoutMs?: number; stdout?: boolean } = {}): Promise<{ code: number; out: Buffer; err: string }> {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     const out: Buffer[] = [];

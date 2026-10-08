@@ -34,3 +34,18 @@ export const THUMB_MAX_EDGE = num(process.env.MEDIA_THUMB_MAX_EDGE, 640);
 export const VOICE_MAX_MS = num(process.env.MEDIA_VOICE_MAX_MS, 15 * 60_000);
 export const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 export const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
+
+// ---------- adaptive video (HLS ladder) + self-hosted media cache (see /workspace/media/CACHE_CONTRACT.md) ----------
+/** HLS ladder rungs (short edge, px). Only rungs <= the source's short edge are made; 240 is always made first. */
+export const HLS_RUNGS = (process.env.MEDIA_HLS_RUNGS || "240,360,480,720").split(",").map(Number).filter((n) => n >= 144 && n <= 720).sort((a, b) => a - b);
+/** videos longer than this get the MP4 only (protects CPU; uploads are capped at 200 MB anyway) */
+export const HLS_MAX_MS = num(process.env.MEDIA_HLS_MAX_MS, 30 * 60_000);
+export const HLS_ENABLED = process.env.MEDIA_HLS !== "0";
+/** background ladder jobs run at this nice level so live rooms/API keep the CPU */
+export const HLS_NICE = num(process.env.MEDIA_HLS_NICE, 10);
+/** "" → same-origin (openlounge.app); set → the self-hosted cache service's public URL */
+export const MEDIA_CDN_BASE = (process.env.MEDIA_CDN_BASE || "").replace(/\/+$/, "");
+/** origin-only listener for the cache service over Railway private networking (0 disables) */
+export const MEDIA_INTERNAL_PORT = num(process.env.MEDIA_INTERNAL_PORT, 8081);
+/** HLS/video directory links stay valid for the clip + this much */
+export const HLS_URL_EXTRA_S = num(process.env.MEDIA_HLS_URL_EXTRA_S, 15 * 60);
