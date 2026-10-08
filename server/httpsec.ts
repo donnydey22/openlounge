@@ -17,6 +17,8 @@ const hostOf = (u: string | undefined) => {
  * Allows: our own /ws (same origin, ws/wss), LiveKit (self-hosted LIVEKIT_URL + LIVEKIT_CLOUD_URL fallback, wss+https),
  * Firebase (gstatic, googleapis, recaptcha, firebaseapp) and OAuth form posts (Google / Apple).
  */
+const cspReportUri = (env: Record<string, string | undefined>) => env.CSP_REPORT_URI || "/csp-report";
+
 export function buildCsp(env: Record<string, string | undefined> = process.env, dev = env.NODE_ENV !== "production") {
   const lk = [env.LIVEKIT_URL, env.LIVEKIT_CLOUD_URL, env.NEXT_PUBLIC_WS_URL].map(hostOf).filter(Boolean);
   const lkConnect = lk.flatMap((h) => [`wss://${h}`, `https://${h}`]);
@@ -60,8 +62,11 @@ export function buildCsp(env: Record<string, string | undefined> = process.env, 
     d["frame-src"].push("https://*.paypal.com", "https://pay.google.com");
     d["img-src"].push("https://*.paypal.com", "https://*.paypalobjects.com");
   }
-  if (!dev) d["upgrade-insecure-requests"] = [];
-  if (env.CSP_REPORT_URI) d["report-uri"] = [env.CSP_REPORT_URI];
+  // upgrade-insecure-requests is ignored (with a console error) when delivered in a report-only policy
+  if (!dev && env.CSP_REPORT_ONLY !== "1") d["upgrade-insecure-requests"] = [];
+  // a report-only policy without a reporting endpoint makes WebKit log an error on every page; /csp-report is a 204 sink
+  d["report-uri"] = [cspReportUri(env)];
+  d["report-to"] = ["csp"]; // pairs with the Reporting-Endpoints header below
   return Object.entries(d)
     .map(([k, v]) => [k, ...[...new Set(v)]].join(" "))
     .join("; ");
@@ -76,6 +81,7 @@ export function securityHeaders(env: Record<string, string | undefined> = proces
       /^(1|true|yes)$/i.test(env.STICKERS_PAID_ENABLED ?? "") ? '(self "https://pay.google.com" "https://www.paypal.com" "https://www.sandbox.paypal.com")' : "()"
     }, usb=(), interest-cohort=()`,
     "X-Frame-Options": "DENY",
+    "Reporting-Endpoints": `csp="${cspReportUri(env)}"`,
     "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
   };
   // HSTS only over TLS in production (Railway terminates TLS; localhost must stay http). 1 year, no preload yet.
