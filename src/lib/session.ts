@@ -350,12 +350,16 @@ export async function unparkSession(): Promise<Creds | null> {
   }
 }
 
-/** "Not you?" / forget this device: drop the parked copy. */
+/** "Not you?" / forget this device: revoke the parked session on the server (best effort), then drop the copy. */
 export async function forgetParked() {
   const n = nativeStore();
   if (!n) return;
   try {
-    if (decodeParked(await n.getSession())) await n.clearSession();
+    const p = decodeParked(await n.getSession());
+    if (!p) return;
+    // a parked refresh token is still a live session: forgetting the device must end it, not just hide it
+    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: p.creds.refresh }) }).catch(() => {});
+    await n.clearSession();
   } catch {
     /* ignore */
   }
