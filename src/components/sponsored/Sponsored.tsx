@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Ban, Flag, Info, MoreVertical } from "lucide-react";
 import { authFetch } from "@/lib/auth";
+import { haptic } from "@/lib/native";
 import { linkify, type LinkToken } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
 import { Sheet } from "@/components/Sheet";
@@ -50,6 +51,7 @@ export function SponsoredCard({ ad, onHidden, className }: { ad: SponsoredAd; on
 
   const feedback = async (action: "hide" | "report", reason?: string) => {
     setBusy(true);
+    haptic(action === "report" ? "success" : "light");
     hiddenNow.add(ad.id);
     slotCache.clear();
     onHidden?.();
@@ -238,6 +240,18 @@ export function SponsoredSlot({ placement, chat, className }: { placement: "room
       live = false;
     };
   }, [me?.id, placement, chat, key]);
-  if (!ad) return null;
+  // one sponsored item per view: step aside while the monetization "featured" card (top of the hallway) is on screen
+  const [featured, setFeatured] = useState(false);
+  useEffect(() => {
+    if (!ad) return;
+    const sel = '[data-testid="featured-sponsored"]';
+    const check = () => setFeatured(!!document.querySelector(sel));
+    check();
+    const mo = new MutationObserver(check);
+    const root = document.querySelector("main") ?? document.body;
+    mo.observe(root, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [ad]);
+  if (!ad || featured) return null;
   return <SponsoredCard ad={ad} className={className} onHidden={() => setAd(null)} />;
 }

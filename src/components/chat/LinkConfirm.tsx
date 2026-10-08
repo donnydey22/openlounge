@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { haptic } from "@/lib/native";
 import { useRouter } from "next/navigation";
 import { ExternalLink, ShieldAlert, Copy, Check } from "lucide-react";
 import { Sheet } from "@/components/Sheet";
@@ -119,7 +120,7 @@ export function LinkConfirmHost() {
             <button
               type="button"
               onClick={() => {
-                copyText(t.href).then((ok) => ok && setCopied(true));
+                copyText(t.href).then((ok) => ok && (haptic("success"), setCopied(true)));
               }}
               className="flex h-12 items-center justify-center gap-2 rounded-full bg-zinc-800 px-4 text-sm font-semibold text-zinc-200 hover:bg-zinc-700"
               aria-label="Copy link"
