@@ -160,6 +160,17 @@ export default function SettingsPage() {
           <p className="text-sm leading-relaxed text-zinc-400">
             Open Lounge is a place for live audio conversations. Drop into a room, chat, and message the people you follow.
           </p>
+          <p className="mt-3 text-xs leading-relaxed text-zinc-500" data-testid="about-licenses">
+            Animated emoji by Google (
+            <a href="https://googlefonts.github.io/noto-emoji-animation/" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300">
+              Noto Emoji Animation
+            </a>
+            ), licensed under{" "}
+            <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300">
+              CC BY 4.0
+            </a>
+            .
+          </p>
         </section>
       </main>
 

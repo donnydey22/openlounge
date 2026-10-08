@@ -232,3 +232,25 @@ test("operator deletion queue (account_deletion_requests): same deletion path, a
   assert.equal((await api(app.base, "/api/me/delete/options", undefined, { token: tok(a) })).status, 401, "sessions revoked");
   await stopDeletionQueue();
 });
+
+test("operator account provisioning (account_provisioning_requests): screen name + password login, hash only", async () => {
+  const { startDeletionQueue, processProvisioningRequests, stopDeletionQueue } = await import("../../server/deletionQueue");
+  const { hashPassword } = await import("../../server/authx/password");
+  process.env.AUTH_EMAIL_DEV = "1"; // password sign-in needs the email provider on (prod: Gmail API configured)
+  const pw = randomBytes(18).toString("base64url");
+  const handle = `appreview_${uniq()}`;
+  startDeletionQueue(60 * 60_000);
+  await new Promise((r) => setTimeout(r, 200));
+  await sql("INSERT INTO account_provisioning_requests (username, first_name, last_name, bio, password_hash, purpose, requested_by) VALUES ($1, 'App', 'Review', 'Demo account for App Review', $2, 'app review', 'test'), ('bad_hash_x', 'X', '', '', 'plaintext', 'x', 'test')", [handle, await hashPassword(pw)], DB());
+  await processProvisioningRequests();
+  const rows = await sql<{ username: string; result: string; user_id: string | null }>("SELECT username, result, user_id FROM account_provisioning_requests ORDER BY id", [], DB());
+  assert.match(rows[0].result, /^created/);
+  assert.ok(rows[0].user_id);
+  assert.match(rows[1].result, /scrypt hash/);
+  const ok = await api(app.base, "/auth/email/login", { identifier: handle, password: pw });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await api(app.base, "/auth/email/login", { identifier: handle, password: "wrong-password-1" })).status, 401);
+  // a second run doesn't duplicate
+  assert.equal(await processProvisioningRequests(), 0);
+  await stopDeletionQueue();
+});
