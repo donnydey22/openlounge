@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
+import { handleGroupsApi } from "./groups";
 import { REPORT_REASONS, SUPPORT_EMAIL, isAdmin } from "./moderation";
 import { applyReportAction, listSuspensions, unsuspendUser } from "./adminModeration";
 import { readJsonBody } from "./httpsec";
@@ -71,6 +72,7 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   // they answer with redirects and are protected by the sealed state cookie, not by CORS.
   if (isNavigationRoute(url)) return handleNavigation(req, res, url, new URLSearchParams((req.url ?? "").split("?")[1] ?? ""));
   if (!cors(req, res)) return;
+  if (url.startsWith("/api/groups/") && (await handleGroupsApi(req, res, url))) return;
   if (url === "/api/health") {
     const db = await Promise.race([store.storageStatus(), new Promise<null>((r) => setTimeout(() => r(null), 2000))]).catch(() => null);
     return json(res, 200, {

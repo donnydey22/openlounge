@@ -40,6 +40,24 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "chat:send": { roomId: "id", text: "string" },
   "chat:delete": { roomId: "id", messageId: "id" },
   "dm:list": {},
+  // groups + unified inbox (server/groups). memberIds / userIds arrays are validated in the service (up to 200).
+  "conv:list": {},
+  "group:create": { title: "string", description: "string?", photo: "photo?" },
+  "group:get": { id: "id" },
+  "group:update": { id: "id", title: "string?", description: "string?", photo: "photo?" },
+  "group:addMembers": { id: "id" },
+  "group:removeMember": { id: "id", userId: "id" },
+  "group:setRole": { id: "id", userId: "id", role: "string" },
+  "group:transfer": { id: "id", userId: "id" },
+  "group:leave": { id: "id" },
+  "group:mute": { id: "id", muted: "bool" },
+  "group:pin": { id: "id", messageId: "id", pinned: "bool?" },
+  "group:deleteMessage": { id: "id", messageId: "id" },
+  "group:inviteCreate": { id: "id", expiresInSec: "number?", maxUses: "number?" },
+  "group:inviteRevoke": { id: "id", token: "id" },
+  "group:invitePreview": { token: "id" },
+  "group:join": { token: "id" },
+  "group:report": { id: "id", reason: "string", note: "string?" },
   "dm:history": { peerId: "id", before: "number?" },
   "dm:send": { to: "id", text: "string", clientId: "id?" },
   "dm:since": { after: "number?" },
@@ -58,7 +76,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
 };
 
 /** Events whose frames may be large (photo uploads). Everything else is capped at WS_SMALL_FRAME_BYTES. */
-export const LARGE_EVENTS = new Set(["user:photo", "auth:register"]);
+export const LARGE_EVENTS = new Set(["user:photo", "auth:register", "group:create", "group:update"]);
 
 function check(spec: Spec, v: unknown): boolean {
   const optional = spec.endsWith("?");

@@ -25,7 +25,8 @@ import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HIS
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
 import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers } from "./seed";
-import { conversationId } from "./conversation";
+import { conversationId, isGroupId } from "./conversation";
+import type { GroupService } from "./groups/service";
 import { REPORT_REASONS, REPORT_TARGETS, filterText, type ReportReason, type ReportRecord, type ReportTarget } from "./moderation";
 import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
 
@@ -332,6 +333,34 @@ export class Store {
     } catch (err) {
       console.warn(`[store] could not load data from ${from}, starting fresh:`, err);
     }
+  }
+
+  /** generic conversation layer (server/groups): set by wireGroups(); DM endpoints delegate to it for group ids */
+  groups: GroupService | null = null;
+
+  /** Conversation layer: append a fully built message to a conversation (group id or 1:1 key), persist, fan out. */
+  pushConversationMessage(key: string, msg: DirectMessage) {
+    const list = this.dms.get(key) ?? [];
+    list.push(msg);
+    if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
+    this.dms.set(key, list);
+    this.scheduleSave();
+    this.events?.dmMessage(msg);
+  }
+
+  /** Conversation layer: delete a message for everyone (the snapshot diff removes the row). */
+  removeConversationMessage(key: string, messageId: string) {
+    const list = this.dms.get(key);
+    const i = list ? list.findIndex((m) => m.id === messageId) : -1;
+    if (!list || i < 0) return false;
+    list.splice(i, 1);
+    this.scheduleSave();
+    return true;
+  }
+
+  /** Conversation layer: message fields changed in place (e.g. readAt) — persist with the next snapshot. */
+  saveSoon() {
+    this.scheduleSave();
   }
 
   private scheduleSave() {
@@ -1685,6 +1714,11 @@ export class Store {
       targetUserId = r.hostId;
       roomId = r.id;
       snapshot = [r.title, r.description].filter(Boolean).join(" — ");
+    } else if (targetType === "group") {
+      const g = this.groups?.reportSnapshot(reporterId, targetId);
+      if (!g || !g.ok) return { ok: false as const, status: 404, error: "Group not found" };
+      targetUserId = g.ownerId;
+      snapshot = g.snapshot;
     } else if (targetType === "message") {
       const rooms = roomIdIn ? [this.rooms.get(roomIdIn)].filter((r): r is RoomRecord => !!r) : [...this.rooms.values()];
       const hit = rooms.flatMap((r) => r.chat).find((m) => m.id === targetId);
@@ -1697,7 +1731,7 @@ export class Store {
       let hit: DirectMessage | undefined;
       for (const [key, list] of this.dms) {
         const [a, b] = key.split("|");
-        if (a !== reporterId && b !== reporterId) continue;
+        if (isGroupId(key) ? !this.groups?.canAccess(reporterId, key) : a !== reporterId && b !== reporterId) continue;
         hit = list.find((m) => m.id === targetId);
         if (hit) break;
       }
@@ -1765,6 +1799,7 @@ export class Store {
    * whether the unread pointer moved, and the read receipt to push to the sender (null if nothing new was seen).
    */
   markDmRead(userId: string, peerId: string, upToMessageId?: unknown): { changed: boolean; receipt: DmReadReceipt | null } {
+    if (isGroupId(peerId)) return this.groups?.markRead(userId, peerId, upToMessageId) ?? { changed: false, receipt: null };
     let reads = this.dmReads.get(userId);
     if (!reads) this.dmReads.set(userId, (reads = new Map()));
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
@@ -1791,7 +1826,7 @@ export class Store {
   }
 
   unreadDmCount(userId: string) {
-    return this.conversations(userId).reduce((n, c) => n + c.unread, 0);
+    return this.conversations(userId).reduce((n, c) => n + c.unread, 0) + (this.groups?.unreadTotal(userId) ?? 0);
   }
 
   conversations(userId: string): ConversationSummary[] {
@@ -1812,6 +1847,7 @@ export class Store {
   }
 
   dmHistory(userId: string, peerId: string, before?: number, limit = 60) {
+    if (isGroupId(peerId)) return this.groups?.history(userId, peerId, before, limit) ?? { messages: [], hasMore: false };
     if (this.isBlocked(userId, peerId)) return { messages: [], hasMore: false };
     const list = this.dms.get(conversationId(userId, peerId)) ?? [];
     const older = before ? list.filter((m) => m.createdAt < before) : list;
@@ -1827,11 +1863,13 @@ export class Store {
       if (this.isBlockedEither(a, b)) continue;
       for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) out.push(list[i]);
     }
+    if (this.groups) out.push(...this.groups.since(userId, after));
     out.sort((x, y) => x.createdAt - y.createdAt);
     return { messages: out.slice(-limit), hasMore: out.length > limit };
   }
 
   sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
+    if (isGroupId(toId)) return this.groups ? this.groups.send(fromId, toId, rawText, clientId) : { ok: false as const, error: "Group not found" };
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };

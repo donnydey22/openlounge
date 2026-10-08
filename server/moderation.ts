@@ -65,7 +65,7 @@ export function filterText(input: string): FilterResult {
 
 export const REPORT_REASONS = ["spam", "harassment", "hate", "sexual", "violence", "self_harm", "impersonation", "illegal", "other"] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
-export const REPORT_TARGETS = ["user", "room", "message", "dm"] as const;
+export const REPORT_TARGETS = ["user", "room", "message", "dm", "group"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
 export interface ReportRecord {

@@ -6,6 +6,8 @@ import type { Ack, DirectMessage, Role } from "../src/lib/types";
 import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, createJoinToken, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { store } from "./store";
+import { isGroupId } from "./conversation";
+import { attachGroupHandlers, groupHistory, groupMessage, groupTyping, groups, wireGroups } from "./groups";
 import { OtpService, normalizePhone } from "./otp";
 import { dropTicket, getTicket, issueTicket } from "./authx/signup";
 import { ACTIVITY_THROTTLE_MS, PRESENCE_CHANNEL, Presence, type PresenceStatus } from "./presence";
@@ -61,6 +63,8 @@ export function registerRealtime(io: WsHub) {
   });
   /** pushed DMs carry the sender's current photo so banners / notifications can show it (additive field) */
   const withSenderPhoto = (m: DirectMessage): DirectMessage => ({ ...m, fromPhotoUrl: store.publicUser(m.fromId)?.photoUrl ?? null });
+  // generic conversation layer (groups): hooks the store's DM paths for group ids + per-member fan-out
+  wireGroups(io, withOnline);
   const otp = new OtpService();
   // a user is "in the foreground" when any of their connections is visible (not a backgrounded WebView / hidden tab)
   setForegroundCheck((userId) => {
@@ -194,6 +198,8 @@ export function registerRealtime(io: WsHub) {
       bg(push()?.dmRead(receipt.readerId, receipt.peerId));
     },
     dmMessage(msg) {
+      if (isGroupId(msg.toId)) return groupMessage(msg);
+      groups.noteDm(msg);
       // deliver to every tab of both participants (sender's other tabs stay in sync)
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
@@ -528,6 +534,9 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => ack(store.deleteChat(roomId, userId, messageId))),
     );
 
+    // ----- groups + unified inbox (group:*, conv:list) -----
+    attachGroupHandlers(socket, authed);
+
     // ----- direct messages -----
     socket.on("dm:list", (_: unknown, ack: AckFn = noop) =>
       authed(ack, (userId) => {
@@ -538,6 +547,7 @@ export function registerRealtime(io: WsHub) {
 
     socket.on("dm:history", ({ peerId, before }: { peerId: string; before?: number }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
+        if (isGroupId(peerId)) return ack(groupHistory(userId, peerId, before));
         const peer = store.publicUser(peerId);
         if (!peer) return ack({ ok: false, error: "User not found" });
         ack({ ok: true, peer: withOnline(peer), ...store.dmHistory(userId, peerId, before) });
@@ -585,6 +595,10 @@ export function registerRealtime(io: WsHub) {
       while (typingWindow.length && now - typingWindow[0] > 10_000) typingWindow.shift();
       if (typingWindow.length >= TYPING_MAX_PER_10S) return; // drop silently
       if (ev === "dm:typing" && now - (lastTypingTo.get(to) ?? 0) < TYPING_MIN_GAP_MS) return;
+      if (isGroupId(to)) {
+        typingWindow.push(now);
+        return groupTyping(userId, to, ev);
+      }
       if (!store.publicUser(to) || store.isBlockedEither(userId, to)) return;
       typingWindow.push(now);
       if (ev === "dm:typing") lastTypingTo.set(to, now);

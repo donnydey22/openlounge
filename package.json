@@ -26,6 +26,7 @@
     "test:typing": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/typing/*.test.ts",
     "test:store": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/store-compliance/*.test.ts",
     "test:invites": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/invites/*.test.ts",
+    "test:groups": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/groups/*.test.ts",
     "test:presence": "node --import tsx --test --test-force-exit tests/presence/*.test.ts"
   },
   "engines": {
