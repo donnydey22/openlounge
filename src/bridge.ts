@@ -10,6 +10,10 @@
 //                                       | 'soft' | 'rigid' | 'selection' | 'success' | 'warning' | 'error'
 //     openAuth(url: string):     Promise<void>   Google/Apple start URL → ASWebAuthenticationSession
 //     openExternal(url: string): void   https URL → SFSafariViewController
+//     haptics(type: string):     void   0.3.0 cross-platform contract (/workspace/native/HAPTICS_BRIDGE.md):
+//                                       'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error' | 'selection'
+//     openBrowser(url: string):  void   0.3.0 cross-platform contract (/workspace/native/BROWSER_BRIDGE.md):
+//                                       external https → SFSafariViewController; openlounge.app → stays in the app
 //     __expo: true, platform: 'ios', version: '0.2.3', capabilities: string[]
 //   }
 //
@@ -197,7 +201,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'openAuth', 'openExternal', 'push', 'share', 'contacts']),
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts']),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
       getPushToken: function () { return typeof window.__olExpoPushToken === 'string' ? window.__olExpoPushToken : ''; },
@@ -217,6 +221,9 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       clearSession: function () { return call('clearSession').then(function () {}); },
       ready: function () { ready('page'); },
       haptic: function (kind) { post({ __ol: 1, method: 'haptic', value: String(kind || 'light') }); },
+      // 0.3.0 contract: same transport, the 7 portable types (unknown types are ignored natively); returns true if sent
+      haptics: function (type) { return post({ __ol: 1, method: 'haptic', value: String(type || 'light') }); },
+      openBrowser: function (url) { return post({ __ol: 1, method: 'openExternal', value: absolute(url) }); },
       openAuth: function (url) { return call('openAuth', absolute(url)).then(function () {}); },
       openExternal: function (url) { post({ __ol: 1, method: 'openExternal', value: absolute(url) }); }
     };
