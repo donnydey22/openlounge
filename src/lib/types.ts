@@ -87,7 +87,7 @@ export interface UserProfile {
   currentRoom: { id: string; title: string } | null;
 }
 
-export type Ack<T = Record<string, never>> = ({ ok: true } & T) | { ok: false; error: string };
+export type Ack<T = Record<string, never>> = ({ ok: true } & T) | { ok: false; error: string; reason?: string };
 
 
 export const TOPICS = [
@@ -120,6 +120,13 @@ export const AVATAR_COLORS = [
 export const CHAT_MAX_LENGTH = 500;
 export const ROOM_CHAT_HISTORY = 200;
 
+/** Immutable, server-generated snapshot shown above a reply. It never exposes arbitrary client HTML. */
+export interface MessageReply {
+  id: string;
+  authorName: string;
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -132,6 +139,10 @@ export interface ChatMessage {
   authorIsBot: boolean;
   text: string;
   createdAt: number;
+  /** Original message context captured by the server at send time. */
+  replyTo?: MessageReply;
+  /** Server timestamp set only when the author changes message text. */
+  editedAt?: number;
 }
 
 export interface DirectMessage {
@@ -143,6 +154,10 @@ export interface DirectMessage {
   toId: string;
   text: string;
   createdAt: number;
+  /** Original message context captured by the server at send time. */
+  replyTo?: MessageReply;
+  /** Server timestamp set only when the sender changes message text. */
+  editedAt?: number;
   /** When the recipient saw it (read receipt, epoch ms); null/absent = sent, not seen yet */
   readAt?: number | null;
   /** Sender's photo (on pushed / catch-up messages; not stored) */

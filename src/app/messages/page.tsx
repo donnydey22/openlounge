@@ -7,6 +7,7 @@ import { Loader2, PenSquare, Search } from "lucide-react";
 import type { ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
+import { MessageText } from "@/components/chat/MessageText";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -66,12 +67,18 @@ export default function MessagesPage() {
         setTimeout(() => setTyping((t) => new Set([...t].filter((x) => x !== from))), 3500),
       );
     };
+    const onUpdated = (m: DirectMessage) => {
+      if (m.fromId !== meId && m.toId !== meId) return;
+      setConversations((list) => list?.map((conversation) => (conversation.lastMessage.id === m.id ? { ...conversation, lastMessage: m } : conversation)) ?? list);
+    };
     socket.on("dm:message", onMsg);
     socket.on("dm:typing", onTyping);
+    socket.on("dm:updated", onUpdated);
     const timers = typingTimers.current;
     return () => {
       socket.off("dm:message", onMsg);
       socket.off("dm:typing", onTyping);
+      socket.off("dm:updated", onUpdated);
       for (const t of timers.values()) clearTimeout(t);
     };
   }, [socket, meId, load]);
@@ -144,7 +151,7 @@ export default function MessagesPage() {
                           ) : (
                             <>
                               {mine && <span className="text-zinc-500">You: </span>}
-                              {c.lastMessage.text}
+                              <MessageText text={c.lastMessage.text} />
                             </>
                           )}
                         </p>

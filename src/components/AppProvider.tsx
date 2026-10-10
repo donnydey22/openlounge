@@ -267,12 +267,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {});
     const catchUp = async () => {
       if (!syncedAt) return void markSynced(); // first session on this page: nothing to catch up on
-      const after = syncedAt - 2_000; // small overlap for clock/ordering jitter; dedup by id below
+      // Small overlap for clock/ordering jitter. Page forward by (createdAt,id) until the whole backlog is caught up.
+      let after = syncedAt - 2_000;
+      let afterId: string | undefined;
       try {
-        const r = await s.request<{ ok: boolean; messages?: DirectMessage[] }>("dm:since", { after });
-        for (const m of r?.messages ?? []) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+        while (true) {
+          const r = await s.request<{ ok: boolean; messages?: DirectMessage[]; hasMore?: boolean }>("dm:since", { after, ...(afterId ? { afterId } : {}) });
+          const batch = r?.messages ?? [];
+          for (const m of batch) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+          if (!r?.hasMore || !batch.length) break;
+          const last = batch[batch.length - 1];
+          after = last.createdAt;
+          afterId = last.id;
+        }
       } catch {
-        /* dropped again — next reconnect retries from the same point */
+        // Do not advance the watermark: a later reconnect must retry from the last completed messages.
+        return;
       }
       void markSynced();
     };
@@ -429,6 +439,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           throw toFriendly(e);
         }
         if (res && res.ok === false) {
+          if (res.reason === "temporarily_unavailable") throw new FriendlyError(NETWORK_COPY, true);
           if (attempt === 0 && res.error === "Not signed in" && loadCreds()) {
             await resumeRef.current?.().catch(() => {});
             continue;

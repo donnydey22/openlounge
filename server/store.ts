@@ -88,8 +88,10 @@ export interface StoreEvents {
   toast(userId: string, message: string): void;
   kickSocket(socketId: string, roomId: string, reason: string): void;
   chatMessage(msg: ChatMessage): void;
+  chatUpdated(msg: ChatMessage): void;
   chatDeleted(roomId: string, messageId: string): void;
   dmMessage(msg: DirectMessage): void;
+  dmUpdated(msg: DirectMessage): void;
   dmTyping(fromId: string, toId: string): void;
   /** someone saw messages in a DM conversation (read receipt for the sender) */
   dmRead?(receipt: DmReadReceipt): void;
@@ -165,8 +167,14 @@ export class Store {
   private hiddenSockets = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
   private events: StoreEvents | null = null;
+  private unpublishedDms = new Map<string, DirectMessage>();
+  private unpublishedDmUpdates = new Map<string, DirectMessage>();
   private backend: Persistence | null = null;
   private flushChain: Promise<void> = Promise.resolve();
+  private mutationVersion = 0;
+  private persistedVersion = 0;
+  private durableFlushTarget = 0;
+  private durableFlushPromise: Promise<void> | null = null;
   private retryDelay = 0;
 
   constructor() {
@@ -321,6 +329,7 @@ export class Store {
   }
 
   private scheduleSave() {
+    this.mutationVersion++;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => this.flush(), 800);
   }
@@ -338,12 +347,45 @@ export class Store {
     return this.flushChain;
   }
 
+  /**
+   * Force a persistence attempt and preserve failures for operations whose success must mean durable storage.
+   * The ordinary debounced flush remains best-effort; callers such as dm:send can await this strict variant.
+   */
+  flushDurably(): Promise<void> {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const target = this.mutationVersion;
+    this.durableFlushTarget = Math.max(this.durableFlushTarget, target);
+    if (!this.durableFlushPromise) {
+      const run = this.flushChain.then(async () => {
+        // DMs arriving during a transaction are folded into the same follow-up save instead of
+        // forcing one full snapshot/transaction per socket request.
+        while (this.persistedVersion < this.durableFlushTarget) await this.saveSnapshot();
+      });
+      this.durableFlushPromise = run;
+      this.flushChain = run.catch(() => {});
+      void run.then(
+        () => { if (this.durableFlushPromise === run) this.durableFlushPromise = null; },
+        () => { if (this.durableFlushPromise === run) this.durableFlushPromise = null; },
+      );
+    }
+    const run = this.durableFlushPromise;
+    return run.then(() => (this.persistedVersion < target ? this.flushDurably() : undefined));
+  }
+
   private async saveSnapshot() {
+    const version = this.mutationVersion;
     const backend = this.backend;
-    if (!backend) return;
+    if (!backend) {
+      this.persistedVersion = Math.max(this.persistedVersion, version);
+      this.publishPersistedDms();
+      return;
+    }
     try {
       await backend.save(this.snapshot());
+      this.persistedVersion = Math.max(this.persistedVersion, version);
       this.retryDelay = 0;
+      this.publishPersistedDms();
     } catch (err) {
       this.retryDelay = Math.min(this.retryDelay ? this.retryDelay * 2 : 2000, 60_000);
       console.error(`[store] ${backend.kind} save failed, retrying in ${this.retryDelay / 1000}s: ${errText(err)}`);
@@ -1492,7 +1534,7 @@ export class Store {
 
   // ---------- room chat ----------
 
-  private pushChat(room: RoomRecord, authorId: string, text: string, createdAt = Date.now()): ChatMessage | null {
+  private pushChat(room: RoomRecord, authorId: string, text: string, createdAt = Date.now(), replyTo?: ChatMessage["replyTo"]): ChatMessage | null {
     const u = this.users.get(authorId);
     const p = room.participants.get(authorId);
     if (!u || !p) return null;
@@ -1507,6 +1549,7 @@ export class Store {
       authorIsBot: u.isBot,
       text,
       createdAt,
+      ...(replyTo ? { replyTo } : {}),
     };
     room.chat.push(msg);
     if (room.chat.length > ROOM_CHAT_HISTORY) room.chat.splice(0, room.chat.length - ROOM_CHAT_HISTORY);
@@ -1530,7 +1573,7 @@ export class Store {
     return false;
   }
 
-  sendChat(roomId: string, userId: string, rawText: unknown) {
+  sendChat(roomId: string, userId: string, rawText: unknown, rawReplyToId?: unknown) {
     const ctx = this.participant(roomId, userId);
     if (!ctx) return { ok: false as const, error: "Join the room to chat" };
     const c = clean(rawText, CHAT_MAX_LENGTH);
@@ -1538,8 +1581,14 @@ export class Store {
     const text = c.text;
     if (!text) return { ok: false as const, error: "Message is empty" };
     if (this.rateLimited(userId)) return { ok: false as const, error: "Slow down a little 🙂" };
+    let replyTo: ChatMessage["replyTo"];
+    if (rawReplyToId !== undefined) {
+      const target = typeof rawReplyToId === "string" ? ctx.room.chat.find((message) => message.id === rawReplyToId) : undefined;
+      if (!target) return { ok: false as const, error: "That message is no longer available to reply to" };
+      replyTo = { id: target.id, authorName: target.authorName, text: target.text };
+    }
     const firstMessage = !ctx.room.chat.some((m) => m.authorId === userId);
-    const msg = this.pushChat(ctx.room, userId, text)!;
+    const msg = this.pushChat(ctx.room, userId, text, Date.now(), replyTo)!;
     this.events?.chatMessage(msg);
 
     // demo flavour: someone in a seeded room waves at newcomers
@@ -1554,6 +1603,22 @@ export class Store {
       }, 1800 + Math.random() * 2000);
     }
     return { ok: true as const, message: msg };
+  }
+
+  editChat(roomId: string, userId: string, messageId: string, rawText: unknown) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.ended) return { ok: false as const, error: "Room not found" };
+    const message = room.chat.find((m) => m.id === messageId);
+    if (!message) return { ok: false as const, error: "Message not found" };
+    if (message.authorId !== userId) return { ok: false as const, error: "Only the author can edit this message" };
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, error: c.error };
+    if (!c.text) return { ok: false as const, error: "Message is empty" };
+    if (c.text === message.text) return { ok: true as const, message };
+    const updated = { ...message, text: c.text, editedAt: Date.now() };
+    Object.assign(message, updated);
+    this.events?.chatUpdated(updated);
+    return { ok: true as const, message: updated };
   }
 
   deleteChat(roomId: string, userId: string, messageId: string) {
@@ -1785,20 +1850,22 @@ export class Store {
     return { messages: older.slice(-limit), hasMore: older.length > limit };
   }
 
-  /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
-  dmsSince(userId: string, after: number, limit = 200) {
+  /** All DMs to/from userId after the inclusive time/id cursor, oldest first — reconnect catch-up. */
+  dmsSince(userId: string, after: number, limit = 200, afterId?: string) {
     const out: DirectMessage[] = [];
     for (const [key, list] of this.dms) {
       const [a, b] = key.split("|");
       if (a !== userId && b !== userId) continue;
       if (this.isBlockedEither(a, b)) continue;
-      for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) out.push(list[i]);
+      for (const message of list) {
+        if (message.createdAt > after || (message.createdAt === after && (!afterId || message.id.localeCompare(afterId) > 0))) out.push(message);
+      }
     }
-    out.sort((x, y) => x.createdAt - y.createdAt);
-    return { messages: out.slice(-limit), hasMore: out.length > limit };
+    out.sort((x, y) => x.createdAt - y.createdAt || x.id.localeCompare(y.id));
+    return { messages: out.slice(0, limit), hasMore: out.length > limit };
   }
 
-  sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
+  sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown, rawReplyToId?: unknown) {
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
@@ -1811,18 +1878,61 @@ export class Store {
     if (cid) {
       // retried send (ack lost on a dropped connection): return the stored message instead of a duplicate
       const recent = this.dms.get(conversationId(fromId, toId)) ?? [];
-      for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--)
-        if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i] };
+      for (let i = recent.length - 1; i >= 0; i--)
+        if (recent[i].clientId === cid && recent[i].fromId === fromId)
+          return { ok: true as const, message: recent[i], needsPublish: this.unpublishedDms.has(recent[i].id) };
     }
     if (this.rateLimited(fromId)) return { ok: false as const, error: "Slow down a little 🙂" };
-    const msg = this.appendDm(fromId, toId, text, cid);
+    const list = this.dms.get(conversationId(fromId, toId)) ?? [];
+    let replyTo: DirectMessage["replyTo"];
+    if (rawReplyToId !== undefined) {
+      const target = typeof rawReplyToId === "string" ? list.find((message) => message.id === rawReplyToId) : undefined;
+      if (!target) return { ok: false as const, error: "That message is no longer available to reply to" };
+      replyTo = { id: target.id, authorName: target.fromName, text: target.text };
+    }
+    const msg = this.appendDm(fromId, toId, text, cid, false, replyTo);
+    this.unpublishedDms.set(msg.id, msg);
     // sending implies you've read everything before it
     this.markDmRead(fromId, toId);
     if (DEMO_SEED && this.isBot(toId)) this.scheduleBotDmReply(toId, fromId);
-    return { ok: true as const, message: msg };
+    return { ok: true as const, message: msg, needsPublish: true };
   }
 
-  private appendDm(fromId: string, toId: string, text: string, clientId?: string) {
+  /** Fan out a direct message only after the persistence transaction is confirmed. */
+  publishDm(message: DirectMessage) {
+    if (!this.unpublishedDms.has(message.id)) return;
+    this.unpublishedDms.delete(message.id);
+    this.events?.dmMessage(message);
+  }
+
+  /** Fan out an edited DM only after its persistence transaction is confirmed. */
+  publishDmUpdate(message: DirectMessage) {
+    if (!this.unpublishedDmUpdates.has(message.id)) return;
+    this.unpublishedDmUpdates.delete(message.id);
+    this.events?.dmUpdated(message);
+  }
+
+  private publishPersistedDms() {
+    for (const message of this.unpublishedDms.values()) this.publishDm(message);
+    for (const message of this.unpublishedDmUpdates.values()) this.publishDmUpdate(message);
+  }
+
+  editDm(userId: string, peerId: string, messageId: string, rawText: unknown) {
+    const message = this.dms.get(conversationId(userId, peerId))?.find((m) => m.id === messageId);
+    if (!message) return { ok: false as const, error: "Message not found" };
+    if (message.fromId !== userId) return { ok: false as const, error: "Only the sender can edit this message" };
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, error: c.error };
+    if (!c.text) return { ok: false as const, error: "Message is empty" };
+    if (c.text === message.text) return { ok: true as const, message, needsPublish: this.unpublishedDmUpdates.has(message.id) };
+    const updated = { ...message, text: c.text, editedAt: Date.now() };
+    Object.assign(message, updated);
+    this.unpublishedDmUpdates.set(message.id, message);
+    this.scheduleSave();
+    return { ok: true as const, message, needsPublish: true };
+  }
+
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string, emit = true, replyTo?: DirectMessage["replyTo"]) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -1838,12 +1948,13 @@ export class Store {
       createdAt: Math.max(Date.now(), (list[list.length - 1]?.createdAt ?? 0) + 1),
       readAt: null,
       ...(clientId ? { clientId } : {}),
+      ...(replyTo ? { replyTo } : {}),
     };
     list.push(msg);
     if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
-    this.events?.dmMessage(msg);
+    if (emit) this.events?.dmMessage(msg);
     return msg;
   }
 

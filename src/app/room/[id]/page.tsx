@@ -303,11 +303,16 @@ export default function RoomPage() {
     const onDeleted = ({ roomId: rid, messageId }: { roomId: string; messageId: string }) => {
       if (rid === roomId) setChat((c) => c.filter((x) => x.id !== messageId));
     };
+    const onUpdated = (m: ChatMessage) => {
+      if (m.roomId === roomId) setChat((c) => c.map((current) => (current.id === m.id ? m : current)));
+    };
     socket.on("chat:message", onMessage);
     socket.on("chat:deleted", onDeleted);
+    socket.on("chat:updated", onUpdated);
     return () => {
       socket.off("chat:message", onMessage);
       socket.off("chat:deleted", onDeleted);
+      socket.off("chat:updated", onUpdated);
     };
   }, [socket, roomId, meId]);
 
@@ -318,9 +323,10 @@ export default function RoomPage() {
   }, [preview]);
 
   const sendChat = useCallback(
-    async (text: string) => {
+    async (text: string, context?: { replyToId?: string; editMessageId?: string }) => {
       try {
-        await request("chat:send", { roomId, text });
+        if (context?.editMessageId) await request("chat:edit", { roomId, messageId: context.editMessageId, text });
+        else await request("chat:send", { roomId, text, ...(context?.replyToId ? { replyToId: context.replyToId } : {}) });
         return true;
       } catch (e) {
         reportError(e);

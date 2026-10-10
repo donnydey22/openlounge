@@ -74,6 +74,15 @@ async function signup(phone: string, username: string) {
   return { c, user: r.user, access: r.access, refresh: r.refresh };
 }
 
+async function waitFor(check: () => boolean, label: string, timeoutMs = 5_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
 before(async () => {
   await resetDb();
 });
@@ -147,17 +156,18 @@ test("ws: schema validation, oversize frames, rate limit, foreign-origin upgrade
   await assert.rejects(connect({ origin: "https://evil.example" }), /403/);
 });
 
-test("dm:send idempotency survives a server restart (client_id persisted)", async () => {
+test("dm:send ack is durable and idempotency survives an abrupt server restart", async () => {
   const a = await signup("+15550001001", "alice_it");
   const b = await signup("+15550001002", "bob_it");
   const m1 = await a.c.req("dm:send", { to: b.user.id, text: "hello", clientId: "cid-123" });
-  const m2 = await a.c.req("dm:send", { to: b.user.id, text: "hello", clientId: "cid-123" });
   assert.ok(m1.ok);
-  assert.equal(m1.message.id, m2.message.id);
   a.c.ws.close();
   b.c.ws.close();
-  // SIGTERM flushes to Postgres; the new process loads client_id from the DB
-  await stopServer(srv);
+  // SIGKILL bypasses the normal shutdown flush. If the positive ack arrived, the transaction must already be durable.
+  const crashed = srv!;
+  const exited = new Promise<void>((resolve) => crashed.once("exit", () => resolve()));
+  crashed.kill("SIGKILL");
+  await exited;
   srv = await startServer();
   const c = await connect();
   const resumed = await c.req("session:resume", { token: a.refresh });
@@ -167,6 +177,71 @@ test("dm:send idempotency survives a server restart (client_id persisted)", asyn
   const h = await c.req("dm:history", { peerId: b.user.id });
   assert.equal(h.messages.filter((m: { text: string }) => m.text === "hello").length, 1);
   c.ws.close();
+});
+
+test("dm retry delivers one durable message after a simulated lost acknowledgment", async () => {
+  const a = await signup("+15550001011", "lossy_alice");
+  const b = await signup("+15550001012", "lossy_bob");
+  const lossy = await connect();
+  assert.ok((await lossy.req("session:resume", { token: a.refresh })).ok);
+  const clientId = "simulated-loss-ack";
+  // Send a valid request but deliberately never attach a pending response handler: the server's ack is ignored,
+  // exactly like a radio handoff that drops the return frame after the request was delivered.
+  lossy.ws.send(JSON.stringify({ t: "req", id: 97, ev: "dm:send", data: { to: b.user.id, text: "one resilient message", clientId } }));
+  await waitFor(() => b.c.events.some((e) => e.ev === "dm:message" && e.data.text === "one resilient message"), "recipient delivery before simulated link loss");
+  lossy.ws.terminate();
+  await lossy.closed;
+
+  const retry = await connect();
+  assert.ok((await retry.req("session:resume", { token: a.refresh })).ok);
+  const recovered = await retry.req("dm:send", { to: b.user.id, text: "one resilient message", clientId });
+  assert.ok(recovered.ok);
+  const history = await retry.req("dm:history", { peerId: b.user.id });
+  assert.equal(history.messages.filter((m: { text: string }) => m.text === "one resilient message").length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(b.c.events.filter((e) => e.ev === "dm:message" && e.data.text === "one resilient message").length, 1);
+  retry.ws.close();
+  a.c.ws.close();
+  b.c.ws.close();
+});
+
+test("DM replies retain a server-authored parent snapshot and only the author can edit", async () => {
+  const a = await signup("+15550001021", "reply_alice");
+  const b = await signup("+15550001022", "reply_bob");
+  const root = await a.c.req("dm:send", { to: b.user.id, text: "original thought", clientId: "reply-root" });
+  assert.ok(root.ok);
+  const reply = await b.c.req("dm:send", { to: a.user.id, text: "following up", clientId: "reply-child", replyToId: root.message.id });
+  assert.deepEqual(reply.message.replyTo, { id: root.message.id, authorName: root.message.fromName, text: "original thought" });
+  const forbidden = await b.c.req("dm:edit", { peerId: a.user.id, messageId: root.message.id, text: "not allowed" });
+  assert.equal(forbidden.ok, false);
+  const edited = await a.c.req("dm:edit", { peerId: b.user.id, messageId: root.message.id, text: "edited thought" });
+  assert.ok(edited.ok);
+  assert.equal(edited.message.text, "edited thought");
+  const history = await a.c.req("dm:history", { peerId: b.user.id });
+  assert.equal(history.messages.find((m: { id: string }) => m.id === root.message.id).text, "edited thought");
+  assert.deepEqual(history.messages.find((m: { id: string }) => m.id === reply.message.id).replyTo, reply.message.replyTo);
+  a.c.ws.close();
+  b.c.ws.close();
+});
+
+test("room chat replies and author edits broadcast without granting edits to other participants", async () => {
+  const a = await signup("+15550001031", "room_alice");
+  const b = await signup("+15550001032", "room_bob");
+  const created = await a.c.req("room:create", { title: "Reply test", topic: "Tech" });
+  assert.ok(created.ok);
+  assert.ok((await a.c.req("room:join", { roomId: created.roomId })).ok);
+  assert.ok((await b.c.req("room:join", { roomId: created.roomId })).ok);
+  const root = await a.c.req("chat:send", { roomId: created.roomId, text: "room root" });
+  assert.ok(root.ok);
+  const reply = await b.c.req("chat:send", { roomId: created.roomId, text: "room reply", replyToId: root.message.id });
+  assert.deepEqual(reply.message.replyTo, { id: root.message.id, authorName: root.message.authorName, text: "room root" });
+  const forbidden = await b.c.req("chat:edit", { roomId: created.roomId, messageId: root.message.id, text: "not allowed" });
+  assert.equal(forbidden.ok, false);
+  const edited = await a.c.req("chat:edit", { roomId: created.roomId, messageId: root.message.id, text: "room root edited" });
+  assert.ok(edited.ok);
+  await waitFor(() => b.c.events.some((e) => e.ev === "chat:updated" && e.data.id === root.message.id && e.data.text === "room root edited"), "room edit broadcast");
+  a.c.ws.close();
+  b.c.ws.close();
 });
 
 test("graceful shutdown: sockets get close code 1012, readyz flips, process exits 0", async () => {

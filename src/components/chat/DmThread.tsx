@@ -3,7 +3,7 @@
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, X } from "lucide-react";
+import { ArrowDown, Ban, ChevronLeft, Flag, Loader2, MoreHorizontal, Pencil, Reply, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -14,6 +14,8 @@ import { cn, firstName } from "@/lib/utils";
 import { useApp } from "../AppProvider";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { MessageText } from "./MessageText";
+import { ReplyPreview } from "./ReplyPreview";
 import { dayDiff, formatClock, formatDaySeparator, formatFull, formatListTime, serverNow, useClockTick } from "@/lib/time";
 import { FollowButton } from "../UserRow";
 import { usePresence } from "@/hooks/usePresence";
@@ -94,9 +96,9 @@ function mergeMessages(list: Item[], incoming: DirectMessage[]): Item[] {
         next = next === list ? [...list] : next;
         // swap in place (same key → no flicker); never lose a read receipt we already have
         next[i] = { ...m, clientId: next[i].clientId ?? m.clientId, readAt: m.readAt ?? next[i].readAt ?? null };
-      } else if (m.readAt && !next[i].readAt) {
+      } else if ((m.editedAt ?? 0) > (next[i].editedAt ?? 0) || (m.readAt && !next[i].readAt)) {
         next = next === list ? [...list] : next;
-        next[i] = { ...next[i], readAt: m.readAt }; // seen while we were away (history refetch after reconnect)
+        next[i] = { ...next[i], ...m, clientId: next[i].clientId ?? m.clientId, readAt: m.readAt ?? next[i].readAt ?? null };
       }
       continue;
     }
@@ -143,6 +145,7 @@ export function DmThread({
   const [error, setError] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const [unseenBelow, setUnseenBelow] = useState(0);
+  const [composerAction, setComposerAction] = useState<import("./ChatComposer").ComposerAction | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const smoothNext = useRef(false);
@@ -206,6 +209,7 @@ export function DmThread({
     setMessages(null);
     setError(null);
     setUnseenBelow(0);
+    setComposerAction(null);
     stickToBottom.current = true;
   }, [peerId]);
 
@@ -274,10 +278,15 @@ export function DmThread({
       if (typingTimer.current) clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setPeerTyping(false), 3500);
     };
+    const onUpdated = (m: DirectMessage) => {
+      const inThread = (m.fromId === peerId && m.toId === me?.id) || (m.fromId === me?.id && m.toId === peerId);
+      if (inThread) setMessages((list) => mergeMessages(list ?? [], [m]));
+    };
     const onVisible = () => appVisible() && markRead();
     socket.on("dm:message", onMsg);
     socket.on("dm:typing", onTyping);
     socket.on("dm:read-receipt", onReceipt);
+    socket.on("dm:updated", onUpdated);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
     window.addEventListener("focus", onVisible);
@@ -285,6 +294,7 @@ export function DmThread({
       socket.off("dm:message", onMsg);
       socket.off("dm:typing", onTyping);
       socket.off("dm:read-receipt", onReceipt);
+      socket.off("dm:updated", onUpdated);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener(NATIVE_VISIBILITY_EVENT, onVisible);
       window.removeEventListener("focus", onVisible);
@@ -362,6 +372,9 @@ export function DmThread({
   // A send that hasn't been acked after SEND_STALL_MS turns into a quiet "Not delivered · Retry" (never a
   // banner); it is still re-sent automatically when the socket comes back (the server dedupes by clientId).
   const stallTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const retryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const retryAttempts = useRef(new Map<string, number>());
+  const deliverRef = useRef<(item: Item) => void>(() => {});
   const armStall = useCallback((clientId: string) => {
     const timers = stallTimers.current;
     const old = timers.get(clientId);
@@ -376,36 +389,74 @@ export function DmThread({
   }, []);
   useEffect(() => {
     const timers = stallTimers.current;
+    const retries = retryTimers.current;
     return () => {
       for (const t of timers.values()) clearTimeout(t);
+      for (const t of retries.values()) clearTimeout(t);
       timers.clear();
+      retries.clear();
+      retryAttempts.current.clear();
     };
   }, []);
 
   const deliver = useCallback(
     async (item: Item) => {
+      const clientId = item.clientId;
+      if (clientId) {
+        const retryTimer = retryTimers.current.get(clientId);
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimers.current.delete(clientId);
+      }
       try {
-        const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId });
+        const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId, ...(item.replyTo ? { replyToId: item.replyTo.id } : {}) });
         if (item.clientId) {
           clearTimeout(stallTimers.current.get(item.clientId));
           stallTimers.current.delete(item.clientId);
+          retryAttempts.current.delete(item.clientId);
         }
         setMessages((list) => mergeMessages(list ?? [], [{ ...r.message, clientId: item.clientId }]));
       } catch (e) {
-        // dropped connection: stays "sending" and is re-sent on reconnect; real errors → failed (tap to retry)
+        // Transient transport/storage errors keep retrying with capped backoff; reconnect also flushes the queue.
         const transient = isTransient(e);
-        if (!transient && item.clientId) {
+        if (item.clientId && transient && !retryTimers.current.has(item.clientId)) {
+          const attempt = retryAttempts.current.get(item.clientId) ?? 0;
+          retryAttempts.current.set(item.clientId, attempt + 1);
+          const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5)) * (0.75 + Math.random() * 0.5);
+          const timer = setTimeout(() => {
+            retryTimers.current.delete(item.clientId!);
+            if (!connected) return; // the reconnect effect will flush the still-queued bubble
+            setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId ? { ...x, state: "sending", autoRetry: undefined } : x)));
+            armStall(item.clientId!);
+            deliverRef.current({ ...item, state: "sending" });
+          }, delay);
+          retryTimers.current.set(item.clientId, timer);
+        } else if (!transient && item.clientId) {
           clearTimeout(stallTimers.current.get(item.clientId));
           stallTimers.current.delete(item.clientId);
+          clearTimeout(retryTimers.current.get(item.clientId));
+          retryTimers.current.delete(item.clientId);
+          retryAttempts.current.delete(item.clientId);
         }
         setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId && x.state === "sending" && !transient ? { ...x, state: "failed", autoRetry: false } : x)));
       }
     },
-    [request, peerId],
+    [request, peerId, connected, armStall],
   );
+  deliverRef.current = (item) => { void deliver(item); };
 
-  const send = async (text: string) => {
+  const send = async (text: string, context?: { replyToId?: string; editMessageId?: string }) => {
     if (!me) return false;
+    if (context?.editMessageId) {
+      try {
+        const r = await request<{ message: DirectMessage }>("dm:edit", { peerId, messageId: context.editMessageId, text });
+        setMessages((list) => mergeMessages(list ?? [], [r.message]));
+        return true;
+      } catch (e) {
+        toast(friendlyMessage(e));
+        return false;
+      }
+    }
+    const target = context?.replyToId ? (messagesRef.current ?? []).find((m) => m.id === context.replyToId) : undefined;
     const clientId = newClientId();
     const item: Item = {
       id: `local-${clientId}`,
@@ -417,6 +468,7 @@ export function DmThread({
       text,
       createdAt: serverNow(), // display only; the server stamps the real createdAt
       state: "sending",
+      ...(target ? { replyTo: { id: target.id, authorName: target.fromName, text: target.text } } : {}),
     };
     stickToBottom.current = true;
     smoothNext.current = true;
@@ -428,6 +480,7 @@ export function DmThread({
   };
 
   const retry = (m: Item) => {
+    if (m.clientId) retryAttempts.current.delete(m.clientId);
     setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId && x.state === "failed" ? { ...x, state: "sending", autoRetry: undefined } : x)));
     if (m.clientId) armStall(m.clientId);
     if (connected) void deliver({ ...m, state: "sending" });
@@ -657,6 +710,8 @@ export function DmThread({
                   latest={i === lastMineIdx}
                   onRetry={retry}
                   onReport={onReportMessage}
+                  onReply={(message) => setComposerAction({ kind: "reply", messageId: message.id, authorName: message.fromName, text: message.text })}
+                  onEdit={(message) => setComposerAction({ kind: "edit", messageId: message.id, text: message.text })}
                 />
               ); })}
               {peerTyping && peer && (
@@ -702,6 +757,8 @@ export function DmThread({
           disabled={messages === null}
           placeholder={peer ? `Message ${firstName(peer.name)}…` : "Message…"}
           autoFocus
+          action={composerAction}
+          onCancelAction={() => setComposerAction(null)}
         />
         )}
       </div>
@@ -722,6 +779,8 @@ const MessageRow = memo(function MessageRow({
   latest,
   onRetry,
   onReport,
+  onReply,
+  onEdit,
 }: {
   m: Item;
   mine: boolean;
@@ -736,6 +795,8 @@ const MessageRow = memo(function MessageRow({
   latest: boolean;
   onRetry: (m: Item) => void;
   onReport?: (m: Item) => void;
+  onReply: (m: Item) => void;
+  onEdit: (m: Item) => void;
 }) {
   const emoji = EMOJI_ONLY.test(m.text.trim());
   void clockTick;
@@ -793,6 +854,8 @@ const MessageRow = memo(function MessageRow({
           title={formatFull(m.createdAt)}
           data-testid="dm-bubble"
           data-ts={m.createdAt}
+          tabIndex={0}
+          onFocus={reveal}
           {...pressHandlers}
           className={cn(
             "min-w-0 text-[15px] leading-[1.35] whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
@@ -804,12 +867,36 @@ const MessageRow = memo(function MessageRow({
             m.state === "failed" && "opacity-60",
           )}
         >
-          {m.text}
+          {m.replyTo && <ReplyPreview reply={m.replyTo} />}
+          <MessageText text={m.text} />
+          {m.editedAt && !emoji && <span className="ml-1.5 text-[10px] font-medium opacity-65">Edited</span>}
         </div>
       </div>
       {showFull && (
         <div className={cn("fade-in mt-[2px] text-[10.5px] leading-[13px] font-medium text-zinc-500", mine ? "pr-1 text-right" : "pl-9 text-left")} data-testid="dm-fulltime">
           {formatFull(m.createdAt)}
+          {!m.state && (
+            <button
+              type="button"
+              tabIndex={showFull ? 0 : -1}
+              onClick={() => onReply(m)}
+              className="ml-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-emerald-400 hover:bg-emerald-500/10"
+              aria-label="Reply to message"
+            >
+              <Reply className="h-3 w-3" /> Reply
+            </button>
+          )}
+          {mine && !m.state && (
+            <button
+              type="button"
+              tabIndex={showFull ? 0 : -1}
+              onClick={() => onEdit(m)}
+              className="ml-1 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-zinc-300 hover:bg-white/10"
+              aria-label="Edit message"
+            >
+              <Pencil className="h-3 w-3" /> Edit
+            </button>
+          )}
           {!mine && onReport && !m.state && !peer?.isBot && (
             <button
               type="button"

@@ -127,6 +127,9 @@ export function registerRealtime(io: WsHub) {
     chatMessage(msg) {
       io.to(`room:${msg.roomId}`).emit("chat:message", msg);
     },
+    chatUpdated(msg) {
+      io.to(`room:${msg.roomId}`).emit("chat:updated", msg);
+    },
     chatDeleted(roomId, messageId) {
       io.to(`room:${roomId}`).emit("chat:deleted", { roomId, messageId });
     },
@@ -157,6 +160,9 @@ export function registerRealtime(io: WsHub) {
       io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:message", withSenderPhoto(msg));
       io.to(`user:${msg.toId}`).emit("dm:unread", { count: store.unreadDmCount(msg.toId) });
       bg(push()?.dm(msg));
+    },
+    dmUpdated(msg) {
+      io.to(`user:${msg.toId}`).to(`user:${msg.fromId}`).emit("dm:updated", withSenderPhoto(msg));
     },
     dmTyping(fromId, toId) {
       io.to(`user:${toId}`).emit("dm:typing", { from: fromId });
@@ -195,10 +201,10 @@ export function registerRealtime(io: WsHub) {
   io.onConnection((socket: Conn, req: IncomingMessage) => {
     const ua = req?.headers?.["user-agent"];
     const me = () => userOfSocket.get(socket.id);
-    const authed = (ack: AckFn | undefined, fn: (userId: string) => void) => {
+    const authed = async (ack: AckFn | undefined, fn: (userId: string) => void | Promise<void>) => {
       const userId = me();
       if (!userId) return (ack ?? noop)({ ok: false, error: "Not signed in" });
-      fn(userId);
+      await fn(userId);
     };
 
     // any authenticated interaction moves "last seen" forward (throttled; no-op while online)
@@ -464,11 +470,15 @@ export function registerRealtime(io: WsHub) {
     );
 
     // ----- in-room chat -----
-    socket.on("chat:send", ({ roomId, text }: { roomId: string; text: string }, ack: AckFn = noop) =>
+    socket.on("chat:send", ({ roomId, text, replyToId }: { roomId: string; text: string; replyToId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         if (store.socketOf(roomId, userId) !== socket.id) return ack({ ok: false, error: "Join the room to chat" });
-        ack(store.sendChat(roomId, userId, text));
+        ack(store.sendChat(roomId, userId, text, replyToId));
       }),
+    );
+
+    socket.on("chat:edit", ({ roomId, messageId, text }: { roomId: string; messageId: string; text: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => ack(store.editChat(roomId, userId, messageId, text))),
     );
 
     socket.on("chat:delete", ({ roomId, messageId }: { roomId: string; messageId: string }, ack: AckFn = noop) =>
@@ -492,17 +502,41 @@ export function registerRealtime(io: WsHub) {
     );
 
     // clientId (optional) is echoed on the stored message so the sender's optimistic bubble is swapped in place
-    socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => {
+    socket.on("dm:send", ({ to, text, clientId, replyToId }: { to: string; text: string; clientId?: string; replyToId?: string }, ack: AckFn = noop) =>
+      authed(ack, async (userId) => {
         presence.activity(userId);
-        ack(store.sendDm(userId, to, text, clientId));
+        const result = store.sendDm(userId, to, text, clientId, replyToId);
+        if (!result.ok) return ack(result);
+        try {
+          // A positive DM ack now means the database transaction committed, not merely that memory accepted it.
+          await store.flushDurably();
+          if (result.needsPublish) store.publishDm(result.message);
+          ack({ ok: true, message: result.message });
+        } catch {
+          // Keep the sender's clientId so its automatic retry can safely re-run after the storage layer recovers.
+          ack({ ok: false, error: "Temporary storage issue. Please retry.", reason: "temporarily_unavailable" });
+        }
+      }),
+    );
+
+    socket.on("dm:edit", ({ peerId, messageId, text }: { peerId: string; messageId: string; text: string }, ack: AckFn = noop) =>
+      authed(ack, async (userId) => {
+        const result = store.editDm(userId, peerId, messageId, text);
+        if (!result.ok) return ack(result);
+        try {
+          await store.flushDurably();
+          if (result.needsPublish) store.publishDmUpdate(result.message);
+          ack({ ok: true, message: result.message });
+        } catch {
+          ack({ ok: false, error: "Temporary storage issue. Please retry.", reason: "temporarily_unavailable" });
+        }
       }),
     );
 
     // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
-    socket.on("dm:since", ({ after }: { after?: number }, ack: AckFn = noop) =>
+    socket.on("dm:since", ({ after, afterId }: { after?: number; afterId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const r = store.dmsSince(userId, Number(after) || 0);
+        const r = store.dmsSince(userId, Number(after) || 0, 200, afterId);
         ack({ ok: true, messages: r.messages.map(withSenderPhoto), hasMore: r.hasMore });
       }),
     );

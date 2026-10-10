@@ -5,9 +5,30 @@ import { configureAuthKeys, originAllowed, parseAccessToken, signAccessToken } f
 import { BadJson, BodyTooLarge, RateLimiter, buildCsp, readJsonBody, securityHeaders, wwwRedirect } from "../../server/httpsec";
 import { validateEvent } from "../../server/wsSchemas";
 import { isTransientPgError, withRetry } from "../../server/pg";
+import { Store } from "../../server/store";
 import { Readable } from "node:stream";
 
 const exp = () => Date.now() + 60_000;
+
+test("dm:since paginates forward across timestamp ties without gaps", () => {
+  const store = new Store();
+  const messages = Array.from({ length: 205 }, (_, i) => ({
+    id: `message-${String(i).padStart(3, "0")}`,
+    createdAt: 100,
+    fromId: i % 2 ? "bob" : "alice",
+    toId: i % 2 ? "alice" : "bob",
+  }));
+  (store as unknown as { dms: Map<string, unknown[]> }).dms.set("alice|bob", messages);
+
+  const first = store.dmsSince("alice", 0, 200);
+  assert.equal(first.messages.length, 200);
+  assert.equal(first.hasMore, true);
+  const last = first.messages[first.messages.length - 1];
+  const second = store.dmsSince("alice", last.createdAt, 200, last.id);
+  assert.equal(second.messages.length, 5);
+  assert.equal(second.hasMore, false);
+  assert.deepEqual([...first.messages, ...second.messages].map((message) => message.id), messages.map((message) => message.id));
+});
 
 test("auth: env AUTH_SECRET preferred over DB key, token carries kid", () => {
   const k = configureAuthKeys({ env: { AUTH_SECRET: "env-secret-aaaaaaaaaaaaaaaaaaaaaaaa" }, dbSecret: "db-secret" });
