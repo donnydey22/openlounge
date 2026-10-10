@@ -115,6 +115,39 @@ test("branding: needs creator account, slug rules, colors, co-hosts; public page
   assert.ok(page && page.host.id === host.id && page.branding.displayName === "My Brand");
 });
 
+test("configured co-hosts receive delegated room powers but cannot end the room", async () => {
+  const { c } = await setup();
+  const users = [...store.users.values()].filter((u) => !u.isBot);
+  const [host, coHost, listener, author] = users;
+  if (!host || !coHost || !listener || !author) return;
+  await c.setProfile(host.id, { type: "creator" });
+  const branding = await c.saveBranding(host.id, { coHosts: [coHost.id] });
+  assert.ok(branding.ok, JSON.stringify(branding));
+  const made = store.createRoom(host.id, { title: "Co-host test" });
+  assert.ok(made.ok, JSON.stringify(made));
+  const roomId = made.roomId;
+  assert.ok(store.join(roomId, host.id, "host-socket").ok);
+  assert.ok(store.join(roomId, coHost.id, "cohost-socket").ok);
+  assert.ok(store.join(roomId, listener.id, "listener-socket").ok);
+  assert.ok(store.join(roomId, author.id, "author-socket").ok);
+
+  const delegated = c.isCoHost(host.id, coHost.id);
+  assert.equal(delegated, true);
+  assert.ok(store.promoteCoHost(roomId, coHost.id).ok);
+  assert.equal(store.roleOf(roomId, coHost.id), "speaker");
+  assert.equal(store.inviteToSpeak(roomId, coHost.id, listener.id).ok, false, "the store still requires explicit server authorization");
+  assert.ok(store.inviteToSpeak(roomId, coHost.id, listener.id, delegated).ok);
+  assert.ok(store.hostMute(roomId, coHost.id, listener.id, delegated).ok);
+  assert.ok(store.setPodium(roomId, coHost.id, listener.id, delegated).ok);
+  assert.ok(store.moveToAudience(roomId, coHost.id, listener.id, delegated).ok);
+
+  const message = store.sendChat(roomId, author.id, "Please moderate this");
+  assert.ok(message.ok);
+  assert.ok(store.deleteChat(roomId, coHost.id, message.message.id, delegated).ok);
+  assert.equal(store.endRoom(roomId, coHost.id).ok, false, "co-hosts never receive end-room authority");
+  assert.ok(store.endRoom(roomId, host.id).ok);
+});
+
 test("series: validation and upcoming occurrences in the host's time zone", async () => {
   const { c } = await setup();
   await c.setProfile("h1", { type: "creator" });
