@@ -10,7 +10,8 @@ import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
 import { native, nativePlatform } from "@/lib/native";
 import { currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
-import { unlockAudio } from "@/lib/audioUnlock";
+import { audioContext, unlockAudio } from "@/lib/audioUnlock";
+import { CallVoiceProcessor } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 import { LIVEKIT_RTC_CONFIG } from "@/lib/livekitIce";
 
@@ -496,6 +497,17 @@ export class CallEngine {
       if (!this.busy) {
         t.stop();
         return null;
+      }
+      // Browser AGC lifts ordinary speech; this final bounded gain + compressor improves quiet microphones without
+      // clipping peaks. It is strictly additive: old WebViews that cannot create the graph keep the raw track.
+      const context = audioContext();
+      if (context) {
+        try {
+          t.setAudioContext(context);
+          await t.setProcessor(new CallVoiceProcessor());
+        } catch {
+          this.netLog("mic-headroom-unavailable");
+        }
       }
       return t;
     } catch (e) {

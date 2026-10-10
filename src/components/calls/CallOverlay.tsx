@@ -111,7 +111,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   return (
     <div
       ref={ref}
-      className={cn(css.pip, "h-[150px] w-[100px] max-[340px]:h-[120px] max-[340px]:w-[80px] [@media(max-height:480px)]:h-[96px] [@media(max-height:480px)]:w-[128px] bg-black", drag && css.pipDragging)}
+      className={cn(css.pip, "aspect-video w-36 max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-black", drag && css.pipDragging)}
       style={{ transform: `translate3d(${p.x}px, ${p.y}px, 0)`, left: 0, top: 0 }}
       data-testid="call-pip"
       onPointerDown={(e) => {
@@ -153,7 +153,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={vid} autoPlay playsInline muted className={cn("h-full w-full object-cover", mirrored && "-scale-x-100")} />
+      <video ref={vid} autoPlay playsInline muted className={cn("h-full w-full object-cover object-center", mirrored && "-scale-x-100")} />
     </div>
   );
 }

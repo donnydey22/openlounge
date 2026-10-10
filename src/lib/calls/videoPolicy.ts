@@ -2,7 +2,7 @@
 //  - Codec: H.264 on phones (iOS WKWebView / Safari, Android WebView / Chrome) where the browser can actually encode it
 //    (RTCRtpSender.getCapabilities), VP8 as the backup codec; VP8 everywhere else. Never picks H.264 blindly.
 //  - Simulcast: per-layer bitrate + frame-rate caps (h180 ~15 fps / 150 kbps, h360 ~24 fps / 400 kbps, top ~1.2 Mbps).
-//  - Audio first: Opus speech with DTX + RED, sender priority / networkPriority "high"; video layers stay "low".
+//  - Audio first: full-band Opus voice with DTX + RED, sender priority / networkPriority "high"; video layers stay "low".
 import type { LocalVideoTrack, Room, TrackPublishOptions } from "livekit-client";
 
 export type CallVideoCodec = "h264" | "vp8";
@@ -95,7 +95,8 @@ export const VIDEO_LAYERS = {
   top: { width: 1280, height: 720, maxBitrate: 1_200_000, maxFramerate: 30 },
 } as const satisfies Record<string, LayerCap>;
 
-export const AUDIO_SPEECH = { maxBitrate: 24_000, priority: "high" as RTCPriorityType };
+/** 48 kbps leaves Opus enough bandwidth for a fuller, more natural voice while DTX, RED and priority protect calls under loss. */
+export const AUDIO_SPEECH = { maxBitrate: 48_000, priority: "high" as RTCPriorityType };
 
 type LKLike = {
   VideoPreset: new (width: number, height: number, maxBitrate: number, maxFramerate?: number, priority?: RTCPriorityType) => {
@@ -120,7 +121,7 @@ export function cameraPublishOptions(LK: LKLike, choice: Pick<CodecChoice, "code
   };
 }
 
-/** Microphone publish options: Opus speech, DTX (silence ~0 kbps), RED (loss resilience), high sender + network priority. */
+/** Microphone publish options: full-band Opus voice, DTX (silence ~0 kbps), RED (loss resilience), high sender + network priority. */
 export function micPublishOptions(): Partial<TrackPublishOptions> {
   return { dtx: true, red: true, audioPreset: { ...AUDIO_SPEECH } };
 }
