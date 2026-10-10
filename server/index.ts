@@ -30,9 +30,9 @@ async function main() {
   await media.ready();
   logProviderStatus();
   initPush();
+  startDeletionQueue(); // store compliance: operator-initiated account deletions (account_deletion_requests)
   // sticker library (catalog + PayPal); non-fatal: chat works without it
   void initStickers().catch(() => {});
-  startDeletionQueue(); // store compliance: operator-initiated account deletions (account_deletion_requests)
   log.info("phone auth", { firebase: firebaseConfigured(), demoOtp: demoOtpEnabled() });
 
   const app = next({ dev, hostname: "localhost", port });
