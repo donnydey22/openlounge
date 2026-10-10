@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Flag, Trash2, X } from "lucide-react";
+import { ArrowDown, Flag, Pencil, Reply, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
 import { formatClock, serverNow, useClockTick } from "@/lib/time";
 import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
+import { MessageText } from "./MessageText";
+import { ReplyPreview } from "./ReplyPreview";
+import type { ComposerAction } from "./ChatComposer";
 
 const GROUP_WINDOW_MS = 2 * 60_000;
 
@@ -45,7 +48,7 @@ export function RoomChatPanel({
   hostId: string;
   canModerate: boolean;
   connected: boolean;
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, context?: { replyToId?: string; editMessageId?: string }) => Promise<boolean>;
   onDelete: (messageId: string) => void;
   onAuthorClick: (userId: string) => void;
   /** report someone else's message (App Store 1.2) */
@@ -62,6 +65,7 @@ export function RoomChatPanel({
   const atBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [composerAction, setComposerAction] = useState<ComposerAction | null>(null);
   const [, setTick] = useState(0);
 
   // re-render every 30s so soft timestamps stay fresh
@@ -124,7 +128,9 @@ export function RoomChatPanel({
             const mine = m.authorId === meId;
             const canDelete = mine || canModerate;
             const canReport = !mine && !!onReport && !m.authorIsBot;
-            const canAct = canDelete || canReport;
+            const canEdit = mine;
+            const canReply = true;
+            const canAct = canDelete || canReport || canEdit || canReply;
             const isHost = m.authorId === hostId;
             const roleMark = isHost ? "✳︎" : m.authorRole === "speaker" ? "🎙" : null;
             return (
@@ -165,7 +171,11 @@ export function RoomChatPanel({
                       <span className="text-[10px] text-zinc-500">{softTime(m.createdAt)}</span>
                     </div>
                   )}
-                  <p className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">{m.text}</p>
+                  <div className="whitespace-pre-wrap break-words text-[14px] leading-snug text-zinc-100">
+                    {m.replyTo && <ReplyPreview reply={m.replyTo} />}
+                    <MessageText text={m.text} />
+                    {m.editedAt && <span className="ml-1.5 text-[10px] font-medium text-zinc-500">Edited</span>}
+                  </div>
                   {!grouped && mine && <div className="mt-0.5 text-right text-[10px] leading-none text-zinc-500">{softTime(m.createdAt)}</div>}
                   {canAct && (
                     <div
@@ -175,6 +185,34 @@ export function RoomChatPanel({
                         selected === m.id ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
                       )}
                     >
+                      {canReply && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(null);
+                            setComposerAction({ kind: "reply", messageId: m.id, authorName: m.authorName, text: m.text });
+                          }}
+                          title="Reply"
+                          aria-label="Reply to message"
+                          className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-emerald-400"
+                        >
+                          <Reply className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(null);
+                            setComposerAction({ kind: "edit", messageId: m.id, text: m.text });
+                          }}
+                          title="Edit message"
+                          aria-label="Edit message"
+                          className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-zinc-100"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       {canReport && (
                         <button
                           onClick={(e) => {
@@ -220,7 +258,7 @@ export function RoomChatPanel({
       </div>
 
       <div className="px-3 pt-1 pb-3">
-        <ChatComposer onSend={onSend} disabled={!connected} placeholder="Say something nice…" compact />
+        <ChatComposer onSend={onSend} disabled={!connected} placeholder="Say something nice…" compact action={composerAction} onCancelAction={() => setComposerAction(null)} />
       </div>
     </div>
   );
