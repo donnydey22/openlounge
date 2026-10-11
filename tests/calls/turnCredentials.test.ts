@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { TURN_CREDENTIAL_TTL_S, TURN_URLS, mintTurnIceServers } from "../../server/turnCredentials";
+import { TURN_CREDENTIAL_TTL_S, TURN_URLS, mintTurnIceServers, turnCredentialTtl } from "../../server/turnCredentials";
 import { CallService } from "../../server/calls/service";
 import { LIVEKIT_RTC_CONFIG, livekitRtcConfig } from "../../src/lib/livekitIce";
 
@@ -66,4 +66,16 @@ test("CallService hands TURN configuration only to authenticated live-call parti
   } finally {
     tcpOnly.dispose();
   }
+});
+
+test("TURN credential lifetime: 6 h default, TURN_CREDENTIAL_TTL_S override clamped to 10 min .. 24 h", () => {
+  assert.equal(TURN_CREDENTIAL_TTL_S, 6 * 3600);
+  assert.equal(turnCredentialTtl(undefined), 6 * 3600);
+  assert.equal(turnCredentialTtl("garbage"), 6 * 3600);
+  assert.equal(turnCredentialTtl("7200"), 7200);
+  assert.equal(turnCredentialTtl("60"), 600);
+  assert.equal(turnCredentialTtl("999999"), 86400);
+  const now = 1_800_000_000_000;
+  const [s] = mintTurnIceServers("c", "u", { secret: "x", now: () => now, ttlS: 1234 })!;
+  assert.equal(Number(s.username.split(":")[0]), now / 1000 + 1234);
 });

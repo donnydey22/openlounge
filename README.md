@@ -223,7 +223,7 @@ Open Lounge normally uses its existing LiveKit connection path. The external cot
 
 1. Keep `TURN_STATIC_SECRET` **unset** to retain the explicit empty-ICE configuration and current LiveKit/TCP behavior.
 2. After review and in an approved staging environment only, set `TURN_STATIC_SECRET` to the same value configured in coturn's `use-auth-secret`. Set it in the application secret manager only — never in `NEXT_PUBLIC_*`, source control, browser code, logs, or support messages.
-3. The call server then gives authenticated participants in a live 1:1 call a fresh 10-minute coturn REST credential and the approved TURN UDP/TCP/TLS endpoints. The static secret never reaches the client.
+3. The call server then gives authenticated participants in a live 1:1 call a fresh coturn REST credential (6 h default, `TURN_CREDENTIAL_TTL_S`) and the approved TURN UDP/TCP/TLS endpoints. The static secret never reaches the client.
 4. Run the forced-relay and device validation protocol in [`docs/ops/coturn-relay-validation.md`](docs/ops/coturn-relay-validation.md) against a staging URL before considering a release.
 5. **Rollback:** remove `TURN_STATIC_SECRET` from the application environment and restart/redeploy the approved app target. No database or coturn configuration change is required; the application returns to the existing explicit empty-ICE/TCP path.
 

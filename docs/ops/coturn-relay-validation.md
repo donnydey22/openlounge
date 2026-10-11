@@ -8,7 +8,7 @@ This plan validates the optional external coturn service for **authenticated 1:1
 
 When the app server has a non-empty server-only `TURN_STATIC_SECRET`:
 
-- The call server creates a fresh coturn REST username in the form `<unix-expiry>:call-<opaque-id>` for each live call participant. The expiry is 10 minutes.
+- The call server creates a fresh coturn REST username in the form `<unix-expiry>:call-<opaque-id>` for each live call participant. The expiry defaults to 6 hours (`TURN_CREDENTIAL_TTL_S`, clamped 10 min to 24 h) so coturn allocation refreshes keep working for long calls.
 - The opaque suffix is HMAC-derived from the call and user identifiers; neither identifier nor the static secret is sent in the ICE payload.
 - The credential is `base64(HMAC-SHA1(TURN_STATIC_SECRET, username))`, compatible with coturn `use-auth-secret`.
 - An authenticated `call:start`, `call:accept`, or `call:get` response for a live participant includes only these URLs:

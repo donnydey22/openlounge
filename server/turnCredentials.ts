@@ -9,11 +9,24 @@ export const TURN_URLS = [
   "turns:turn.openlounge.app:443?transport=tcp",
 ] as const;
 
-/** Coturn REST credentials are valid for ten minutes; call rejoin fetches refresh them while a call is live. */
-export const TURN_CREDENTIAL_TTL_S = 10 * 60;
+/**
+ * Default coturn REST credential lifetime: 6 hours. coturn re-checks the username's expiry on every allocation
+ * Refresh (~every 10 min), so a credential shorter than the longest call would drop a relayed call mid-way; rejoins
+ * also fetch a fresh credential via call:get. Override with TURN_CREDENTIAL_TTL_S (clamped to 10 min .. 24 h).
+ */
+export const TURN_CREDENTIAL_TTL_S = 6 * 60 * 60;
+export const TURN_CREDENTIAL_TTL_MIN_S = 10 * 60;
+export const TURN_CREDENTIAL_TTL_MAX_S = 24 * 60 * 60;
+
+export function turnCredentialTtl(raw: string | undefined = process.env.TURN_CREDENTIAL_TTL_S): number {
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n)) return TURN_CREDENTIAL_TTL_S;
+  return Math.min(TURN_CREDENTIAL_TTL_MAX_S, Math.max(TURN_CREDENTIAL_TTL_MIN_S, Math.floor(n)));
+}
 
 type MintOptions = {
   secret?: string | null;
+  ttlS?: number;
   now?: () => number;
 };
 
@@ -29,7 +42,7 @@ export function mintTurnIceServers(callId: string, userId: string, opts: MintOpt
   const secret = (opts.secret ?? process.env.TURN_STATIC_SECRET ?? "").trim();
   if (!secret || !callId || !userId) return null;
 
-  const expiresAt = Math.floor((opts.now?.() ?? Date.now()) / 1000) + TURN_CREDENTIAL_TTL_S;
+  const expiresAt = Math.floor((opts.now?.() ?? Date.now()) / 1000) + (opts.ttlS ?? turnCredentialTtl());
   const opaqueId = createHmac("sha256", secret).update(`${callId}\u0000${userId}`).digest("base64url").slice(0, 32);
   const username = `${expiresAt}:call-${opaqueId}`;
   const credential = createHmac("sha1", secret).update(username).digest("base64");
