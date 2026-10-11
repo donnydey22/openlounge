@@ -11,15 +11,20 @@ import { STICKER_ID_RE, parseSticker } from "../../src/lib/stickers/token";
 const BRAND = "Open Lounge";
 const SITE = process.env.AUTH_PUBLIC_URL?.replace(/\/$/, "") || "https://openlounge.app";
 
-function loadBuiltin(): StickerPack[] {
-  const candidates = [path.join(process.cwd(), "server/stickers/noto-packs.json"), typeof __dirname !== "undefined" ? path.join(__dirname, "noto-packs.json") : ""];
+function loadPackFile(name: string): StickerPack[] | null {
+  const candidates = [path.join(process.cwd(), "server/stickers", name), typeof __dirname !== "undefined" ? path.join(__dirname, name) : ""];
   for (const f of candidates)
-    if (f && fs.existsSync(f)) {
-      const j = JSON.parse(fs.readFileSync(f, "utf8")) as { packs: StickerPack[] };
-      return j.packs;
-    }
-  console.warn("[stickers] noto-packs.json not found; no built-in packs");
-  return [];
+    if (f && fs.existsSync(f)) return (JSON.parse(fs.readFileSync(f, "utf8")) as { packs: StickerPack[] }).packs;
+  return null;
+}
+
+/** Built-in free packs, in catalog order: Google Noto Animated first, then Microsoft Fluent Animated (MIT). */
+function loadBuiltin(): StickerPack[] {
+  const noto = loadPackFile("noto-packs.json");
+  if (!noto) console.warn("[stickers] noto-packs.json not found; no Noto packs");
+  const fluent = loadPackFile("fluent-packs.json");
+  if (!fluent) console.warn("[stickers] fluent-packs.json not found; no Fluent packs");
+  return [...(noto ?? []), ...(fluent ?? [])];
 }
 
 export const validPrice = (v: unknown): v is number | null => v === null || v === 0 || (typeof v === "number" && (PRICE_TIERS as readonly number[]).includes(v));

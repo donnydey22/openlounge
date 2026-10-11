@@ -21,6 +21,7 @@ import { UPLOAD_DIR, addSticker, createPack, removeSticker, updatePack } from ".
 import { handleMonetRoute, initMonet, isMonetRoute } from "../monet/router";
 
 const PUBLIC_DIR = path.join(process.cwd(), "public", "sticker-files");
+const FLUENT_DIR = path.join(process.cwd(), "public", "emoji", "fluent");
 const WELL_KNOWN = "/.well-known/apple-developer-merchantid-domain-association";
 
 const json = (res: ServerResponse, status: number, body: unknown, cache = "no-store") => {
@@ -60,8 +61,9 @@ const TYPES: Record<string, string> = { ".webp": "image/webp", ".png": "image/pn
 
 function serveFile(req: IncomingMessage, res: ServerResponse, rel: string) {
   // rel: "noto/<file>" (in the image) or "u/<packId>/<file>" (uploads on the volume). No traversal.
-  if (!/^(noto\/[\w.-]+|u\/[\w-]+\/[\w.-]+)$/.test(rel) || rel.includes("..")) return json(res, 404, { ok: false });
-  const file = rel.startsWith("u/") ? path.join(UPLOAD_DIR, rel.slice(2)) : path.join(PUBLIC_DIR, rel);
+  // "fluent/<cp>.webp" | "fluent/p/<cp>.webp": Microsoft Fluent animated emoji, served in place from public/emoji/fluent (no copy)
+  if (!/^(noto\/[\w.-]+|fluent\/(p\/)?[\w-]+\.webp|u\/[\w-]+\/[\w.-]+)$/.test(rel) || rel.includes("..")) return json(res, 404, { ok: false });
+  const file = rel.startsWith("u/") ? path.join(UPLOAD_DIR, rel.slice(2)) : rel.startsWith("fluent/") ? path.join(FLUENT_DIR, rel.slice(7)) : path.join(PUBLIC_DIR, rel);
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return json(res, 404, { ok: false });
     const gz = file.endsWith(".json.gz");

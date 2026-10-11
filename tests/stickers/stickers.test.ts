@@ -101,7 +101,7 @@ test("sticker token round-trips, is invisible to old clients, and rejects junk",
 
 test("built-in Noto packs: all free, published, CC BY 4.0 attributed, files exist", async () => {
   const { svc } = await setup();
-  const builtins = svc.list().filter((p) => p.builtin);
+  const builtins = svc.list().filter((p) => p.builtin && p.id.startsWith("noto-"));
   assert.deepEqual(builtins.map((p) => p.id).sort(), ["noto-animals", "noto-faces", "noto-hands", "noto-love", "noto-party"]);
   for (const s of builtins) {
     const p = svc.pack(s.id)!;
@@ -116,6 +116,35 @@ test("built-in Noto packs: all free, published, CC BY 4.0 attributed, files exis
   }
   assert.ok(svc.searchStickers("heart").length > 0);
   assert.ok(svc.list({ q: "cat" }).length > 0);
+});
+
+test("built-in Fluent packs: after Google's five, all 746 Microsoft Fluent animated emoji, free, MIT attributed, files exist", async () => {
+  const { svc } = await setup();
+  const ids = svc.list().filter((p) => p.builtin).map((p) => p.id);
+  assert.deepEqual(ids.slice(0, 5), ["noto-faces", "noto-love", "noto-hands", "noto-animals", "noto-party"], "Google first");
+  const fl = ids.slice(5);
+  assert.deepEqual(fl, ["fluent-faces", "fluent-love", "fluent-hands", "fluent-people", "fluent-active", "fluent-animals", "fluent-world", "fluent-party"], "Fluent second");
+  let n = 0;
+  const seen = new Set<string>();
+  for (const id of fl) {
+    const p = svc.pack(id)!;
+    assert.equal(p.priceCents ?? 0, 0);
+    assert.equal(p.attribution!.license, "MIT");
+    assert.match(p.attribution!.text, /Microsoft/);
+    for (const st of p.stickers) {
+      n++;
+      assert.ok(!seen.has(st.id), "unique " + st.id);
+      seen.add(st.id);
+      assert.equal(st.format, "webp");
+      assert.ok(fs.existsSync(path.join("public/emoji", st.file)), st.file);
+      assert.ok(fs.existsSync(path.join("public/emoji", st.poster)), st.poster);
+    }
+    assert.ok(p.stickers.some((s) => s.id === "fl-" + p.cover), "cover in pack " + id);
+  }
+  assert.equal(n, 746);
+  assert.ok(fs.existsSync("public/emoji/fluent/LICENSE"), "MIT notice ships");
+  const fid = svc.pack("fluent-faces")!.stickers[0].id;
+  assert.equal(svc.sendError("u1", stickerText({ packId: "fluent-faces", stickerId: fid, emoji: "😀" } as any)), null, "a Fluent sticker can be sent");
 });
 
 test("prices: only Free / $0.99 / $1.99 / $2.99; admin packs default to FREE drafts", async () => {
