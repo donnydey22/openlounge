@@ -24,10 +24,13 @@ export class MediasoupCallSession {
   private producers = new Map<"audio" | "video", { close(): void; pause(): void | Promise<void>; resume(): void | Promise<void> }>();
   private closed = false;
   private syncing = false;
+  /** A consumer:available notice arrived while a sync was in flight; run another pass so late producers are never dropped. */
+  private syncAgain = false;
+  private syncDone: Promise<void> | null = null;
   private connected = false;
   private joined = false;
   private generation = 0;
-  private readonly onAvailable = () => void this.syncConsumers();
+  private readonly onAvailable = () => void this.syncConsumers().catch(() => {});
 
   constructor(
     private socket: RealtimeClient,
@@ -191,10 +194,35 @@ export class MediasoupCallSession {
     return els.some((el) => !el.paused);
   }
 
-  private async syncConsumers(generation?: number) {
-    if (this.closed || this.syncing || !this.recv || !this.device) return;
+  /**
+   * Serialized consumer sync. A notice that lands while a pass is running (e.g. the peer's video producer created right
+   * after its audio producer) schedules one more pass instead of being dropped, and callers awaiting a sync (connect)
+   * wait for every queued pass, so producers that appeared before or during setup are all consumed and resumed.
+   */
+  private syncConsumers(generation?: number): Promise<void> {
+    if (this.closed || !this.recv || !this.device) return Promise.resolve();
+    if (this.syncing) {
+      this.syncAgain = true;
+      return this.syncDone ?? Promise.resolve();
+    }
     this.syncing = true;
-    try {
+    this.syncDone = (async () => {
+      try {
+        do {
+          this.syncAgain = false;
+          await this.syncOnce(generation);
+        } while (this.syncAgain && !this.closed);
+      } finally {
+        this.syncing = false;
+        this.syncDone = null;
+      }
+    })();
+    return this.syncDone;
+  }
+
+  private async syncOnce(generation?: number) {
+    if (this.closed || !this.recv || !this.device) return;
+    {
       const r = await this.req<{ ok: boolean; consumers?: Array<{ id: string; producerId: string; kind: "audio" | "video"; rtpParameters: unknown }> }>("ms:consume", {
         transportId: this.recv.id,
         rtpCapabilities: this.device.rtpCapabilities,
@@ -211,8 +239,6 @@ export class MediasoupCallSession {
         this.opts.onRemoteTrack({ kind: consumer.kind, track: consumer.track, close: () => consumer.close() });
         await this.req<{ ok: boolean }>("ms:consumer:resume", { consumerId: consumer.id });
       }
-    } finally {
-      this.syncing = false;
     }
   }
 

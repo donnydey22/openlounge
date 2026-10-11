@@ -13,6 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
+import { sfuSelected } from "./sfuSelect";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -59,10 +60,10 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       close: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     };
   };
-  const mediasoupBackend = (): CallMediaBackend | null => {
+  const mediasoupBackend = (participants?: { callerId: string; calleeId: string }): CallMediaBackend | null => {
     // The gateway must be connected before a new call ever selects UDP. If the SFU is unavailable, the unchanged
     // LiveKit/TCP call path is selected instead; no user action and no in-call backend choice is required.
-    if (process.env.CALL_SFU !== "layered" || !gw.connected) return null;
+    if (!sfuSelected(participants) || !gw.connected) return null;
     return {
       provider: "mediasoup",
       issue: async ({ callId, userId, ttlSec }) => {
@@ -87,7 +88,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    selectMedia: () => mediasoupBackend() ?? liveKitBackend(),
+    selectMedia: (participants) => mediasoupBackend(participants) ?? liveKitBackend(),
     liveKitFallback: liveKitBackend,
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
