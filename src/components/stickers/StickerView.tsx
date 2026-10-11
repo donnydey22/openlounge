@@ -140,7 +140,8 @@ export const StickerView = memo(function StickerView({
     [],
   );
 
-  const src = isLottie ? sticker.poster : sticker.file;
+  // animated WebP (Fluent) plays natively; when animation is off it shows the static poster instead
+  const src = isLottie || (!animate && sticker.poster) ? sticker.poster : sticker.file;
   return (
     <div
       ref={box}
