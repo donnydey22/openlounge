@@ -115,11 +115,20 @@ test("branding: needs creator account, slug rules, colors, co-hosts; public page
   assert.ok(page && page.host.id === host.id && page.branding.displayName === "My Brand");
 });
 
+let phoneSeq = 0;
+/** Fresh non-bot accounts for room-power tests. */
+function roomPeople(tag: string, n = 4) {
+  return Array.from({ length: n }, (_, i) => {
+    const made = store.createAccount(`+1602555${String(++phoneSeq).padStart(4, "0")}`, { firstName: `${tag}${i}`, username: `${tag}_${phoneSeq}_${i}` });
+    assert.ok(made.ok, JSON.stringify(made));
+    return made.user;
+  });
+}
+
 test("configured co-hosts receive delegated room powers but cannot end the room", async () => {
   const { c } = await setup();
-  const users = [...store.users.values()].filter((u) => !u.isBot);
-  const [host, coHost, listener, author] = users;
-  if (!host || !coHost || !listener || !author) return;
+  // Real accounts: the test DATA_DIR starts with no people, so never rely on seeded users (that skipped every assertion).
+  const [host, coHost, listener, author] = roomPeople("ch");
   await c.setProfile(host.id, { type: "creator" });
   const branding = await c.saveBranding(host.id, { coHosts: [coHost.id] });
   assert.ok(branding.ok, JSON.stringify(branding));
@@ -138,6 +147,10 @@ test("configured co-hosts receive delegated room powers but cannot end the room"
   assert.equal(store.inviteToSpeak(roomId, coHost.id, listener.id).ok, false, "the store still requires explicit server authorization");
   assert.ok(store.inviteToSpeak(roomId, coHost.id, listener.id, delegated).ok);
   assert.ok(store.hostMute(roomId, coHost.id, listener.id, delegated).ok);
+  // The host holds the podium of a new room; a co-host may hand it out only once the host has let it go.
+  assert.equal(store.rooms.get(roomId)?.podiumUserId, host.id);
+  assert.equal(store.setPodium(roomId, coHost.id, listener.id, delegated).ok, false, "co-host cannot take the podium from the host");
+  assert.ok(store.setPodium(roomId, host.id, null).ok);
   assert.ok(store.setPodium(roomId, coHost.id, listener.id, delegated).ok);
   assert.ok(store.moveToAudience(roomId, coHost.id, listener.id, delegated).ok);
 
@@ -156,6 +169,46 @@ test("configured co-hosts receive delegated room powers but cannot end the room"
   assert.ok(message.ok);
   assert.ok(store.deleteChat(roomId, coHost.id, message.message.id, delegated).ok);
   assert.equal(store.endRoom(roomId, coHost.id).ok, false, "co-hosts never receive end-room authority");
+  assert.ok(store.endRoom(roomId, host.id).ok);
+});
+
+test("co-host rejections against the host leave the host's stage, mic, podium and chat untouched", async () => {
+  const { c } = await setup();
+  const [host, coHost, other] = roomPeople("hp", 3);
+  await c.setProfile(host.id, { type: "creator" });
+  assert.ok((await c.saveBranding(host.id, { coHosts: [coHost.id] })).ok);
+  const made = store.createRoom(host.id, { title: "Host protection" });
+  assert.ok(made.ok, JSON.stringify(made));
+  const roomId = made.roomId;
+  for (const [u, sock] of [[host, "h"], [coHost, "c"], [other, "o"]] as const) assert.ok(store.join(roomId, u.id, sock).ok);
+  assert.ok(store.promoteCoHost(roomId, coHost.id).ok);
+  const delegated = c.isCoHost(host.id, coHost.id);
+  assert.equal(delegated, true);
+  const room = store.rooms.get(roomId)!;
+  const hostP = () => room.participants.get(host.id)!;
+  store.setMuted(roomId, host.id, false);
+  assert.ok(store.setPodium(roomId, host.id, host.id).ok);
+  const before = { role: hostP().role, muted: hostP().muted, podium: room.podiumUserId };
+  const hostMessage = store.sendChat(roomId, host.id, "Welcome in");
+  assert.ok(hostMessage.ok);
+
+  const refusals = [
+    store.hostMute(roomId, coHost.id, host.id, delegated),
+    store.moveToAudience(roomId, coHost.id, host.id, delegated),
+    store.inviteToSpeak(roomId, coHost.id, host.id, delegated),
+    store.setPodium(roomId, coHost.id, other.id, delegated),
+    store.setPodium(roomId, coHost.id, null, delegated),
+    store.deleteChat(roomId, coHost.id, hostMessage.message.id, delegated),
+  ];
+  for (const r of refusals) assert.equal(r.ok, false);
+  assert.match((refusals[0] as { error: string }).error, /host/);
+  assert.deepEqual({ role: hostP().role, muted: hostP().muted, podium: room.podiumUserId }, before, "host state unchanged");
+  assert.ok(room.chat.some((m) => m.id === hostMessage.message.id), "host message kept");
+
+  // The host keeps full authority over the co-host, and over their own messages.
+  assert.ok(store.hostMute(roomId, host.id, coHost.id).ok);
+  assert.ok(store.moveToAudience(roomId, host.id, coHost.id).ok);
+  assert.ok(store.deleteChat(roomId, host.id, hostMessage.message.id).ok);
   assert.ok(store.endRoom(roomId, host.id).ok);
 });
 
