@@ -1,6 +1,6 @@
 "use client";
 
-// Full animated emoji picker, three tabs:
+// Full animated emoji picker, three tabs (variant="reaction": the first tab is "Telegram" — Telegram's 631 only):
 //   Emoji  — Recent + 9 categories + search over every emoji we have an animation for (Telegram's set, plus Google Noto for
 //            what Telegram lacks — or the reverse when the internal switch says Noto).
 //   Google — all ~880 Google Noto Animated Emoji (CC BY 4.0) in Google's own categories, searchable by name + Google's tags,
@@ -28,6 +28,8 @@ let fluentP: Promise<FCatalog> | null = null;
 const loadFluent = () => (fluentP ??= import("@/lib/emoji/fluent.json").then((m) => (m.default ?? m) as unknown as FCatalog));
 const G_ICON = ["😀", "🙋", "🐻", "🍔", "✈️", "🎉", "💡", "❤️", "🏁", "⋯"];
 const TAB_KEY = "ol:emojiTab";
+// Reaction picker: its own last-used tab (Telegram / Google / Fluent), independent of the composer picker
+const REACTION_TAB_KEY = "ol:reactionTab";
 
 const CAT_ICON = ["😀", "👋", "🐻", "🍔", "⚽", "✈️", "💡", "❤️", "🏳️"];
 const CAT_LABEL = ["Smileys", "People", "Animals & Nature", "Food & Drink", "Activity", "Travel & Places", "Objects", "Symbols", "Flags"];
@@ -61,7 +63,7 @@ const Cell = memo(function Cell({
   name: string;
   size: number;
   onPick: (e: string) => void;
-  source?: "noto" | "fluent";
+  source?: "telegram" | "noto" | "fluent";
   /** Google tab: "animated" gets a small play marker, "static" shows the still glyph */
   kind?: "animated" | "static";
 }) {
@@ -95,13 +97,19 @@ export function EmojiPicker({
   height = 320,
   autoFocusSearch,
   cellSize = 30,
+  variant = "composer",
 }: {
   onPick: (emoji: string) => void;
   className?: string;
   height?: number;
   autoFocusSearch?: boolean;
   cellSize?: number;
+  /** "reaction": the first tab is "Telegram" — only Telegram's 631 animated emoji (self-hosted → upstream → Noto gap-fill),
+   *  separate from the "Google" tab; last-used tab persisted per variant. "composer": unchanged Emoji (Telegram + Noto) tab. */
+  variant?: "composer" | "reaction";
 }) {
+  const reaction = variant === "reaction";
+  const tabKey = reaction ? REACTION_TAB_KEY : TAB_KEY;
   const [cat, setCat] = useState<Catalog | null>(null);
   const [gcat, setGcat] = useState<GCatalog | null>(null);
   const [fcat, setFcat] = useState<FCatalog | null>(null);
@@ -114,11 +122,11 @@ export function EmojiPicker({
 
   useEffect(() => {
     let alive = true;
-    loadCatalog().then((c) => alive && setCat(c));
+    loadCatalog().then((c) => alive && setCat(reaction ? { cats: c.cats, rows: c.rows.filter((r) => r[5] === "t") } : c));
     setRecent(recentEmoji());
     try {
-      const stored = localStorage.getItem(TAB_KEY);
-      if (stored === "google" || stored === "fluent") setTabState(stored);
+      const stored = localStorage.getItem(tabKey);
+      if (stored === "google" || stored === "fluent" || (reaction && stored === "emoji")) setTabState(stored);
     } catch {
       /* ignore */
     }
@@ -149,7 +157,7 @@ export function EmojiPicker({
     sections.current = [];
     scroller.current?.scrollTo({ top: 0 });
     try {
-      localStorage.setItem(TAB_KEY, t);
+      localStorage.setItem(tabKey, t);
     } catch {
       /* ignore */
     }
@@ -161,18 +169,23 @@ export function EmojiPicker({
     onPick(e);
   };
 
+  // first tab's rows: the reaction picker's Telegram tab is Telegram's own set only (Google lives in its own tab)
+  const firstRows = useMemo(() => (!cat ? [] : reaction ? cat.rows.filter((r) => r[5] === "t") : cat.rows), [cat, reaction]);
+  const tgKeys = useMemo(() => new Set(firstRows.map((r) => r[0])), [firstRows]);
+  const firstRecent = reaction && cat ? recent.filter((e) => tgKeys.has(e)) : recent;
+  const firstSource = reaction ? ("telegram" as const) : undefined;
   const byCat = useMemo(() => {
     if (!cat) return [];
     const out: Row[][] = cat.cats.map(() => []);
-    for (const r of cat.rows) out[r[3]]?.push(r);
+    for (const r of firstRows) out[r[3]]?.push(r);
     return out;
-  }, [cat]);
+  }, [cat, firstRows]);
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (tab !== "emoji" || !cat || !s) return null;
     const words = s.split(/\s+/);
-    return cat.rows.filter((r) => r[0] === s || words.every((w) => r[2].includes(w))).slice(0, 160);
-  }, [q, cat, tab]);
+    return firstRows.filter((r) => r[0] === s || words.every((w) => r[2].includes(w))).slice(0, 160);
+  }, [q, cat, tab, firstRows]);
   // Google tab: animated sections (Google's categories) + "More (static)" = catalog emoji Google never animated
   const gByCat = useMemo(() => {
     if (!gcat) return [];
@@ -244,7 +257,7 @@ export function EmojiPicker({
       <div className={cn("flex shrink-0 items-center", compact ? "pt-1.5 pl-2" : "px-3 pt-2")} role="tablist" aria-label="Emoji sets">
         {(
           [
-            ["emoji", "Emoji"],
+            ["emoji", reaction ? "Telegram" : "Emoji"],
             ["google", "Google"],
             ["fluent", "Fluent"],
           ] as const
@@ -262,7 +275,7 @@ export function EmojiPicker({
             )}
           >
             {label}
-            {k !== "emoji" && !compact && <span className="ml-1 font-normal text-emerald-400/90 max-[359px]:hidden">animated</span>}
+            {(k !== "emoji" || reaction) && !compact && <span className="ml-1 font-normal text-emerald-400/90 max-[359px]:hidden">animated</span>}
           </button>
         ))}
       </div>
@@ -384,20 +397,20 @@ export function EmojiPicker({
           results.length ? (
             <div className={cn(grid, "pt-1")} data-testid="emoji-results">
               {results.map((r) => (
-                <Cell key={r[1]} e={r[0]} name={r[2].split(" ").slice(0, 6).join(" ")} size={cellSize} onPick={pick} />
+                <Cell key={r[1]} e={r[0]} name={r[2].split(" ").slice(0, 6).join(" ")} size={cellSize} onPick={pick} source={firstSource} />
               ))}
             </div>
           ) : (
             <p className="px-4 py-10 text-center text-sm text-zinc-500">No emoji found</p>
           )
         ) : (
-          <>
-            {recent.length > 0 && (
+          <div data-testid={reaction ? "telegram-emoji" : undefined} className="contents">
+            {firstRecent.length > 0 && (
               <section>
                 <h3 className="sticky top-0 z-[1] bg-inherit px-4 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">Recent</h3>
                 <div className={grid}>
-                  {recent.map((e) => (
-                    <Cell key={e} e={e} name={e} size={cellSize} onPick={pick} />
+                  {firstRecent.map((e) => (
+                    <Cell key={e} e={e} name={e} size={cellSize} onPick={pick} source={firstSource} />
                   ))}
                 </div>
               </section>
@@ -413,12 +426,12 @@ export function EmojiPicker({
                 <h3 className="px-4 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">{CAT_LABEL[i]}</h3>
                 <div className={grid}>
                   {rows.map((r) => (
-                    <Cell key={r[1]} e={r[0]} name={r[2].split(" ").slice(0, 6).join(" ")} size={cellSize} onPick={pick} />
+                    <Cell key={r[1]} e={r[0]} name={r[2].split(" ").slice(0, 6).join(" ")} size={cellSize} onPick={pick} source={firstSource} />
                   ))}
                 </div>
               </section>
             ))}
-          </>
+          </div>
         )}
       </div>
       <nav className="flex shrink-0 items-center justify-between gap-0.5 border-t border-white/5 px-2 py-1" aria-label="Emoji categories">
