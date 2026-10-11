@@ -36,6 +36,10 @@ export function isPhoneLike(env: Pick<CodecEnv, "ua" | "maxTouchPoints" | "nativ
   return /Macintosh/.test(ua) && (env.maxTouchPoints ?? 0) > 1;
 }
 
+export function isAndroid(env: Pick<CodecEnv, "ua" | "nativePlatform">): boolean {
+  return env.nativePlatform === "android" || /OpenLoungeAndroid|Android/i.test(env.ua || "");
+}
+
 /** H.264 the SFU / other browsers can take: packetization-mode=1 (or any H.264 entry when fmtp lines are absent). */
 export function canSendH264(caps: CodecEnv["caps"]): boolean {
   const list = caps?.codecs ?? [];
@@ -51,6 +55,10 @@ export function chooseVideoCodec(env: CodecEnv): CodecChoice {
   const o = (env.override || "").toLowerCase();
   if (o === "vp8") return { codec: "vp8", backup: false, phone, h264, reason: "override" };
   if (o === "h264" && h264) return { codec: "h264", backup: "vp8", phone, h264, reason: "override" };
+  // Android: H.264 with no VP8 backup, so each camera track is one negotiation (a backup-codec renegotiation timing out
+  // dropped audio on call c31351b4). Every subscriber we ship (Android/iOS WebView, Chrome, Safari, Firefox) decodes
+  // H.264; if the H.264 publish itself fails, publishCamera still falls back to VP8.
+  if (phone && h264 && isAndroid(env)) return { codec: "h264", backup: false, phone, h264, reason: "android-h264-single" };
   if (phone && h264) return { codec: "h264", backup: "vp8", phone, h264, reason: "phone-h264" };
   return { codec: "vp8", backup: false, phone, h264, reason: phone ? "phone-no-h264" : "desktop" };
 }

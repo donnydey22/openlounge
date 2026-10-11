@@ -9,7 +9,7 @@ import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
 import { native, nativePlatform } from "@/lib/native";
-import { browserNetworkTier, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
+import { browserNetworkTier, captureResolution, currentCodecChoice, isPhoneLike, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
@@ -31,6 +31,10 @@ export interface CallSnapshot {
   muted: boolean;
   camOn: boolean;
   facing: "user" | "environment";
+  /** more than one camera (or a phone/tablet): show the Flip control */
+  canFlip: boolean;
+  /** a camera on/off/flip is in flight (serialized: one renegotiation at a time) */
+  camBusy: boolean;
   remoteCam: boolean;
   remoteMuted: boolean;
   speaker: boolean;
@@ -61,6 +65,8 @@ const initial = (): CallSnapshot => ({
   muted: false,
   camOn: false,
   facing: "user",
+  canFlip: false,
+  camBusy: false,
   remoteCam: false,
   remoteMuted: false,
   speaker: false,
@@ -545,6 +551,7 @@ export class CallEngine {
       this.camTrack = t;
       if (this.videoEls.local) t.attach(this.videoEls.local);
       this.set({ camOn: true });
+      void this.detectFlip();
       return t;
     } catch {
       this.set({ camOn: false, error: "Camera unavailable. Continuing with audio." });
@@ -589,7 +596,7 @@ export class CallEngine {
         }
         if (this.s.camOn) {
           const cam = await this.ensureCamPreview();
-          if (cam && this.room === room) await publishCamera(LK, room, cam, currentCodecChoice(nativePlatform()), browserNetworkTier());
+          if (cam && this.room === room) await this.publishCamSafe(LK, room, cam);
         }
         // never block "connected" on playback unlock / device enumeration (WebKit can leave play() pending without a gesture)
         void Promise.race([room.startAudio(), new Promise((r) => setTimeout(r, 1500))])
@@ -858,6 +865,82 @@ export class CallEngine {
     } catch {
       /* ignore */
     }
+    // ship call events to the server log (batched every 5 s, max 20 per batch, at most 12 batches per call)
+    const callId = this.s.call?.id;
+    if (callId && callId !== this.netCallId) ((this.netCallId = callId), (this.netSent = 0));
+    if (!callId || this.netSent >= 12) return;
+    this.netQueue.push({ ev, t: Date.now(), ...extra });
+    if (this.netQueue.length > 20) this.netQueue.splice(0, this.netQueue.length - 20);
+    this.netLogTimer ??= setTimeout(() => {
+      this.netLogTimer = null;
+      const events = this.netQueue.splice(0);
+      if (!events.length) return;
+      this.netSent++;
+      void this.req("call:netlog", { callId, events: JSON.stringify(events).slice(0, 3800) }).catch(() => {});
+    }, 5_000);
+  }
+  private netQueue: Record<string, unknown>[] = [];
+  private netLogTimer: ReturnType<typeof setTimeout> | null = null;
+  private netSent = 0;
+  private netCallId: string | null = null;
+
+  /** Publish the camera with a timeout. On timeout cancel only the video (audio keeps flowing; no reconnect). */
+  private async publishCamSafe(LK: Parameters<typeof publishCamera>[0], room: Room, cam: LocalVideoTrack): Promise<boolean> {
+    const t0 = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((r) => (timer = setTimeout(() => r("timeout"), camPublishTimeoutMs())));
+    const pub = publishCamera(LK, room, cam, currentCodecChoice(nativePlatform()), browserNetworkTier()).then(
+      () => "ok" as const,
+      (e) => {
+        this.netLog("cam-publish-failed", { err: String((e as Error)?.message ?? e).slice(0, 120) });
+        return "fail" as const;
+      },
+    );
+    const r = await Promise.race([pub, timeout]);
+    clearTimeout(timer);
+    if (r === "ok") return true;
+    if (r === "timeout") this.netLog("cam-publish-timeout", { ms: Date.now() - t0 });
+    // cancel just the camera: unpublish (or the late publish once it lands), stop capture; the mic is untouched
+    const cancel = () => room.localParticipant.unpublishTrack(cam, true).catch(() => {});
+    void cancel();
+    void pub.then((x) => {
+      if (x === "ok") void cancel();
+    });
+    if (this.camTrack === cam) {
+      cam.stop();
+      this.camTrack = null;
+    }
+    this.set({ camOn: false, error: "Video paused on a weak connection. Audio continues." });
+    const id = this.s.call?.id;
+    if (id) void this.req("call:video", { callId: id, on: false }).catch(() => {});
+    return false;
+  }
+  static CAM_PUBLISH_TIMEOUT_MS = 12_000;
+
+  /** Serialize camera on/off/flip: one renegotiation in flight, taps during it (or within 350 ms) are dropped. */
+  private camOp: Promise<void> | null = null;
+  private camOpEnd = 0;
+  private serialCam(fn: () => Promise<void>): Promise<void> {
+    if (this.camOp || Date.now() - this.camOpEnd < 350) return this.camOp ?? Promise.resolve();
+    this.set({ camBusy: true });
+    this.camOp = fn()
+      .catch(() => {})
+      .finally(() => {
+        this.camOp = null;
+        this.camOpEnd = Date.now();
+        this.set({ camBusy: false });
+      });
+    return this.camOp;
+  }
+
+  /** Flip is offered on phones/tablets, or anywhere more than one camera exists (labels only after permission). */
+  private async detectFlip() {
+    let n = 0;
+    try {
+      n = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput").length;
+    } catch {}
+    const phone = typeof navigator !== "undefined" && isPhoneLike({ ua: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints, nativePlatform: nativePlatform() });
+    this.set({ canFlip: phone || n > 1 });
   }
 
   /** Tear down only the media connection (keep the call, its timer and UI); local tracks are re-acquired on rejoin. */
@@ -1124,7 +1207,10 @@ export class CallEngine {
     postNative({ type: "call:muted", muted });
   }
 
-  async toggleCam() {
+  toggleCam() {
+    return this.serialCam(() => this.toggleCamNow());
+  }
+  private async toggleCamNow() {
     const on = !this.s.camOn;
     buzz("light");
     const call = this.s.call;
@@ -1148,7 +1234,7 @@ export class CallEngine {
       if (room?.state === "connected" && lk) {
         const pub = room.localParticipant.getTrackPublication(lk.Track.Source.Camera);
         if (pub?.track) await (pub.track as LocalVideoTrack).unmute();
-        else await publishCamera(lk, room, cam, currentCodecChoice(nativePlatform()), browserNetworkTier()).catch(() => {});
+        else if (!(await this.publishCamSafe(lk, room, cam))) return;
       }
     } else {
       this.set({ camOn: false });
@@ -1160,7 +1246,10 @@ export class CallEngine {
     if (call?.id) void this.req("call:video", { callId: call.id, on }).catch(() => {});
   }
 
-  async flip() {
+  flip() {
+    return this.serialCam(() => this.flipNow());
+  }
+  private async flipNow() {
     const facing = this.s.facing === "user" ? "environment" : "user";
     buzz("light");
     if (this.mediasoup) {
@@ -1174,10 +1263,19 @@ export class CallEngine {
     }
     const t = this.camTrack;
     if (!t) return this.set({ facing });
+    // restartTrack keeps the same publication (replaceTrack: no renegotiation, no call drop) and stops the old
+    // capture before acquiring the new one (iOS allows a single camera). exact first, then a soft hint.
+    const res = captureResolution(browserNetworkTier());
     try {
-      await t.restartTrack({ facingMode: facing });
+      try {
+        await t.restartTrack({ facingMode: { exact: facing } as unknown as "user", resolution: res });
+      } catch {
+        await t.restartTrack({ facingMode: facing, resolution: res });
+      }
       this.set({ facing });
+      this.netLog("cam-flipped", { facing });
     } catch {
+      this.netLog("cam-flip-failed", { facing });
       this.set({ error: "Couldn't switch camera" });
     }
   }
@@ -1226,6 +1324,15 @@ export class CallEngine {
     this.videoEls[which] = el;
     if (el && track) track.attach(el);
   }
+}
+
+/** camera publish timeout; localStorage openlounge:campubms overrides it (test/debug only) */
+function camPublishTimeoutMs() {
+  try {
+    const o = Number(localStorage.getItem("openlounge:campubms"));
+    if (o > 0) return o;
+  } catch {}
+  return CallEngine.CAM_PUBLISH_TIMEOUT_MS;
 }
 
 async function micPermission(): Promise<"granted" | "denied" | "prompt" | "unknown"> {

@@ -153,7 +153,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={vid} autoPlay playsInline muted className={cn("h-full w-full object-cover object-center", mirrored && "-scale-x-100")} />
+      <CallVideo vid={vid} className={cn("h-full w-full object-cover object-center", mirrored && "-scale-x-100")} />
     </div>
   );
 }
@@ -164,7 +164,31 @@ function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: bo
     callEngine.attachVideo(which, vid.current);
     return () => callEngine.attachVideo(which, null);
   }, [which]);
-  return <video ref={vid} autoPlay playsInline muted className={cn("absolute inset-0 h-full w-full bg-black object-cover", mirrored && "-scale-x-100")} data-testid={`call-video-${which}`} />;
+  return <CallVideo vid={vid} className={cn("absolute inset-0 h-full w-full bg-black object-cover", mirrored && "-scale-x-100")} testId={`call-video-${which}`} />;
+}
+
+/** transparent 1×1 GIF: WebKit/Android WebView otherwise paint their gray "play" placeholder before the first frame */
+const BLANK_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/** Call <video>: stays mounted across track changes (attach/detach swaps srcObject), invisible until it's 'playing'. */
+function CallVideo({ vid, className, testId }: { vid: React.RefObject<HTMLVideoElement | null>; className: string; testId?: string }) {
+  const [playing, setPlaying] = useState(false);
+  return (
+    <video
+      ref={vid}
+      autoPlay
+      playsInline
+      muted
+      poster={BLANK_POSTER}
+      controls={false}
+      disablePictureInPicture
+      onPlaying={() => setPlaying(true)}
+      onEmptied={() => setPlaying(false)}
+      data-testid={testId}
+      data-playing={playing ? "1" : "0"}
+      className={cn(className, "transition-opacity duration-150 [&::-webkit-media-controls]:!hidden [&::-webkit-media-controls-start-playback-button]:!hidden", playing ? "opacity-100" : "opacity-0")}
+    />
+  );
 }
 
 function Incoming({ s }: { s: CallSnapshot }) {
@@ -232,20 +256,25 @@ function Incoming({ s }: { s: CallSnapshot }) {
 }
 
 function Controls({ s }: { s: CallSnapshot }) {
+  // Flip sits next to Speaker (it used to share Speaker's slot, so iPhone/Android never saw it); shown on
+  // phones/tablets or whenever more than one camera exists
+  const flip = s.camOn && s.canFlip;
+  const cols = s.speakerSupported && flip ? "grid-cols-5" : "grid-cols-4";
   return (
-    <div className="grid w-full max-w-md grid-cols-4 items-start gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2">
-      {s.speakerSupported ? (
+    <div className={cn("grid w-full max-w-md items-start gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2", cols, cols === "grid-cols-5" && "max-w-lg")}>
+      {s.speakerSupported && (
         <RoundBtn label="Speaker" active={s.speaker} onClick={() => void callEngine.toggleSpeaker()} testId="call-speaker">
           <Volume2 className="h-6 w-6" />
         </RoundBtn>
-      ) : s.camOn ? (
-        <RoundBtn label="Flip" onClick={() => void callEngine.flip()} testId="call-flip">
+      )}
+      {flip ? (
+        <RoundBtn label="Flip" onClick={() => void callEngine.flip()} disabled={s.camBusy} testId="call-flip">
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>
       ) : (
-        <span />
+        !s.speakerSupported && <span />
       )}
-      <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
+      <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} disabled={s.camBusy} testId="call-video">
         {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
       </RoundBtn>
       <RoundBtn label={s.muted ? "Unmute" : "Mute"} active={s.muted} onClick={() => void callEngine.toggleMute()} testId="call-mute">
