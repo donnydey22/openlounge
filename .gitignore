@@ -41,6 +41,8 @@ android/.idea/
 *.log
 npm-debug.log*
 logs/
+playwright-report/
+test-results/
 
 # OS / editor
 .DS_Store
