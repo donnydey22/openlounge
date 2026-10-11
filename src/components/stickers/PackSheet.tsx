@@ -44,12 +44,12 @@ export function PackBody({ pack, onSend, size = 76 }: { pack: StickerPack; onSen
           <button
             key={s.id}
             type="button"
-            disabled={!onSend}
+            aria-disabled={!onSend || undefined}
             onClick={() => onSend?.(s)}
             className={cn("rounded-2xl p-1 transition-transform duration-150 ease-out active:scale-90", onSend && "hover:bg-white/5")}
             aria-label={onSend ? `Send ${s.emoji} sticker` : `${s.emoji} sticker`}
           >
-            <StickerView sticker={s} size={size} />
+            <StickerView sticker={s} size={size} still />
           </button>
         ))}
       </div>

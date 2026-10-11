@@ -85,7 +85,7 @@ function PackRow({ pack, onOpen, href }: { pack: PackSummary; onOpen: () => void
       <div className="text-[13px] text-zinc-500">{pack.count} stickers · {pack.category}</div>
       <div className="mt-1.5 flex gap-1 overflow-hidden">
         {pack.preview.map((s) => (
-          <StickerView key={s.id} sticker={s} size={52} />
+          <StickerView key={s.id} sticker={s} size={52} still />
         ))}
       </div>
     </>
