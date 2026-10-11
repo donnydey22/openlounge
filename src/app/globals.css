@@ -877,3 +877,30 @@ html[data-nowhere] .ol-word-wave > span, html[data-nowhere] .ol-splash-word > sp
     animation-duration: 0.8s;
   }
 }
+
+/* chat videos use our own UI: never show native (Android WebView gray play / controls) chrome */
+.ol-chat-video::-webkit-media-controls,
+[data-testid^="media-"] video::-webkit-media-controls,
+[data-testid="viewer-video"]::-webkit-media-controls,
+[data-testid^="media-"] video::-webkit-media-controls-start-playback-button,
+[data-testid="viewer-video"]::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  -webkit-appearance: none;
+}
+
+/* photo/video bubbles never look like links (no underline, blue tint or WebView tap flash); GPU-only fades */
+[data-testid="media-photo"],
+[data-testid="media-video"] {
+  -webkit-tap-highlight-color: transparent;
+  text-decoration: none;
+  color: inherit;
+  contain: layout paint;
+}
+[data-testid="media-photo"] img,
+[data-testid="media-video"] img,
+[data-testid="video-start-poster"],
+[data-testid="viewer-photo-full"] {
+  -webkit-user-drag: none;
+  backface-visibility: hidden;
+  will-change: opacity;
+}

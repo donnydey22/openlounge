@@ -5,7 +5,7 @@ import { attachAdaptive } from "@/lib/media/adaptive";
 // conversation's photos and videos. Transforms are written straight to the DOM in rAF (no React render per frame).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ChevronRight, Download, Loader2, Pause, Play, Share2, Trash2, Volume2, VolumeX, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Pause, Play, Share2, Trash2, Volume2, VolumeX, X } from "lucide-react";
 import type { DirectMessage, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatFull, serverNow } from "@/lib/time";
@@ -14,6 +14,16 @@ import { deleteMediaNow, getUrls, markViewed } from "@/lib/media/client";
 import { mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabilities";
 import { closeViewer, type ViewerTarget } from "./viewerStore";
 import { useTick } from "./hooks";
+
+/**
+ * Telegram-style video start: the frozen poster is the ONLY placeholder until the first frame renders, then it
+ * cross-fades to playback. No spinner ever (start, buffering or stalls; a stall just holds the last frame).
+ * "blur": if the first frame isn't ready within VIDEO_START_BLUR_DELAY_MS the poster softly blurs, then clears into
+ * playback. "frozen": the poster stays sharp. Flip this one constant to switch.
+ */
+export const VIDEO_START_PLACEHOLDER: "blur" | "frozen" = "blur";
+export const VIDEO_START_BLUR_DELAY_MS = 250;
+export const VIDEO_START_FADE_MS = 150;
 
 type Urls = { full?: string; thumb?: string; poster?: string; original?: string; hls?: string; hlsLow?: string };
 
@@ -348,6 +358,8 @@ function PhotoStage({
   const [hd, setHd] = useState(false);
   const img = useRef<HTMLDivElement>(null);
   const [fullLoaded, setFullLoaded] = useState(false);
+  const [fullFailed, setFullFailed] = useState(false);
+  const [fullTry, setFullTry] = useState(0);
   const t = useRef({ scale: 1, x: 0, y: 0 });
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef<{ kind: "none" | "pan" | "pinch" | "dismiss" | "swipe"; startX: number; startY: number; startT: { scale: number; x: number; y: number }; dist: number; cx: number; cy: number; t0: number }>({
@@ -495,8 +507,38 @@ function PhotoStage({
       <div ref={img} className="relative will-change-transform" style={{ aspectRatio: String(ar), width: `min(100vw, calc(100dvh * ${ar}))`, maxHeight: "100dvh" }}>
         {a.ph && <img src={a.ph} alt="" className="absolute inset-0 h-full w-full object-contain blur-lg" draggable={false} />}
         {urls?.thumb && <img src={urls.thumb} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />}
-        {urls?.full && (!saver || hd) && <img src={urls.full} alt={a.name ?? "Photo"} decoding="async" onLoad={() => setFullLoaded(true)} className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-150", fullLoaded ? "opacity-100" : "opacity-0")} draggable={false} />}
-        {!fullLoaded && (!saver || hd) && <Loader2 className="absolute inset-0 m-auto h-7 w-7 animate-spin text-white/70 motion-reduce:animate-none" />}
+        {urls?.full && (!saver || hd) && (
+          <img
+            key={fullTry}
+            src={fullTry ? `${urls.full}${urls.full.includes("?") ? "&" : "?"}r=${fullTry}` : urls.full}
+            alt={a.name ?? "Photo"}
+            decoding="async"
+            data-testid="viewer-photo-full"
+            // Telegram-style: blur/thumbnail stays until the full image has DECODED, then a 150ms cross-fade. No spinner.
+            onLoad={(e) => {
+              const im = e.currentTarget;
+              (im.decode ? im.decode() : Promise.resolve()).catch(() => {}).then(() => setFullLoaded(true));
+            }}
+            onError={() => setFullFailed(true)}
+            className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-150", fullLoaded ? "opacity-100" : "opacity-0")}
+            draggable={false}
+          />
+        )}
+        {fullFailed && !fullLoaded && (
+          <button
+            type="button"
+            data-testid="viewer-photo-retry"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={() => {
+              setFullFailed(false);
+              setFullTry((n) => n + 1);
+            }}
+            className="absolute inset-0 m-auto flex h-9 w-fit items-center gap-1.5 rounded-full bg-black/55 px-3 text-[13px] font-medium text-white backdrop-blur-sm"
+          >
+            Tap to retry
+          </button>
+        )}
       </div>
       {/* data saver: the 640px preview is shown; full quality only on request */}
       {saver && !hd && urls?.full && (
@@ -534,7 +576,9 @@ function VideoStage({
   const [muted, setMuted] = useState(!!a.gif);
   const [time, setTime] = useState(0);
   const [dur, setDur] = useState((a.durMs ?? 0) / 1000);
-  const [waiting, setWaiting] = useState(true);
+  // first frame rendered → poster cross-fades out. Never goes back (mid-play stalls keep the last frame).
+  const [ready, setReady] = useState(false);
+  const [blur, setBlur] = useState(false);
   const [failed, setFailed] = useState(false);
   const drag = useRef<{ y: number; x: number; t0: number; active: boolean } | null>(null);
   const mp4 = urls?.full ?? urls?.original;
@@ -548,6 +592,24 @@ function VideoStage({
     if (!el || !src) return;
     const detach = attachAdaptive(el, { hls, hlsLow: hls ? urls?.hlsLow : undefined, mp4 }, { id: a.id, onFatal: () => setFailed(true) });
     el.muted = !!a.gif;
+    setReady(false);
+    setBlur(false);
+    let done = false;
+    const show = () => {
+      if (done) return;
+      done = true;
+      setReady(true);
+    };
+    // only blur when the first frame is actually slow: fast loads never flash a blur
+    const bt = VIDEO_START_PLACEHOLDER === "blur" ? setTimeout(() => !done && setBlur(true), VIDEO_START_BLUR_DELAY_MS) : undefined;
+    const rvfc = (el as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number }).requestVideoFrameCallback;
+    const onPlaying = () => {
+      if (rvfc) rvfc.call(el, show);
+      else if (el.currentTime > 0) show();
+    };
+    const onTime = () => el.currentTime > 0 && !el.paused && show();
+    el.addEventListener("playing", onPlaying);
+    el.addEventListener("timeupdate", onTime);
     const p = el.play();
     // autoplay with sound can be refused (no gesture reached the element on some engines): retry muted
     if (p)
@@ -556,7 +618,13 @@ function VideoStage({
         setMuted(true);
         void el.play().catch(() => setPlaying(false));
       });
-    return detach;
+    return () => {
+      done = true;
+      if (bt) clearTimeout(bt);
+      el.removeEventListener("playing", onPlaying);
+      el.removeEventListener("timeupdate", onTime);
+      detach();
+    };
     // re-attach only when the media itself changes (signed-URL refreshes keep the running player)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcKey, a.gif]);
@@ -590,15 +658,13 @@ function VideoStage({
           poster={urls?.poster}
           playsInline
           loop={!!a.gif}
-          preload="metadata"
+          preload="auto"
+          data-testid="viewer-video"
           className="max-h-full max-w-full"
           // real on-screen size from the first frame: hls.js caps the rendition to it (no 300×150 default box)
           style={{ aspectRatio: a.w && a.h ? `${a.w}/${a.h}` : undefined, width: a.w && a.h ? `min(100vw, calc(100dvh * ${(a.w / a.h).toFixed(4)}))` : "100vw" }}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
-          onWaiting={() => setWaiting(true)}
-          onPlaying={() => setWaiting(false)}
-          onCanPlay={() => setWaiting(false)}
           onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
           onLoadedMetadata={(e) => Number.isFinite(e.currentTarget.duration) && setDur(e.currentTarget.duration)}
           onVolumeChange={(e) => setMuted(e.currentTarget.muted)}
@@ -608,7 +674,26 @@ function VideoStage({
         />
       )}
       {failed && <div className="px-6 text-center text-sm text-white/80">This video can&apos;t play here. {a.status === "processing" ? "It's still being prepared. Try again in a moment." : "Save it to watch."}</div>}
-      {waiting && src && !failed && <Loader2 className="pointer-events-none absolute h-8 w-8 animate-spin text-white/80 motion-reduce:animate-none" />}
+      {src && !failed && (urls?.poster || a.ph) && (
+        // the frozen poster sits exactly over the video until its first frame paints (no spinner, ever)
+        <img
+          src={urls?.poster || a.ph}
+          alt=""
+          aria-hidden
+          draggable={false}
+          data-testid="video-start-poster"
+          data-blur={blur && !ready ? "1" : "0"}
+          className="pointer-events-none absolute inset-0 m-auto max-h-full max-w-full object-contain"
+          style={{
+            aspectRatio: a.w && a.h ? `${a.w}/${a.h}` : undefined,
+            width: a.w && a.h ? `min(100vw, calc(100dvh * ${(a.w / a.h).toFixed(4)}))` : "100vw",
+            opacity: ready ? 0 : 1,
+            filter: blur && !ready ? "blur(10px)" : "none",
+            transform: blur && !ready ? "scale(1.04)" : "none",
+            transition: `opacity ${VIDEO_START_FADE_MS}ms ease-out, transform ${VIDEO_START_FADE_MS}ms ease-out`,
+          }}
+        />
+      )}
       {!a.gif && (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 bg-gradient-to-t from-black/75 to-transparent px-4 pt-10 pb-[max(1rem,env(safe-area-inset-bottom))] text-white" onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}>
           <button onClick={() => (playing ? v.current?.pause() : void v.current?.play())} aria-label={playing ? "Pause" : "Play"} className="rounded-full p-1.5 hover:bg-white/10">

@@ -214,7 +214,10 @@ export async function processVideo(src: string, outDir: string, opts: { gif?: bo
   if (!p.video || !p.video.width) throw new MediaError("This file has no video");
   const { w, h } = outSize(p);
   const placeholder = await poster(src, outDir, p.durationMs);
-  if (!opts.gif && H264_SAFE(p) && Math.max(p.video.width, p.video.height) <= 1920) {
+  // rotated sources (phone portrait clips: rotate tag / display matrix) are never stream-copied: some players
+  // (older Android WebViews, MSE paths) ignore the matrix and show them sideways. The transcode bakes the rotation
+  // into upright pixels (ffmpeg autorotate = transpose) and drops the matrix, so posters, MP4 and HLS all agree.
+  if (!opts.gif && H264_SAFE(p) && p.video.rotation === 0 && Math.max(p.video.width, p.video.height) <= 1920) {
     const r = await ffQueue.run(() =>
       run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", path.join(outDir, "full.mp4")], { timeoutMs: 5 * 60_000 }),
     );
@@ -234,6 +237,7 @@ export async function transcodeVideo(src: string, outDir: string, opts: { gif?: 
     "-vf", `scale=${w}:${h}:flags=bicubic,format=yuv420p`,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", opts.gif ? "28" : "24", "-profile:v", "high", "-level", "4.0",
     ...(opts.gif ? [] : ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]),
+    "-metadata:s:v:0", "rotate=0",
     "-threads", String(FFMPEG_THREADS), "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", tmp,
   ];
   const r = await ffQueue.run(() => run(FFMPEG, args, { timeoutMs: 30 * 60_000 }));
