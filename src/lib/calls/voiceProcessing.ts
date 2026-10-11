@@ -12,6 +12,63 @@ export const CALL_MIC_COMPRESSOR = {
 
 type VoiceProcessorOptions = { track: MediaStreamTrack; audioContext: AudioContext };
 
+/** The narrow LiveKit surface needed to safely attach and remove a processor. */
+export type VoiceProcessingTrack = {
+  setAudioContext(context: AudioContext): void;
+  setProcessor(processor: CallVoiceProcessor): Promise<unknown>;
+  stopProcessor(): Promise<unknown>;
+};
+
+export type VoiceProcessingHandle = {
+  /** Ensures that a suspended/interrupted context has reverted the published track to the raw microphone. */
+  publishRawIfNeeded(): Promise<void>;
+  /** Removes the context listener when the call track is discarded. */
+  dispose(): void;
+};
+
+export const isAudioContextRunning = (context: Pick<AudioContext, "state"> | null | undefined) => context?.state === "running";
+
+/**
+ * Attach bounded gain/compression only to a live Web Audio graph. WebKit and older WebViews can create a destination
+ * track while its context is suspended; publishing that destination is silent, so the raw browser-captured mic is the
+ * safe fallback both before a gesture unlock and after an interruption.
+ */
+export async function enableVoiceProcessing(track: VoiceProcessingTrack, context: AudioContext | null): Promise<VoiceProcessingHandle | null> {
+  if (!context || context.state !== "running") return null;
+
+  let rawMic: Promise<void> | null = null;
+  const restoreRawMic = () =>
+    (rawMic ??= Promise.resolve(track.stopProcessor())
+      .then(() => undefined)
+      .catch(() => undefined));
+
+  track.setAudioContext(context);
+  if (!isAudioContextRunning(context)) return null;
+
+  try {
+    await track.setProcessor(new CallVoiceProcessor());
+  } catch (error) {
+    await restoreRawMic();
+    throw error;
+  }
+  if (!isAudioContextRunning(context)) {
+    await restoreRawMic();
+    return null;
+  }
+
+  const onStateChange = () => {
+    if (!isAudioContextRunning(context)) void restoreRawMic();
+  };
+  context.addEventListener("statechange", onStateChange);
+  return {
+    publishRawIfNeeded: async () => {
+      if (!isAudioContextRunning(context)) await restoreRawMic();
+      if (rawMic) await rawMic;
+    },
+    dispose: () => context.removeEventListener("statechange", onStateChange),
+  };
+}
+
 /** LiveKit-compatible processor. If Web Audio is unavailable, the caller keeps the untouched microphone track. */
 export class CallVoiceProcessor {
   name = "openlounge-voice-headroom";
@@ -19,6 +76,7 @@ export class CallVoiceProcessor {
   private nodes: AudioNode[] = [];
 
   async init({ track, audioContext }: VoiceProcessorOptions) {
+    if (!isAudioContextRunning(audioContext)) throw new Error("AudioContext is not running");
     await this.destroy();
     const source = audioContext.createMediaStreamSource(new MediaStream([track]));
     const gain = audioContext.createGain();

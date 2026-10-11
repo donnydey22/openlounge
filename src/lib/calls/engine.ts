@@ -11,7 +11,7 @@ import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "liveki
 import { native, nativePlatform } from "@/lib/native";
 import { currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
-import { CallVoiceProcessor } from "./voiceProcessing";
+import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 import { LIVEKIT_RTC_CONFIG } from "@/lib/livekitIce";
 
@@ -117,6 +117,7 @@ export class CallEngine {
   private roomPromise: Promise<Room | null> | null = null;
   private micTrack: LocalAudioTrack | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
+  private micVoiceProcessing: VoiceProcessingHandle | null = null;
   private camTrack: LocalVideoTrack | null = null;
   private remoteVideo: RemoteTrack | null = null;
   private audioEls: HTMLMediaElement[] = [];
@@ -499,15 +500,15 @@ export class CallEngine {
         return null;
       }
       // Browser AGC lifts ordinary speech; this final bounded gain + compressor improves quiet microphones without
-      // clipping peaks. It is strictly additive: old WebViews that cannot create the graph keep the raw track.
+      // clipping peaks. A suspended Web Audio destination is silent on iOS 15 / older Android WebViews, so attach it
+      // only after the gesture unlock is actually running; interruptions fall back to the raw captured microphone.
+      this.clearMicVoiceProcessing();
       const context = audioContext();
-      if (context) {
-        try {
-          t.setAudioContext(context);
-          await t.setProcessor(new CallVoiceProcessor());
-        } catch {
-          this.netLog("mic-headroom-unavailable");
-        }
+      try {
+        this.micVoiceProcessing = await enableVoiceProcessing(t, context);
+        if (!this.micVoiceProcessing) this.netLog("mic-headroom-bypassed");
+      } catch {
+        this.netLog("mic-headroom-unavailable");
       }
       return t;
     } catch (e) {
@@ -556,6 +557,9 @@ export class CallEngine {
         mark("lk-connected");
         const mic = (await this.preMic) ?? (await this.acquireMic());
         if (mic && this.room === room) {
+          // If the context was interrupted while we connected, wait for LiveKit to restore the original mic track
+          // before publication rather than sending a silent Web Audio destination.
+          await this.micVoiceProcessing?.publishRawIfNeeded();
           this.micTrack = mic;
           if (this.s.muted) await mic.mute();
           await room.localParticipant.publishTrack(mic, { ...micPublishOptions(), source: LK.Track.Source.Microphone });
@@ -689,6 +693,7 @@ export class CallEngine {
       room.removeAllListeners();
       void room.disconnect(true).catch(() => {});
     }
+    this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
     this.micTrack?.stop();
@@ -889,6 +894,7 @@ export class CallEngine {
       room.removeAllListeners();
       void room.disconnect();
     }
+    this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
     this.micTrack?.stop();
@@ -906,6 +912,11 @@ export class CallEngine {
     if (this.weakTimer) clearTimeout(this.weakTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     this.stallTimer = null;
+  }
+
+  private clearMicVoiceProcessing() {
+    this.micVoiceProcessing?.dispose();
+    this.micVoiceProcessing = null;
   }
 
   // ---------- controls ----------

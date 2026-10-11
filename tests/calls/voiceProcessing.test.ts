@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CALL_MIC_COMPRESSOR, CALL_MIC_GAIN, CallVoiceProcessor } from "../../src/lib/calls/voiceProcessing";
+import { CALL_MIC_COMPRESSOR, CALL_MIC_GAIN, CallVoiceProcessor, enableVoiceProcessing } from "../../src/lib/calls/voiceProcessing";
 
 class FakeNode {
   next: FakeNode | undefined;
@@ -15,6 +15,8 @@ class FakeNode {
 }
 
 class FakeContext {
+  state: AudioContextState = "running";
+  private readonly listeners = new Set<() => void>();
   source = new FakeNode();
   gain = Object.assign(new FakeNode(), { gain: { value: 0 } });
   compressor = Object.assign(new FakeNode(), {
@@ -39,6 +41,31 @@ class FakeContext {
   }
   createMediaStreamDestination() {
     return this.destination;
+  }
+  addEventListener(type: string, listener: () => void) {
+    if (type === "statechange") this.listeners.add(listener);
+  }
+  removeEventListener(type: string, listener: () => void) {
+    if (type === "statechange") this.listeners.delete(listener);
+  }
+  setState(state: AudioContextState) {
+    this.state = state;
+    for (const listener of this.listeners) listener();
+  }
+}
+
+class FakeProcessorTrack {
+  contexts: unknown[] = [];
+  processors = 0;
+  stops = 0;
+  setAudioContext(context: AudioContext) {
+    this.contexts.push(context);
+  }
+  async setProcessor() {
+    this.processors++;
+  }
+  async stopProcessor() {
+    this.stops++;
   }
 }
 
@@ -67,4 +94,31 @@ test("voice processor raises quiet input while retaining a compressor safety cei
   } finally {
     (globalThis as unknown as { MediaStream: typeof MediaStream }).MediaStream = saved;
   }
+});
+
+test("suspended audio context leaves the raw microphone untouched", async () => {
+  const context = new FakeContext();
+  context.setState("suspended");
+  const track = new FakeProcessorTrack();
+
+  const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
+
+  assert.equal(handle, null);
+  assert.equal(track.contexts.length, 0, "do not bind a suspended context to the LiveKit microphone track");
+  assert.equal(track.processors, 0, "do not publish a suspended destination track");
+  assert.equal(track.stops, 0, "raw microphone needs no processor cleanup");
+});
+
+test("an interrupted audio context immediately restores the raw microphone track", async () => {
+  const context = new FakeContext();
+  const track = new FakeProcessorTrack();
+  const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
+
+  assert.ok(handle);
+  assert.equal(track.contexts.length, 1);
+  assert.equal(track.processors, 1);
+  context.setState("suspended");
+  await handle.publishRawIfNeeded();
+  assert.equal(track.stops, 1, "processor is removed after suspension so LiveKit republishes the raw mic");
+  handle.dispose();
 });
