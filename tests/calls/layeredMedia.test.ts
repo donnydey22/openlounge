@@ -88,3 +88,27 @@ test("layered fallback fails closed when the durable LiveKit path is unavailable
     service.dispose();
   }
 });
+
+test("called parties cannot obtain or relay direct media before explicitly accepting", async () => {
+  const { service, events } = setup();
+  try {
+    const start = await service.start("a", "b", false);
+    assert.equal(start.ok, true);
+    if (!start.ok) return;
+    assert.equal(start.media?.provider, "mediasoup");
+    const incoming = events.find((event) => event.userId === "b" && event.ev === "call:incoming");
+    assert.equal(incoming?.data.media, null);
+
+    const beforeAccept = await service.get_(start.call.id, "b");
+    assert.equal(beforeAccept.ok, true);
+    if (beforeAccept.ok) assert.equal(beforeAccept.media, null);
+    assert.deepEqual(await service.mediaRequest(start.call.id, "b", "conn-b", "join", {}), { ok: false, error: "Answer the call before joining direct media" });
+
+    const accepted = await service.accept(start.call.id, "b");
+    assert.equal(accepted.ok, true);
+    if (accepted.ok) assert.equal(accepted.media?.provider, "mediasoup");
+    assert.deepEqual(await service.mediaRequest(start.call.id, "b", "conn-b", "join", {}), { ok: true, result: { method: "join" } });
+  } finally {
+    service.dispose();
+  }
+});

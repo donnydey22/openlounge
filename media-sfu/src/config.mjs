@@ -21,6 +21,20 @@ const ip = (value, key) => {
   return value;
 };
 
+const gatewayUrl = (env) => {
+  const expectedHost = required(env, "OPENLOUNGE_GATEWAY_HOST").toLowerCase();
+  let value;
+  try {
+    value = new URL(required(env, "OPENLOUNGE_GATEWAY_WS_URL"));
+  } catch {
+    throw new Error("OPENLOUNGE_GATEWAY_WS_URL must be a valid WSS URL");
+  }
+  if (value.protocol !== "wss:") throw new Error("OPENLOUNGE_GATEWAY_WS_URL must use wss");
+  if (!value.hostname || value.hostname.toLowerCase() !== expectedHost) throw new Error("OPENLOUNGE_GATEWAY_WS_URL host must match OPENLOUNGE_GATEWAY_HOST");
+  if (value.username || value.password) throw new Error("OPENLOUNGE_GATEWAY_WS_URL must not contain credentials");
+  return value.toString();
+};
+
 /**
  * Parse the narrow first-pilot envelope. HTTP health listens on loopback only; browser control signaling stays on the
  * authenticated Open Lounge WebSocket. The WebRTC port range is intentionally distinct from coturn's 3478, 443 and
@@ -38,8 +52,11 @@ export function readConfig(env = process.env) {
   const bindIp = ip(env.MEDIASOUP_LISTEN_IP ?? "0.0.0.0", "MEDIASOUP_LISTEN_IP");
   const announcedAddress = ip(required(env, "MEDIASOUP_ANNOUNCED_ADDRESS"), "MEDIASOUP_ANNOUNCED_ADDRESS");
   if (announcedAddress === "0.0.0.0") throw new Error("MEDIASOUP_ANNOUNCED_ADDRESS must be public");
+  const maxCalls = positive(env, "MEDIASOUP_MAX_CALLS", 2);
+  const maxSessions = positive(env, "MEDIASOUP_MAX_SESSIONS", maxCalls * 2);
+  if (maxSessions > maxCalls * 2) throw new Error("MEDIASOUP_MAX_SESSIONS may not exceed two sessions per pilot call");
   return {
-    gatewayUrl: required(env, "OPENLOUNGE_GATEWAY_WS_URL"),
+    gatewayUrl: gatewayUrl(env),
     gatewaySecret,
     admissionSecret,
     bindIp,
@@ -47,7 +64,8 @@ export function readConfig(env = process.env) {
     minPort,
     maxPort,
     // A one-core coturn co-location pilot must stay deliberately tiny. Capacity only expands after measured review.
-    maxCalls: positive(env, "MEDIASOUP_MAX_CALLS", 2),
+    maxCalls,
+    maxSessions,
     healthHost: env.MEDIASOUP_HEALTH_HOST ?? "127.0.0.1",
     healthPort: port(env, "MEDIASOUP_HEALTH_PORT", 8081),
   };

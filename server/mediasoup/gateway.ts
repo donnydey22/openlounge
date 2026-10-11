@@ -90,6 +90,12 @@ export class MediasoupGateway {
     this.conn.emit("ms:gateway:close", { callId });
   }
 
+  /** Drop all direct-media state tied to a browser socket. This is server-originated cleanup, not a browser command. */
+  closeConnection(connectionId: string) {
+    if (!this.connected || !this.conn) return;
+    this.conn.emit("ms:gateway:closeConnection", { connectionId });
+  }
+
   handleResponse(conn: Conn, data: unknown) {
     if (conn !== this.conn || !data || typeof data !== "object") return { ok: false as const };
     const d = data as { id?: unknown; ok?: unknown; result?: unknown; error?: unknown };

@@ -178,6 +178,9 @@ export class CallService {
   /** media credential for a participant of a LIVE call (never for an ended one); fresh enough to connect with */
   private async media(c: CallRec, userId: string): Promise<CallMedia | null> {
     if (c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
+    // The caller may establish its outbound UDP transport while ringing, but the called party never receives a
+    // Mediasoup admission token (nor can it use one) before explicitly accepting the call.
+    if (c.backend.provider === "mediasoup" && userId === c.calleeId && c.phase !== "active") return null;
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const media = await t.p;
@@ -254,8 +257,10 @@ export class CallService {
     }
     this.live.set(callerId, c.id);
     this.live.set(calleeId, c.id);
-    // pre-create both LiveKit tokens now (room is created by LiveKit on first join); accept → connect only
-    for (const uid of [callerId, calleeId]) this.mint(c, uid);
+    // Preserve ring-time prewarming for the established LiveKit path. For direct UDP, only the caller has a
+    // credential until the callee atomically accepts; the server enforces that consent boundary below as well.
+    this.mint(c, callerId);
+    if (backend.provider === "livekit") this.mint(c, calleeId);
     c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
     c.timer.unref?.();
     const info = this.info(c);
@@ -376,6 +381,7 @@ export class CallService {
   async mediaRequest(callId: unknown, userId: string, connectionId: string, method: string, payload: Record<string, unknown>) {
     const c = this.get(callId, userId);
     if (!c || c.phase === "ended" || c.backend.provider !== "mediasoup" || !c.backend.relay) return { ok: false as const, error: "UDP media isn't available" };
+    if (userId === c.calleeId && c.phase !== "active") return { ok: false as const, error: "Answer the call before joining direct media" };
     const media = await this.media(c, userId);
     if (!media || media.provider !== "mediasoup") return { ok: false as const, error: "UDP media credential expired" };
     const result = await c.backend.relay({ callId: c.id, userId, connectionId, method, payload, token: media.token });

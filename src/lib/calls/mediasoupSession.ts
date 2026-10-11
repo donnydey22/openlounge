@@ -25,6 +25,8 @@ export class MediasoupCallSession {
   private closed = false;
   private syncing = false;
   private connected = false;
+  private joined = false;
+  private generation = 0;
   private readonly onAvailable = () => void this.syncConsumers();
 
   constructor(
@@ -40,25 +42,44 @@ export class MediasoupCallSession {
   }
 
   async connect(withVideo: boolean) {
-    const work = this.connectInner(withVideo);
-    await Promise.race([
-      work,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("UDP media connection timed out")), CONNECT_TIMEOUT_MS)),
-    ]);
+    const generation = ++this.generation;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        this.connectInner(withVideo, generation),
+        new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("UDP media connection timed out")), CONNECT_TIMEOUT_MS))),
+      ]);
+    } catch (err) {
+      // Close the browser and broker session before the caller asks the server to switch both participants to TCP.
+      // Outstanding WebSocket responses are harmless because every post-await path below verifies this generation.
+      if (generation === this.generation) this.close();
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
-  private async connectInner(withVideo: boolean) {
+  private assertActive(generation: number) {
+    if (this.closed || generation !== this.generation) throw new Error("UDP media connection cancelled");
+  }
+
+  private async connectInner(withVideo: boolean, generation: number) {
     const { Device } = await import("mediasoup-client");
+    this.assertActive(generation);
     const joined = await this.req<{ ok: boolean; routerRtpCapabilities?: unknown }>("ms:join", {});
     if (!joined.ok || !joined.routerRtpCapabilities) throw new Error("Mediasoup admission failed");
+    this.assertActive(generation);
+    this.joined = true;
     const device = new Device();
     await device.load({ routerRtpCapabilities: joined.routerRtpCapabilities as Parameters<DeviceLike["load"]>[0]["routerRtpCapabilities"] });
+    this.assertActive(generation);
     this.device = device;
     const [sendOpts, recvOpts] = await Promise.all([
       this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createSendTransport"]>[0] }>("ms:transport:create", { direction: "send" }),
       this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createRecvTransport"]>[0] }>("ms:transport:create", { direction: "recv" }),
     ]);
     if (!sendOpts.ok || !sendOpts.transport || !recvOpts.ok || !recvOpts.transport) throw new Error("Mediasoup transport setup failed");
+    this.assertActive(generation);
     const send = device.createSendTransport({ ...sendOpts.transport, iceServers: this.media.iceServers ?? [], iceTransportPolicy: "all" });
     const recv = device.createRecvTransport({ ...recvOpts.transport, iceServers: this.media.iceServers ?? [], iceTransportPolicy: "all" });
     this.send = send;
@@ -66,13 +87,12 @@ export class MediasoupCallSession {
     this.wireTransport(send, "send");
     this.wireTransport(recv, "recv");
     this.socket.on("ms:consumer:available", this.onAvailable);
-    await this.publishAudio();
-    if (withVideo) await this.enableCamera("user");
-    await this.syncConsumers();
-    if (!this.closed) {
-      this.connected = true;
-      this.opts.onState("connected");
-    }
+    await this.publishAudio(generation);
+    if (withVideo) await this.enableCamera("user", generation);
+    await this.syncConsumers(generation);
+    this.assertActive(generation);
+    this.connected = true;
+    this.opts.onState("connected");
   }
 
   private wireTransport(transport: TransportLike | RecvTransportLike, direction: "send" | "recv") {
@@ -96,30 +116,42 @@ export class MediasoupCallSession {
     }
   }
 
-  private async publishAudio() {
+  private async publishAudio(generation?: number) {
     if (!this.send || this.mic) return;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC });
     const track = stream.getAudioTracks()[0];
-    if (!track || this.closed) {
+    if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return;
     }
     this.mic = track;
     const producer = await this.send.produce({ track, appData: { source: "microphone" } });
+    if (this.closed || (generation !== undefined && generation !== this.generation)) {
+      producer.close();
+      track.stop();
+      return;
+    }
     this.producers.set("audio", producer);
   }
 
-  async enableCamera(facing: "user" | "environment") {
+  async enableCamera(facing: "user" | "environment", generation?: number) {
     if (!this.send || this.camera) return this.camera;
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
     const track = stream.getVideoTracks()[0];
-    if (!track || this.closed) {
+    if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return null;
     }
     this.camera = track;
     this.opts.onLocalVideo(track);
     const producer = await this.send.produce({ track, appData: { source: "camera" } });
+    if (this.closed || (generation !== undefined && generation !== this.generation)) {
+      producer.close();
+      track.stop();
+      this.camera = null;
+      this.opts.onLocalVideo(null);
+      return null;
+    }
     this.producers.set("video", producer);
     return track;
   }
@@ -159,7 +191,7 @@ export class MediasoupCallSession {
     return els.some((el) => !el.paused);
   }
 
-  private async syncConsumers() {
+  private async syncConsumers(generation?: number) {
     if (this.closed || this.syncing || !this.recv || !this.device) return;
     this.syncing = true;
     try {
@@ -169,8 +201,12 @@ export class MediasoupCallSession {
       });
       if (!r.ok) throw new Error("Mediasoup consumer setup failed");
       for (const params of r.consumers ?? []) {
-        if (this.closed || this.consumers.has(params.id)) continue;
+        if (this.closed || (generation !== undefined && generation !== this.generation) || this.consumers.has(params.id)) continue;
         const consumer = await this.recv.consume(params as Parameters<RecvTransportLike["consume"]>[0]);
+        if (this.closed || (generation !== undefined && generation !== this.generation)) {
+          consumer.close();
+          continue;
+        }
         this.consumers.set(consumer.id, consumer);
         this.opts.onRemoteTrack({ kind: consumer.kind, track: consumer.track, close: () => consumer.close() });
         await this.req<{ ok: boolean }>("ms:consumer:resume", { consumerId: consumer.id });
@@ -187,6 +223,10 @@ export class MediasoupCallSession {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.generation++;
+    const shouldLeave = this.joined && typeof this.media.callId === "string";
+    this.joined = false;
+    if (shouldLeave) void this.socket.request("ms:leave", { callId: this.media.callId }, 1_000).catch(() => {});
     this.socket.off("ms:consumer:available", this.onAvailable);
     for (const consumer of this.consumers.values()) consumer.close();
     this.consumers.clear();

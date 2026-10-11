@@ -128,6 +128,9 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
 /** Per-connection handlers. `authed` is realtime.ts's guard (acks "Not signed in"). */
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void) {
   const s = () => svc!;
+  // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
+  // normal app-side socket teardown; browser code cannot address another connection id.
+  socket.onClose(() => mediaGateway().closeConnection(socket.id));
   // This is the sole gateway authentication route. It is intentionally outside `authed`: the SFU has no user session,
   // but must prove knowledge of a server-only secret before it can receive any brokered media command.
   socket.on("ms:gateway:hello", ({ secret }: { secret?: unknown }, ack: AckFn = noop) => ack(mediaGateway().attach(socket, secret)));
@@ -185,6 +188,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
         .catch(() => ack({ ok: false, error: "UDP media unavailable" }));
     });
   socket.on("ms:join", relay("join"));
+  socket.on("ms:leave", relay("leave"));
   socket.on("ms:transport:create", relay("transport:create"));
   socket.on("ms:transport:connect", relay("transport:connect"));
   socket.on("ms:produce", relay("produce"));

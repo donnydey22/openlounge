@@ -8,6 +8,13 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 "$root/media-sfu/deploy/preflight.sh"
 "$root/media-sfu/deploy/backup-coturn-config.sh"
 
+env_file=/etc/openlounge-mediasoup-sfu.env
+[[ -f "$env_file" && ! -L "$env_file" ]] || { echo "Missing regular root-owned $env_file" >&2; exit 2; }
+[[ $(stat -c '%U:%G' "$env_file") == root:root && $(stat -c '%a' "$env_file") == 600 ]] || {
+  echo "$env_file must be root:root with mode 0600; refusing to load media secrets." >&2
+  exit 2
+}
+
 id -u openlounge-sfu >/dev/null 2>&1 || useradd --system --home /var/lib/openlounge-mediasoup-sfu --shell /usr/sbin/nologin openlounge-sfu
 install -d -o openlounge-sfu -g openlounge-sfu -m 0750 /opt/openlounge-mediasoup-sfu /var/lib/openlounge-mediasoup-sfu
 rsync -a --delete --exclude node_modules "$root/media-sfu/" /opt/openlounge-mediasoup-sfu/media-sfu/

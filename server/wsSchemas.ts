@@ -87,6 +87,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "ms:gateway:response": { id: "id" },
   "ms:gateway:notice": { connectionId: "id", event: "string" },
   "ms:join": { callId: "id" },
+  "ms:leave": { callId: "id" },
   "ms:transport:create": { callId: "id", direction: "string" },
   "ms:transport:connect": { callId: "id", direction: "string", transportId: "id" },
   "ms:produce": { callId: "id", transportId: "id", kind: "string" },

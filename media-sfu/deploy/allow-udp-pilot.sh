@@ -6,6 +6,7 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Run with sudo after review." >&2; exit 64; }
 min=${MEDIASOUP_RTC_MIN_PORT:-40000}
 max=${MEDIASOUP_RTC_MAX_PORT:-49999}
-[[ $min =~ ^[0-9]+$ && $max =~ ^[0-9]+$ && $min -le $max && $max -lt 50000 ]] || { echo "Invalid SFU UDP range" >&2; exit 2; }
+source "$(dirname "${BASH_SOURCE[0]}")/validate-pilot-range.sh"
+mediasoup_validate_pilot_range "$min" "$max"
 ufw allow "$min:$max/udp" comment 'Open Lounge Mediasoup direct UDP pilot'
 ufw status numbered
