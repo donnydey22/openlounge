@@ -134,3 +134,29 @@ test("publishCamera: H.264 publish failure retries once with VP8; VP8 failure pr
   await assert.rejects(publishCamera(LK, room as never, {} as never, { codec: "vp8", backup: false }));
   assert.equal(calls.length, 1);
 });
+
+// ---------- low-bandwidth tier ----------
+import { networkTier, captureResolution } from "../../src/lib/calls/videoPolicy";
+test("network tier: Data Saver, 2g/3g, slow downlink → low; 4g / missing API → normal; override wins", () => {
+  assert.equal(networkTier(null), "normal");
+  assert.equal(networkTier({ effectiveType: "4g", downlink: 10 }), "normal");
+  assert.equal(networkTier({ effectiveType: "4g", saveData: true }), "low");
+  for (const t of ["slow-2g", "2g", "3g"]) assert.equal(networkTier({ effectiveType: t }), "low", t);
+  assert.equal(networkTier({ effectiveType: "4g", downlink: 0.9 }), "low");
+  assert.equal(networkTier({ effectiveType: "4g", downlink: 0 }), "normal");
+  assert.equal(networkTier({ effectiveType: "2g" }, "normal"), "normal");
+  assert.equal(networkTier(null, "low"), "low");
+});
+test("low tier caps capture at 360p and publishes 360p/400k top + one 180p layer; normal unchanged", () => {
+  assert.deepEqual(captureResolution("low"), { width: 640, height: 360, frameRate: 24 });
+  assert.equal(captureResolution("normal").height, 720);
+  const lo = cameraPublishOptions({ VideoPreset }, { codec: "vp8", backup: false }, "low");
+  assert.equal(lo.simulcast, true);
+  assert.equal(lo.videoEncoding?.maxBitrate, VIDEO_LAYERS.mid.maxBitrate);
+  assert.equal(lo.videoEncoding?.maxFramerate, VIDEO_LAYERS.mid.maxFramerate);
+  assert.equal(lo.videoSimulcastLayers?.length, 1);
+  assert.equal(lo.videoSimulcastLayers?.[0].height, 180);
+  const hi = cameraPublishOptions({ VideoPreset }, { codec: "h264", backup: "vp8" });
+  assert.equal(hi.videoEncoding?.maxBitrate, VIDEO_LAYERS.top.maxBitrate);
+  assert.equal(hi.videoSimulcastLayers?.length, 2);
+});
