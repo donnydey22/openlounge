@@ -42,7 +42,10 @@ import { LIVEKIT_RTC_CONFIG } from "@/lib/livekitIce";
 
 const MIC_OPTIONS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
-export type AudioStatus = "off" | "connecting" | "connected" | "unavailable" | "error";
+export type AudioStatus = "off" | "connecting" | "reconnecting" | "connected" | "unavailable" | "error";
+
+/** Rejoin backoff after LiveKit gives up (Disconnected) or a connect fails mid-session: 1 s, 2 s, 4 s, 8 s, then every 10 s. */
+export const rejoinDelayMs = (attempt: number) => Math.min(10_000, 1000 * 2 ** Math.max(0, attempt));
 
 export function useLiveKitAudio({
   roomId,
@@ -88,6 +91,9 @@ export function useLiveKitAudio({
     }
     let cancelled = false;
     let room: Room | null = null;
+    let attempt = 0;
+    let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+    let everConnected = false;
     const attached = new Map<string, HTMLMediaElement[]>();
     const setup = (LK: LiveKit) => {
     const { RoomEvent, Track } = LK;
@@ -113,14 +119,65 @@ export function useLiveKitAudio({
       })
       .on(RoomEvent.AudioPlaybackStatusChanged, () => setNeedsGesture(!r.canPlaybackAudio))
       .on(RoomEvent.ParticipantPermissionsChanged, () => setPermVersion((v) => v + 1))
-      .on(RoomEvent.Reconnecting, () => setStatus("connecting"))
-      .on(RoomEvent.Reconnected, () => setStatus("connected"))
-      .on(RoomEvent.Disconnected, () => !cancelled && setStatus("off"));
+      .on(RoomEvent.Reconnecting, () => !cancelled && setStatus("reconnecting"))
+      .on(RoomEvent.Reconnected, () => {
+        if (cancelled) return;
+        attempt = 0;
+        setStatus("connected");
+      })
+      .on(RoomEvent.Disconnected, (reason?: number) => {
+        if (cancelled || room !== r) return;
+        const R = LK.DisconnectReason;
+        // removed by the server (kicked, room closed, same account joined elsewhere) or we left: don't fight it
+        if (reason === R.CLIENT_INITIATED || reason === R.PARTICIPANT_REMOVED || reason === R.ROOM_DELETED || reason === R.DUPLICATE_IDENTITY) {
+          setStatus("off");
+          return;
+        }
+        // LiveKit's own resume + full reconnect gave up (long drop, network switch): rejoin with a fresh token
+        scheduleRejoin();
+      });
     return r;
     };
 
-    (async () => {
-      setStatus("connecting");
+    const teardownRoom = () => {
+      const old = room as Room | null;
+      room = null;
+      if (!old) return;
+      setActiveAudioRoom(null);
+      old.removeAllListeners();
+      void old.disconnect();
+      document.querySelectorAll("[data-lk-audio]").forEach((el) => el.remove());
+      roomRef.current = null;
+    };
+    const scheduleRejoin = (now = false) => {
+      if (cancelled) return;
+      teardownRoom();
+      setStatus("reconnecting");
+      if (rejoinTimer) clearTimeout(rejoinTimer);
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      // offline: wait for the 'online' event (it calls us with now=true); keep a slow timer as a safety net
+      const delay = now ? 0 : offline ? 10_000 : rejoinDelayMs(attempt);
+      attempt++;
+      rejoinTimer = setTimeout(() => {
+        rejoinTimer = null;
+        void connect();
+      }, delay);
+    };
+    const onOnline = () => {
+      if (cancelled) return;
+      // back online / switched Wi-Fi <-> cellular: a pending rejoin goes now (LiveKit restarts ICE itself if still connected)
+      if (rejoinTimer || (everConnected && !room)) scheduleRejoin(true);
+    };
+    const onOffline = () => {
+      if (!cancelled && everConnected) setStatus("reconnecting");
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", onOnline);
+      window.addEventListener("offline", onOffline);
+    }
+
+    const connect = async () => {
+      setStatus(everConnected ? "reconnecting" : "connecting");
       setError(null);
       try {
         markAudio("audio-start");
@@ -143,6 +200,11 @@ export function useLiveKitAudio({
             setStatus("unavailable");
             return;
           }
+          if (res.status === 403 || res.status === 404) {
+            // not allowed in this room any more (left, removed, room ended): stop rejoining
+            setStatus("off");
+            return;
+          }
         }
         markAudio("audio-token");
         if (!body.ok || !body.url || !body.token) throw new Error("audio token");
@@ -158,7 +220,9 @@ export function useLiveKitAudio({
         });
         if (cancelled) return room.disconnect();
         setActiveAudioRoom(room);
-        markAudio("audio-connected");
+        markAudio(everConnected ? "audio-rejoined" : "audio-connected");
+        everConnected = true;
+        attempt = 0;
         setStatus("connected");
         // try to start playback right away (works if the user already tapped); else show the banner
         await room.startAudio().catch(() => {});
@@ -167,19 +231,25 @@ export function useLiveKitAudio({
         // Soft-fail: the in-app room already exists; only audio is down.
         if (cancelled) return;
         console.warn("[audio] LiveKit connect failed", err);
+        if (everConnected || attempt < 3) {
+          // mid-session (or first tries): keep retrying with backoff instead of leaving the room silent
+          scheduleRejoin();
+          return;
+        }
         setError("Live audio couldn't connect");
         setStatus("error");
       }
-    })();
+    };
+    void connect();
 
     return () => {
       cancelled = true;
-      setActiveAudioRoom(null);
-      const r = room as Room | null;
-      r?.removeAllListeners();
-      void r?.disconnect();
-      document.querySelectorAll("[data-lk-audio]").forEach((el) => el.remove());
-      roomRef.current = null;
+      if (rejoinTimer) clearTimeout(rejoinTimer);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", onOnline);
+        window.removeEventListener("offline", onOffline);
+      }
+      teardownRoom();
       setSpeaking(new Set());
       setLevels(new Map());
       setStatus("off");
