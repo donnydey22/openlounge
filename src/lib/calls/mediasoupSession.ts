@@ -10,6 +10,23 @@ type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 const MIC: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 const CONNECT_TIMEOUT_MS = 4_000;
 
+/** Resolves when a mediasoup-client transport reaches "connected"; rejects on "failed"/"closed". */
+export function waitTransportConnected(t: { connectionState?: string; on(ev: "connectionstatechange", fn: (s: string) => void): unknown; off?(ev: "connectionstatechange", fn: (s: string) => void): unknown }) {
+  if (t.connectionState === "connected") return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const fn = (state: string) => {
+      if (state === "connected") {
+        t.off?.("connectionstatechange", fn);
+        resolve();
+      } else if (state === "failed" || state === "closed") {
+        t.off?.("connectionstatechange", fn);
+        reject(new Error(`UDP transport ${state}`));
+      }
+    };
+    t.on("connectionstatechange", fn);
+  });
+}
+
 /**
  * Browser half of the brokered Mediasoup protocol. The only network API used here is the app's authenticated
  * RealtimeClient; the SFU control connection and its long-lived secret stay server-side.
@@ -93,6 +110,10 @@ export class MediasoupCallSession {
     await this.publishAudio(generation);
     if (withVideo) await this.enableCamera("user", generation);
     await this.syncConsumers(generation);
+    this.assertActive(generation);
+    // Signaling alone succeeds even when UDP is blocked; only report "connected" once ICE/DTLS on the send transport
+    // is really up, so a blocked network trips the 4 s connect timeout (→ LiveKit TCP) instead of waiting ~15 s for ICE failure.
+    await waitTransportConnected(send);
     this.assertActive(generation);
     this.connected = true;
     this.opts.onState("connected");

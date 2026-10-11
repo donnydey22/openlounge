@@ -63,3 +63,11 @@ test("connect-time sync awaits a pass already running from an earlier notice", a
   await awaited;
   assert.deepEqual(got, ["video"]);
 });
+
+test("waitTransportConnected resolves on connected and rejects on failed", async () => {
+  const { waitTransportConnected } = await import("../../src/lib/calls/mediasoupSession");
+  const mk = () => { const fns: Array<(s: string) => void> = []; return { t: { connectionState: "new", on: (_e: string, f: (s: string) => void) => fns.push(f), off() {} }, emit: (s: string) => fns.forEach((f) => f(s)) }; };
+  const a = mk(); const pa = waitTransportConnected(a.t as any); a.emit("connecting"); a.emit("connected"); await pa;
+  const b = mk(); const pb = waitTransportConnected(b.t as any); b.emit("failed"); await assert.rejects(pb);
+  await waitTransportConnected({ connectionState: "connected", on() {} } as any);
+});
