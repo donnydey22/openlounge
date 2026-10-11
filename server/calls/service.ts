@@ -6,7 +6,7 @@
 // Outcomes: completed | missed (45s timeout) | declined | cancelled (caller hung up first) | busy | failed.
 // Every ended call leaves one service message in the DM (store.appendCallMessage).
 import { randomUUID } from "node:crypto";
-import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase } from "../../src/lib/types";
+import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 
 const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
@@ -54,6 +54,8 @@ export interface CallDeps {
   /** LiveKit: null when audio isn't configured */
   mintToken(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
   mediaUrl(): string | null;
+  /** Optional self-hosted TURN credentials; invoked only for a live call participant after token minting. */
+  turnIceServers(callId: string, userId: string): TurnIceServer[] | null;
   closeMedia(callId: string): void;
   push?: {
     incoming(calleeId: string, call: CallInfo): void;
@@ -154,7 +156,9 @@ export class CallService {
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const token = await t.p;
-    return token && (c.phase as CallPhase) !== "ended" ? { url, token } : null;
+    if (!token || (c.phase as CallPhase) === "ended") return null;
+    const iceServers = this.d.turnIceServers(c.id, userId);
+    return { url, token, ...(iceServers ? { iceServers } : {}) };
   }
 
   /**

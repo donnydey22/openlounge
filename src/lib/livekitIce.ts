@@ -1,16 +1,16 @@
+import type { TurnIceServer } from "./types";
+
 /**
- * ICE config for every LiveKit connection (rooms + 1:1 calls).
- *
- * Production LiveKit runs on Railway with force_tcp (Railway routes no inbound UDP): media rides ICE/TCP straight to the
- * SFU's public TCP proxy, and the SFU learns each client's address from the TCP connection itself (peer-reflexive).
- * Clients therefore need no STUN/TURN servers at all.
- *
- * An explicit (empty) iceServers list matters: when the option is absent, livekit-client uses the server's list, and
- * LiveKit's built-in default STUN list includes a vendor we never use. Passing [] keeps every client off third-party
- * STUN hosts (no client IPs leaked to them, no wasted gathering). If a self-hosted TURN is ever enabled, put its
- * per-call credentials here instead (see /workspace/calls/turn-bench/RESULTS.md).
+ * ICE config for LiveKit connections. Railway's SFU remains force_tcp, so the explicit empty
+ * list retains the established TCP-only path when a call has no self-hosted TURN credential.
+ * Passing an explicit list also prevents livekit-client from adding an unapproved default STUN service.
  */
-export const LIVEKIT_RTC_CONFIG: RTCConfiguration = {
-  iceTransportPolicy: "all",
-  iceServers: [],
-};
+export function livekitRtcConfig(iceServers?: TurnIceServer[] | null): RTCConfiguration {
+  return {
+    iceTransportPolicy: "all",
+    iceServers: iceServers?.length ? iceServers : [],
+  };
+}
+
+/** Room audio has no per-call TURN credential and therefore stays on the established explicit-empty-ICE path. */
+export const LIVEKIT_RTC_CONFIG = livekitRtcConfig();
