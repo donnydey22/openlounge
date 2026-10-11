@@ -22,6 +22,7 @@ export type EmojiAsset =
   | { type: "webp"; src: string; poster: string | null; durationMs: number; source: "telegram"; remote?: boolean }
   | { type: "lottie"; src: string; poster: string; durationMs: number; source: "noto"; remote?: false };
 
+const TG_ENABLED_SOURCES: EmojiSource[] = ["noto"];
 const tgDur = new Map<string, number>();
 for (const pair of TG_KEYS.split(" ")) {
   const [k, cs] = pair.split(":");
@@ -39,7 +40,7 @@ export function emojiKey(emoji: string): string {
   return out.join("_");
 }
 
-const VALID = new Set<EmojiSource>(["telegram", "noto"]);
+const VALID = new Set<EmojiSource>(TG_ENABLED_SOURCES);
 let cached: EmojiSource | null = null;
 
 function platform(): "web" | "ios" | "android" {
@@ -71,13 +72,13 @@ export function emojiSource(): EmojiSource {
   const plat = platform();
   const perPlatform =
     plat === "ios" ? process.env.NEXT_PUBLIC_EMOJI_SOURCE_IOS : plat === "android" ? process.env.NEXT_PUBLIC_EMOJI_SOURCE_ANDROID : process.env.NEXT_PUBLIC_EMOJI_SOURCE_WEB;
-  for (const c of [pick, perPlatform, process.env.NEXT_PUBLIC_EMOJI_SOURCE, "telegram"]) {
+  for (const c of [pick, perPlatform, process.env.NEXT_PUBLIC_EMOJI_SOURCE, "noto"]) {
     if (c && VALID.has(c as EmojiSource)) {
       if (typeof window !== "undefined") cached = c as EmojiSource;
       return c as EmojiSource;
     }
   }
-  return "telegram";
+  return "noto";
 }
 
 /** Dev/compare only: switch the set at runtime (components re-read it on mount). */
@@ -91,7 +92,11 @@ export function setEmojiSourceOverride(s: EmojiSource | null) {
   cached = null;
 }
 
+// Telegram's set is "All rights reserved, Telegram" with no license, so it is OFF in production (Donny, Oct 10 2026).
+// Files removed from public/emoji/telegram; flip TG_ENABLED only if a real license is obtained.
+const TG_ENABLED = false;
 function tgAsset(k: string): EmojiAsset | null {
+  if (!TG_ENABLED) return null;
   const d = tgDur.get(k);
   return d === undefined ? null : { type: "webp", src: `/emoji/telegram/${k}.webp`, poster: `/emoji/telegram/p/${k}.webp`, durationMs: d, source: "telegram" };
 }
