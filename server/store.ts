@@ -1590,6 +1590,7 @@ export class Store {
     const isHost = ctx.room.hostId === actorId;
     const canModerate = isHost || coHost;
     if (actorId !== targetId && !canModerate) return { ok: false as const, error: "Only the host or a co-host can do that" };
+    if (coHost && !isHost && targetId === ctx.room.hostId) return { ok: false as const, error: "Co-hosts can't moderate the host" };
     if (ctx.p.role !== "speaker") return { ok: false as const, error: "Not a speaker" };
     ctx.p.role = "listener";
     ctx.p.muted = true;
@@ -1604,6 +1605,7 @@ export class Store {
     const ctx = this.participant(roomId, targetId);
     if (!ctx) return { ok: false as const, error: "Not in room" };
     if (ctx.room.hostId !== actorId && !coHost) return { ok: false as const, error: "Only the host or a co-host can invite speakers" };
+    if (coHost && ctx.room.hostId !== actorId && targetId === ctx.room.hostId) return { ok: false as const, error: "Co-hosts can't moderate the host" };
     if (ctx.p.role !== "listener") return { ok: false as const, error: "Already on stage" };
     ctx.p.role = "speaker";
     ctx.p.muted = true;
@@ -1619,6 +1621,7 @@ export class Store {
     const ctx = this.participant(roomId, targetId);
     if (!ctx) return { ok: false as const, error: "Not in room" };
     if (ctx.room.hostId !== actorId && !coHost) return { ok: false as const, error: "Only the host or a co-host can mute others" };
+    if (coHost && ctx.room.hostId !== actorId && targetId === ctx.room.hostId) return { ok: false as const, error: "Co-hosts can't moderate the host" };
     ctx.p.muted = true;
     ctx.p.speaking = false;
     // Clubhouse rule: moderators can mute, never force-unmute — the speaker can unmute themselves.
@@ -1632,6 +1635,9 @@ export class Store {
   setPodium(roomId: string, actorId: string, targetId: string | null, coHost = false) {
     const room = this.rooms.get(roomId);
     if (!room || room.ended) return { ok: false as const, error: "Room not found" };
+    const delegated = coHost && room.hostId !== actorId;
+    // Giving another person the podium (or clearing it) while the host holds it changes the host's room state.
+    if (delegated && room.podiumUserId === room.hostId) return { ok: false as const, error: "Co-hosts can't moderate the host" };
     if (targetId === null) {
       if (room.hostId !== actorId && room.podiumUserId !== actorId && !coHost) return { ok: false as const, error: "Only the host or a co-host can clear the podium" };
       room.podiumUserId = null;
@@ -1640,6 +1646,7 @@ export class Store {
     }
     const target = room.participants.get(targetId);
     if (!target || target.role === "listener") return { ok: false as const, error: "Only speakers can hold the podium" };
+    if (delegated && targetId === room.hostId) return { ok: false as const, error: "Co-hosts can't moderate the host" };
     const isHost = room.hostId === actorId;
     if (!isHost && !coHost && actorId !== targetId) return { ok: false as const, error: "Only the host or a co-host can assign the podium" };
     const actor = room.participants.get(actorId);
@@ -1762,6 +1769,7 @@ export class Store {
     if (!room || room.ended) return { ok: false as const, error: "Room not found" };
     const idx = room.chat.findIndex((m) => m.id === messageId);
     if (idx === -1) return { ok: false as const, error: "Message not found" };
+    if (coHost && room.hostId !== userId && room.chat[idx].authorId === room.hostId) return { ok: false as const, error: "Co-hosts can't delete the host's messages" };
     if (room.chat[idx].authorId !== userId && room.hostId !== userId && !coHost)
       return { ok: false as const, error: "Only the host, a co-host, or the author can delete a message" };
     room.chat.splice(idx, 1);

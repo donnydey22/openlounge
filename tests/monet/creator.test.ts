@@ -141,6 +141,17 @@ test("configured co-hosts receive delegated room powers but cannot end the room"
   assert.ok(store.setPodium(roomId, coHost.id, listener.id, delegated).ok);
   assert.ok(store.moveToAudience(roomId, coHost.id, listener.id, delegated).ok);
 
+  // Delegation lets a co-host manage other participants, never the actual room host. These checks live in the store
+  // rather than only the UI/realtime layer so a crafted WebSocket payload cannot bypass them.
+  const hostMessage = store.sendChat(roomId, host.id, "Host message");
+  assert.ok(hostMessage.ok);
+  assert.equal(store.hostMute(roomId, coHost.id, host.id, delegated).ok, false, "co-host cannot mute the host");
+  assert.equal(store.moveToAudience(roomId, coHost.id, host.id, delegated).ok, false, "co-host cannot move the host to audience");
+  assert.equal(store.setPodium(roomId, coHost.id, host.id, delegated).ok, false, "co-host cannot change the host's podium state");
+  assert.ok(store.setPodium(roomId, host.id, host.id).ok);
+  assert.equal(store.setPodium(roomId, coHost.id, null, delegated).ok, false, "co-host cannot clear the host's podium state");
+  assert.equal(store.deleteChat(roomId, coHost.id, hostMessage.message.id, delegated).ok, false, "co-host cannot delete host chat");
+
   const message = store.sendChat(roomId, author.id, "Please moderate this");
   assert.ok(message.ok);
   assert.ok(store.deleteChat(roomId, coHost.id, message.message.id, delegated).ok);

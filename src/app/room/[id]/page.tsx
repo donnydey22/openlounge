@@ -633,6 +633,7 @@ export default function RoomPage() {
               meId={me?.id}
               hostId={room.hostId}
               canModerate={canModerate}
+              canModerateHost={isHost}
               connected={connected}
               onSend={sendChat}
               onDelete={deleteChat}
@@ -654,6 +655,7 @@ export default function RoomPage() {
             meId={me?.id}
             hostId={room.hostId}
             canModerate={canModerate}
+            canModerateHost={isHost}
             connected={connected}
             onSend={sendChat}
             onDelete={deleteChat}
@@ -668,7 +670,7 @@ export default function RoomPage() {
       <UserActionSheet
         target={selectedP}
         roomId={roomId}
-        canModerate={canModerate}
+        canModerate={canModerate && !(isCoHost && selectedP?.userId === room.hostId)}
         onClose={() => setSelected(null)}
         onMessage={(uid) => {
           setSelected(null);
