@@ -80,6 +80,18 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:current": {},
   "call:history": { before: "number?" },
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },
+  "call:mediaFallback": { callId: "id" },
+  // Server-brokered Mediasoup signaling. Extra structured fields (DTLS/RTP parameters) are validated by the SFU
+  // adapter rather than serialized into this intentionally tiny generic schema layer.
+  "ms:gateway:hello": { secret: "string" },
+  "ms:gateway:response": { id: "id" },
+  "ms:gateway:notice": { connectionId: "id", event: "string" },
+  "ms:join": { callId: "id" },
+  "ms:transport:create": { callId: "id", direction: "string" },
+  "ms:transport:connect": { callId: "id", direction: "string", transportId: "id" },
+  "ms:produce": { callId: "id", transportId: "id", kind: "string" },
+  "ms:consume": { callId: "id", transportId: "id" },
+  "ms:consumer:resume": { callId: "id", consumerId: "id" },
   "dm:reaction_add": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:reaction_remove": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:delete": { peerId: "id", messageIds: "string-array?", forEveryone: "bool?" },

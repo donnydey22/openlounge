@@ -1,6 +1,7 @@
 {
   "name": "openlounge",
   "version": "0.1.0",
+  "packageManager": "npm@10.9.2",
   "private": true,
   "description": "Open Lounge — a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
   "scripts": {
@@ -49,6 +50,7 @@
     "livekit-server-sdk": "^2.19.1",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.52.0",
+    "mediasoup-client": "^3.24.5",
     "next": "^16.3.8",
     "nodemailer": "^7.0.13",
     "pg": "^8.23.1",

@@ -7,6 +7,7 @@
 // Every ended call leaves one service message in the DM (store.appendCallMessage).
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
+import type { CallMediaBackend } from "./mediaBackend";
 
 const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
@@ -51,12 +52,16 @@ export interface CallDeps {
   /** in a live audio room right now */
   inRoom(userId: string): boolean;
   appendCallMessage(meta: CallMeta, calleeId: string): void;
-  /** LiveKit: null when audio isn't configured */
-  mintToken(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
-  mediaUrl(): string | null;
-  /** Optional self-hosted TURN credentials; invoked only for a live call participant after token minting. */
-  turnIceServers(callId: string, userId: string): TurnIceServer[] | null;
-  closeMedia(callId: string): void;
+  /** Preferred backend for a NEW call. The selected instance is retained on the call record. */
+  selectMedia?(): CallMediaBackend | null;
+  /** Existing LiveKit path for compatibility and layered Mediasoup fallback. */
+  liveKitFallback?(): CallMediaBackend | null;
+  /** Legacy LiveKit hooks retained for focused unit tests and older integration wiring. */
+  mintToken?(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
+  mediaUrl?(): string | null;
+  /** Optional self-hosted TURN credentials; this remains untouched when no secret is configured. */
+  turnIceServers?(callId: string, userId: string): TurnIceServer[] | null;
+  closeMedia?(callId: string): void;
   push?: {
     incoming(calleeId: string, call: CallInfo): void;
     cancel(calleeId: string, callId: string, reason: string): void;
@@ -78,8 +83,10 @@ interface CallRec {
   answeredAt: number | null;
   endedAt: number | null;
   outcome: CallOutcome | null;
-  /** per participant: the current LiveKit token (re-minted by media() once it's past half its lifetime) */
-  tokens: Map<string, { p: Promise<string | null>; at: number }>;
+  /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
+  tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
+  /** Captured once at call start; only `fallbackMedia()` may replace it, and only Mediasoup → LiveKit. */
+  backend: CallMediaBackend;
   timer: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
@@ -106,6 +113,25 @@ export class CallService {
 
   private now() {
     return this.d.now?.() ?? Date.now();
+  }
+
+  private legacyLiveKit(): CallMediaBackend | null {
+    const url = this.d.mediaUrl?.();
+    const mint = this.d.mintToken;
+    if (!url || !mint) return null;
+    return {
+      provider: "livekit",
+      issue: async ({ callId, userId, name, ttlSec }) => {
+        const token = await mint(callId, userId, name, ttlSec);
+        const iceServers = this.d.turnIceServers?.(callId, userId);
+        return token ? { provider: "livekit", url, token, expiresAt: Math.floor(this.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}) } : null;
+      },
+      close: (callId) => this.d.closeMedia?.(callId),
+    };
+  }
+
+  private selectBackend() {
+    return this.d.selectMedia?.() ?? this.legacyLiveKit();
   }
 
   dispose() {
@@ -144,21 +170,18 @@ export class CallService {
   }
 
   private mint(c: CallRec, userId: string) {
-    const t = { p: this.d.mintToken(c.id, userId, this.d.peer(userId)?.name ?? "Guest", CALL_TOKEN_TTL_S).catch(() => null), at: this.now() };
+    const t = { p: c.backend.issue({ callId: c.id, userId, name: this.d.peer(userId)?.name ?? "Guest", ttlSec: CALL_TOKEN_TTL_S }).catch(() => null), at: this.now() };
     c.tokens.set(userId, t);
     return t;
   }
 
   /** media credential for a participant of a LIVE call (never for an ended one); fresh enough to connect with */
   private async media(c: CallRec, userId: string): Promise<CallMedia | null> {
-    const url = this.d.mediaUrl();
-    if (!url || c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
+    if (c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
-    const token = await t.p;
-    if (!token || (c.phase as CallPhase) === "ended") return null;
-    const iceServers = this.d.turnIceServers(c.id, userId);
-    return { url, token, ...(iceServers ? { iceServers } : {}) };
+    const media = await t.p;
+    return media && (c.phase as CallPhase) !== "ended" ? media : null;
   }
 
   /**
@@ -201,6 +224,8 @@ export class CallService {
     }
     if (this.d.inRoom(callerId)) return { ok: false, error: "Leave the room you're in to start a call", reason: "self_busy" };
     if (this.limited(callerId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
+    const backend = this.selectBackend();
+    if (!backend) return { ok: false, error: "Calls aren't available right now", reason: "media_unavailable" };
     const now = this.now();
     const c: CallRec = {
       id: randomUUID(),
@@ -215,6 +240,7 @@ export class CallService {
       endedAt: null,
       outcome: null,
       tokens: new Map(),
+      backend,
       timer: null,
       pushed: false,
       orphanSince: null,
@@ -325,6 +351,37 @@ export class CallService {
     return { ok: true as const, call: this.info(c), media: c.phase === "ended" ? null : await this.media(c, userId) };
   }
 
+  /**
+   * The only in-call backend migration: a failed or degraded Mediasoup transport moves BOTH participants to the
+   * established LiveKit/TCP backend. The new credential is broadcast, and clients rebuild media automatically.
+   */
+  async fallbackMedia(callId: unknown, userId: string) {
+    const c = this.get(callId, userId);
+    if (!c || c.phase === "ended") return { ok: false as const, error: "This call isn't available" };
+    if (c.backend.provider === "livekit") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyFallback: true };
+    const fallback = this.d.liveKitFallback?.() ?? this.legacyLiveKit();
+    if (!fallback) return { ok: false as const, error: "TCP fallback isn't available" };
+    c.backend.close(c.id);
+    c.backend = fallback;
+    c.tokens.clear();
+    for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
+    const info = this.info(c);
+    const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
+    for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaFallback", { call: info, media, from: "mediasoup", to: "livekit" });
+    this.d.log?.("call media fallback", { callId: c.id, from: "mediasoup", to: "livekit" });
+    return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
+  }
+
+  /** Broker an authenticated browser signaling action to the currently selected Mediasoup backend. */
+  async mediaRequest(callId: unknown, userId: string, connectionId: string, method: string, payload: Record<string, unknown>) {
+    const c = this.get(callId, userId);
+    if (!c || c.phase === "ended" || c.backend.provider !== "mediasoup" || !c.backend.relay) return { ok: false as const, error: "UDP media isn't available" };
+    const media = await this.media(c, userId);
+    if (!media || media.provider !== "mediasoup") return { ok: false as const, error: "UDP media credential expired" };
+    const result = await c.backend.relay({ callId: c.id, userId, connectionId, method, payload, token: media.token });
+    return { ok: true as const, result };
+  }
+
   /** client-measured accept → first remote audio (ms) */
   metric(callId: unknown, userId: string, acceptToAudioMs: unknown) {
     const c = this.get(callId, userId);
@@ -375,7 +432,7 @@ export class CallService {
     if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
     else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
-    this.d.closeMedia(c.id);
+    c.backend.close(c.id);
     this.d.appendCallMessage({ id: c.id, callerId: c.callerId, video: c.everVideo, outcome, durationSec }, c.calleeId);
     this.d.log?.("call end", { callId: c.id, outcome, durationSec });
   }

@@ -1,0 +1,10 @@
+[Unit]
+Description=Hard-bounded resource slice for the Open Lounge Mediasoup pilot
+Before=slices.target
+
+[Slice]
+CPUQuota=35%
+CPUWeight=50
+MemoryHigh=384M
+MemoryMax=448M
+TasksMax=128

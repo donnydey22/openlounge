@@ -1,0 +1,43 @@
+[Unit]
+Description=Open Lounge brokered Mediasoup direct-UDP pilot
+Documentation=https://github.com/donnydey22/openlounge
+After=network-online.target coturn.service
+Wants=network-online.target
+ConditionPathExists=/etc/openlounge-mediasoup-sfu.env
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=openlounge-sfu
+Group=openlounge-sfu
+WorkingDirectory=/opt/openlounge-mediasoup-sfu/media-sfu
+EnvironmentFile=/etc/openlounge-mediasoup-sfu.env
+ExecStart=/usr/bin/env node src/index.mjs
+Restart=always
+RestartSec=5
+
+# Separate cgroup with a hard ceiling so coturn has priority on the 1-vCPU/2-GB host.
+Slice=openlounge-sfu.slice
+CPUQuota=35%
+CPUWeight=50
+MemoryHigh=384M
+MemoryMax=448M
+TasksMax=128
+LimitNOFILE=16384
+OOMPolicy=stop
+
+# Process isolation. Media needs IPv4/IPv6 UDP sockets and outbound WSS only; it has no privileged ports or shell access.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/openlounge-mediasoup-sfu
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+[Install]
+WantedBy=multi-user.target
