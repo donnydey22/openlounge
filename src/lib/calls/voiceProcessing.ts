@@ -20,8 +20,10 @@ export type VoiceProcessingTrack = {
 };
 
 export type VoiceProcessingHandle = {
-  /** Ensures that a suspended/interrupted context has reverted the published track to the raw microphone. */
+  /** Waits for any pending swap so a suspended/interrupted context has reverted the track to the raw microphone. */
   publishRawIfNeeded(): Promise<void>;
+  /** True while the published track is the boosted Web Audio destination. */
+  readonly processing: boolean;
   /** Removes the context listener when the call track is discarded. */
   dispose(): void;
 };
@@ -29,43 +31,65 @@ export type VoiceProcessingHandle = {
 export const isAudioContextRunning = (context: Pick<AudioContext, "state"> | null | undefined) => context?.state === "running";
 
 /**
- * Attach bounded gain/compression only to a live Web Audio graph. WebKit and older WebViews can create a destination
- * track while its context is suspended; publishing that destination is silent, so the raw browser-captured mic is the
- * safe fallback both before a gesture unlock and after an interruption.
+ * Attach bounded gain/compression only to a live Web Audio graph. WebKit and older WebViews (iOS 15, Android 7) can
+ * create a destination track while its context is suspended; publishing that destination is silent. So the raw
+ * browser-captured mic is published until the gesture unlock leaves the context "running", the boost is swapped in
+ * then (LiveKit replaces the sender track in place — no renegotiation, no gap), and any later suspend/interrupt swaps
+ * straight back to the raw mic until the context runs again. Swaps are serialized so a flapping state never races.
  */
 export async function enableVoiceProcessing(track: VoiceProcessingTrack, context: AudioContext | null): Promise<VoiceProcessingHandle | null> {
-  if (!context || context.state !== "running") return null;
+  if (!context) return null;
+  let bound = false;
+  let processing = false;
+  let disposed = false;
+  let failed: unknown = null;
+  let chain: Promise<void> = Promise.resolve();
 
-  let rawMic: Promise<void> | null = null;
-  const restoreRawMic = () =>
-    (rawMic ??= Promise.resolve(track.stopProcessor())
-      .then(() => undefined)
-      .catch(() => undefined));
-
-  track.setAudioContext(context);
-  if (!isAudioContextRunning(context)) return null;
-
-  try {
-    await track.setProcessor(new CallVoiceProcessor());
-  } catch (error) {
-    await restoreRawMic();
-    throw error;
-  }
-  if (!isAudioContextRunning(context)) {
-    await restoreRawMic();
-    return null;
-  }
-
-  const onStateChange = () => {
-    if (!isAudioContextRunning(context)) void restoreRawMic();
+  const sync = () => {
+    chain = chain.then(async () => {
+      const want = !disposed && failed === null && isAudioContextRunning(context);
+      if (want && !processing) {
+        if (!bound) {
+          track.setAudioContext(context);
+          bound = true;
+        }
+        try {
+          await track.setProcessor(new CallVoiceProcessor());
+          processing = true;
+        } catch (error) {
+          failed = error; // graph unavailable on this engine: stay on the raw mic for the rest of the call
+          await Promise.resolve(track.stopProcessor()).catch(() => undefined);
+          return;
+        }
+        // The context may have been interrupted while the graph was being built.
+        if (!isAudioContextRunning(context)) {
+          await Promise.resolve(track.stopProcessor()).catch(() => undefined);
+          processing = false;
+        }
+      } else if (!want && processing) {
+        await Promise.resolve(track.stopProcessor()).catch(() => undefined);
+        processing = false;
+      }
+    });
+    return chain;
   };
+
+  const onStateChange = () => void sync();
   context.addEventListener("statechange", onStateChange);
+  await sync();
+  if (failed !== null) {
+    context.removeEventListener("statechange", onStateChange);
+    throw failed;
+  }
   return {
-    publishRawIfNeeded: async () => {
-      if (!isAudioContextRunning(context)) await restoreRawMic();
-      if (rawMic) await rawMic;
+    publishRawIfNeeded: () => sync(),
+    get processing() {
+      return processing;
     },
-    dispose: () => context.removeEventListener("statechange", onStateChange),
+    dispose: () => {
+      disposed = true;
+      context.removeEventListener("statechange", onStateChange);
+    },
   };
 }
 

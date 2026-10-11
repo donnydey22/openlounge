@@ -501,12 +501,13 @@ export class CallEngine {
       }
       // Browser AGC lifts ordinary speech; this final bounded gain + compressor improves quiet microphones without
       // clipping peaks. A suspended Web Audio destination is silent on iOS 15 / older Android WebViews, so attach it
-      // only after the gesture unlock is actually running; interruptions fall back to the raw captured microphone.
+      // only while the gesture-unlocked context is running (raw mic before that and during interruptions, swapped in place).
       this.clearMicVoiceProcessing();
       const context = audioContext();
       try {
         this.micVoiceProcessing = await enableVoiceProcessing(t, context);
         if (!this.micVoiceProcessing) this.netLog("mic-headroom-bypassed");
+        else if (!this.micVoiceProcessing.processing) this.netLog("mic-headroom-deferred");
       } catch {
         this.netLog("mic-headroom-unavailable");
       }

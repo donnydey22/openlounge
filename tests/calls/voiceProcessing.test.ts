@@ -96,29 +96,62 @@ test("voice processor raises quiet input while retaining a compressor safety cei
   }
 });
 
-test("suspended audio context leaves the raw microphone untouched", async () => {
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+test("suspended audio context publishes the raw microphone, then swaps the boost in once it is running", async () => {
   const context = new FakeContext();
-  context.setState("suspended");
+  context.setState("suspended"); // iOS 15 / Android 7 WebView before the gesture unlock
   const track = new FakeProcessorTrack();
 
   const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
 
-  assert.equal(handle, null);
+  assert.ok(handle);
+  assert.equal(handle.processing, false);
   assert.equal(track.contexts.length, 0, "do not bind a suspended context to the LiveKit microphone track");
-  assert.equal(track.processors, 0, "do not publish a suspended destination track");
-  assert.equal(track.stops, 0, "raw microphone needs no processor cleanup");
+  assert.equal(track.processors, 0, "do not publish a suspended (silent) destination track");
+
+  context.setState("running"); // the tap resumed the shared context
+  await handle.publishRawIfNeeded();
+  assert.equal(handle.processing, true);
+  assert.equal(track.contexts.length, 1);
+  assert.equal(track.processors, 1, "boost attached in place once the context runs");
+  handle.dispose();
 });
 
-test("an interrupted audio context immediately restores the raw microphone track", async () => {
+test("an interrupted audio context restores the raw microphone and re-attaches the boost on resume", async () => {
   const context = new FakeContext();
   const track = new FakeProcessorTrack();
   const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
 
   assert.ok(handle);
-  assert.equal(track.contexts.length, 1);
+  assert.equal(handle.processing, true);
   assert.equal(track.processors, 1);
+  context.setState("interrupted" as AudioContextState); // iOS phone call / backgrounding
+  await handle.publishRawIfNeeded();
+  assert.equal(handle.processing, false);
+  assert.equal(track.stops, 1, "processor is removed so LiveKit republishes the raw mic");
+  context.setState("running");
+  await handle.publishRawIfNeeded();
+  assert.equal(track.processors, 2);
+  assert.equal(track.contexts.length, 1, "context bound once");
+  handle.dispose();
+  context.setState("suspended");
+  await settle();
+  assert.equal(track.stops, 1, "a disposed handle no longer touches the track");
+});
+
+test("a flapping context never leaves the boost attached while suspended", async () => {
+  const context = new FakeContext();
+  context.setState("suspended");
+  const track = new FakeProcessorTrack();
+  const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
+  assert.ok(handle);
+  context.setState("running");
+  context.setState("suspended");
+  context.setState("running");
   context.setState("suspended");
   await handle.publishRawIfNeeded();
-  assert.equal(track.stops, 1, "processor is removed after suspension so LiveKit republishes the raw mic");
+  assert.equal(handle.processing, false);
+  assert.equal(track.processors - track.stops, 0);
   handle.dispose();
 });
