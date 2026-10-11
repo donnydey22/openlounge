@@ -106,9 +106,54 @@ type LKLike = {
   };
 };
 
-/** Camera publish options for the chosen codec (simulcast with capped layers, VP8 backup when H.264 is primary). */
-export function cameraPublishOptions(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">): Partial<TrackPublishOptions> {
+// ---------- network tier (low-bandwidth caps) ----------
+export type NetworkTier = "low" | "normal";
+export interface NetInfoLike {
+  effectiveType?: string;
+  saveData?: boolean;
+  /** Mbps estimate */
+  downlink?: number;
+}
+/**
+ * "low" on Data Saver, 2g/3g (incl. slow-2g) or a measured downlink under 1.5 Mbps; "normal" otherwise or when the
+ * Network Information API is missing (Safari/Firefox: LiveKit's congestion control + dynacast still adapt live).
+ */
+export function networkTier(info?: NetInfoLike | null, override?: string | null): NetworkTier {
+  const o = (override || "").toLowerCase();
+  if (o === "low" || o === "normal") return o;
+  if (!info) return "normal";
+  if (info.saveData) return "low";
+  if (info.effectiveType && /(^|-)2g$|^3g$/.test(info.effectiveType)) return "low";
+  if (typeof info.downlink === "number" && info.downlink > 0 && info.downlink < 1.5) return "low";
+  return "normal";
+}
+export function browserNetworkTier(): NetworkTier {
+  if (typeof navigator === "undefined") return "normal";
+  let override: string | null = null;
+  try {
+    override = localStorage.getItem("openlounge:vnet");
+  } catch {}
+  return networkTier((navigator as Navigator & { connection?: NetInfoLike }).connection ?? null, override);
+}
+/** Camera capture size per tier: 360p on low networks (smaller encode, less CPU/heat), 720p otherwise. */
+export function captureResolution(tier: NetworkTier): { width: number; height: number; frameRate: number } {
+  return tier === "low" ? { width: 640, height: 360, frameRate: 24 } : { width: 1280, height: 720, frameRate: 30 };
+}
+
+/**
+ * Camera publish options for the chosen codec (simulcast with capped layers, VP8 backup when H.264 is primary).
+ * Low tier: top layer capped at 360p / 400 kbps / 24 fps with a single 180p layer under it.
+ */
+export function cameraPublishOptions(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal"): Partial<TrackPublishOptions> {
   const { low, mid, top } = VIDEO_LAYERS;
+  if (tier === "low")
+    return {
+      simulcast: true,
+      videoCodec: choice.codec,
+      backupCodec: choice.backup ? { codec: choice.backup } : false,
+      videoEncoding: { maxBitrate: mid.maxBitrate, maxFramerate: mid.maxFramerate, priority: "low" },
+      videoSimulcastLayers: [new LK.VideoPreset(low.width, low.height, low.maxBitrate, low.maxFramerate, "low")] as TrackPublishOptions["videoSimulcastLayers"],
+    };
   return {
     simulcast: true,
     videoCodec: choice.codec,
@@ -127,8 +172,8 @@ export function micPublishOptions(): Partial<TrackPublishOptions> {
 }
 
 /** Room publishDefaults built from the policy. */
-export function publishDefaults(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">): Partial<TrackPublishOptions> {
-  return { ...micPublishOptions(), ...cameraPublishOptions(LK, choice) };
+export function publishDefaults(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal"): Partial<TrackPublishOptions> {
+  return { ...micPublishOptions(), ...cameraPublishOptions(LK, choice, tier) };
 }
 
 /**
@@ -140,13 +185,14 @@ export async function publishCamera(
   room: Room,
   cam: LocalVideoTrack,
   choice: Pick<CodecChoice, "codec" | "backup">,
+  tier: NetworkTier = "normal",
 ) {
   const base = { source: LK.Track.Source.Camera };
   try {
-    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, choice), ...base });
+    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, choice, tier), ...base });
   } catch (e) {
     if (choice.codec === "vp8") throw e;
     if (cached) cached = { ...cached, codec: "vp8", backup: false, reason: "h264-publish-failed" };
-    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, { codec: "vp8", backup: false }), ...base });
+    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, { codec: "vp8", backup: false }, tier), ...base });
   }
 }

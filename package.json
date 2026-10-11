@@ -34,7 +34,8 @@
     "test:monet": "DATA_DIR=$(mktemp -d) node --import tsx --test --test-force-exit --test-concurrency=1 tests/monet/*.test.ts",
     "test:media": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=120000 tests/media/*.test.ts",
     "test:turn:relay": "node tests/e2e/turn-relay-harness.mjs",
-    "test:turn:relay:config": "node --test tests/e2e/turn-relay-harness.test.mjs"
+    "test:turn:relay:config": "node --test tests/e2e/turn-relay-harness.test.mjs",
+    "test:roomchat": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/room-chat/*.test.ts"
   },
   "engines": {
     "node": ">=20.9"

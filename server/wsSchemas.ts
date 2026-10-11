@@ -39,6 +39,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "reaction:send": { roomId: "id", emoji: "string" },
   "chat:send": { roomId: "id", text: "string" },
   "chat:delete": { roomId: "id", messageId: "id" },
+  "chat:edit": { roomId: "id", messageId: "id", text: "string" },
   "dm:list": {},
   // groups + unified inbox (server/groups). memberIds / userIds arrays are validated in the service (up to 200).
   "conv:list": {},
