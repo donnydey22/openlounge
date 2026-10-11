@@ -15,6 +15,7 @@ import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { sfuSelected } from "./sfuSelect";
 
+const netlogBuckets = new Map<string, number[]>();
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
 
@@ -171,6 +172,19 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   );
   socket.on("call:metric", ({ callId, acceptToAudioMs }: { callId: string; acceptToAudioMs: number }, ack: AckFn = noop) =>
     authed(ack, (uid) => ack(s().metric(callId, uid, acceptToAudioMs))),
+  );
+  // client call events (mic-headroom-*, cam-publish-timeout, flips…) → server log; ≤ 1 batch / 4 s and 30 / hour per user
+  socket.on("call:netlog", ({ callId, events }: { callId: string; events: string }, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const now = Date.now();
+      const b = (netlogBuckets.get(uid) ?? []).filter((t) => now - t < 3_600_000);
+      if (b.length >= 30 || (b.length && now - b[b.length - 1] < 4_000)) return ack({ ok: false, error: "rate_limited" });
+      b.push(now);
+      netlogBuckets.set(uid, b);
+      if (netlogBuckets.size > 5_000) netlogBuckets.delete(netlogBuckets.keys().next().value as string);
+      log.info("[calls] client-net", { callId, userId: uid, events: String(events ?? "").slice(0, 4_000) });
+      ack({ ok: true });
+    }),
   );
   socket.on("call:mediaFallback", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void s().fallbackMedia(callId, uid).then(ack, () => ack({ ok: false, error: "TCP fallback failed" }))),

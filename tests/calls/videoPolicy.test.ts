@@ -49,11 +49,16 @@ test("H.264 capability: needs a video/H264 entry (packetization-mode=1 when fmtp
   assert.equal(canSendH264({ codecs: [vp8, { mimeType: "video/h264" }] }), true);
 });
 
-test("codec choice: H.264 + VP8 backup on phones that can encode it", () => {
-  for (const ua of [UA.iphoneSafari, UA.iosApp, UA.androidChrome, UA.androidWebView]) {
+test("codec choice: H.264 + VP8 backup on iOS; Android H.264 alone (one negotiation per camera track)", () => {
+  for (const ua of [UA.iphoneSafari, UA.iosApp]) {
     const c = chooseVideoCodec({ ua, caps: capsBoth });
     assert.deepEqual([c.codec, c.backup, c.reason], ["h264", "vp8", "phone-h264"], ua);
   }
+  for (const ua of [UA.androidChrome, UA.androidWebView]) {
+    const c = chooseVideoCodec({ ua, caps: capsBoth });
+    assert.deepEqual([c.codec, c.backup, c.reason], ["h264", false, "android-h264-single"], ua);
+  }
+  assert.equal(chooseVideoCodec({ ua: "x", nativePlatform: "android", caps: capsBoth }).backup, false);
   const ipad = chooseVideoCodec({ ua: UA.ipadDesktop, maxTouchPoints: 5, caps: capsBoth });
   assert.equal(ipad.codec, "h264");
 });
