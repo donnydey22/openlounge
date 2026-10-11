@@ -143,6 +143,8 @@ export interface ChatMessage {
   authorIsBot: boolean;
   text: string;
   createdAt: number;
+  /** set when the author edited the message (room chat is in-memory, like the message itself) */
+  editedAt?: number;
 }
 
 export interface DirectMessage {
