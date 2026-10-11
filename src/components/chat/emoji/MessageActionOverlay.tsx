@@ -191,7 +191,7 @@ export function MessageActionOverlay({
           className="absolute overflow-hidden rounded-3xl bg-zinc-900/[0.97] shadow-[0_12px_40px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
           style={{ left: pickerLeft, top: pickerTop, width: pickerW, transformOrigin: target.mine ? "right top" : "left top" }}
         >
-          <EmojiPicker height={pickerH} onPick={(e) => pick(e, picker.current?.querySelector(`[data-emoji="${CSS.escape(e)}"]`) ?? null)} />
+          <EmojiPicker purpose="reaction" height={pickerH} onPick={(e) => pick(e, picker.current?.querySelector(`[data-emoji="${CSS.escape(e)}"]`) ?? null)} />
         </div>
       )}
       {!expanded && actions.length > 0 && (
