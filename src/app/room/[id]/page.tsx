@@ -818,11 +818,12 @@ function AudioStatusPill({ status, error }: { status: string; error: string | nu
   if (status === "connected" || status === "off") return null;
   const map: Record<string, { cls: string; text: string }> = {
     connecting: { cls: "bg-zinc-800 text-zinc-400", text: "Connecting audio…" },
+    reconnecting: { cls: "bg-amber-400/10 text-amber-300", text: "Reconnecting audio… Room is still open — stage, hands and chat work." },
     unavailable: {
       cls: "bg-amber-400/10 text-amber-400",
       text: "🔇 Live audio is off — this server has no LiveKit credentials. Stage, hands and chat still work.",
     },
-    error: { cls: "bg-amber-400/10 text-amber-300", text: "🔇 Live audio is reconnecting. Room is still open — stage, hands and chat work." },
+    error: { cls: "bg-amber-400/10 text-amber-300", text: "🔇 Live audio couldn't connect. Room is still open — stage, hands and chat work." },
   };
   const m = map[status];
   if (!m) return null;

@@ -30,7 +30,7 @@ export function DropInStatus({ room, meId, audio }: { room: RoomState; meId?: st
   if (phase === "done") return null;
   const target = waiting[0] ?? null;
   const label =
-    audio === "connecting" ? "Connecting audio…" : others.length === 0 ? (target ? `Ringing ${firstName(target.name)}…` : "Waiting for others to join…") : "Connected";
+    audio === "connecting" ? "Connecting audio…" : audio === "reconnecting" ? "Reconnecting…" : others.length === 0 ? (target ? `Ringing ${firstName(target.name)}…` : "Waiting for others to join…") : "Connected";
   return (
     <div
       className={cn("mt-4 flex items-center gap-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/5 px-4 py-3", phase === "pop" && s.connected)}
