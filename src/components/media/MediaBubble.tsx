@@ -648,6 +648,21 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
       className={cn(className, state === "error" && "invisible")}
     />
   );
+  // a just-sent video's local preview is the video file itself: an <img> can't decode it (it used to flash
+  // "Tap to retry" until the server poster replaced it), so show its first frame with a muted, paused <video>
+  if (local && src === local && a.kind === "video")
+    return (
+      <video
+        src={`${local}#t=0.1`}
+        muted
+        playsInline
+        preload="metadata"
+        aria-hidden
+        onLoadedData={() => onLoaded()}
+        className={className}
+        data-testid="media-local-video"
+      />
+    );
   const responsive = !local && a.kind === "photo" && a.srcset && urls?.thumbS && urls.thumb;
   return (
     <>

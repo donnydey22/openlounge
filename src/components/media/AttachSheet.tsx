@@ -3,7 +3,8 @@
 // self-destruct timer (Off, 1 min, 1 hour, 1 day, 1 week, Custom up to 30 days, View once). Also takes pasted and
 // dropped files.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, File as FileIcon, Flame, GripVertical, Images, Paperclip, Plus, Timer, X } from "lucide-react";
+import { Camera, File as FileIcon, Flame, GripVertical, Images, Paperclip, Plus, Timer, Video, X } from "lucide-react";
+import { VideoRecorderSheet } from "./VideoRecorder";
 import { Sheet } from "../Sheet";
 import { cn } from "@/lib/utils";
 import { ALBUM_MAX, MAX_TTL_SECONDS, TTL_PRESETS, formatBytes, formatDuration } from "@/lib/media/types";
@@ -24,6 +25,7 @@ const isTouch = () => typeof window !== "undefined" && !!window.matchMedia?.("(p
 
 export function AttachButton({ disabled, onPick }: { disabled?: boolean; onPick: (files: File[], asFile: boolean, source: PickSource) => void }) {
   const [menu, setMenu] = useState(false);
+  const [recOpen, setRecOpen] = useState(false);
   const media = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -53,15 +55,33 @@ export function AttachButton({ disabled, onPick }: { disabled?: boolean; onPick:
           <MenuTile icon={<Images className="h-6 w-6" />} label="Photo or video" color="bg-sky-500" onClick={() => media.current?.click()} />
           {isTouch() && <MenuTile icon={<Camera className="h-6 w-6" />} label="Camera" color="bg-rose-500" onClick={() => camera.current?.click()} />}
           <MenuTile icon={<FileIcon className="h-6 w-6" />} label="File" color="bg-violet-500" onClick={() => file.current?.click()} />
+          <MenuTile
+            icon={<Video className="h-6 w-6" />}
+            label="Video message"
+            color="bg-emerald-500"
+            testId="attach-video-message"
+            onClick={() => {
+              setMenu(false);
+              setRecOpen(true);
+            }}
+          />
         </div>
       </Sheet>
+      <VideoRecorderSheet
+        open={recOpen}
+        onClose={() => setRecOpen(false)}
+        onRecorded={(f) => {
+          setRecOpen(false);
+          onPick([f], false, "camera");
+        }}
+      />
     </>
   );
 }
 
-function MenuTile({ icon, label, color, onClick }: { icon: React.ReactNode; label: string; color: string; onClick: () => void }) {
+function MenuTile({ icon, label, color, onClick, testId }: { icon: React.ReactNode; label: string; color: string; onClick: () => void; testId?: string }) {
   return (
-    <button type="button" onClick={onClick} className="flex flex-col items-center gap-2 rounded-2xl p-3 text-[13px] font-medium text-zinc-200 hover:bg-white/5">
+    <button type="button" onClick={onClick} data-testid={testId} className="flex flex-col items-center gap-2 rounded-2xl p-3 text-[13px] font-medium text-zinc-200 hover:bg-white/5">
       <span className={cn("flex h-14 w-14 items-center justify-center rounded-full text-white", color)}>{icon}</span>
       {label}
     </button>
