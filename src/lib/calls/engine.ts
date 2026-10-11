@@ -13,7 +13,7 @@ import { currentCodecChoice, micPublishOptions, publishCamera, publishDefaults }
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
-import { LIVEKIT_RTC_CONFIG } from "@/lib/livekitIce";
+import { livekitRtcConfig } from "@/lib/livekitIce";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -550,7 +550,7 @@ export class CallEngine {
         this.room = room;
         this.wire(LK, room);
         mark("lk-connect");
-        await room.connect(media.url, media.token, { autoSubscribe: true, peerConnectionTimeout: 20_000, rtcConfig: LIVEKIT_RTC_CONFIG });
+        await room.connect(media.url, media.token, { autoSubscribe: true, peerConnectionTimeout: 20_000, rtcConfig: livekitRtcConfig(media.iceServers) });
         if (this.room !== room || !this.busy) {
           void room.disconnect();
           return null;

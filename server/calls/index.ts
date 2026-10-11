@@ -8,6 +8,7 @@ import { log, metrics } from "../log";
 import { CallService } from "./service";
 import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
+import { mintTurnIceServers } from "../turnCredentials";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -55,6 +56,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     mintToken: (callId, userId, name, ttlSec) =>
       livekit.enabled ? createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec }) : Promise.resolve(null),
     mediaUrl: () => (livekit.enabled ? livekit.url : null),
+    turnIceServers: (callId, userId) => mintTurnIceServers(callId, userId),
     closeMedia: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert

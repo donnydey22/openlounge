@@ -233,10 +233,20 @@ export interface CallInfo {
   /** active call: participants currently without a connection (inside the reconnect grace) */
   offline?: string[];
 }
-/** What a participant needs to connect media: LiveKit URL + token (pre-created at ring time). */
+/** A public, short-lived TURN credential handed to an authenticated call participant. */
+export interface TurnIceServer {
+  urls: string[];
+  username: string;
+  credential: string;
+  credentialType: "password";
+}
+
+/** What a participant needs to connect media: LiveKit URL + token (pre-created at ring time), plus optional TURN. */
 export interface CallMedia {
   url: string;
   token: string;
+  /** Absent unless the server has a TURN_STATIC_SECRET; never contains the static TURN secret. */
+  iceServers?: TurnIceServer[];
 }
 
 /**

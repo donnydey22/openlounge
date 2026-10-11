@@ -10,6 +10,8 @@ import "./env";
 import { AccessToken } from "livekit-server-sdk";
 import { setTestEnv, startApp, wipeDb, phoneLogin, type App } from "../unified-auth/harness";
 
+// A deliberately fake test-only secret; production configuration remains entirely external to Git.
+process.env.TURN_STATIC_SECRET = "turn-media-test-secret-not-production";
 setTestEnv({ providers: false });
 let app: App;
 type L = Awaited<ReturnType<typeof phoneLogin>>;
@@ -56,10 +58,19 @@ test("call tokens: short-lived, per call + per person, re-minted while live, nev
   assert.equal(ta.video.room, room);
   assert.equal(ta.sub, id(A));
   assert.ok(Math.abs(ta.exp - now() - 6) <= 2, `exp in ${ta.exp - now()} s`);
+  // only this authenticated call participant receives short-lived coturn configuration; the static secret never does
+  assert.deepEqual(r.media.iceServers?.[0]?.urls, [
+    "turn:turn.openlounge.app:3478?transport=udp",
+    "turn:turn.openlounge.app:3478?transport=tcp",
+    "turns:turn.openlounge.app:443?transport=tcp",
+  ]);
+  assert.match(r.media.iceServers?.[0]?.username ?? "", /^\d{10}:call-[A-Za-z0-9_-]{32}$/);
+  assert.equal(JSON.stringify(r.media).includes(process.env.TURN_STATIC_SECRET!), false);
 
   // a stranger can't get media for someone else's call
   const g0 = await C.client.req("call:get", { callId });
   assert.ok(!g0.ok || !g0.media, "non-participant got media");
+  assert.equal(g0.media?.iceServers, undefined, "non-participant got TURN configuration");
 
   const acc = await B.client.req("call:accept", { callId });
   assert.ok(acc.ok, JSON.stringify(acc));
@@ -112,4 +123,17 @@ test("call tokens: short-lived, per call + per person, re-minted while live, nev
   assert.equal(await webhook("participant_joined", unknown, id(A)), 200);
   await sleep(300);
   assert.equal(kicks(room, t0).length + kicks(unknown, t0).length, 0);
+});
+
+test("calls retain the explicit empty-ICE/TCP path when TURN_STATIC_SECRET is unset", async () => {
+  const saved = process.env.TURN_STATIC_SECRET;
+  delete process.env.TURN_STATIC_SECRET;
+  try {
+    const r = await A.client.req("call:start", { peerId: id(B) });
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.equal(r.media?.iceServers, undefined);
+    assert.ok((await A.client.req("call:hangup", { callId: r.call.id })).ok);
+  } finally {
+    process.env.TURN_STATIC_SECRET = saved;
+  }
 });
