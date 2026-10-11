@@ -7,6 +7,10 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "re
 import { Bold, Check, Code, EyeOff, Italic, Keyboard, Link2, Pencil, SendHorizontal, Smile, Strikethrough, Underline, X } from "lucide-react";
 import { toggleStyle, wrapLink, type MdStyle } from "@/lib/format/markdown";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
+import { enterSends, indentLines, newline, tabIndents } from "@/lib/composer/keys";
+
+const COMPOSER_MAX_H = 200; // ~8 lines, then it scrolls
+const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && !window.matchMedia?.("(any-pointer: fine)").matches;
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
 import { useEmojiPanelHeight } from "@/lib/emoji/fit";
@@ -14,7 +18,7 @@ import { useEmojiPanelHeight } from "@/lib/emoji/fit";
 // the animated picker (and its catalog) loads only when the panel is first opened
 const EmojiPicker = lazy(() => import("./emoji/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
 
-/** Single-line-feel composer: Enter sends, Shift+Enter adds a newline. */
+/** Multi-line composer (Grok-style): desktop Enter sends / Shift+Enter newline; phones Return = newline, send button sends; lists + indentation carry over (src/lib/composer/keys.ts). */
 export function ChatComposer({
   onSend,
   onTyping,
@@ -62,6 +66,9 @@ export function ChatComposer({
   const [sending, setSending] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [panel, setPanel] = useState(false);
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => setCoarse(coarsePointer()), []);
+
   const panelH = useEmojiPanelHeight(!!emojiPanel && panel); // fits landscape phones / follows the keyboard
   // edit mode: park the draft, load the message text, put the caret at the end; restore the draft when it ends
   const draftRef = useRef<string | null>(null);
@@ -71,7 +78,7 @@ export function ChatComposer({
     const grow = () => {
       if (!ta) return;
       ta.style.height = "auto";
-      ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+      ta.style.height = Math.min(ta.scrollHeight, COMPOSER_MAX_H) + "px";
     };
     if (editId && editing) {
       if (draftRef.current === null) draftRef.current = text;
@@ -135,7 +142,16 @@ export function ChatComposer({
     const ta = ref.current;
     if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+    ta.style.height = Math.min(ta.scrollHeight, COMPOSER_MAX_H) + "px";
+  };
+  /** keyboard edits (newline / indent) apply synchronously: the next keystroke must see the new value + caret */
+  const applyKeyEdit = (ta: HTMLTextAreaElement, r: { text: string; start: number; end: number }) => {
+    if (r.text.length > CHAT_MAX_LENGTH) return;
+    ta.value = r.text;
+    ta.setSelectionRange(r.start, r.end);
+    setText(r.text);
+    if (r.text.trim()) onTyping?.();
+    grow();
   };
   const applyEdit = (r: { text: string; start: number; end: number }) => {
     if (r.text.length > CHAT_MAX_LENGTH) return;
@@ -360,7 +376,7 @@ export function ChatComposer({
           maxLength={CHAT_MAX_LENGTH}
           disabled={disabled}
           placeholder={ph}
-          enterKeyHint="send"
+          enterKeyHint={coarse ? "enter" : "send"}
           onBlur={() => {
             onTypingStop?.();
             setSel(null);
@@ -384,7 +400,7 @@ export function ChatComposer({
             else onTypingStop?.();
             // auto-grow up to ~5 lines
             e.target.style.height = "auto";
-            e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+            e.target.style.height = Math.min(e.target.scrollHeight, COMPOSER_MAX_H) + "px";
           }}
           onKeyDown={(e) => {
             if (formatKey(e)) return;
@@ -400,14 +416,23 @@ export function ChatComposer({
               onEditCancel?.();
               return;
             }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) {
               e.preventDefault();
-              submit();
+              if (enterSends({ coarse, shift: e.shiftKey, mod: e.ctrlKey || e.metaKey })) return void submit();
+              const ta = e.currentTarget;
+              applyKeyEdit(ta, newline(ta.value, ta.selectionStart, ta.selectionEnd));
+              return;
+            }
+            if (e.key === "Tab" && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              const ta = e.currentTarget;
+              if (!tabIndents(ta.value, ta.selectionStart, ta.selectionEnd)) return;
+              e.preventDefault();
+              applyKeyEdit(ta, indentLines(ta.value, ta.selectionStart, ta.selectionEnd, e.shiftKey));
             }
           }}
           className={cn(
-            "block max-h-[120px] w-full resize-none border border-white/10 bg-zinc-950 px-4 leading-snug outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 disabled:opacity-50",
-            compact ? "rounded-[20px] py-2 text-[14px]" : "rounded-2xl py-2.5 text-[16px] sm:text-[15px]",
+            "block max-h-[200px] w-full resize-none border border-white/10 bg-zinc-950 px-4 leading-snug outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 disabled:opacity-50",
+            compact ? "rounded-[20px] py-2 text-[16px] sm:text-[14px]" : "rounded-2xl py-2.5 text-[16px] sm:text-[15px]",
             emojiPanel && "pr-11",
           )}
         />
