@@ -9,6 +9,7 @@
 // Grid cells show light posters and animate on hover / press. Sections use content-visibility so only what's on
 // screen is laid out and painted; posters are lazy-loaded.
 
+import { readReactionSet, saveReactionSet } from "@/lib/emoji/reactionSet";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { AnimatedEmoji } from "./AnimatedEmoji";
@@ -95,12 +96,15 @@ export function EmojiPicker({
   height = 320,
   autoFocusSearch,
   cellSize = 30,
+  purpose = "compose",
 }: {
   onPick: (emoji: string) => void;
   className?: string;
   height?: number;
   autoFocusSearch?: boolean;
   cellSize?: number;
+  /** "reaction" = message-reaction picker: opens on the animated set (Google / Fluent) last used on this device, Google by default */
+  purpose?: "compose" | "reaction";
 }) {
   const [cat, setCat] = useState<Catalog | null>(null);
   const [gcat, setGcat] = useState<GCatalog | null>(null);
@@ -116,7 +120,8 @@ export function EmojiPicker({
     let alive = true;
     loadCatalog().then((c) => alive && setCat(c));
     setRecent(recentEmoji());
-    try {
+    if (purpose === "reaction") setTabState(readReactionSet());
+    else try {
       const stored = localStorage.getItem(TAB_KEY);
       if (stored === "google" || stored === "fluent") setTabState(stored);
     } catch {
@@ -148,6 +153,10 @@ export function EmojiPicker({
     setActive(-1);
     sections.current = [];
     scroller.current?.scrollTo({ top: 0 });
+    if (purpose === "reaction") {
+      if (t !== "emoji") saveReactionSet(t); // static/system emoji tab is never remembered
+      return;
+    }
     try {
       localStorage.setItem(TAB_KEY, t);
     } catch {
@@ -156,6 +165,7 @@ export function EmojiPicker({
   };
 
   const pick = (e: string) => {
+    if (purpose === "reaction" && tab !== "emoji") saveReactionSet(tab);
     pushRecent(e);
     setRecent(recentEmoji());
     onPick(e);
