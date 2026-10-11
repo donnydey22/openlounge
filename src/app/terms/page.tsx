@@ -109,7 +109,7 @@ export default function Terms() {
       </p>
       <p className="mt-2">
         Some emoji and sticker artwork is provided by third parties and remains their property. Animated emoji by Google (Noto Emoji Animation) are licensed under CC BY 4.0.
-        Third-party names and trademarks in links and previews belong to their owners.
+        Microsoft Fluent Emoji Animated is licensed under MIT. Third-party names and trademarks in links and previews belong to their owners.
       </p>
 
       <H id="payments">6. Payments and Premium</H>
@@ -205,7 +205,8 @@ export default function Terms() {
         <a className="underline" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">
           CC BY 4.0
         </a>{" "}
-        (resized and re-encoded). Animated emoji artwork © Telegram (telegram.org), via the Telegram-Animated-Emojis collection.
+        (resized and re-encoded). Microsoft Fluent Emoji Animated © Microsoft, licensed under MIT (license included with the local asset collection).
+        Animated emoji artwork © Telegram (telegram.org), via the Telegram-Animated-Emojis collection.
       </p>
       <LegalFooter className="mt-10 border-t border-white/5 pt-6" />
     </main>
