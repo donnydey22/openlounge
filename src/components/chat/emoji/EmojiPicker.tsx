@@ -13,6 +13,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { AnimatedEmoji } from "./AnimatedEmoji";
 import { cn } from "@/lib/utils";
+import { emojiKey } from "@/lib/emoji/assets";
 
 type Row = [emoji: string, key: string, name: string, cat: number, durationMs: number, source: "t" | "n"];
 type Catalog = { cats: string[]; rows: Row[] };
@@ -171,8 +172,17 @@ export function EmojiPicker({
 
   // first tab's rows: the reaction picker's Telegram tab is Telegram's own set only (Google lives in its own tab)
   const firstRows = useMemo(() => (!cat ? [] : reaction ? cat.rows.filter((r) => r[5] === "t") : cat.rows), [cat, reaction]);
-  const tgKeys = useMemo(() => new Set(firstRows.map((r) => r[0])), [firstRows]);
-  const firstRecent = reaction && cat ? recent.filter((e) => tgKeys.has(e)) : recent;
+  // match Recent by normalized key (❤ vs ❤️, ZWJ with/without FE0F), shown as the catalog's own form
+  const tgByKey = useMemo(() => new Map(firstRows.map((r) => [emojiKey(r[0]), r[0]])), [firstRows]);
+  const firstRecent = useMemo(() => {
+    if (!reaction || !cat) return recent;
+    const out: string[] = [];
+    for (const e of recent) {
+      const c = tgByKey.get(emojiKey(e));
+      if (c && !out.includes(c)) out.push(c);
+    }
+    return out;
+  }, [reaction, cat, recent, tgByKey]);
   const firstSource = reaction ? ("telegram" as const) : undefined;
   const byCat = useMemo(() => {
     if (!cat) return [];
