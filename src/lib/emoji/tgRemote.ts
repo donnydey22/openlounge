@@ -1,6 +1,7 @@
 // GENERATED from /workspace/reactions/tg-map.json — Telegram animated emoji upstream paths (secondary source).
 // telegram-emojis.vercel.app has no asset host of its own: it lists github.com/Tarikul-Islam-Anik/Telegram-Animated-Emojis via the
 // GitHub contents API and renders each item's download_url, i.e. raw.githubusercontent.com/<repo>/main/<Category>/<Name>.webp.
+// (Checked 2026-10-10: telegram-emojis.vercel.app serves no image files itself — its own paths 404 and its /_next/image proxy refuses — so this raw URL IS the Vercel site's backing copy.)
 // Loaded lazily (own chunk) only when our self-hosted copy fails.
 export const TG_REMOTE_BASE = "https://raw.githubusercontent.com/Tarikul-Islam-Anik/Telegram-Animated-Emojis/main/";
 const CATS = ["Activity", "Animals and Nature", "Flags", "Food and Drink", "Objects", "People", "Smileys", "Symbols", "Travel and Places"];
