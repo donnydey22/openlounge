@@ -19,7 +19,7 @@ import { GroupInboxRow, InboxLeaveGroup, mergeInbox, useGroupInbox } from "@/com
 
 export default function MessagesPage() {
   useDeletedIds(); // re-render when someone deletes their account (live ghost)
-  const { socket, connected, request, me, setActiveDm, presenceOf } = useApp();
+  const { socket, connected, request, me, setActiveDm, presenceOf, isLive } = useApp();
   useClockTick(); // inbox stamps flip ("9:24 PM" → "Yesterday") on the minute tick / foreground / timezone change
   const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
   const [composing, setComposing] = useState(false);
@@ -180,7 +180,7 @@ export default function MessagesPage() {
                     data-presence={st}
                     className="flex items-center gap-3 rounded-2xl px-3 py-2.5 transition-colors hover:bg-white/5 active:bg-white/[0.07]"
                   >
-                    <Avatar name={c.peer.name} color={c.peer.color} photo={c.peer.photoUrl} size="md" presence={st === "offline" ? null : st} />
+                    <Avatar name={c.peer.name} color={c.peer.color} photo={c.peer.photoUrl} size="md" presence={st === "offline" ? null : st} live={isLive(c.peer.id)} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className={cn("truncate text-[15px]", c.unread ? "font-bold text-zinc-50" : "font-semibold text-zinc-100")}>{c.peer.name}</span>
@@ -244,7 +244,7 @@ export default function MessagesPage() {
 }
 
 function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { request, me, following, presenceOf } = useApp();
+  const { request, me, following, presenceOf, isLive } = useApp();
   const router = useRouter();
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [q, setQ] = useState("");
@@ -303,7 +303,7 @@ function NewMessageSheet({ open, onClose }: { open: boolean; onClose: () => void
               }}
               className="flex w-full items-center gap-3 rounded-2xl p-2.5 text-left hover:bg-white/5"
             >
-              <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="sm" presence={u.isBot || presenceOf(u.id) === "offline" ? null : (presenceOf(u.id) as "online" | "away")} />
+              <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="sm" presence={u.isBot || presenceOf(u.id) === "offline" ? null : (presenceOf(u.id) as "online" | "away")} live={isLive(u.id)} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{u.name}</div>
                 <div className="truncate text-xs text-zinc-500">

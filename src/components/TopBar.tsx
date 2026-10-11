@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { MessageCircle, Search, Settings, WifiOff } from "lucide-react";
+import { Bell, MessageCircle, Search, Settings, WifiOff } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { useApp } from "./AppProvider";
 import { HeaderWordmark } from "./brand/HeaderWordmark";
+import { useLiveNow } from "@/lib/liveNow";
 
 export function TopBar() {
-  const { me, offline, unreadDms } = useApp();
+  const { me, offline, unreadDms, socket, connected, status } = useApp();
+  const { unread: liveUnread } = useLiveNow(socket, connected && status === "ready");
   return (
     <header data-app-header className="sticky top-0 z-30 border-b border-white/5 bg-app/80 pt-[env(safe-area-inset-top,0px)] backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-2xl items-center justify-between gap-2 px-4 max-[389px]:gap-1.5 max-[389px]:px-3">
@@ -27,6 +29,15 @@ export function TopBar() {
           )}
           <Link href="/explore" className="rounded-full p-2.5 text-zinc-300 hover:bg-white/5 hover:text-white max-[389px]:p-2 max-[339px]:p-1.5" aria-label="Explore">
             <Search className="h-5 w-5" />
+          </Link>
+          {/* Live now inbox: green = unread live-room notices (server/push/liveInbox.ts) */}
+          <Link href="/live" className="relative rounded-full p-2.5 text-zinc-300 hover:bg-white/5 hover:text-white max-[389px]:p-2 max-[339px]:p-1.5" aria-label={liveUnread ? `Live now, ${liveUnread} new` : "Live now"} data-testid="live-bell">
+            <Bell className="h-5 w-5" />
+            {liveUnread > 0 && (
+              <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-on-color">
+                {liveUnread > 9 ? "9+" : liveUnread}
+              </span>
+            )}
           </Link>
           <Link href="/messages" className="relative rounded-full p-2.5 text-zinc-300 hover:bg-white/5 hover:text-white max-[389px]:p-2 max-[339px]:p-1.5" aria-label="Messages">
             <MessageCircle className="h-5 w-5" />

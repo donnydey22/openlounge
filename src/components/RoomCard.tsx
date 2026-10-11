@@ -37,7 +37,7 @@ export function RoomCard({ room, highlight }: { room: RoomSummary; highlight?: b
               key={s.id}
               className={room.speakers.length === 1 ? "absolute top-[13px] left-[13px]" : i === 0 ? "absolute top-0 left-0" : "absolute right-0 bottom-0 rounded-[40%] ring-[3px] ring-zinc-900"}
             >
-              <Avatar name={s.name} color={s.color} photo={s.photoUrl} size="sm" />
+              <Avatar name={s.name} color={s.color} photo={s.photoUrl} size="sm" live={s.id === room.hostId} />
             </div>
           ))}
           {room.speakers.length === 0 && <div className="flex h-14 w-14 items-center justify-center rounded-[38%] bg-zinc-800 text-xl">🎧</div>}

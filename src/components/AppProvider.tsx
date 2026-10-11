@@ -96,6 +96,8 @@ interface AppCtx {
   lastSeenAt(userId: string, fallback?: number | null): number | null;
   /** Live presence: "online" (green), "away" (amber: connected but backgrounded), "offline" (no dot) */
   presenceOf(userId: string): PresenceStatus;
+  /** hosting or on stage in a live (hallway) room right now, from rooms:update → the avatar live ring */
+  isLive(userId: string): boolean;
   /** True only once the socket has been down for more than a few seconds (drives a subtle indicator) */
   offline: boolean;
 }
@@ -538,6 +540,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [onlineIds, lastSeen],
   );
 
+  const liveIds = useMemo(() => {
+    const out = new Set<string>();
+    for (const r of rooms) for (const id of r.liveIds ?? [r.hostId, ...r.speakers.map((x) => x.id)]) out.add(id);
+    return out;
+  }, [rooms]);
+  const isLive = useCallback((userId: string) => liveIds.has(userId), [liveIds]);
+
   const status: Status = !booted ? "booting" : !token ? "signedOut" : me ? "ready" : "connecting";
 
   const value = useMemo<AppCtx>(
@@ -570,9 +579,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isOnline,
       lastSeenAt,
       presenceOf,
+      isLive,
       offline,
     }),
-    [status, connected, socket, me, rooms, roomsLoaded, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, offline],
+    [status, connected, socket, me, rooms, roomsLoaded, following, toasts, unreadDms, onboarding, setActiveDm, getActiveDm, completeLogin, finishOnboarding, signOut, request, follow, updateMe, setPhoto, toast, reportError, banner, dismissToast, onlineIds, isOnline, lastSeenAt, presenceOf, isLive, offline],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

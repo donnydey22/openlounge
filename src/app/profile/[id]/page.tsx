@@ -31,7 +31,7 @@ import { useSafety, type ReportTarget } from "@/lib/safety";
 export default function ProfilePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { me, request, following, signOut, updateMe, setPhoto, toast, reportError } = useApp();
+  const { me, request, following, signOut, updateMe, setPhoto, toast, reportError, isLive } = useApp();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<"followers" | "following" | null>(null);
@@ -121,7 +121,7 @@ export default function ProfilePage() {
       <main className="mx-auto max-w-lg px-5 pt-10 pb-28 fade-in">
         {/* Clubhouse-like header: avatar left, actions right */}
         <div className="flex items-start justify-between gap-4">
-          <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="profile" presence={u.isBot ? null : presence.dot} />
+          <Avatar name={u.name} color={u.color} photo={u.photoUrl} size="profile" presence={u.isBot ? null : presence.dot} live={isLive(u.id)} />
           <div className="flex flex-wrap justify-end gap-2 pt-1">
             {!u.isBot && <ShareProfileButton iconOnly username={u.username} name={u.name} isMe={isMe} onCopied={() => toast("Profile link copied")} />}
             {isMe ? (

@@ -280,6 +280,28 @@ body {
   animation: live-dot 1.6s ease-in-out 3;
 }
 
+/* Live ring (Avatar live): host / speaker in a live room. Same thermals rule as .live-dot: three soft pulses when it
+   appears, then a static green squircle outline. Reduced motion, data-lowend and legacy engines: static from paint. */
+@keyframes live-ring {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.06);
+  }
+}
+.live-ring {
+  animation: live-ring 1.6s ease-in-out 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-ring {
+    animation: none;
+  }
+}
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -744,6 +766,8 @@ html[data-hidden] *::after {
 }
 /* low-end devices: no decorative loops, no filter bloom (repaints) */
 html[data-lowend] .live-dot,
+html[data-lowend] .live-ring,
+html[data-nowhere] .live-ring,
 html[data-lowend] .podium-ring,
 html[data-lowend] .skeleton {
   animation: none !important;

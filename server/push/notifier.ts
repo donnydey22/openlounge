@@ -4,6 +4,7 @@ import type { PushRepo, Platform } from "./repo";
 import { voipService } from "../calls/voip";
 import type { PushMessage, PushSender } from "./sender";
 import { cleanHashes, pepperHash, clientHash } from "./contacts";
+import type { LiveInboxRepo, LiveNotice } from "./liveInbox";
 
 /** In-app copy of a notification for the user's open tabs/apps ("notify:activity" frame). The client shows a banner
  *  when visible, an OS notification from a hidden web tab, and nothing in a hidden native WebView (the push covers it). */
@@ -36,10 +37,14 @@ export interface NotifierDeps {
   blocked?(a: string, b: string): boolean;
   /** send the in-app copy to the user's open connections; true when at least one connection got it */
   inApp?(userId: string, n: InAppNotice): boolean;
+  /** "Live now" inbox (server/push/liveInbox.ts): live-room notices are kept here so a missed banner isn't lost */
+  inbox?: LiveInboxRepo;
+  /** an inbox entry was added: realtime.ts sends "notify:inbox" to the user's open connections (unread count, list) */
+  inboxChanged?(userId: string, n: LiveNotice): void;
   now?(): number;
 }
 
-export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "recentRoom"];
+export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "trendingLive"];
 export const ACTIVE_ROOM_INTERVAL_MS = 10 * 60_000; // max 1 "active rooms" push per user per 10 min
 export const DEDUPE_MS = 30 * 60_000; // same (user, dedupe key) at most once per 30 min
 export const HOURLY_CAP = 20; // all non-DM pushes per user per hour
@@ -47,6 +52,23 @@ export const DM_HOURLY_CAP = 30; // DM pushes per user per hour (collapse per th
 export const FOLLOWER_BATCH_MS = 10 * 60_000;
 export const TRENDING_MIN_FOLLOWED = 3;
 export const RECENT_ROOM_MS = 7 * 24 * 3600_000;
+
+/** Clubhouse-style live copy, one source for Android FCM, iOS APNs, the web notification and the in-app banner:
+ *  title says who did what ("Maya started a room"), body is the room title + "· tap to join". */
+export const LIVE_COPY = {
+  started: (name: string) => `${name} started a room`,
+  joined: (name: string) => `${name} joined a room`,
+  speaking: (name: string) => `${name} is speaking`,
+  liveAgain: (name: string) => `${name} is live again`,
+  scheduled: (name: string | null) => (name ? `${name}'s room is live now` : "Your scheduled room is live now"),
+  popular: "Popular with people you follow",
+  trendingLive: "Trending live",
+  body: (roomTitle: string) => `${clip(roomTitle || "Untitled room", 90)} · tap to join`,
+} as const;
+
+function clip(s: string, max: number) {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
 
 /** "in-app": shown in the user's open (visible) app/tab instead of a device push */
 export type Outcome = "sent" | "in-app" | "no-tokens" | `skip:${string}`;
@@ -58,6 +80,8 @@ export class Notifier {
   private followerBuf = new Map<string, { names: string[]; ids: string[]; timer: NodeJS.Timeout | null; lastSentAt: number }>();
   /** host -> (userId -> last time they were in that host's room) */
   private recentByHost = new Map<string, Map<string, number>>();
+  /** (user|room) -> last time it went into the Live now inbox (same 30-min window as dedupe: no re-unread churn) */
+  private inboxed = new Map<string, number>();
   constructor(private d: NotifierDeps) {}
 
   private now() {
@@ -77,6 +101,7 @@ export class Notifier {
   }
   async deleteUserData(userId: string) {
     await this.d.repo.deleteUserData(userId);
+    await this.d.inbox?.deleteUserData(userId);
     await voipService()?.store.deleteUser(userId); // PushKit tokens (server/calls/voip.ts)
   }
   getPrefs(userId: string) {
@@ -107,12 +132,14 @@ export class Notifier {
     const now = this.now();
     const prefs: NotifPrefs = await this.d.repo.getPrefs(userId);
     if (!prefs[type]) return "skip:pref";
-    if (type !== "dm" && type !== "roomInvite" && inQuietHours(prefs.quietHours, now)) return "skip:quiet";
     if (opts.dedupeKey) {
       const k = `${userId}|${opts.dedupeKey}`;
       const at = this.dedupe.get(k);
       if (at !== undefined && now - at < DEDUPE_MS) return "skip:dedupe";
     }
+    // Live now inbox: silent (no buzz), so it keeps what quiet hours / the throttle / the cap hold back too
+    if (opts.live?.roomId) await this.toInbox(userId, msg, opts.live.roomId, opts.live.actorId ?? null, now);
+    if (type !== "dm" && type !== "roomInvite" && inQuietHours(prefs.quietHours, now)) return "skip:quiet";
     if (ACTIVE_ROOM_TYPES.includes(type)) {
       const last = this.lastActiveRoom.get(userId);
       if (last !== undefined && now - last < ACTIVE_ROOM_INTERVAL_MS) return "skip:throttle";
@@ -141,6 +168,27 @@ export class Notifier {
     const res = await this.d.sender.send(tokens, this.withBadge(userId, msg));
     for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
     return "sent";
+  }
+
+  private async toInbox(userId: string, msg: PushMessage, roomId: string, actorId: string | null, now: number) {
+    if (!this.d.inbox) return;
+    const k = `${userId}|${roomId}`;
+    const at = this.inboxed.get(k);
+    if (at !== undefined && now - at < DEDUPE_MS) return;
+    this.inboxed.set(k, now);
+    const n: LiveNotice = { roomId, type: msg.type, actorId, title: msg.title, body: msg.body, url: msg.url, at: now, readAt: null };
+    try {
+      await this.d.inbox.add(userId, n);
+      this.d.inboxChanged?.(userId, n);
+    } catch (e) {
+      console.warn("[push] live inbox add failed:", (e as Error).message); // never blocks the notification itself
+    }
+  }
+
+  /** the room ended: its Live now entries go away (realtime.ts tells the users' open connections) */
+  async roomEnded(roomId: string): Promise<string[]> {
+    for (const k of this.inboxed.keys()) if (k.endsWith(`|${roomId}`)) this.inboxed.delete(k);
+    return (await this.d.inbox?.clearRoom(roomId)) ?? [];
   }
 
   /** every push carries the current total unread as data.badge (Android launcher badge / iOS aps.badge) */
@@ -274,7 +322,7 @@ export class Notifier {
       out[uid] = await this.deliver(
         uid,
         "followedRoom",
-        { type: "followedRoom", title: `🎙️ ${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        { type: "followedRoom", title: LIVE_COPY.started(name), body: LIVE_COPY.body(roomTitle), channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
         { dedupeKey: `room:${roomId}`, live },
       );
     }
@@ -284,7 +332,7 @@ export class Notifier {
       out[uid] = await this.deliver(
         uid,
         "recentRoom",
-        { type: "recentRoom", title: `🔴 ${name} is live again`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        { type: "recentRoom", title: LIVE_COPY.liveAgain(name), body: LIVE_COPY.body(roomTitle), channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
         { dedupeKey: `room:${roomId}`, live },
       );
     }
@@ -316,8 +364,8 @@ export class Notifier {
           "trendingRoom",
           {
             type: "trendingRoom",
-            title: "🔥 Popular with people you follow",
-            body: `${names.join(", ")} and ${followedInRoom.length - 2} more are in “${room.title}”`,
+            title: LIVE_COPY.popular,
+            body: `${names.join(", ")} and ${followedInRoom.length - 2} more are in “${clip(room.title || "Untitled room", 60)}” · tap to join`,
             channel: "rooms",
             tag: `room:${room.id}`,
             url: `/room/${room.id}`,
@@ -329,7 +377,7 @@ export class Notifier {
         out[uid] = await this.deliver(
           uid,
           "followedRoom",
-          { type: "followedRoom", title: `${name} joined a room`, body: room.title, channel: "rooms", tag: `room:${room.id}`, url: `/room/${room.id}`, data: { roomId: room.id } },
+          { type: "followedRoom", title: LIVE_COPY.joined(name), body: LIVE_COPY.body(room.title), channel: "rooms", tag: `room:${room.id}`, url: `/room/${room.id}`, data: { roomId: room.id } },
           { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
         );
       }
@@ -337,17 +385,67 @@ export class Notifier {
     return out;
   }
 
-  /** Scheduled room starting → people who RSVP'd. (No scheduling/RSVP feature in the app yet: call this from it.) */
-  async scheduledRoomStarting(roomId: string, roomTitle: string, rsvpUserIds: string[]) {
+  /**
+   * a listener was brought on stage: their followers hear "Maya is speaking" (followedRoom; the room dedupe means
+   * anyone already told about this room isn't told again). Never across a block, never to people already in the room.
+   */
+  async roomSpeaking(room: { id: string; title: string; hostId: string; participantIds: string[] }, userId: string) {
+    const inRoom = new Set(room.participantIds);
+    const name = this.d.userName(userId) ?? "Someone";
     const out: Record<string, Outcome> = {};
-    for (const uid of rsvpUserIds)
+    for (const uid of this.d.followerIds(userId)) {
+      if (inRoom.has(uid) || uid === userId) continue;
+      if (this.d.blocked?.(uid, userId) || this.d.blocked?.(uid, room.hostId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
+      out[uid] = await this.deliver(
+        uid,
+        "followedRoom",
+        { type: "roomSpeaking", title: LIVE_COPY.speaking(name), body: LIVE_COPY.body(room.title), channel: "rooms", tag: `room:${room.id}`, url: `/room/${room.id}`, data: { roomId: room.id } },
+        { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
+      );
+    }
+    return out;
+  }
+
+  /** Scheduled room starting → people who RSVP'd. (No scheduling/RSVP feature in the app yet: call this from it.) */
+  async scheduledRoomStarting(roomId: string, roomTitle: string, rsvpUserIds: string[], hostId?: string) {
+    const out: Record<string, Outcome> = {};
+    const name = hostId ? this.d.userName(hostId) : null;
+    for (const uid of rsvpUserIds) {
+      if (hostId && this.d.blocked?.(uid, hostId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
       out[uid] = await this.deliver(
         uid,
         "scheduledRoom",
-        { type: "scheduledRoom", title: "⏰ Starting now", body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
-        { dedupeKey: `room:${roomId}`, live: { roomId } },
+        { type: "scheduledRoom", title: LIVE_COPY.scheduled(name), body: LIVE_COPY.body(roomTitle), channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        { dedupeKey: `room:${roomId}`, live: { roomId, actorId: hostId } },
       );
+    }
     return out;
+  }
+
+  /** weekly "Trending live" pick for one user (server/push/trendingLive.ts decides who and which room) */
+  async trendingLive(userId: string, room: { id: string; title: string; hostId: string; count: number }) {
+    if (this.d.blocked?.(userId, room.hostId)) return "skip:blocked" as Outcome;
+    const host = this.d.userName(room.hostId) ?? "Someone";
+    return this.deliver(
+      userId,
+      "trendingLive",
+      {
+        type: "trendingLive",
+        title: LIVE_COPY.trendingLive,
+        body: `${host} · ${clip(room.title || "Untitled room", 60)} · ${room.count} listening · tap to join`,
+        channel: "rooms",
+        tag: `room:${room.id}`,
+        url: `/room/${room.id}`,
+        data: { roomId: room.id },
+      },
+      { dedupeKey: `room:${room.id}`, live: { actorId: room.hostId, roomId: room.id } },
+    );
   }
 
   /** new follower. First one goes out right away; more within 10 min are batched into "A, B and N others followed you". */

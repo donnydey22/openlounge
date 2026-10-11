@@ -15,7 +15,8 @@ import { ACTIVITY_THROTTLE_MS, PRESENCE_CHANNEL, Presence, type PresenceStatus }
 import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
-import { bg, push, setForegroundCheck, setInAppSink } from "./push";
+import { bg, liveInbox, push, setForegroundCheck, setInAppSink, setInboxSink } from "./push";
+import type { LiveNotice } from "./push/liveInbox";
 import { attachCallHandlers, calls, wireCalls } from "./calls";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
@@ -86,6 +87,17 @@ export function registerRealtime(io: WsHub) {
     io.to(ch).emit("notify:activity", { ...n, actor: actor ? { id: actor.id, name: actor.name, color: actor.color, photoUrl: actor.photoUrl } : null, at: Date.now() });
     return true;
   });
+  // Live now inbox (server/push/liveInbox.ts): entries carry the actor's face and the room's live state (how long, how many)
+  const liveEntry = (n: LiveNotice) => {
+    const actor = n.actorId ? store.publicUser(n.actorId) : null;
+    const r = store.rooms.get(n.roomId);
+    return {
+      ...n,
+      actor: actor ? { id: actor.id, name: actor.name, color: actor.color, photoUrl: actor.photoUrl } : null,
+      room: r && !r.ended ? { id: r.id, title: r.title, startedAt: r.createdAt, count: r.participants.size } : null,
+    };
+  };
+  setInboxSink((userId, n) => io.to(`user:${userId}`).emit("notify:inbox", { entry: liveEntry(n) }));
   // 1:1 audio/video calls (server/calls): ringing is pushed when no app/tab is visible
   wireCalls(io, (userId) => {
     for (const c of io.members(`user:${userId}`)) if (!c.hidden) return true;
@@ -179,6 +191,10 @@ export function registerRealtime(io: WsHub) {
       io.clearChannel(`room:${roomId}`);
       lastSeen.delete(roomId);
       closeLiveKitRoom(roomId);
+      // Live now: the room's entries auto-clear, live, on every open app/tab of the people who had one
+      bg(push()?.roomEnded(roomId).then((uids) => {
+        for (const uid of uids) io.to(`user:${uid}`).emit("notify:inboxEnded", { roomId });
+      }));
     },
     toast(userId, message) {
       io.to(`user:${userId}`).emit("toast", { message });
@@ -465,6 +481,30 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => ack({ ok: true, users: store.suggestions(userId).map(withOnline) })),
     );
 
+    // Live now inbox: list (live rooms only; entries for rooms that already ended are dropped) + read state
+    socket.on("notify:inbox", (_: unknown, ack: AckFn = noop) =>
+      authed(ack, async (userId) => {
+        const box = liveInbox();
+        if (!box) return ack({ ok: true, entries: [] });
+        try {
+          ack({ ok: true, entries: (await box.list(userId)).map(liveEntry).filter((e) => e.room) });
+        } catch {
+          ack({ ok: false, error: "Couldn't load Live now" });
+        }
+      }),
+    );
+
+    socket.on("notify:inboxRead", ({ roomIds }: { roomIds?: string[] }, ack: AckFn = noop) =>
+      authed(ack, async (userId) => {
+        const box = liveInbox();
+        const ids = Array.isArray(roomIds) ? roomIds.filter((x) => typeof x === "string" && ROOM_ID.test(x)).slice(0, 100) : null;
+        const n = box ? await box.markRead(userId, ids, Date.now()).catch(() => 0) : 0;
+        // other tabs / devices of the same user drop the unread mark too
+        if (n) io.to(`user:${userId}`).emit("notify:inboxRead", { roomIds: ids });
+        ack({ ok: true, changed: n });
+      }),
+    );
+
     socket.on("rooms:list", (_: unknown, ack: AckFn = noop) => ack({ ok: true, rooms: store.listRooms() }));
 
     socket.on("room:create", (input, ack: AckFn = noop) =>
@@ -542,6 +582,9 @@ export function registerRealtime(io: WsHub) {
       authed(ack, (userId) => {
         const res = store.inviteToSpeak(roomId, userId, target);
         if (res.ok) bg(push()?.inviteToSpeak(roomId, store.rooms.get(roomId)?.title ?? "", userId, target));
+        // "Maya is speaking" to the new speaker's followers (public rooms only, same as joins)
+        const rec = res.ok ? store.rooms.get(roomId) : null;
+        if (rec && !rec.private) bg(push()?.roomSpeaking({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, target));
         ack(res);
       }),
     );

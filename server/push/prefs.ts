@@ -1,4 +1,4 @@
-export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "newFollower", "contactJoined"] as const;
+export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "newFollower", "contactJoined", "trendingLive"] as const;
 export type NotifType = (typeof NOTIF_TYPES)[number];
 
 export interface QuietHours {
@@ -19,6 +19,8 @@ export const DEFAULT_PREFS: NotifPrefs = {
   recentRoom: false,
   newFollower: true,
   contactJoined: true,
+  /** weekly "Trending live" pick: the busiest live room, for people who don't follow its host (server/push/trendingLive.ts) */
+  trendingLive: true,
   quietHours: null,
   contactsOptIn: false,
   contactsKeep: false,

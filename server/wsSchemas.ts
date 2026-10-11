@@ -26,6 +26,8 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "presence:visible": { visible: "bool?" },
   "onboarding:suggestions": {},
   "rooms:list": {},
+  "notify:inbox": {},
+  "notify:inboxRead": { roomIds: "string-array?" },
   "room:create": { title: "string?", topic: "string?", description: "string?" },
   "room:join": { roomId: "id" },
   "room:leave": { roomId: "id" },

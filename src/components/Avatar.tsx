@@ -56,6 +56,7 @@ export function Avatar({
   online,
   presence,
   onPodium = false,
+  live = false,
   deleted,
   className,
 }: {
@@ -73,6 +74,8 @@ export function Avatar({
   /** In-room live presence (bottom-left): green = here, amber = backgrounded / reconnecting; omit to hide */
   presence?: "online" | "away" | null;
   onPodium?: boolean;
+  /** hosting or on stage in a live room right now: green squircle ring + LIVE pip (a few pulses, then static) */
+  live?: boolean;
   /** deleted account: grey ghost avatar (also inferred from the name "Deleted Account" with no photo) */
   deleted?: boolean;
   className?: string;
@@ -137,6 +140,12 @@ export function Avatar({
         </span>
       )}
 
+      {live && !onPodium && !showGlow && !ghost && (
+        <span className="live-ring openlounge-hex pointer-events-none absolute -inset-[4px]" data-live-ring aria-hidden>
+          <ShapeOutline className="stroke-emerald-400" />
+        </span>
+      )}
+
       <div
         className={cn(
           "openlounge-hex relative flex items-center justify-center font-semibold text-on-color/95 shadow-inner select-none transition-opacity",
@@ -144,7 +153,7 @@ export function Avatar({
           away && "opacity-40",
         )}
         style={{ background: `linear-gradient(145deg, ${color}, ${shade(color, -28)})` }}
-        aria-label={name}
+        aria-label={live && !ghost ? `${name}, live now` : name}
       >
         {ghost ? (
           <Ghost className="relative z-[1] h-[55%] w-[55%] text-white/80" aria-hidden />

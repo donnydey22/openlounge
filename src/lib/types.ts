@@ -86,6 +86,8 @@ export interface RoomSummary {
   speakerCount: number;
   listenerCount: number;
   speakers: { id: string; name: string; color: string; photoUrl: string | null }[];
+  /** host + everyone on stage (capped): their avatars show the live ring across the app */
+  liveIds?: string[];
 }
 
 export interface UserProfile {
@@ -381,6 +383,8 @@ export interface NotifPrefsClient {
   recentRoom: boolean;
   newFollower: boolean;
   contactJoined: boolean;
+  /** weekly "Trending live" pick (rooms whose host you don't follow) */
+  trendingLive: boolean;
   contactsOptIn: boolean;
   /** "Tell me when contacts join": keep codes of contacts who aren't members yet (no 24 h purge) */
   contactsKeep?: boolean;
@@ -397,4 +401,18 @@ export interface ActivityNotice {
   roomId?: string;
   actor: { id: string; name: string; color: string; photoUrl: string | null } | null;
   at: number;
+}
+
+/** One "Live now" inbox entry (server "notify:inbox", see server/push/liveInbox.ts). room = live state; null once ended. */
+export interface LiveNoticeEntry {
+  roomId: string;
+  type: string;
+  actorId: string | null;
+  title: string;
+  body: string;
+  url: string;
+  at: number;
+  readAt: number | null;
+  actor: { id: string; name: string; color: string; photoUrl: string | null } | null;
+  room: { id: string; title: string; startedAt: number; count: number } | null;
 }

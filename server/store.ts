@@ -98,6 +98,8 @@ interface RoomRecord {
 
 /** max messages per delete request (multi-select) */
 export const DM_DELETE_MAX = 100;
+/** per room in rooms:update: host + speakers whose avatars get the live ring */
+const LIVE_IDS_MAX = 50;
 
 export interface StoreEvents {
   roomChanged(roomId: string): void;
@@ -1304,6 +1306,8 @@ export class Store {
             const u = this.users.get(p.userId)!;
             return { id: u.id, name: u.name, color: u.color, photoUrl: this.photoUrl(u) };
           }),
+          // everyone hosting or on stage (not just the 4 faces): drives the live ring on avatars app-wide
+          liveIds: speakers.slice(0, LIVE_IDS_MAX).map((p) => p.userId),
         };
       })
       .sort((a, b) => {
