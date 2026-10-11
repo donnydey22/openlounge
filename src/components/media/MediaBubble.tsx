@@ -636,10 +636,16 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
       loading="eager"
       fetchPriority="high"
       draggable={false}
-      onLoad={() => {
-        setState("loaded");
-        record(true);
-        onLoaded();
+      onLoad={(e) => {
+        // cross-fade only once the bitmap is decoded (no half-painted / janky swap)
+        const im = e.currentTarget;
+        void (im.decode ? im.decode() : Promise.resolve())
+          .catch(() => {})
+          .then(() => {
+            setState("loaded");
+            record(true);
+            onLoaded();
+          });
       }}
       onError={() => {
         setState("error");
@@ -651,18 +657,7 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
   // a just-sent video's local preview is the video file itself: an <img> can't decode it (it used to flash
   // "Tap to retry" until the server poster replaced it), so show its first frame with a muted, paused <video>
   if (local && src === local && a.kind === "video")
-    return (
-      <video
-        src={`${local}#t=0.1`}
-        muted
-        playsInline
-        preload="metadata"
-        aria-hidden
-        onLoadedData={() => onLoaded()}
-        className={className}
-        data-testid="media-local-video"
-      />
-    );
+    return <LocalPreviewVideo local={local} className={className} onLoaded={onLoaded} />;
   const responsive = !local && a.kind === "photo" && a.srcset && urls?.thumbS && urls.thumb;
   return (
     <>
@@ -690,6 +685,30 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
         </button>
       )}
     </>
+  );
+}
+
+// transparent 1×1 GIF: Android WebView's gray "play" poster never shows while the first frame decodes
+const BLANK_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/** just-sent video's first frame: hidden (blurred placeholder underneath) until the frame has actually decoded */
+function LocalPreviewVideo({ local, className, onLoaded }: { local: string; className: string; onLoaded: () => void }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <video
+      src={`${local}#t=0.1`}
+      poster={BLANK_POSTER}
+      muted
+      playsInline
+      preload="metadata"
+      aria-hidden
+      onLoadedData={() => {
+        setShown(true);
+        onLoaded();
+      }}
+      className={cn(className, "ol-chat-video", !shown && "invisible")}
+      data-testid="media-local-video"
+    />
   );
 }
 
