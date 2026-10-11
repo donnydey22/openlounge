@@ -6,16 +6,22 @@ import { onLiveKitEvent } from "../livekitWebhook";
 import { bg, push } from "../push";
 import { log, metrics } from "../log";
 import { CallService } from "./service";
+import type { CallMediaBackend } from "./mediaBackend";
 import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
 import { mintTurnIceServers } from "../turnCredentials";
+import { randomUUID } from "node:crypto";
+import { mintMediasoupAdmission } from "../mediasoup/admission";
+import { MediasoupGateway } from "../mediasoup/gateway";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
 
 let svc: CallService | null = null;
 let unwatchMedia: (() => void) | null = null;
+let gateway: MediasoupGateway | null = null;
 export const calls = () => svc;
+const mediaGateway = () => (gateway ??= new MediasoupGateway());
 
 /** room id passed to createJoinToken / closeLiveKitRoom → LiveKit room "openlounge-call-<id>" */
 const mediaRoom = (callId: string) => `call-${callId}`;
@@ -39,6 +45,34 @@ function voipPayload(call: { id: string; callerId: string; video: boolean; expir
 export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) {
   svc?.dispose();
   if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
+  const gw = mediaGateway();
+  gw.setNotifier(({ connectionId, event, data }) => io.get(connectionId)?.emit(event, data));
+  const liveKitBackend = (): CallMediaBackend | null => {
+    if (!livekit.enabled) return null;
+    return {
+      provider: "livekit",
+      issue: async ({ callId, userId, name, ttlSec }) => {
+        const token = await createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec });
+        const iceServers = mintTurnIceServers(callId, userId);
+        return { provider: "livekit", url: livekit.url, token, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}) };
+      },
+      close: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
+    };
+  };
+  const mediasoupBackend = (): CallMediaBackend | null => {
+    // The gateway must be connected before a new call ever selects UDP. If the SFU is unavailable, the unchanged
+    // LiveKit/TCP call path is selected instead; no user action and no in-call backend choice is required.
+    if (process.env.CALL_SFU !== "layered" || !gw.connected) return null;
+    return {
+      provider: "mediasoup",
+      issue: async ({ callId, userId, ttlSec }) => {
+        const token = mintMediasoupAdmission({ callId, userId, nonce: randomUUID(), ttlSec });
+        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec } : null;
+      },
+      relay: (input) => gw.request(input),
+      close: (callId) => gw.closeCall(callId),
+    };
+  };
   svc = new CallService({
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
     isConnected: (userId) => {
@@ -53,11 +87,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    mintToken: (callId, userId, name, ttlSec) =>
-      livekit.enabled ? createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec }) : Promise.resolve(null),
-    mediaUrl: () => (livekit.enabled ? livekit.url : null),
-    turnIceServers: (callId, userId) => mintTurnIceServers(callId, userId),
-    closeMedia: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
+    selectMedia: () => mediasoupBackend() ?? liveKitBackend(),
+    liveKitFallback: liveKitBackend,
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
@@ -97,6 +128,14 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
 /** Per-connection handlers. `authed` is realtime.ts's guard (acks "Not signed in"). */
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void) {
   const s = () => svc!;
+  // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
+  // normal app-side socket teardown; browser code cannot address another connection id.
+  socket.onClose(() => mediaGateway().closeConnection(socket.id));
+  // This is the sole gateway authentication route. It is intentionally outside `authed`: the SFU has no user session,
+  // but must prove knowledge of a server-only secret before it can receive any brokered media command.
+  socket.on("ms:gateway:hello", ({ secret }: { secret?: unknown }, ack: AckFn = noop) => ack(mediaGateway().attach(socket, secret)));
+  socket.on("ms:gateway:response", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleResponse(socket, data)));
+  socket.on("ms:gateway:notice", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleNotice(socket, data)));
   socket.on("call:start", ({ peerId, video }: { peerId: string; video?: boolean }, ack: AckFn = noop) =>
     authed(ack, (uid) => void s().start(uid, peerId, !!video).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
@@ -132,4 +171,27 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:metric", ({ callId, acceptToAudioMs }: { callId: string; acceptToAudioMs: number }, ack: AckFn = noop) =>
     authed(ack, (uid) => ack(s().metric(callId, uid, acceptToAudioMs))),
   );
+  socket.on("call:mediaFallback", ({ callId }: { callId: string }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void s().fallbackMedia(callId, uid).then(ack, () => ack({ ok: false, error: "TCP fallback failed" }))),
+  );
+  const relay = (method: string) => (input: { callId?: string; [key: string]: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const { callId, ...payload } = input ?? {};
+      if (typeof callId !== "string") return ack({ ok: false, error: "callId required" });
+      void s()
+        .mediaRequest(callId, uid, socket.id, method, payload)
+        .then((r) => {
+          if (!r.ok) return ack(r);
+          const value = r.result;
+          ack(value && typeof value === "object" && !Array.isArray(value) ? { ok: true, ...(value as Record<string, unknown>) } : { ok: true, result: value });
+        })
+        .catch(() => ack({ ok: false, error: "UDP media unavailable" }));
+    });
+  socket.on("ms:join", relay("join"));
+  socket.on("ms:leave", relay("leave"));
+  socket.on("ms:transport:create", relay("transport:create"));
+  socket.on("ms:transport:connect", relay("transport:connect"));
+  socket.on("ms:produce", relay("produce"));
+  socket.on("ms:consume", relay("consume"));
+  socket.on("ms:consumer:resume", relay("consumer:resume"));
 }

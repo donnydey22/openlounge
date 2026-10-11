@@ -1,0 +1,19 @@
+{
+  "name": "openlounge-mediasoup-sfu",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Isolated, brokered UDP Mediasoup service for Open Lounge 1:1 calls",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/index.mjs && node --check src/config.mjs && npm run test"
+  },
+  "dependencies": {
+    "mediasoup": "3.29.0",
+    "ws": "8.18.3"
+  }
+}

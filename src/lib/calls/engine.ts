@@ -14,6 +14,7 @@ import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
+import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -114,7 +115,13 @@ export class CallEngine {
   private meId: string | null = null;
   private media: CallMedia | null = null;
   private room: Room | null = null;
-  private roomPromise: Promise<Room | null> | null = null;
+  private roomPromise: Promise<Room | MediasoupCallSession | null> | null = null;
+  private mediasoup: MediasoupCallSession | null = null;
+  private mediasoupConnected = false;
+  private mediasoupLocalVideo: MediaStreamTrack | null = null;
+  private mediasoupRemoteVideo: MediaStreamTrack | null = null;
+  private mediasoupDegradeTimer: ReturnType<typeof setTimeout> | null = null;
+  private fallbackInFlight = false;
   private micTrack: LocalAudioTrack | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
@@ -171,6 +178,7 @@ export class CallEngine {
       this.socket.off("call:state", this.onState);
       this.socket.off("call:video", this.onVideo);
       this.socket.off("call:peer", this.onPeer);
+      this.socket.off("call:mediaFallback", this.onMediaFallback);
     }
     this.socket = socket;
     if (!socket) return;
@@ -178,6 +186,7 @@ export class CallEngine {
     socket.on("call:state", this.onState);
     socket.on("call:video", this.onVideo);
     socket.on("call:peer", this.onPeer);
+    socket.on("call:mediaFallback", this.onMediaFallback);
     this.watchNetwork();
   }
 
@@ -196,7 +205,7 @@ export class CallEngine {
         if (this.s.call && this.busy) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
         return;
       }
-      if (this.s.call?.id === call.id && this.room) {
+      if (this.s.call?.id === call.id && (this.room || this.mediasoup)) {
         // WS came back while media kept going (or LiveKit is resuming): just re-sync the peer's state
         this.set({ peerReconnecting: !!call.offline?.some((u) => u !== this.meId) });
         return;
@@ -316,18 +325,21 @@ export class CallEngine {
     void this.req("call:ack", { callId: call.id }).catch(() => {});
     playRingtone({ video: call.video, untilMs: call.expiresAt + 2000 });
     mark("ring");
-    // pre-warm: LiveKit client + signalling connection + mic (only if already permitted: no prompt before Accept)
-    void loadLK()
-      .then((LK) => {
-        if (!this.media || this.s.call?.id !== call.id) return;
-        const room = this.newRoom(LK);
-        this.room = room;
-        void room.prepareConnection(this.media.url, this.media.token).catch(() => {});
-      })
-      .catch(() => {});
-    void micPermission().then((p) => {
-      if (p === "granted" && this.s.call?.id === call.id && this.s.ui === "incoming") this.preMic = this.acquireMic();
-    });
+    // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
+    // a UDP transport before the user consents to answer.
+    if (this.media?.provider === "livekit")
+      void loadLK()
+        .then((LK) => {
+          if (!this.media || this.media.provider !== "livekit" || this.s.call?.id !== call.id) return;
+          const room = this.newRoom(LK);
+          this.room = room;
+          void room.prepareConnection(this.media.url, this.media.token).catch(() => {});
+        })
+        .catch(() => {});
+    if (this.media?.provider === "livekit")
+      void micPermission().then((p) => {
+        if (p === "granted" && this.s.call?.id === call.id && this.s.ui === "incoming") this.preMic = this.acquireMic();
+      });
   };
 
   async accept(withVideo = false) {
@@ -340,8 +352,10 @@ export class CallEngine {
     mark("accept");
     this.acceptedHere = true;
     this.set({ ui: "connecting", camOn: withVideo });
-    if (!this.preMic) this.preMic = this.acquireMic();
-    if (withVideo) void this.ensureCamPreview();
+    if (this.media?.provider === "livekit") {
+      if (!this.preMic) this.preMic = this.acquireMic();
+      if (withVideo) void this.ensureCamPreview();
+    }
     // connect with the ring-time token right away, in parallel with telling the server
     const accepted = this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:accept", { callId: call.id }).catch(() => ({ ok: false, error: "No connection" }) as const);
     if (!this.media) {
@@ -407,8 +421,8 @@ export class CallEngine {
         stopTones();
         this.acceptT0 = performance.now();
         mark("accepted");
-        this.set({ call, ui: this.room?.state === "connected" ? "active" : "connecting", connectedAt: Date.now() });
-        if (this.room?.state === "connected") playConnected();
+        this.set({ call, ui: this.mediaConnected() ? "active" : "connecting", connectedAt: Date.now() });
+        if (this.mediaConnected()) playConnected();
         postNative({ type: "call:connected", callId: call.id });
       }
       return;
@@ -538,11 +552,19 @@ export class CallEngine {
     }
   }
 
-  /** join the LiveKit room. callee: after Accept. caller: right after call:start (publishes while it rings). */
-  private connect(answer: boolean): Promise<Room | null> {
+  private mediaConnected() {
+    return this.room?.state === "connected" || this.mediasoupConnected;
+  }
+
+  /** Join the selected backend. LiveKit remains byte-for-byte the normal path unless CALL_SFU=layered selects UDP. */
+  private connect(answer: boolean): Promise<Room | MediasoupCallSession | null> {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
+    if (media.provider === "mediasoup") {
+      this.roomPromise = this.connectMediasoup(media, answer);
+      return this.roomPromise;
+    }
     this.roomPromise = (async () => {
       try {
         const LK = await loadLK();
@@ -593,6 +615,159 @@ export class CallEngine {
       }
     })();
     return this.roomPromise;
+  }
+
+  private async connectMediasoup(media: CallMedia, answer: boolean): Promise<MediasoupCallSession | null> {
+    try {
+      // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
+      // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
+      this.releaseLiveKitPrewarm();
+      const session = new MediasoupCallSession(this.socket!, media, {
+        onRemoteTrack: (track) => this.onMediasoupTrack(track),
+        onState: (state) => this.onMediasoupState(state),
+        onLocalVideo: (track) => this.setMediasoupLocalVideo(track),
+      });
+      this.mediasoup = session;
+      await session.connect(this.s.camOn);
+      if (this.mediasoup !== session || !this.busy) {
+        session.close();
+        return null;
+      }
+      this.mediasoupConnected = true;
+      this.clearMediasoupDegrade();
+      if (answer || this.s.call?.phase === "active") {
+        if (this.s.ui === "connecting") {
+          this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
+          playConnected();
+          postNative({ type: "call:connected", callId: this.s.call?.id });
+        }
+      }
+      return session;
+    } catch (e) {
+      if (this.busy) {
+        this.netLog("ms-connect-failed");
+        await this.requestTcpFallback();
+      }
+      return null;
+    }
+  }
+
+  private releaseLiveKitPrewarm() {
+    const room = this.room;
+    this.room = null;
+    if (room) {
+      room.removeAllListeners();
+      void room.disconnect();
+    }
+    this.clearMicVoiceProcessing();
+    void this.preMic?.then((track) => track?.stop());
+    this.preMic = null;
+    this.micTrack?.stop();
+    this.micTrack = null;
+    this.camTrack?.stop();
+    this.camTrack = null;
+  }
+
+  private onMediasoupTrack({ kind, track, close }: MediasoupRemoteTrack) {
+    if (kind === "audio") {
+      const el = document.createElement("audio");
+      el.dataset.olCallAudio = "1";
+      el.autoplay = true;
+      el.setAttribute("playsinline", "true");
+      el.srcObject = new MediaStream([track]);
+      document.body.appendChild(el);
+      this.audioEls.push(el);
+      const onPlay = () => this.firstAudio();
+      el.addEventListener("playing", onPlay, { once: true });
+      void el.play().catch(() => this.set({ needsGesture: true }));
+      track.addEventListener("ended", () => {
+        el.remove();
+        close();
+      }, { once: true });
+      return;
+    }
+    this.mediasoupRemoteVideo = track;
+    this.attachRawVideo(this.videoEls.remote, track);
+    this.set({ remoteCam: true, videoInvite: !this.s.camOn });
+    track.addEventListener("ended", () => {
+      if (this.mediasoupRemoteVideo === track) {
+        this.mediasoupRemoteVideo = null;
+        this.set({ remoteCam: false, videoInvite: false });
+      }
+      close();
+    }, { once: true });
+  }
+
+  private setMediasoupLocalVideo(track: MediaStreamTrack | null) {
+    this.mediasoupLocalVideo = track;
+    this.attachRawVideo(this.videoEls.local, track);
+  }
+
+  private attachRawVideo(el: HTMLVideoElement | null, track: MediaStreamTrack | null) {
+    if (!el) return;
+    el.srcObject = track ? new MediaStream([track]) : null;
+    if (track) void el.play().catch(() => {});
+  }
+
+  private onMediasoupState(state: "connected" | "disconnected" | "failed") {
+    if (!this.busy || this.media?.provider !== "mediasoup") return;
+    if (state === "connected") {
+      this.mediasoupConnected = true;
+      this.clearMediasoupDegrade();
+      this.set({ reconnecting: false });
+      return;
+    }
+    this.mediasoupConnected = false;
+    this.set({ reconnecting: true });
+    this.netLog(`ms-${state}`);
+    if (state === "failed") return void this.requestTcpFallback();
+    this.clearMediasoupDegrade();
+    this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 4_000);
+  }
+
+  private clearMediasoupDegrade() {
+    if (this.mediasoupDegradeTimer) clearTimeout(this.mediasoupDegradeTimer);
+    this.mediasoupDegradeTimer = null;
+  }
+
+  private async requestTcpFallback() {
+    const callId = this.s.call?.id;
+    if (!callId || this.fallbackInFlight || this.media?.provider !== "mediasoup") return;
+    this.fallbackInFlight = true;
+    try {
+      const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000);
+      if (!r.ok || !r.media || r.media.provider !== "livekit") throw new Error(r.error ?? "TCP fallback unavailable");
+      await this.switchMedia(r.media);
+    } catch {
+      // The server keeps the call's normal reconnect grace; displaying the failure is preferable to a falsely active
+      // call if both direct UDP and the durable TCP path are unavailable.
+      this.set({ error: "Couldn't reconnect the call" });
+    } finally {
+      this.fallbackInFlight = false;
+    }
+  }
+
+  private onMediaFallback = (d: { call?: CallInfo; media?: CallMedia | null; from?: string; to?: string }) => {
+    if (!d?.call || d.call.id !== this.s.call?.id || d.media?.provider !== "livekit") return;
+    // A callee can receive the switch while still looking at the incoming-call screen. Update the credential but do
+    // not connect or prompt for media until they press Accept.
+    if (this.s.ui === "incoming") {
+      this.media = d.media;
+      this.clearMediasoupDegrade();
+      return;
+    }
+    void this.switchMedia(d.media, d.call);
+  };
+
+  private async switchMedia(media: CallMedia, call?: CallInfo) {
+    if (!this.busy || this.media?.provider === media.provider && this.media.token === media.token) return;
+    this.clearMediasoupDegrade();
+    this.dropMediaForRejoin();
+    this.media = media;
+    this.roomPromise = null;
+    if (call) this.set({ call });
+    this.netLog("media-fallback-livekit");
+    await this.connect(true);
   }
 
   private wire(LK: LK, room: Room) {
@@ -694,6 +869,13 @@ export class CallEngine {
       room.removeAllListeners();
       void room.disconnect(true).catch(() => {});
     }
+    const mediasoup = this.mediasoup;
+    this.mediasoup = null;
+    this.mediasoupConnected = false;
+    mediasoup?.close();
+    this.mediasoupLocalVideo = null;
+    this.mediasoupRemoteVideo = null;
+    this.clearMediasoupDegrade();
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
@@ -730,8 +912,8 @@ export class CallEngine {
           if (g?.ok && g.call) {
             if (g.media) this.media = g.media;
             this.netLog("rejoin-attempt", { attempt, reason });
-            const room = await this.connect(true);
-            if (room && this.room === room) {
+            const connection = await this.connect(true);
+            if (connection && this.mediaConnected()) {
               this.set({ reconnecting: false, call: g.call });
               this.netLog("rejoined", { ms: Date.now() - t0, attempt });
               return;
@@ -830,7 +1012,10 @@ export class CallEngine {
         if (!this.busy || (this.s.ui !== "active" && this.s.ui !== "connecting")) return;
         this.netLog("net-change", { why });
         const room = this.room;
-        if (!room) {
+        if (this.mediasoup) {
+          // Direct UDP cannot safely migrate itself after an interface change. Select the proven TCP backend instead.
+          void this.requestTcpFallback();
+        } else if (!room) {
           if (this.rejoining) this.wake?.();
           else void this.rejoin(why);
         } else if (room.state === "connected") {
@@ -847,7 +1032,7 @@ export class CallEngine {
     window.addEventListener("online", () => {
       this.netLog("online");
       if (this.rejoining) this.wake?.();
-      else if (this.busy && this.room?.state === "connected") this.set({ reconnecting: false });
+      else if (this.busy && this.mediaConnected()) this.set({ reconnecting: false });
     });
     conn?.addEventListener?.("change", () => {
       const ty = conn.type ?? null;
@@ -895,6 +1080,13 @@ export class CallEngine {
       room.removeAllListeners();
       void room.disconnect();
     }
+    const mediasoup = this.mediasoup;
+    this.mediasoup = null;
+    this.mediasoupConnected = false;
+    mediasoup?.close();
+    this.mediasoupLocalVideo = null;
+    this.mediasoupRemoteVideo = null;
+    this.clearMediasoupDegrade();
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
@@ -910,6 +1102,7 @@ export class CallEngine {
     this.acceptedHere = false;
     this.acceptT0 = 0;
     this.metricSent = false;
+    this.fallbackInFlight = false;
     if (this.weakTimer) clearTimeout(this.weakTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     this.stallTimer = null;
@@ -925,6 +1118,7 @@ export class CallEngine {
     const muted = !this.s.muted;
     this.set({ muted });
     buzz("light");
+    if (this.mediasoup) await this.mediasoup.setMuted(muted).catch(() => {});
     const t = this.micTrack;
     if (t) await (muted ? t.mute() : t.unmute()).catch(() => {});
     postNative({ type: "call:muted", muted });
@@ -934,6 +1128,18 @@ export class CallEngine {
     const on = !this.s.camOn;
     buzz("light");
     const call = this.s.call;
+    if (this.mediasoup) {
+      try {
+        if (on) await this.mediasoup.enableCamera(this.s.facing);
+        else await this.mediasoup.disableCamera();
+        this.set({ camOn: on, videoInvite: false });
+      } catch {
+        this.set({ camOn: false, error: "Camera unavailable. Continuing with audio." });
+        return;
+      }
+      if (call?.id) void this.req("call:video", { callId: call.id, on }).catch(() => {});
+      return;
+    }
     if (on) {
       const cam = await this.ensureCamPreview();
       if (!cam) return;
@@ -957,6 +1163,15 @@ export class CallEngine {
   async flip() {
     const facing = this.s.facing === "user" ? "environment" : "user";
     buzz("light");
+    if (this.mediasoup) {
+      try {
+        await this.mediasoup.flipCamera(facing);
+        this.set({ facing });
+      } catch {
+        this.set({ error: "Couldn't switch camera" });
+      }
+      return;
+    }
     const t = this.camTrack;
     if (!t) return this.set({ facing });
     try {
@@ -988,6 +1203,11 @@ export class CallEngine {
   }
   async startAudio() {
     unlockAudio();
+    if (this.mediasoup) {
+      const playing = await this.mediasoup.startAudio().catch(() => false);
+      this.set({ needsGesture: !playing });
+      return;
+    }
     await this.room?.startAudio().catch(() => {});
     this.set({ needsGesture: this.room ? !this.room.canPlaybackAudio : false });
   }
@@ -995,6 +1215,12 @@ export class CallEngine {
   /** video elements from the UI (PiP / full screen); null detaches */
   attachVideo(which: "local" | "remote", el: HTMLVideoElement | null) {
     const prev = this.videoEls[which];
+    if (this.mediasoup) {
+      this.videoEls[which] = el;
+      this.attachRawVideo(el, which === "local" ? this.mediasoupLocalVideo : this.mediasoupRemoteVideo);
+      if (prev && prev !== el) prev.srcObject = null;
+      return;
+    }
     const track = which === "local" ? this.camTrack : this.remoteVideo;
     if (prev && track) track.detach(prev);
     this.videoEls[which] = el;

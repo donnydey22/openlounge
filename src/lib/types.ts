@@ -243,12 +243,22 @@ export interface TurnIceServer {
   credentialType: "password";
 }
 
-/** What a participant needs to connect media: LiveKit URL + token (pre-created at ring time), plus optional TURN. */
+/**
+ * What a participant needs to connect a call's selected media backend. `token` is always short-lived and scoped to
+ * the call plus participant: a LiveKit JWT for the established TCP path, or a signed Mediasoup admission token for
+ * the brokered UDP path. It never contains a TURN or gateway static secret.
+ */
 export interface CallMedia {
+  provider: "livekit" | "mediasoup";
+  /** LiveKit signalling URL, or the opaque "broker" label for Mediasoup (never a browser control endpoint). */
   url: string;
   token: string;
   /** Absent unless the server has a TURN_STATIC_SECRET; never contains the static TURN secret. */
   iceServers?: TurnIceServer[];
+  /** Needed only by the Mediasoup client to bind every brokered request to this call. */
+  callId?: string;
+  /** Epoch seconds; useful to reject stale provider credentials before connecting. */
+  expiresAt?: number;
 }
 
 /**
