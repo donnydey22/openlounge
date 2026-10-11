@@ -170,7 +170,9 @@ export default function RoomPage() {
 
   const participants = room?.participants ?? [];
   const meP = participants.find((p) => p.userId === me?.id);
-  const amHost = !!meP && room?.hostId === me?.id;
+  const isHost = !!meP && room?.hostId === me?.id;
+  const isCoHost = !!meP?.isCoHost && !isHost && meP.role !== "listener";
+  const canModerate = isHost || isCoHost;
 
   const audio = useLiveKitAudio({
     roomId,
@@ -247,7 +249,7 @@ export default function RoomPage() {
   const toggleHand = () => {
     if (!meP) return;
     socket?.emit("hand:set", { roomId, raised: !meP.handRaised });
-    if (!meP.handRaised) toast(amHost ? "✋ Hand raised" : "✋ Hand raised — the host will see you're in the queue");
+    if (!meP.handRaised) toast(canModerate ? "✋ Hand raised" : "✋ Hand raised — the host will see you're in the queue");
   };
 
   const invite = async (userId: string) => {
@@ -570,7 +572,7 @@ export default function RoomPage() {
                   </span>
                 )}
               </button>
-              {amHost && (
+              {canModerate && (
                 <button onClick={() => setHandsOpen(true)} className="relative rounded-full bg-zinc-800 p-3.5 text-zinc-200 transition hover:bg-zinc-700" aria-label="Raised hands">
                   <span className="text-lg leading-none">🙌</span>
                   {hands.length > 0 && (
@@ -630,7 +632,8 @@ export default function RoomPage() {
               messages={chat}
               meId={me?.id}
               hostId={room.hostId}
-              canModerate={amHost}
+              canModerate={canModerate}
+              canModerateHost={isHost}
               connected={connected}
               onSend={sendChat}
               onDelete={deleteChat}
@@ -651,7 +654,8 @@ export default function RoomPage() {
             messages={chat}
             meId={me?.id}
             hostId={room.hostId}
-            canModerate={amHost}
+            canModerate={canModerate}
+            canModerateHost={isHost}
             connected={connected}
             onSend={sendChat}
             onDelete={deleteChat}
@@ -666,7 +670,7 @@ export default function RoomPage() {
       <UserActionSheet
         target={selectedP}
         roomId={roomId}
-        amHost={amHost}
+        canModerate={canModerate && !(isCoHost && selectedP?.userId === room.hostId)}
         onClose={() => setSelected(null)}
         onMessage={(uid) => {
           setSelected(null);
@@ -759,7 +763,7 @@ export default function RoomPage() {
           >
             <Link2 className="h-4 w-4" /> Copy room link
           </button>
-          {onStage && !amHost && (
+          {onStage && !isHost && (
             <button
               onClick={() => {
                 socket?.emit("stage:toAudience", { roomId, userId: me?.id });
@@ -770,7 +774,7 @@ export default function RoomPage() {
               <ChevronDown className="h-4 w-4" /> Move myself to audience
             </button>
           )}
-          {!amHost && (
+          {!isHost && (
             <button
               onClick={() => {
                 setMenuOpen(false);
@@ -781,7 +785,7 @@ export default function RoomPage() {
               <Flag className="h-4 w-4" /> Report room
             </button>
           )}
-          {amHost && (
+          {isHost && (
             <button
               onClick={() => {
                 setMenuOpen(false);

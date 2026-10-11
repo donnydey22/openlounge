@@ -39,6 +39,7 @@ export function RoomChatPanel({
   meId,
   hostId,
   canModerate,
+  canModerateHost = false,
   connected,
   onSend,
   onDelete,
@@ -52,6 +53,8 @@ export function RoomChatPanel({
   meId: string | undefined;
   hostId: string;
   canModerate: boolean;
+  /** Only the host may remove a host-authored room-chat message. */
+  canModerateHost?: boolean;
   connected: boolean;
   onSend: (text: string) => Promise<boolean>;
   onDelete: (messageId: string) => void;
@@ -132,7 +135,7 @@ export function RoomChatPanel({
             const grouped = !!prev && prev.authorId === m.authorId && m.createdAt - prev.createdAt < GROUP_WINDOW_MS;
             const mine = m.authorId === meId;
             const sticker = parseSticker(m.text); // sticker message: large, no bubble
-            const canDelete = mine || canModerate;
+            const canDelete = mine || (canModerate && (m.authorId !== hostId || canModerateHost));
             const canReport = !mine && !!onReport && !m.authorIsBot;
             const canAct = canDelete || canReport;
             const isHost = m.authorId === hostId;

@@ -38,6 +38,8 @@ export interface Participant {
   color: string;
   photoUrl: string | null;
   role: Role;
+  /** Configured by the current room host's creator branding; co-hosts retain speaker role. */
+  isCoHost?: boolean;
   muted: boolean;
   handRaised: boolean;
   handRaisedAt: number | null;

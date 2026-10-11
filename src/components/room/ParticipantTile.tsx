@@ -94,6 +94,11 @@ export function ParticipantTile({
             ✳︎
           </span>
         )}
+        {!isHost && p.isCoHost && (
+          <span className="text-sky-400" title="Co-host">
+            ✦
+          </span>
+        )}
         <span className="truncate">{isMe ? "You" : firstName(p.name)}</span>
         {followed && !isMe && (
           <span className="text-[9px] text-sky-400" title="You follow">

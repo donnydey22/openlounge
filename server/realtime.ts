@@ -17,6 +17,7 @@ import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
 import { bg, push, setForegroundCheck, setInAppSink } from "./push";
 import { attachCallHandlers, calls, wireCalls } from "./calls";
+import { creator } from "./creator/service";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
 const TYPING_MAX_PER_10S = 20; // typing + typing_stop frames per socket per 10s
@@ -126,6 +127,18 @@ export function registerRealtime(io: WsHub) {
       }, CARD_COALESCE_MS),
     );
   };
+  /** Creator branding is the authority for the co-host badge and delegated moderation. */
+  const roomState = (roomId: string) => {
+    const state = store.roomState(roomId);
+    if (!state) return null;
+    return { ...state, participants: state.participants.map((p) => ({ ...p, isCoHost: creator().isCoHost(state.hostId, p.userId) })) };
+  };
+  /** A configured co-host must be present on stage; branding alone never authorizes a socket. */
+  const canCoHostModerate = (roomId: string, userId: string) => {
+    const room = store.rooms.get(roomId);
+    const role = store.roleOf(roomId, userId);
+    return !!room && !room.ended && role !== null && role !== "listener" && creator().isCoHost(room.hostId, userId);
+  };
 
   // Keep LiveKit permissions in sync with stage roles (and enforce host mutes).
   const lastSeen = new Map<string, Map<string, { role: Role; muted: boolean }>>();
@@ -155,7 +168,7 @@ export function registerRealtime(io: WsHub) {
         roomId,
         setTimeout(() => {
           roomTimers.delete(roomId);
-          const state = store.roomState(roomId);
+          const state = roomState(roomId);
           if (!state) return;
           io.to(`room:${roomId}`).emit("room:state", state);
           syncLiveKit(roomId, state.participants);
@@ -489,6 +502,9 @@ export function registerRealtime(io: WsHub) {
         socket.join(`room:${roomId}`);
         presence.refresh(userId);
         const rec = store.rooms.get(roomId);
+        // Co-hosts are trusted only when the room host configured them in creator branding. They join directly
+        // to the stage, but keep a speaker role so only the actual host can end the room.
+        if (rec && creator().isCoHost(rec.hostId, userId)) store.promoteCoHost(roomId, userId);
         // invite-only rooms (drop-in audio chats) never announce who's in them
         if (rec && rec.hostId !== userId && !rec.private)
           bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, userId));
@@ -502,7 +518,7 @@ export function registerRealtime(io: WsHub) {
               .then((token) => ({ url: livekit.url, token }))
               .catch(() => null);
         }
-        ack({ ok: true, room: store.roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled, ...(lk ?? {}) } });
+        ack({ ok: true, room: roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled, ...(lk ?? {}) } });
       }),
     );
 
@@ -535,12 +551,12 @@ export function registerRealtime(io: WsHub) {
 
 
     socket.on("stage:toAudience", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.moveToAudience(roomId, userId, target))),
+      authed(ack, (userId) => ack(store.moveToAudience(roomId, userId, target, canCoHostModerate(roomId, userId)))),
     );
 
     socket.on("host:invite", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const res = store.inviteToSpeak(roomId, userId, target);
+        const res = store.inviteToSpeak(roomId, userId, target, canCoHostModerate(roomId, userId));
         if (res.ok) bg(push()?.inviteToSpeak(roomId, store.rooms.get(roomId)?.title ?? "", userId, target));
         ack(res);
       }),
@@ -562,11 +578,11 @@ export function registerRealtime(io: WsHub) {
     );
 
     socket.on("host:mute", ({ roomId, userId: target }: { roomId: string; userId: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.hostMute(roomId, userId, target))),
+      authed(ack, (userId) => ack(store.hostMute(roomId, userId, target, canCoHostModerate(roomId, userId)))),
     );
 
     socket.on("podium:set", ({ roomId, userId: target }: { roomId: string; userId: string | null }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.setPodium(roomId, userId, target ?? null))),
+      authed(ack, (userId) => ack(store.setPodium(roomId, userId, target ?? null, canCoHostModerate(roomId, userId)))),
     );
 
     socket.on("reaction:send", ({ roomId, emoji }: { roomId: string; emoji: string }, ack: AckFn = noop) =>
@@ -587,7 +603,7 @@ export function registerRealtime(io: WsHub) {
     );
 
     socket.on("chat:delete", ({ roomId, messageId }: { roomId: string; messageId: string }, ack: AckFn = noop) =>
-      authed(ack, (userId) => ack(store.deleteChat(roomId, userId, messageId))),
+      authed(ack, (userId) => ack(store.deleteChat(roomId, userId, messageId, canCoHostModerate(roomId, userId)))),
     );
 
     // ----- groups + unified inbox (group:*, conv:list) -----

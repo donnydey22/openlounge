@@ -12,7 +12,7 @@ import { useApp } from "../AppProvider";
 export function UserActionSheet({
   target,
   roomId,
-  amHost,
+  canModerate,
   onClose,
   onMessage,
   onReport,
@@ -21,7 +21,7 @@ export function UserActionSheet({
 }: {
   target: Participant | null;
   roomId: string;
-  amHost: boolean;
+  canModerate: boolean;
   onClose: () => void;
   /** Open a DM with this user without leaving the room */
   onMessage?: (userId: string) => void;
@@ -124,22 +124,22 @@ export function UserActionSheet({
         </div>
       )}
 
-      {(amHost || isMe) && (
+      {(canModerate || isMe) && (
         <div className="mt-5 space-y-1 border-t border-white/5 pt-4">
-          {amHost && !isMe && target.role === "listener" && (
+          {canModerate && !isMe && target.role === "listener" && (
             <ActionRow icon={<Mic className="h-4 w-4" />} label="Invite to speak" onClick={() => act("host:invite", `Invited ${target.name} to the stage`)} />
           )}
-          {amHost && !isMe && target.role === "speaker" && !target.muted && (
+          {canModerate && !isMe && target.role === "speaker" && !target.muted && (
             <ActionRow icon={<MicOff className="h-4 w-4 text-red-400" />} label="Mute" onClick={() => act("host:mute", `🔇 Muted ${target.name}`)} />
           )}
-          {(amHost || isMe) && target.role !== "listener" && (
+          {(canModerate || isMe) && target.role !== "listener" && (
             <ActionRow
               icon={<Sparkles className="h-4 w-4 text-amber-400" />}
               label={isMe ? "Claim the podium" : "Give the podium"}
               onClick={() => act("podium:set", isMe ? "🎙 You're on the podium" : `🎙 ${target.name} holds the podium`)}
             />
           )}
-          {((amHost && !isMe) || isMe) && target.role === "speaker" && (
+          {((canModerate && !isMe) || isMe) && target.role === "speaker" && (
             <ActionRow
               icon={<ArrowDownToLine className="h-4 w-4" />}
               label={isMe ? "Move myself to audience" : "Move to audience"}
