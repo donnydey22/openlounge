@@ -5,8 +5,10 @@ set -euo pipefail
 [[ ${MEDIASOUP_INSTALL_APPROVED:-} == YES ]] || { echo "Refusing: set MEDIASOUP_INSTALL_APPROVED=YES only after review." >&2; exit 64; }
 [[ $EUID -eq 0 ]] || { echo "Run with sudo after review." >&2; exit 64; }
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-"$root/media-sfu/deploy/preflight.sh"
-"$root/media-sfu/deploy/backup-coturn-config.sh"
+# Deployment scripts are invoked through bash because source archives preserve content but not executable modes.
+bash "$root/media-sfu/deploy/preflight.sh"
+bash "$root/media-sfu/deploy/verify-network-boundary.sh"
+bash "$root/media-sfu/deploy/backup-coturn-config.sh"
 
 env_file=/etc/openlounge-mediasoup-sfu.env
 [[ -f "$env_file" && ! -L "$env_file" ]] || { echo "Missing regular root-owned $env_file" >&2; exit 2; }
@@ -15,15 +17,18 @@ env_file=/etc/openlounge-mediasoup-sfu.env
   exit 2
 }
 
+bash "$root/media-sfu/deploy/install-node22-lts.sh"
 id -u openlounge-sfu >/dev/null 2>&1 || useradd --system --home /var/lib/openlounge-mediasoup-sfu --shell /usr/sbin/nologin openlounge-sfu
 install -d -o openlounge-sfu -g openlounge-sfu -m 0750 /opt/openlounge-mediasoup-sfu /var/lib/openlounge-mediasoup-sfu
-rsync -a --delete --exclude node_modules "$root/media-sfu/" /opt/openlounge-mediasoup-sfu/media-sfu/
+rsync -a --delete --exclude node_modules --chown=openlounge-sfu:openlounge-sfu "$root/media-sfu/" /opt/openlounge-mediasoup-sfu/media-sfu/
 cd /opt/openlounge-mediasoup-sfu/media-sfu
-sudo -u openlounge-sfu npm ci --omit=dev --no-audit --no-fund
+sudo -u openlounge-sfu env PATH="/opt/openlounge-node/bin:$PATH" npm ci --omit=dev --no-audit --no-fund
 install -m 0644 "$root/media-sfu/deploy/openlounge-sfu.slice" /etc/systemd/system/openlounge-sfu.slice
 install -m 0644 "$root/media-sfu/deploy/openlounge-mediasoup-sfu.service" /etc/systemd/system/openlounge-mediasoup-sfu.service
 install -d -m 0755 /etc/systemd/system/coturn.service.d
 install -m 0644 "$root/media-sfu/deploy/coturn-reserve.conf" /etc/systemd/system/coturn.service.d/20-openlounge-reserve.conf
+MEDIASOUP_JOURNAL_APPROVED=YES bash "$root/media-sfu/deploy/configure-journald.sh"
 systemctl daemon-reload
+bash "$root/media-sfu/deploy/apply-coturn-reserve.sh"
 systemctl enable --now openlounge-mediasoup-sfu.service
 systemctl --no-pager status coturn.service openlounge-mediasoup-sfu.service

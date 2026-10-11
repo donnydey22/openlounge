@@ -8,14 +8,24 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Service]
-Type=simple
+Type=notify
 User=openlounge-sfu
 Group=openlounge-sfu
 WorkingDirectory=/opt/openlounge-mediasoup-sfu/media-sfu
 EnvironmentFile=/etc/openlounge-mediasoup-sfu.env
-ExecStart=/usr/bin/env node src/index.mjs
+Environment=OPENLOUNGE_NODE_BIN=/opt/openlounge-node/bin/node
+Environment=MEDIASOUP_WATCHDOG_START_TIMEOUT_SEC=60
+ExecStart=/bin/bash deploy/run-with-watchdog.sh
 Restart=always
 RestartSec=5
+TimeoutStartSec=75s
+NotifyAccess=all
+WatchdogSec=30s
+WatchdogSignal=SIGABRT
+KillMode=control-group
+SyslogIdentifier=openlounge-mediasoup
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
 
 # Separate cgroup with a hard ceiling so coturn has priority on the 1-vCPU/2-GB host.
 Slice=openlounge-sfu.slice

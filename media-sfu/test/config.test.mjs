@@ -32,5 +32,11 @@ test("requires encrypted, allowlisted gateway control transport and bounded sess
   assert.throws(() => readConfig({ ...base(), OPENLOUNGE_GATEWAY_WS_URL: "ws://staging.openlounge.app/ws" }), /wss/);
   assert.throws(() => readConfig({ ...base(), OPENLOUNGE_GATEWAY_WS_URL: "wss://other.example/ws" }), /must match/);
   assert.throws(() => readConfig({ ...base(), OPENLOUNGE_GATEWAY_WS_URL: "wss://user:pass@staging.openlounge.app/ws" }), /credentials/);
+  assert.throws(() => readConfig({ ...base(), OPENLOUNGE_GATEWAY_HOST: "other.example", OPENLOUNGE_GATEWAY_WS_URL: "wss://other.example/ws" }), /approved/);
   assert.throws(() => readConfig({ ...base(), MEDIASOUP_MAX_SESSIONS: "5" }), /two sessions/);
+});
+
+test("health stays on loopback even when a root environment file is misconfigured", () => {
+  assert.throws(() => readConfig({ ...base(), MEDIASOUP_HEALTH_HOST: "0.0.0.0" }), /127\.0\.0\.1/);
+  assert.throws(() => readConfig({ ...base(), MEDIASOUP_HEALTH_HOST: "203.0.113.10" }), /127\.0\.0\.1/);
 });
