@@ -318,11 +318,16 @@ export default function RoomPage() {
     const onDeleted = ({ roomId: rid, messageId }: { roomId: string; messageId: string }) => {
       if (rid === roomId) setChat((c) => c.filter((x) => x.id !== messageId));
     };
+    const onEdited = (m: ChatMessage) => {
+      if (m.roomId === roomId) setChat((c) => c.map((x) => (x.id === m.id ? { ...x, text: m.text, editedAt: m.editedAt } : x)));
+    };
     socket.on("chat:message", onMessage);
     socket.on("chat:deleted", onDeleted);
+    socket.on("chat:edited", onEdited);
     return () => {
       socket.off("chat:message", onMessage);
       socket.off("chat:deleted", onDeleted);
+      socket.off("chat:edited", onEdited);
     };
   }, [socket, roomId, meId]);
 
@@ -336,6 +341,21 @@ export default function RoomPage() {
     async (text: string) => {
       try {
         await request("chat:send", { roomId, text });
+        return true;
+      } catch (e) {
+        reportError(e);
+        return false;
+      }
+    },
+    [request, roomId, toast],
+  );
+
+  const editChat = useCallback(
+    async (messageId: string, text: string) => {
+      try {
+        const r = await request<{ message?: ChatMessage }>("chat:edit", { roomId, messageId, text });
+        const m = r?.message;
+        if (m) setChat((c) => c.map((x) => (x.id === m.id ? { ...x, text: m.text, editedAt: m.editedAt } : x)));
         return true;
       } catch (e) {
         reportError(e);
@@ -637,6 +657,7 @@ export default function RoomPage() {
               connected={connected}
               onSend={sendChat}
               onDelete={deleteChat}
+              onEdit={editChat}
               onAuthorClick={openAuthor}
               hiddenIds={safety.hidden}
               onReport={(m) => setReportTarget({ type: "message", id: m.id, roomId, label: m.text })}
@@ -659,6 +680,7 @@ export default function RoomPage() {
             connected={connected}
             onSend={sendChat}
             onDelete={deleteChat}
+              onEdit={editChat}
             onAuthorClick={openAuthor}
             hiddenIds={safety.hidden}
             onReport={(m) => setReportTarget({ type: "message", id: m.id, roomId, label: m.text })}

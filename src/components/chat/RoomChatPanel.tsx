@@ -4,7 +4,7 @@ import { FormattedText } from "./FormattedText";
 import { LinkifiedText } from "./LinkifiedText";
 import { DELETED_NAME, isDeletedId, useDeletedIds } from "@/lib/userDisplay";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Flag, Trash2, X } from "lucide-react";
+import { ArrowDown, Flag, Pencil, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
 import { formatClock, serverNow, useClockTick } from "@/lib/time";
@@ -43,6 +43,7 @@ export function RoomChatPanel({
   connected,
   onSend,
   onDelete,
+  onEdit,
   onAuthorClick,
   onReport,
   hiddenIds,
@@ -58,6 +59,8 @@ export function RoomChatPanel({
   connected: boolean;
   onSend: (text: string) => Promise<boolean>;
   onDelete: (messageId: string) => void;
+  /** save an edit of my own message; false keeps edit mode open */
+  onEdit?: (messageId: string, text: string) => Promise<boolean>;
   onAuthorClick: (userId: string) => void;
   /** report someone else's message (App Store 1.2) */
   onReport?: (message: ChatMessage) => void;
@@ -74,6 +77,7 @@ export function RoomChatPanel({
   const atBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [, setTick] = useState(0);
 
   // re-render every 30s so soft timestamps stay fresh
@@ -137,7 +141,8 @@ export function RoomChatPanel({
             const sticker = parseSticker(m.text); // sticker message: large, no bubble
             const canDelete = mine || (canModerate && (m.authorId !== hostId || canModerateHost));
             const canReport = !mine && !!onReport && !m.authorIsBot;
-            const canAct = canDelete || canReport;
+            const canEdit = !!onEdit && mine && !sticker && Date.now() - m.createdAt < 48 * 3600_000;
+            const canAct = canDelete || canReport || canEdit;
             const isHost = m.authorId === hostId;
             const roleMark = isHost ? "✳︎" : m.authorRole === "speaker" ? "🎙" : null;
             return (
@@ -179,7 +184,13 @@ export function RoomChatPanel({
                     </div>
                   )}
                   {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-snug text-zinc-100"><FormattedText text={m.text} leaf={roomLeaf} /></p>}
-                  {!grouped && mine && <div className="mt-0.5 text-right text-[10px] leading-none text-zinc-500">{softTime(m.createdAt)}</div>}
+                  {(m.editedAt || (!grouped && mine)) && (
+                    <div className={cn("mt-0.5 text-[10px] leading-none text-zinc-500", mine && "text-right")} data-testid={m.editedAt ? "room-chat-edited" : undefined}>
+                      {m.editedAt ? "edited" : ""}
+                      {m.editedAt && !grouped && mine ? " · " : ""}
+                      {!grouped && mine ? softTime(m.createdAt) : ""}
+                    </div>
+                  )}
                   {canAct && (
                     <div
                       className={cn(
@@ -200,6 +211,21 @@ export function RoomChatPanel({
                           className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-amber-400"
                         >
                           <Flag className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(null);
+                            setEditing({ id: m.id, text: m.text });
+                          }}
+                          title="Edit message"
+                          aria-label="Edit message"
+                          data-testid="room-chat-edit"
+                          className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-emerald-400"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
                         </button>
                       )}
                       {canDelete && (
@@ -233,7 +259,15 @@ export function RoomChatPanel({
       </div>
 
       <div className="px-3 pt-1 pb-3">
-        <ChatComposer onSend={onSend} disabled={!connected} placeholder="Say something nice…" compact />
+        <ChatComposer
+          onSend={onSend}
+          disabled={!connected}
+          placeholder="Say something nice…"
+          compact
+          editing={editing}
+          onEditSave={async (text) => (editing && onEdit ? onEdit(editing.id, text) : false)}
+          onEditCancel={() => setEditing(null)}
+        />
       </div>
     </div>
   );

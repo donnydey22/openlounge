@@ -208,6 +208,9 @@ export function registerRealtime(io: WsHub) {
     chatDeleted(roomId, messageId) {
       io.to(`room:${roomId}`).emit("chat:deleted", { roomId, messageId });
     },
+    chatEdited(msg) {
+      io.to(`room:${msg.roomId}`).emit("chat:edited", msg);
+    },
     roomPresence(ev) {
       io.to(`room:${ev.roomId}`).emit("room:presence", ev);
     },
@@ -599,6 +602,13 @@ export function registerRealtime(io: WsHub) {
         const stickerErr = stickers().sendError(userId, text); // paid sticker packs: buyers only
         if (stickerErr) return ack({ ok: false, error: stickerErr });
         ack(store.sendChat(roomId, userId, text));
+      }),
+    );
+
+    socket.on("chat:edit", ({ roomId, messageId, text }: { roomId: string; messageId: string; text: string }, ack: AckFn = noop) =>
+      authed(ack, (userId) => {
+        if (store.socketOf(roomId, userId) !== socket.id) return ack({ ok: false, error: "Join the room to chat" });
+        ack(store.editChat(roomId, userId, messageId, text));
       }),
     );
 

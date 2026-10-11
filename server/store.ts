@@ -107,6 +107,7 @@ export interface StoreEvents {
   kickSocket(socketId: string, roomId: string, reason: string): void;
   chatMessage(msg: ChatMessage): void;
   chatDeleted(roomId: string, messageId: string): void;
+  chatEdited?(msg: ChatMessage): void;
   dmMessage(msg: DirectMessage): void;
   dmTyping(fromId: string, toId: string): void;
   /** someone saw messages in a DM conversation (read receipt for the sender) */
@@ -1775,6 +1776,27 @@ export class Store {
     room.chat.splice(idx, 1);
     this.events?.chatDeleted(roomId, messageId);
     return { ok: true as const };
+  }
+
+  /** Room chat edit: the author only, while still in the room, within the DM edit window; same filter as sending. */
+  editChat(roomId: string, userId: string, messageId: unknown, rawText: unknown) {
+    const ctx = this.participant(roomId, userId);
+    if (!ctx) return { ok: false as const, error: "Join the room to chat" };
+    const m = typeof messageId === "string" ? ctx.room.chat.find((x) => x.id === messageId) : undefined;
+    if (!m) return { ok: false as const, error: "Message not found" };
+    if (m.authorId !== userId) return { ok: false as const, error: "You can only edit your own messages" };
+    if (parseSticker(m.text)) return { ok: false as const, error: "This message can't be edited" };
+    if (Date.now() - m.createdAt > MESSAGE_EDIT_WINDOW_MS) return { ok: false as const, error: "Messages can only be edited for 48 hours" };
+    const c = clean(rawText, CHAT_MAX_LENGTH);
+    if (c.text === null) return { ok: false as const, error: c.error };
+    if (!c.text) return { ok: false as const, error: "Message is empty" };
+    if (parseSticker(c.text)) return { ok: false as const, error: "This message can't be edited" };
+    if (c.text === m.text) return { ok: true as const, unchanged: true, message: m };
+    if (this.slidingLimit(this.editRate, userId, 60_000, 20)) return { ok: false as const, error: "Slow down a little 🙂" };
+    m.text = c.text;
+    m.editedAt = Date.now();
+    this.events?.chatEdited?.(m);
+    return { ok: true as const, unchanged: false, message: m };
   }
 
   // ---------- UGC safety: blocks + reports ----------
