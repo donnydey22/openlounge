@@ -66,6 +66,7 @@ export const StickerView = memo(function StickerView({
   loop = true,
   className,
   title,
+  still = false,
 }: {
   sticker: Sticker;
   size: number;
@@ -74,12 +75,22 @@ export const StickerView = memo(function StickerView({
   loop?: boolean;
   className?: string;
   title?: string;
+  /** animated-image stickers (Fluent WebP): show the still poster; a tap / press plays the animation once (Telegram-style) */
+  still?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const holder = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [live, setLive] = useState(false);
   const [posterOk, setPosterOk] = useState(true);
+  const [pressed, setPressed] = useState(false);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (pressTimer.current && clearTimeout(pressTimer.current)), []);
+  const playOnce = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    setPressed(true);
+    pressTimer.current = setTimeout(() => setPressed(false), 3200);
+  };
   const anim = useRef<LottieAnim | null>(null);
   const counted = useRef(false);
 
@@ -141,7 +152,8 @@ export const StickerView = memo(function StickerView({
   );
 
   // animated WebP (Fluent) plays natively; when animation is off it shows the static poster instead
-  const src = isLottie || (!animate && sticker.poster) ? sticker.poster : sticker.file;
+  const stillImage = !isLottie && !!sticker.poster && (!animate || (still && !pressed));
+  const src = isLottie || stillImage ? sticker.poster : sticker.file;
   return (
     <div
       ref={box}
@@ -150,6 +162,8 @@ export const StickerView = memo(function StickerView({
       title={title}
       role="img"
       aria-label={title ?? `${sticker.emoji} sticker`}
+      data-still={stillImage ? "1" : undefined}
+      onPointerDown={still && !isLottie ? playOnce : undefined}
     >
       {src && posterOk ? (
         // eslint-disable-next-line @next/next/no-img-element

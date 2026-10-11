@@ -255,7 +255,7 @@ function Cell({ item, onSend, onPreview }: { item: { packId: string; sticker: St
         onSend(item.packId, item.sticker);
       }}
     >
-      <StickerView sticker={item.sticker} size={60} />
+      <StickerView sticker={item.sticker} size={60} still />
     </button>
   );
 }
