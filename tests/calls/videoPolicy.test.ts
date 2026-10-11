@@ -11,6 +11,7 @@ import {
   publishDefaults,
   publishCamera,
   VIDEO_LAYERS,
+  AUDIO_SPEECH,
 } from "../../src/lib/calls/videoPolicy";
 
 const UA = {
@@ -98,11 +99,13 @@ test("camera options: H.264 primary carries a VP8 backup codec", () => {
   assert.deepEqual(o.backupCodec, { codec: "vp8" });
 });
 
-test("mic options: Opus speech bitrate, DTX + RED kept, high priority (beats video)", () => {
+test("mic options: full-band Opus voice headroom, DTX + RED and high priority (beats video)", () => {
   const m = micPublishOptions();
   assert.equal(m.dtx, true);
   assert.equal(m.red, true);
-  assert.equal(m.audioPreset!.maxBitrate, AudioPresets.speech.maxBitrate);
+  assert.equal(AUDIO_SPEECH.maxBitrate, AudioPresets.music.maxBitrate);
+  assert.ok(AUDIO_SPEECH.maxBitrate > AudioPresets.speech.maxBitrate);
+  assert.equal(m.audioPreset!.maxBitrate, AUDIO_SPEECH.maxBitrate);
   assert.equal(m.audioPreset!.priority, "high");
   const d = publishDefaults({ VideoPreset }, { codec: "vp8", backup: false });
   assert.equal(d.audioPreset!.priority, "high");
