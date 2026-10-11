@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Prefer HTTPS. Cleartext (http) is allowed only for private LAN testing. -->
+<!-- Prefer HTTPS. Cleartext (http) is allowed only for private LAN testing.
+     Old Android (7.0 / API 24) ships without ISRG Root X1, so the Let's Encrypt chain Railway serves for openlounge.app
+     (YE1 -> Root YE -> X2 -> X1) fails in the WebView and in HttpsURLConnection. Bundle ISRG Root X1/X2 as extra trust
+     anchors next to the system store (verified SHA-256: X1 96:BC:EC:..:08:C6, X2 69:72:9B:..:14:70). -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
         </trust-anchors>
     </base-config>
     <domain-config cleartextTrafficPermitted="true">
