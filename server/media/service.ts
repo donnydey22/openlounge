@@ -10,6 +10,7 @@
 //   GET  /api/media/f/:id/:variant     → file (Range support; access re-checked on every request)
 // Expiry: the sweeper deletes the file + media row at expiresAt (recipient online or not), leaves a tombstone so the
 // bubble becomes "Photo expired", and pushes "media:update" to both sides. Reconnecting clients reconcile.
+import { applyValidators, notModifiedHeaders } from "./conditional";
 import { conversationId as convKey, isGroupId } from "../conversation";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
@@ -909,6 +910,10 @@ export class MediaService {
       "X-Content-Type-Options": "nosniff",
     };
     if (r.expiresAt) headers.Pragma = "no-cache";
+    else if (applyValidators(req, stat, headers) && !req.headers.range) {
+      res.writeHead(304, notModifiedHeaders(headers)).end();
+      return;
+    }
     const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
     let start = 0;
     let end = stat.size - 1;

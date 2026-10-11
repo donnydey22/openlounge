@@ -5,6 +5,7 @@
 // so one token covers a whole video directory (master + renditions + init + segments + poster).
 // HLS playlists stay relative on disk; the serving edge appends the client's token query to every URI
 // (this origin on the public port; the cache service when MEDIA_CDN_BASE points at it — the internal port returns raw).
+import { applyValidators, notModifiedHeaders } from "./conditional";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs";
 import zlib from "node:zlib";
@@ -136,6 +137,10 @@ export async function handleMediaOrigin(req: IncomingMessage, res: ServerRespons
   }
 
   base["Accept-Ranges"] = "bytes";
+  if (f.cache !== "no-store" && applyValidators(req, stat, base) && !req.headers.range) {
+    res.writeHead(304, notModifiedHeaders(base)).end();
+    return;
+  }
   const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
   let start = 0;
   let end = stat.size - 1;
