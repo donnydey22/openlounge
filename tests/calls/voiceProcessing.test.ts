@@ -155,3 +155,55 @@ test("a flapping context never leaves the boost attached while suspended", async
   assert.equal(track.processors - track.stops, 0);
   handle.dispose();
 });
+
+test("the processor refuses to build a graph on a suspended context (a silent destination is never produced)", async () => {
+  const context = new FakeContext();
+  context.setState("suspended");
+  const processor = new CallVoiceProcessor();
+  await assert.rejects(
+    processor.init({ track: {} as MediaStreamTrack, audioContext: context as unknown as AudioContext }),
+    /not running/,
+  );
+  assert.equal(processor.processedTrack, undefined);
+  assert.equal(context.source.next, undefined, "no nodes wired on a suspended context");
+});
+
+test("a context that never runs keeps the raw microphone for the whole call", async () => {
+  const context = new FakeContext();
+  context.setState("suspended");
+  const track = new FakeProcessorTrack();
+  const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
+  assert.ok(handle);
+  context.setState("interrupted" as AudioContextState);
+  context.setState("suspended");
+  await handle.publishRawIfNeeded();
+  assert.equal(handle.processing, false);
+  assert.equal(track.processors, 0);
+  assert.equal(track.contexts.length, 0);
+  handle.dispose();
+});
+
+test("a graph failure after the context starts running leaves the raw microphone published", async () => {
+  const context = new FakeContext();
+  context.setState("suspended");
+  const track = new FakeProcessorTrack();
+  track.setProcessor = async () => {
+    track.processors++;
+    throw new Error("Web Audio unavailable");
+  };
+  const handle = await enableVoiceProcessing(track, context as unknown as AudioContext);
+  assert.ok(handle);
+  context.setState("running");
+  await handle.publishRawIfNeeded();
+  assert.equal(handle.processing, false);
+  assert.equal(track.stops, 1, "processor torn down so LiveKit keeps the raw mic");
+  context.setState("suspended");
+  context.setState("running");
+  await handle.publishRawIfNeeded();
+  assert.equal(track.processors, 1, "no retry loop after a failed graph");
+  handle.dispose();
+});
+
+test("no audio context publishes the untouched microphone", async () => {
+  assert.equal(await enableVoiceProcessing(new FakeProcessorTrack(), null), null);
+});
