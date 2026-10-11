@@ -1,11 +1,10 @@
 "use client";
 
-// Full animated emoji picker, three tabs:
+// Full animated emoji picker, two tabs:
 //   Emoji  — Recent + 9 categories + search over every emoji we have an animation for (Telegram's set, plus Google Noto for
 //            what Telegram lacks — or the reverse when the internal switch says Noto).
 //   Google — all ~880 Google Noto Animated Emoji (CC BY 4.0) in Google's own categories, searchable by name + Google's tags,
 //            each marked as animated; emoji Google never animated follow in a separate "More (static)" section.
-//   Fluent — all 746 self-hosted Microsoft Fluent animated emoji (MIT), searchable and grouped by Unicode category.
 // Grid cells show light posters and animate on hover / press. Sections use content-visibility so only what's on
 // screen is laid out and painted; posters are lazy-loaded.
 
@@ -22,10 +21,6 @@ type GRow = [emoji: string, key: string, name: string, cat: number, tags: string
 type GCatalog = { cats: string[]; rows: GRow[] };
 let googleP: Promise<GCatalog> | null = null;
 const loadGoogle = () => (googleP ??= import("@/lib/emoji/google.json").then((m) => (m.default ?? m) as unknown as GCatalog));
-type FRow = [emoji: string, key: string, name: string, cat: number, durationMs: number];
-type FCatalog = { cats: string[]; rows: FRow[] };
-let fluentP: Promise<FCatalog> | null = null;
-const loadFluent = () => (fluentP ??= import("@/lib/emoji/fluent.json").then((m) => (m.default ?? m) as unknown as FCatalog));
 const G_ICON = ["😀", "🙋", "🐻", "🍔", "✈️", "🎉", "💡", "❤️", "🏁", "⋯"];
 const TAB_KEY = "ol:emojiTab";
 
@@ -61,7 +56,7 @@ const Cell = memo(function Cell({
   name: string;
   size: number;
   onPick: (e: string) => void;
-  source?: "noto" | "fluent";
+  source?: "noto";
   /** Google tab: "animated" gets a small play marker, "static" shows the still glyph */
   kind?: "animated" | "static";
 }) {
@@ -104,8 +99,7 @@ export function EmojiPicker({
 }) {
   const [cat, setCat] = useState<Catalog | null>(null);
   const [gcat, setGcat] = useState<GCatalog | null>(null);
-  const [fcat, setFcat] = useState<FCatalog | null>(null);
-  const [tab, setTabState] = useState<"emoji" | "google" | "fluent">("emoji");
+  const [tab, setTabState] = useState<"emoji" | "google">("emoji");
   const [q, setQ] = useState("");
   const [active, setActive] = useState(-1);
   const [recent, setRecent] = useState<string[]>([]);
@@ -117,8 +111,7 @@ export function EmojiPicker({
     loadCatalog().then((c) => alive && setCat(c));
     setRecent(recentEmoji());
     try {
-      const stored = localStorage.getItem(TAB_KEY);
-      if (stored === "google" || stored === "fluent") setTabState(stored);
+      if (localStorage.getItem(TAB_KEY) === "google") setTabState("google");
     } catch {
       /* ignore */
     }
@@ -135,15 +128,7 @@ export function EmojiPicker({
       alive = false;
     };
   }, [tab, gcat]);
-  useEffect(() => {
-    if (tab !== "fluent" || fcat) return;
-    let alive = true;
-    loadFluent().then((f) => alive && setFcat(f));
-    return () => {
-      alive = false;
-    };
-  }, [tab, fcat]);
-  const setTab = (t: "emoji" | "google" | "fluent") => {
+  const setTab = (t: "emoji" | "google") => {
     setTabState(t);
     setActive(-1);
     sections.current = [];
@@ -195,19 +180,7 @@ export function EmojiPicker({
       stat: gStatic.filter((r) => r[0] === s || hit(r[2])).slice(0, 80),
     };
   }, [q, gcat, gStatic, tab]);
-  const fByCat = useMemo(() => {
-    if (!fcat) return [];
-    const out: FRow[][] = fcat.cats.map(() => []);
-    for (const r of fcat.rows) out[r[3]]?.push(r);
-    return out;
-  }, [fcat]);
-  const fResults = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (tab !== "fluent" || !fcat || !s) return null;
-    const words = s.split(/\s+/);
-    return fcat.rows.filter((r) => r[0] === s || words.every((w) => r[2].includes(w))).slice(0, 200);
-  }, [q, fcat, tab]);
-  const searching = tab === "emoji" ? !!results : tab === "google" ? !!gResults : !!fResults;
+  const searching = tab === "emoji" ? !!results : !!gResults;
 
   // highlight the tab of the section in view
   useEffect(() => {
@@ -224,7 +197,7 @@ export function EmojiPicker({
     onScroll();
     root.addEventListener("scroll", onScroll, { passive: true });
     return () => root.removeEventListener("scroll", onScroll);
-  }, [cat, gcat, fcat, searching, tab]);
+  }, [cat, gcat, searching, tab]);
 
   const jump = (i: number) => {
     setQ("");
@@ -246,7 +219,6 @@ export function EmojiPicker({
           [
             ["emoji", "Emoji"],
             ["google", "Google"],
-            ["fluent", "Fluent"],
           ] as const
         ).map(([k, label]) => (
           <button
@@ -262,7 +234,7 @@ export function EmojiPicker({
             )}
           >
             {label}
-            {k !== "emoji" && !compact && <span className="ml-1 font-normal text-emerald-400/90 max-[359px]:hidden">animated</span>}
+            {k === "google" && !compact && <span className="ml-1 font-normal text-emerald-400/90 max-[359px]:hidden">animated</span>}
           </button>
         ))}
       </div>
@@ -273,7 +245,7 @@ export function EmojiPicker({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             autoFocus={autoFocusSearch}
-            placeholder={compact ? "Search" : tab === "google" ? "Search Google animated emoji" : tab === "fluent" ? "Search Fluent animated emoji" : "Search emoji"}
+            placeholder={compact ? "Search" : tab === "google" ? "Search Google animated emoji" : "Search emoji"}
             enterKeyHint="search"
             className="min-w-0 flex-1 bg-transparent text-[16px] text-zinc-100 outline-none placeholder:text-zinc-500 sm:text-sm"
             data-testid="emoji-search"
@@ -287,18 +259,7 @@ export function EmojiPicker({
       </div>
       </div>
       <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2 [scrollbar-width:thin]">
-        {tab === "fluent" ? (
-          !fcat ? (
-            <div className={cn(grid, "pt-2")}>{Array.from({ length: 32 }, (_, i) => <div key={i} className="m-1.5 aspect-square h-8 animate-pulse rounded-full bg-white/[0.05]" />)}</div>
-          ) : fResults ? (
-            fResults.length ? <div className={cn(grid, "pt-1")} data-testid="fluent-emoji-results">{fResults.map((r) => <Cell key={r[1]} e={r[0]} name={r[2]} size={cellSize} onPick={pick} source="fluent" kind="animated" />)}</div> : <p className="px-4 py-10 text-center text-sm text-zinc-500">No emoji found</p>
-          ) : (
-            <div data-testid="fluent-emoji">
-              <p className="px-4 pt-2 text-[11px] leading-snug text-zinc-500">{fcat.rows.length} animated emoji by Microsoft · <a href="https://github.com/microsoft/fluentui-emoji-animated" target="_blank" rel="noopener noreferrer" className="underline">MIT</a></p>
-              {fByCat.map((rows, i) => <section key={i} ref={(el) => { sections.current[i] = el; }} className="[contain-intrinsic-size:auto_480px] [content-visibility:auto]"><GHead label={fcat.cats[i]} count={rows.length} animated /><div className={grid}>{rows.map((r) => <Cell key={r[1]} e={r[0]} name={r[2]} size={cellSize} onPick={pick} source="fluent" kind="animated" />)}</div></section>)}
-            </div>
-          )
-        ) : tab === "google" ? (
+        {tab === "google" ? (
           !gcat || !cat ? (
             <div className={cn(grid, "pt-2")}>
               {Array.from({ length: 32 }, (_, i) => (
@@ -427,10 +388,10 @@ export function EmojiPicker({
             key={`${tab}${i}`}
             type="button"
             onClick={() => jump(i)}
-            aria-label={tab === "google" ? (gcat?.cats[i] ?? "More (static)") : tab === "fluent" ? (fcat?.cats[i] ?? "Emoji category") : CAT_LABEL[i]}
+            aria-label={tab === "google" ? (gcat?.cats[i] ?? "More (static)") : CAT_LABEL[i]}
             className={cn(
               "flex h-8 w-8 items-center justify-center rounded-full text-[17px] transition",
-              (tab === "google" || tab === "fluent") && "h-8 w-auto max-w-8 min-w-0 flex-1 text-[15px]",
+              tab === "google" && "h-8 w-auto max-w-8 min-w-0 flex-1 text-[15px]",
               active === i && !searching ? "bg-white/10" : "opacity-60 hover:opacity-100",
             )}
           >

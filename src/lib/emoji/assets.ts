@@ -5,12 +5,9 @@
 //   noto:    Google Noto Animated Emoji (Lottie JSON, CC BY 4.0 — "Animated emoji by Google"), the full set self-hosted in
 //            /emoji/noto/<key>.json (+ posters in /emoji/noto/p/<key>.webp, manifest.json), rendered with lottie-web's light
 //            canvas build, lazy-loaded only when a Lottie emoji is actually shown.
-//   fluent:  Microsoft Fluent Emoji Animated (MIT), one self-hosted 160 px animated WebP per Unicode emoji with a static
-//            poster under /emoji/fluent. Skin-tone variants continue through the Noto fallback when Fluent has no matching asset.
 //
 // Load order for an emoji (assetChain): 1) our Telegram copy → 2) the upstream Telegram file (raw.githubusercontent.com — what
-// telegram-emojis.vercel.app itself renders) if ours errors or doesn't paint within ~3 s → 3) our Noto copy → 4) our Fluent copy
-// → 5) the native glyph.
+// telegram-emojis.vercel.app itself renders) if ours errors or doesn't paint within ~3 s → 3) our Noto copy → 4) the native glyph.
 // Emoji Telegram's set lacks start at Noto. The switch is internal: NEXT_PUBLIC_EMOJI_SOURCE (build),
 // NEXT_PUBLIC_EMOJI_SOURCE_{WEB,IOS,ANDROID} (per platform), and — outside production builds or with localStorage "ol:dev" = "1" —
 // localStorage "ol:emojiSet" / ?emojiSet= for side-by-side comparisons (noto first, then Telegram).
@@ -18,13 +15,11 @@
 
 import { linkSlow } from "@/lib/dataSaver";
 import { afterCritical } from "@/lib/media/critical";
-import { FLUENT_KEYS } from "./fluentKeys";
 import { NOTO_KEYS, TG_KEYS } from "./keys";
 
-export type EmojiSource = "telegram" | "noto" | "fluent";
+export type EmojiSource = "telegram" | "noto";
 export type EmojiAsset =
   | { type: "webp"; src: string; poster: string | null; durationMs: number; source: "telegram"; remote?: boolean }
-  | { type: "webp"; src: string; poster: string; durationMs: number; source: "fluent"; remote?: false }
   | { type: "lottie"; src: string; poster: string; durationMs: number; source: "noto"; remote?: false };
 
 const tgDur = new Map<string, number>();
@@ -33,11 +28,6 @@ for (const pair of TG_KEYS.split(" ")) {
   tgDur.set(k, Number(cs) * 10);
 }
 const noto = new Set(NOTO_KEYS.split(" "));
-const fluentDur = new Map<string, number>();
-for (const pair of FLUENT_KEYS.split(" ")) {
-  const [k, ms] = pair.split(":");
-  fluentDur.set(k, Number(ms));
-}
 
 export function emojiKey(emoji: string): string {
   const out: string[] = [];
@@ -49,7 +39,7 @@ export function emojiKey(emoji: string): string {
   return out.join("_");
 }
 
-const VALID = new Set<EmojiSource>(["telegram", "noto", "fluent"]);
+const VALID = new Set<EmojiSource>(["telegram", "noto"]);
 let cached: EmojiSource | null = null;
 
 function platform(): "web" | "ios" | "android" {
@@ -108,10 +98,6 @@ function tgAsset(k: string): EmojiAsset | null {
 function notoAsset(k: string): EmojiAsset | null {
   return noto.has(k) ? { type: "lottie", src: `/emoji/noto/${k}.json`, poster: `/emoji/noto/p/${k}.webp`, durationMs: 0, source: "noto" } : null;
 }
-function fluentAsset(k: string): EmojiAsset | null {
-  const durationMs = fluentDur.get(k);
-  return durationMs === undefined ? null : { type: "webp", src: `/emoji/fluent/${k}.webp`, poster: `/emoji/fluent/p/${k}.webp`, durationMs, source: "fluent" };
-}
 
 const memo = new Map<string, EmojiAsset | null>();
 /** Animated asset for one emoji from the preferred source, else the other one; null → render the native glyph. */
@@ -120,10 +106,7 @@ export function animatedAsset(emoji: string, source: EmojiSource = emojiSource()
   if (memo.has(id)) return memo.get(id)!;
   const k = emojiKey(emoji);
   // "❤" typed without FE0F and "❤️" share a key; ZWJ sequences may also be stored with / without FE0F
-  const tg = tgAsset(k);
-  const n = notoAsset(k);
-  const f = fluentAsset(k);
-  const a = source === "fluent" ? f ?? tg ?? n : source === "noto" ? n ?? tg ?? f : tg ?? n ?? f;
+  const a = source === "noto" ? notoAsset(k) ?? tgAsset(k) : tgAsset(k) ?? notoAsset(k);
   memo.set(id, a);
   return a;
 }
@@ -132,13 +115,12 @@ export function animatedAsset(emoji: string, source: EmojiSource = emojiSource()
 // A step is either a ready asset or the (lazily resolved) upstream Telegram file. Session health: after 3 failures of a tier
 // we stop trying it first, so a dead origin costs three timeouts, not one per emoji.
 export type ChainStep = EmojiAsset | { type: "remote"; key: string; durationMs: number };
-const failures = { telegramLocal: 0, fluent: 0, remote: 0 };
+const failures = { local: 0, remote: 0 };
 export const FALLBACK_TIMEOUT_MS = 3000;
 export const REMOTE_TIMEOUT_MS = 6000;
 export function noteAssetFailure(step: ChainStep) {
   if (step.type === "remote" || (step.type === "webp" && step.remote)) failures.remote++;
-  else if (step.type === "webp" && step.source === "telegram") failures.telegramLocal++;
-  else if (step.type === "webp" && step.source === "fluent") failures.fluent++;
+  else if (step.type === "webp") failures.local++;
 }
 /** Ordered sources to try for one emoji. `animated` = false (static posters) skips the upstream file (it has no poster). */
 export function assetChain(emoji: string, source: EmojiSource = emojiSource(), animated = true): ChainStep[] {
@@ -146,16 +128,12 @@ export function assetChain(emoji: string, source: EmojiSource = emojiSource(), a
   const tg = tgAsset(k);
   const tgSteps: ChainStep[] = [];
   if (tg) {
-    if (failures.telegramLocal < 3) tgSteps.push(tg);
+    if (failures.local < 3) tgSteps.push(tg);
     if (animated && failures.remote < 3) tgSteps.push({ type: "remote", key: k, durationMs: tg.durationMs });
     if (!tgSteps.length) tgSteps.push(tg);
   }
   const n = notoAsset(k);
-  const f = fluentAsset(k);
-  const fluentSteps: ChainStep[] = f ? [f] : [];
-  if (source === "fluent") return [...fluentSteps, ...tgSteps, ...(n ? [n] : [])];
-  if (source === "noto") return [...(n ? [n] : []), ...tgSteps, ...fluentSteps];
-  return [...tgSteps, ...(n ? [n] : []), ...fluentSteps];
+  return source === "noto" ? [...(n ? [n] : []), ...tgSteps] : [...tgSteps, ...(n ? [n] : [])];
 }
 let remoteMod: Promise<typeof import("./tgRemote")> | null = null;
 /** Resolve the upstream Telegram file for a key (separate chunk, loaded only on the first local failure). */
