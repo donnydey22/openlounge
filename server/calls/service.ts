@@ -53,7 +53,8 @@ export interface CallDeps {
   inRoom(userId: string): boolean;
   appendCallMessage(meta: CallMeta, calleeId: string): void;
   /** Preferred backend for a NEW call. The selected instance is retained on the call record. */
-  selectMedia?(): CallMediaBackend | null;
+  /** Chooses the media backend for a new call; receives both participants so a server-side test allowlist can opt them in. */
+  selectMedia?(participants?: { callerId: string; calleeId: string }): CallMediaBackend | null;
   /** Existing LiveKit path for compatibility and layered Mediasoup fallback. */
   liveKitFallback?(): CallMediaBackend | null;
   /** Legacy LiveKit hooks retained for focused unit tests and older integration wiring. */
@@ -130,8 +131,8 @@ export class CallService {
     };
   }
 
-  private selectBackend() {
-    return this.d.selectMedia?.() ?? this.legacyLiveKit();
+  private selectBackend(participants?: { callerId: string; calleeId: string }) {
+    return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
   }
 
   dispose() {
@@ -227,7 +228,7 @@ export class CallService {
     }
     if (this.d.inRoom(callerId)) return { ok: false, error: "Leave the room you're in to start a call", reason: "self_busy" };
     if (this.limited(callerId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
-    const backend = this.selectBackend();
+    const backend = this.selectBackend({ callerId, calleeId });
     if (!backend) return { ok: false, error: "Calls aren't available right now", reason: "media_unavailable" };
     const now = this.now();
     const c: CallRec = {
