@@ -179,6 +179,7 @@ export default function SettingsPage() {
               Credits
             </Link>
           </p>
+          <p className="mt-3 text-xs text-zinc-500" data-testid="about-copyright">© Global Network LLC 2026</p>
         </section>
       </main>
 
