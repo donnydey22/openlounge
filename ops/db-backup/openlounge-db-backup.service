@@ -1,0 +1,38 @@
+[Unit]
+Description=Open Lounge encrypted PostgreSQL backup and restore verification
+Documentation=file:///opt/openlounge-backups/docs/ops/postgres-backups.md
+Wants=network-online.target
+After=network-online.target
+OnFailure=openlounge-db-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+User=openlounge-backup
+Group=openlounge-backup
+EnvironmentFile=/etc/openlounge-backups/backup.env
+ExecStart=/opt/openlounge-backups/bin/openlounge-db-backup.sh
+UMask=0077
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=20%
+MemoryMax=512M
+TasksMax=96
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/srv/openlounge-backups /var/lib/openlounge-backup
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openlounge-db-backup
