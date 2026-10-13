@@ -64,5 +64,7 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>NSHumanReadableCopyright</key>
+	<string>Global Network LLC 2026</string>
 </dict>
 </plist>
