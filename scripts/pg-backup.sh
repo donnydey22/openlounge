@@ -2,15 +2,16 @@
 # Logical backup of the Open Lounge Postgres database (pg_dump custom format, compressed).
 #
 #   DATABASE_URL=postgresql://... scripts/pg-backup.sh [out_dir]          # default out_dir: ./backups
-#   railway run --service Postgres -- bash scripts/pg-backup.sh           # uses DATABASE_PUBLIC_URL from Railway
 #
+# This is a manual developer helper, not the production backup path. It deliberately does not
+# read DATABASE_PUBLIC_URL; production uses the private Railway Cron exporter in ops/db-backup/railway/.
 # Railway Postgres runs PG 18: pg_dump must be >= the server major version (pg_dump 17 refuses an 18 server).
 # If the local pg_dump is too old the script falls back to the postgres:18 Docker image when Docker is available.
 # Restore:  pg_restore --clean --if-exists --no-owner -d "$TARGET_URL" backups/openlounge-<ts>.dump
 # Retention: KEEP (default 14) newest dumps are kept in out_dir.
 set -euo pipefail
-URL="${DATABASE_PUBLIC_URL:-${DATABASE_URL:-}}"
-[ -n "$URL" ] || { echo "set DATABASE_URL (or DATABASE_PUBLIC_URL)" >&2; exit 2; }
+URL="${DATABASE_URL:-}"
+[ -n "$URL" ] || { echo "set DATABASE_URL from an approved private environment" >&2; exit 2; }
 OUT="${1:-backups}"
 KEEP="${KEEP:-14}"
 mkdir -p "$OUT"

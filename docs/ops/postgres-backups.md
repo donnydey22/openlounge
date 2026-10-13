@@ -1,80 +1,196 @@
-# Encrypted Railway PostgreSQL backups
+# Railway-private, signed, encrypted PostgreSQL backups
 
-This runbook defines the **reviewed, not-yet-deployed** backup path for Open Lounge. It is intentionally independent of calls, LiveKit, coturn, Mediasoup, camera controls, media delivery, reactions, and stickers.
+> **Status: review source only.** This PR does not create a Railway service, database role, SSH account/key, or droplet file; set a production variable; deploy; merge; touch the public database proxy; or change calls, LiveKit, coturn, Mediasoup, media, reactions, or stickers.
 
-## Design
+## Objective and boundary
 
-The backup job runs on `openlounge-media`, not on Railway. It uses a dedicated **20 GiB DigitalOcean Block Storage volume**, encrypted with LUKS2 as `/dev/mapper/openlounge-backups` and mounted only at `/srv/openlounge-backups`. The runner fails and emits a journal failure if that exact mapper is absent or a different mount is substituted. This separate mounted volume provides the hard storage boundary and keeps backup work off the droplet root filesystem.
+Railway Postgres is reachable only as `postgres.railway.internal`. The backup source therefore runs as a **separate Railway Cron service in the same project/environment**, not on the media droplet. It makes a logical custom-format `pg_dump`, an exact application-table row-count inventory from the same PostgreSQL snapshot, encrypts both to two age recipients, signs the manifest, and SFTPs ciphertext only to the existing 20 GiB LUKS volume at `/srv/openlounge-backups` on `openlounge-media` (`165.232.137.71`).
 
-Every daily job:
+The receiver never has a Railway URL, database role/password, exporter signing key, or ability to connect to Railway. It verifies the signature and hashes, decrypts to a temporary volume-only workspace, restores into a loopback Unix-socket scratch PostgreSQL cluster, compares row counts, then retains only verified ciphertext.
 
-1. opens a read-only repeatable-read source transaction and exports its PostgreSQL snapshot;
-2. uses that snapshot for `pg_dump --format=custom`, so the dump and source row-count inventory refer to the same logical database state;
-3. encrypts the custom archive with `age` recipients before retaining it;
-4. decrypts only inside the mounted encrypted volume;
-5. restores into a temporary, loopback-only PostgreSQL 18 scratch cluster owned by the backup service user;
-6. compares all user-table row counts against the exported source snapshot; and
-7. stages archive/manifest pairs under the encrypted volume and promotes them only after all verification steps pass; and
-8. deletes the scratch cluster and every plaintext temporary archive before exit.
-
-The service keeps **7 daily** archives and copies Sunday’s verified encrypted archive into the weekly set, retaining **4 weekly** archives. Each retained archive has a mode-0600 manifest with its SHA-256 and a digest of the verified table-count inventory. A run reserves `max(1 GiB, source database size × 3 + 1 GiB)` before it begins, accounting for the custom dump, decrypted restore input, scratch restore data, encrypted output, and a safety margin. The systemd unit limits backup work to 20% CPU and 512 MiB memory, uses idle I/O priority, and writes both normal and failure output to the journal. A failed unit also invokes `logger` at `user.err` severity.
-
-The archive volume is LUKS-encrypted at rest, and each archive is separately encrypted with `age`. The service must have a local age identity to perform its automated restore test, so these controls protect detached-volume/snapshot exposure and accidental file access; they do **not** protect against an active root compromise of the media host. Keep an additional recovery recipient/identity offline and outside the droplet.
-
-## Required host material
-
-No secret is committed in this repository. During a Chief-of-Staff-approved rollout, create these files outside the release tree:
-
-| Path | Owner and mode | Purpose |
-|---|---|---|
-| `/etc/openlounge-backups/backup.env` | `root:openlounge-backup`, `0640` | Non-secret paths, retention settings, and the required `/dev/mapper/openlounge-backups` source; copy from `ops/db-backup/backup.env.example`. |
-| `/etc/openlounge-backups/pg_service.conf` | `root:openlounge-backup`, `0640` | libpq service definition for the Railway public PostgreSQL endpoint, `sslmode=require`, and the dedicated backup role. |
-| `/etc/openlounge-backups/.pgpass` | `openlounge-backup:openlounge-backup`, `0600` | The dedicated database role password. |
-| `/etc/openlounge-backups/age-recipients.txt` | `root:openlounge-backup`, `0640` | At least one recovery recipient and the local restore-test recipient. |
-| `/etc/openlounge-backups/age-identity.txt` | `root:openlounge-backup`, `0640` | The local restore-test identity. Do not put the offline recovery identity here. |
-
-Use a dedicated Railway PostgreSQL role with only the read privileges required by `pg_dump`; do not reuse the application role. The database operator must validate the exact grants against Railway’s role model. At a minimum, it needs `CONNECT`, schema visibility, and read access to all Open Lounge data; it must not have application write privileges. The source connection is configured only through `PGSERVICEFILE` and `PGPASSFILE`, so a password never enters the process command line, logs, units, or repository.
-
-PostgreSQL currently runs major version 18. The job fails closed unless `pg_dump` is major 18 or newer. The host also needs PostgreSQL 18 client and server binaries because it starts a temporary local scratch cluster for every restore test. That scratch server is not enabled as a persistent service.
-
-## Rollout — Chief of Staff only
-
-The following is a future deployment procedure. This PR **does not execute any of it**.
-
-1. In DigitalOcean, create and attach a 20 GiB block volume to `openlounge-media`. Do not alter firewall rules.
-2. On the host, create the LUKS2 mapping **named `/dev/mapper/openlounge-backups`** for the new volume, format it, mount it at `/srv/openlounge-backups`, and set owner `openlounge-backup:openlounge-backup`, mode `0700`. Persist the exact mapper/mount relation only after a reboot test. Record the LUKS recovery material in the approved secret store; never in Git, Railway, or the unit file.
-3. Install only the required host packages: `age`, PostgreSQL 18 client/server binaries, and their dependencies. Disable any package-created persistent PostgreSQL cluster; the backup unit starts its own loopback scratch cluster and removes it after every run.
-4. Create the system user `openlounge-backup` with `/usr/sbin/nologin`, its state directory, the five files in the previous table, and the restricted Railway database role. Confirm that the source connection uses TLS and has no write privilege.
-5. Install `/opt/openlounge-backups/bin/openlounge-db-backup.sh`, the three unit files from `ops/db-backup/`, and the approved environment file. Run `systemd-analyze verify` before `daemon-reload`.
-6. Run `systemctl start openlounge-db-backup.service` once while observing `journalctl -fu openlounge-db-backup.service`. Require a successful encrypted archive, successful scratch restore, equal row counts, a clean scratch-directory removal, no plaintext `.dump` file outside the mounted volume, and a free-space calculation that satisfies the capacity formula.
-7. Before enabling the timer, temporarily stop or unmount the backup mapper and run the unit once. Require a failed unit and an `openlounge-db-backup` `user.err` journal entry; restore the exact mapper, then repeat the successful test. Enable `openlounge-db-backup.timer`; verify `systemctl list-timers openlounge-db-backup.timer`, its next run, and the journal failure path. The timer catches up one missed calendar run after a host outage because `Persistent=true` is set.
-8. After seven daily and four weekly archives exist, review capacity and an offline recovery decrypt using the second recipient before treating the job as operationally complete.
-
-## Failure response and revert
-
-A failed run is visible in both `journalctl -u openlounge-db-backup.service` and the `openlounge-db-backup` `user.err` journal entry, including a missing/wrong backup mapper. Until the final commit point, the runner removes any newly promoted archive/manifest paths; a failed run is therefore never retained as a new daily or weekly copy. The previous verified archives remain unchanged.
-
-To stop the schedule without deleting recoverable data:
-
-```bash
-systemctl disable --now openlounge-db-backup.timer
-systemctl stop openlounge-db-backup.service
+```text
+Railway Cron at 03:30 UTC
+  postgres.railway.internal (TLS verify-full; read-only role)
+  ├─ consistent snapshot holder + parallel pg_dump/inventory (bounded)
+  ├─ age: recovery recipient + droplet restore-test recipient
+  ├─ minisign: signed canonical manifest of ciphertext hashes
+  └─ host-key-pinned SFTP: openlounge-backup@165.232.137.71
+                                      │ encrypted, signed receipt only
+                                      ▼
+openlounge-media 20 GiB LUKS volume
+  openlounge-backup (SFTP ingress): incoming/ only
+  openlounge-backup-verify (systemd verifier): quarantine/ → scratch restore → daily/weekly/
 ```
 
-To revert the implementation after review, remove the backup units and `/opt/openlounge-backups` release directory, run `systemctl daemon-reload`, and leave the encrypted volume plus existing archives in place until an independent restore confirms they are no longer needed. Reverting this job does not alter Railway application variables, the Open Lounge application, or client software.
+## Guarantees and limits
 
-## Cross-platform compatibility matrix
+- The fixed offline recovery recipient is `age1nnl9tv0w5tjk3kttljyflzllrhna99l6jnzt5dw5ctuhefz2n3gqcel5j2`. A separate droplet-only **public** age recipient is supplied at rollout. Neither age private identity is committed.
+- The Railway service holds the private Minisign signing key as a sealed variable. The droplet holds only the matching public verification key. A transport attacker cannot create a valid receipt by replacing ciphertext and hashes.
+- The receiver has two principals. `openlounge-backup` can SFTP only into `incoming`; `openlounge-backup-verify` alone can read the age identity and retention paths. The uploader cannot read or alter retained archives.
+- The exporter uses `PGSSLMODE=verify-full` with a sealed private-host CA PEM. It fails closed without authenticated database TLS. A disposable local test may use `disable` only under `BACKUP_TEST_MODE=1`.
+- The system is intentionally log-alerted, as requested: Railway failures exit nonzero in the Cron deployment log; receiver failures emit `user.err` to the droplet journal. There is no new notification vendor or paid monitoring service.
 
-This backup PR contains **no browser bundle, Expo source, native module, API route, or media/call change**. Client behavior is therefore unchanged; the compatibility requirement is recorded explicitly for release review.
+## Read-only source role — Chief of Staff only
 
-| Surface | Change in this PR | Required release check | Revert impact |
-|---|---|---|---|
-| iOS Safari on every supported iOS/iPadOS version | None | Existing web smoke only; backup execution is not client-visible. | None; disable timer. |
-| iOS Expo wrapper (`com.donnydey.openlounge`) | None | Existing sign-in, DM, room-chat, and upload smoke only; no new binary. | None; no App Store build or rollback. |
-| Android Chrome and WebView on every supported Android version | None | Existing sign-in and messaging smoke only; no client TLS behavior changes. | None; no Play build or rollback. |
-| Older Android TLS paths | None | The only new TLS path is media-host-to-Railway PostgreSQL and uses `sslmode=require`; it does not traverse an Android device. | None; disable timer. |
-| Chrome, Firefox, Safari/WebKit, Edge web app | None | Existing web smoke only; no frontend asset or route changes. | None; disable timer. |
-| Railway Postgres and media host | New host-only scheduled job | Check TLS source connection, restore counts, retention, journal failures, CPU/memory limits, and mount boundary. | Disable timer; retain encrypted archives. |
+Run through an approved administrative connection inside Railway. Replace the database name and password through an approved secrets workflow; never commit, print, or paste them in chat.
+
+```sql
+CREATE ROLE openlounge_backup_ro
+  LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+  CONNECTION LIMIT 4
+  PASSWORD '<generated-secret>';
+
+GRANT CONNECT ON DATABASE openlounge TO openlounge_backup_ro;
+GRANT pg_read_all_data TO openlounge_backup_ro;
+```
+
+Four connections accommodate the snapshot holder, parallel row-count inventory, `pg_dump`, and PostgreSQL client behavior while remaining bounded. Do not grant any write, server-file, execute-program, signal, replication, `BYPASSRLS`, role-management, database-creation, or superuser privilege. The exporter fails closed when any application table has row-level security rather than silently producing a partial backup.
+
+## Railway Cron rollout — Chief of Staff only
+
+1. Create a new one-shot Railway service in the existing Open Lounge project/environment. It is **not** the web service and uses the Dockerfile below rather than the root `railway.json`.
+
+   ```text
+   RAILWAY_DOCKERFILE_PATH=/build/ops/db-backup/railway/Dockerfile
+   Cron Schedule: 30 3 * * *
+   ```
+
+   Railway Cron uses UTC. Its bounded exporter exits nonzero on any phase failure; Railway skips a scheduled execution that overlaps an active one.
+
+2. Build a dedicated restricted SFTP key pair and a Minisign key pair offline. Put the SFTP public key and Minisign public key on the droplet. Put only the SFTP **private** key and Minisign **private** key in sealed Railway variables. Generate the Minisign key without a passphrase only because the sealed Railway Cron variable is the access control; protect it equivalently to a service password.
+
+3. Set only these sealed variables (the templates contain no secret values):
+
+   | Variable | Required value | Purpose |
+   |---|---|---|
+   | `BACKUP_PGHOST` | `postgres.railway.internal` | Enforced private network address |
+   | `BACKUP_PGPORT` | `5432` | Private Postgres port |
+   | `BACKUP_PGDATABASE` | application database name | Source database |
+   | `BACKUP_PGUSER` | `openlounge_backup_ro` | Enforced read-only role |
+   | `BACKUP_PGPASSWORD` | generated role password | Sealed only |
+   | `BACKUP_PGSSLMODE` | `verify-full` | Authenticated TLS required |
+   | `BACKUP_PGSSLROOTCERT_PEM` | approved private-host CA PEM | Sealed multiline CA material |
+   | `BACKUP_AGE_RESTORE_RECIPIENT` | droplet restore-test `age1...` public recipient | Enables restore verification |
+   | `BACKUP_MANIFEST_SIGNING_KEY` | Minisign private key | Signs hashes and manifest |
+   | `BACKUP_SSH_PRIVATE_KEY` | restricted SFTP private key | Sealed multiline key |
+   | `BACKUP_SSH_KNOWN_HOSTS` | verified `165.232.137.71` host-key line | Host-key pin |
+   | `BACKUP_EXPORT_TIMEOUT_SEC` | `3600` | Maximum dump/inventory phase |
+   | `BACKUP_SNAPSHOT_HOLD_SEC` | `3900` | Must exceed export timeout; holder is killed immediately after both consumers finish |
+   | `BACKUP_SFTP_TIMEOUT_SEC` | `600` | Maximum transfer phase |
+
+   The service requires no public domain, persistent volume, inbound port, public Railway Postgres TCP proxy, or app `DATABASE_URL`.
+
+4. Before enabling the schedule, manually execute one Cron run. Require exit 0 and the log line `export complete: signed encrypted dump and inventory uploaded`. Confirm no log contains passwords, private keys, plaintext dump data, or count inventory data.
+
+## Droplet receiver rollout — Chief of Staff only
+
+### 1. Preserve the LUKS boundary
+
+```bash
+findmnt /srv/openlounge-backups
+# must show /dev/mapper/openlounge-backups
+```
+
+Do not alter coturn, SFU, firewall rules, or the root filesystem. The backup receiver writes only to the existing dedicated 20 GiB LUKS volume.
+
+### 2. Create separated ingress and verification principals
+
+```bash
+sudo groupadd --system openlounge-backup-ingress
+sudo groupadd --system openlounge-backup-verify
+sudo useradd --system --home-dir /srv/openlounge-backups --shell /usr/sbin/nologin --gid openlounge-backup-ingress openlounge-backup
+sudo useradd --system --home-dir /var/lib/openlounge-backup-verify --shell /usr/sbin/nologin --gid openlounge-backup-verify openlounge-backup-verify
+sudo usermod -a -G openlounge-backup-ingress openlounge-backup-verify
+sudo chown root:openlounge-backup-ingress /srv/openlounge-backups
+sudo chmod 0750 /srv/openlounge-backups
+sudo install -d -o openlounge-backup -g openlounge-backup-ingress -m 2770 /srv/openlounge-backups/incoming
+sudo install -d -o openlounge-backup-verify -g openlounge-backup-verify -m 0700 \
+  /srv/openlounge-backups/daily /srv/openlounge-backups/weekly /srv/openlounge-backups/.tmp \
+  /srv/openlounge-backups/.scratch /srv/openlounge-backups/.receipt-stage /srv/openlounge-backups/quarantine \
+  /var/lib/openlounge-backup-verify
+```
+
+Create the key directory, install only the dedicated SFTP public key, and add the approved `sshd` policy:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
+sudo install -o root -g root -m 0600 /dev/stdin /etc/ssh/authorized_keys/openlounge-backup
+sudo tee /etc/ssh/sshd_config.d/openlounge-backup.conf >/dev/null <<'EOF'
+Match User openlounge-backup
+    ChrootDirectory /srv/openlounge-backups
+    AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+    ForceCommand internal-sftp -d /incoming -u 0007
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY no
+    AllowTcpForwarding no
+    X11Forwarding no
+    PermitTunnel no
+EOF
+sudo sshd -t
+sudo sshd -T -C user=openlounge-backup,host=165.232.137.71,addr=127.0.0.1 | grep -E 'authorizedkeysfile|forcecommand|chrootdirectory'
+sudo systemctl reload ssh
+```
+
+The setgid `incoming` directory and `-u 0007` result in ingress-group-readable, non-public upload files for the verifier. `daily`, `weekly`, staging, scratch, state, keys, and quarantine remain verifier-only; the ingress account is **not** in the verifier group. Before enabling the Cron schedule, validate with a dedicated test key that SFTP can upload into `incoming`, cannot obtain a shell, cannot access `daily`, and cannot forward ports.
+
+The receiver unit runs with primary group `openlounge-backup-verify` and an explicit supplemental `openlounge-backup-ingress` group solely to atomically take files from `incoming`; it never grants the ingress account membership in the verifier group.
+
+### 3. Install verifier requirements and public keys
+
+Install `age`, `minisign`, and PostgreSQL 18 client/server packages. Do not enable a persistent PostgreSQL service. The systemd unit creates a temporary Unix-socket-only scratch cluster for each receipt.
+
+```bash
+sudo install -d -o root -g openlounge-backup-verify -m 0750 /etc/openlounge-backups
+sudo age-keygen -o /etc/openlounge-backups/restore-test-age-identity.txt
+sudo chown openlounge-backup-verify:openlounge-backup-verify /etc/openlounge-backups/restore-test-age-identity.txt
+sudo chmod 0600 /etc/openlounge-backups/restore-test-age-identity.txt
+sudo -u openlounge-backup-verify age-keygen -y /etc/openlounge-backups/restore-test-age-identity.txt
+sudo install -o root -g openlounge-backup-verify -m 0640 /dev/stdin /etc/openlounge-backups/manifest-verify.pub
+```
+
+`manifest-verify.pub` must be the trusted public key corresponding to the sealed Railway `BACKUP_MANIFEST_SIGNING_KEY`. Keep the recovery identity matching the compiled recovery recipient **off the droplet**.
+
+Install the receiver environment as `/etc/openlounge-backups/backup.env` with owner `root:openlounge-backup-verify` and mode `0640`. Then install the exact executable and units:
+
+```bash
+sudo install -D -m 0755 ops/db-backup/openlounge-db-restore-verify.sh /opt/openlounge-db-backups/bin/openlounge-db-restore-verify.sh
+sudo install -D -m 0755 ops/db-backup/run-failure-drill.sh /opt/openlounge-db-backups/bin/run-failure-drill.sh
+sudo install -D -m 0644 ops/db-backup/openlounge-db-restore-verify.service /etc/systemd/system/openlounge-db-restore-verify.service
+sudo install -D -m 0644 ops/db-backup/openlounge-db-restore-verify.path /etc/systemd/system/openlounge-db-restore-verify.path
+sudo install -D -m 0644 ops/db-backup/openlounge-db-restore-verify-failure@.service /etc/systemd/system/openlounge-db-restore-verify-failure@.service
+sudo systemd-analyze verify /etc/systemd/system/openlounge-db-restore-verify.{service,path}
+sudo systemctl daemon-reload
+sudo systemctl enable --now openlounge-db-restore-verify.path
+```
+
+The path unit has both `PathChanged` and `PathExistsGlob`: an already-received manifest is reconciled after reboot or path-unit restart. The verifier has `RestrictAddressFamilies=AF_UNIX` and `IPAddressDeny=any`; it cannot initiate IP network connections.
+
+### 4. Receiver operation and failure handling
+
+- The uploader transfers partial names, renames archive/count/signature, then publishes the manifest last. Stale partials are removed after six hours; valid manifests are never accepted from partial names.
+- A failing or unsigned receipt is moved to the verifier-only `quarantine/` directory with a timestamp and reason, emits `user.err`, and does not block later valid manifests. Inspect it before deletion.
+- The verifier stores the latest accepted signed receipt timestamp under its private state directory and rejects a replay or stale receipt.
+- Retention is **7 daily** and **4 weekly** verified receipt quartets: encrypted dump, encrypted counts, signed manifest, and signature. A Sunday weekly copy keeps its original signed names and signature intact.
+
+## Acceptance, restore, and failure drill
+
+1. Run one manual Cron export. Verify `journalctl -u openlounge-db-restore-verify.service -n 200 --no-pager` contains `restore verification passed`, `daily/` has one `.dump.age`, `.counts.age`, `.manifest`, and `.manifest.minisig`, and `find /srv/openlounge-backups -type f -name '*.dump'` prints nothing.
+2. Run the non-destructive root-only drill:
+
+   ```bash
+   sudo /opt/openlounge-db-backups/bin/run-failure-drill.sh
+   ```
+
+   It writes an unsigned synthetic manifest, requires verifier failure, waits for the exact `user.err` alert, quarantines the synthetic receipt, and resets the unit state. It never contacts Railway or changes a retained archive.
+3. Validate a real restricted SFTP login and a representative-size restore under the unit’s `20%` CPU, `512 MiB` memory, idle I/O, and six-hour aggregate timeout while coturn/SFU load is observed. Do not call the system operational until this is successful.
+4. After seven daily and four weekly verified receipts, inspect LUKS volume headroom and review journals for any failed Cron, partial cleanup, or quarantined receipt.
+
+## Cost and revert
+
+- **No new paid service is added.** This uses existing Railway Cron capability, the existing `openlounge-media` droplet, and the existing LUKS volume. Railway may meter daily Cron compute and outbound SFTP under the existing plan; there is no new storage vendor, bucket, public proxy, or DigitalOcean resource.
+- Banned vendors are absent: Cloudflare, Twilio, Bunny, Mux, and Cloudinary.
+- To revert safely: disable/remove only the dedicated Railway Cron service, disable the receiver path/service, then revoke the dedicated SFTP key after no approved exports remain. Keep the LUKS volume, verified ciphertext, public verification key, and recovery material intact until an independent restore confirms retention is no longer required. Later remove the role, units, `/opt/openlounge-db-backups`, and dedicated accounts through a reviewed change.
 
 ## Local validation
 
@@ -83,11 +199,6 @@ npm run test:db-backups
 npm run test:db-backups:integration
 ```
 
-The integration test starts only a disposable local PostgreSQL 16 source database and a disposable local scratch restore. It does not connect to Railway, DigitalOcean, or production.
+The integration test runs a disposable PostgreSQL source and maps the private hostname only inside the test. It proves signed encrypted export, receipt signature rejection/quarantine while a later valid receipt succeeds, restore/count comparison, weekly retention signature preservation, and stale partial cleanup. It uses a fake SFTP transport; the real key-only chroot, host-key, and access-boundary checks remain explicit production rollout gates above.
 
-**References**
-
-[1]: https://www.postgresql.org/docs/current/app-pgdump.html "PostgreSQL pg_dump documentation"
-[2]: https://www.postgresql.org/docs/current/functions-admin.html "PostgreSQL snapshot synchronization functions"
-[3]: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html "systemd timer documentation"
-[4]: https://github.com/FiloSottile/age "age encryption tool documentation"
+**References:** [Railway Cron Jobs](https://docs.railway.com/guides/cron-jobs), [Railway Private Networking](https://docs.railway.com/guides/private-networking), [PostgreSQL snapshots](https://www.postgresql.org/docs/current/functions-admin.html), [PostgreSQL `pg_dump`](https://www.postgresql.org/docs/current/app-pgdump.html), [age](https://github.com/FiloSottile/age), and [Minisign](https://jedisct1.github.io/minisign/).

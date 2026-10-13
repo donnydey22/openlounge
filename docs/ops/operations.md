@@ -23,13 +23,15 @@ Tokens carry a key id (`ol1.<sid>.<exp>.<sig>.<kid>`); pre-change 4-part tokens 
   so even a hard rotation only costs clients one silent refresh.
 
 ## Backups
-Status checked read-only on 2026-10-06 (`railway postgres pitr status|backup list|schedule list -s Postgres`):
-**PITR disabled, no bucket, no on-demand backups, no schedule.** Postgres volume 112 MB / 500 MB.
-- Logical dump: `DATABASE_URL=... npm run db:backup [dir]` (`scripts/pg-backup.sh`, custom format, 600 perms,
-  TOC sanity check, keeps 14). Server is PG 18 → needs pg_dump ≥ 18 (falls back to `docker postgres:18`).
-- From the box: `railway run -s Postgres -- bash scripts/pg-backup.sh ~/backups/openlounge` (uses DATABASE_PUBLIC_URL).
-- Recommended (needs user action): `railway postgres pitr schedule set ...` or enable PITR in the dashboard, and a
-  weekly off-site dump. Restore drill: `pg_restore --clean --if-exists --no-owner -d $TARGET dump` (verified locally).
+Production backup design and rollout/revert instructions: [Railway-private encrypted PostgreSQL backups](postgres-backups.md).
+
+- The dedicated Railway Cron service connects only through `postgres.railway.internal` with its read-only
+  `openlounge_backup_ro` role. It encrypts each custom dump and row-count inventory before SFTP to the existing
+  LUKS-protected media-host volume; no public Railway PostgreSQL TCP proxy is enabled or required.
+- The media host receives ciphertext only, validates a restore and application-table row counts in a temporary
+  loopback-only PostgreSQL cluster, and retains 7 daily plus 4 weekly verified receipt triplets.
+- `npm run db:backup` remains a **manual developer helper** requiring an explicitly provided private `DATABASE_URL`;
+  it is not the production schedule and does not read `DATABASE_PUBLIC_URL`.
 
 ## Environment variables (new in this branch; all optional)
 | Var | Default | Purpose |

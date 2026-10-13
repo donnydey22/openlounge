@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch encrypted Open Lounge backup receipts
+RequiresMountsFor=/srv/openlounge-backups
+After=local-fs.target
+
+[Path]
+PathChanged=/srv/openlounge-backups/incoming
+# Catch up a completed receipt that existed before this path unit started or was restarted.
+PathExistsGlob=/srv/openlounge-backups/incoming/openlounge-*.dump.age.manifest
+Unit=openlounge-db-restore-verify.service
+
+[Install]
+WantedBy=multi-user.target
