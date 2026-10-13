@@ -17,6 +17,7 @@ export function LegalFooter({ className = "" }: { className?: string }) {
       <a href={SUPPORT_MAILTO} className="hover:text-zinc-300 hover:underline">
         Contact &amp; support
       </a>
+      <span data-testid="copyright">© Global Network LLC 2026</span>
     </footer>
   );
 }
