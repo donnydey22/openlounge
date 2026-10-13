@@ -688,6 +688,41 @@ function ThumbImage({ a, urls, src, local, width, className, onLoaded }: { a: Me
   );
 }
 
+/**
+ * A small shared-media image that stays hidden until `img.decode()` resolves. It is deliberately used for
+ * image documents and original-format GIFs too: both used to bypass the Telegram thumbnail/blur contract.
+ * Callers keep their poster, blurred preview, or file icon mounted underneath; this component never adds a
+ * loading wheel and never causes a layout shift.
+ */
+function DecodeGatedImage({ src, placeholder, alt = "", className, testId }: { src: string; placeholder?: string; alt?: string; className: string; testId?: string }) {
+  const [decodedSrc, setDecodedSrc] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const decoded = decodedSrc === src;
+  return (
+    <>
+      {placeholder && <img src={placeholder} alt="" aria-hidden decoding="sync" className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" draggable={false} />}
+      <img
+        key={src}
+        src={src}
+        alt={alt}
+        decoding="async"
+        draggable={false}
+        data-testid={testId}
+        onLoad={(e) => {
+          const image = e.currentTarget;
+          // `load` only proves bytes arrived. Hold the sharp bitmap until the decoder has finished so a slow
+          // WebKit/Android image never flashes over its thumbnail or file icon half-painted.
+          void (image.decode ? image.decode() : Promise.resolve())
+            .catch(() => {})
+            .then(() => setDecodedSrc(src));
+        }}
+        onError={() => setFailedSrc(src)}
+        className={cn(className, !decoded && "opacity-0", failedSrc === src && "invisible")}
+      />
+    </>
+  );
+}
+
 // transparent 1×1 GIF: Android WebView's gray "play" poster never shows while the first frame decodes
 const BLANK_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
@@ -747,8 +782,8 @@ function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof 
     );
   if (!src || !allowed) return <span ref={ref as never} className="hidden" />;
   if (a.mime === "image/gif" || src.includes("/original")) {
-    // GIF still converting: show the GIF itself
-    return <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />;
+    // GIF still converting: retain the existing thumbnail until the original GIF has decoded.
+    return <DecodeGatedImage src={src} className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none" testId="media-gif-inline" />;
   }
   return (
     <video
@@ -830,19 +865,20 @@ function DocumentTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; min
         aria-label={uploading ? "Cancel upload" : failed ? "Retry" : dl !== null ? "Cancel download" : `Open ${name}`}
         className={cn("relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl text-white", urls?.thumb ? "bg-zinc-700" : style.bg)}
       >
-        {urls?.thumb && <img src={urls.thumb} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+        {!uploading && !failed && (
+          <span className="relative flex flex-col items-center">
+            <Icon className="h-5 w-5" />
+            {ext && <span className="mt-0.5 text-[8.5px] leading-none font-bold tracking-wide">{ext}</span>}
+          </span>
+        )}
+        {urls?.thumb && !uploading && !failed && <DecodeGatedImage src={urls.thumb} placeholder={a.ph} className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none" testId="media-document-thumb" />}
         {uploading || dl !== null ? (
           <ProgressRing value={uploading ? (outbox!.phase === "uploading" ? outbox!.progress : undefined) : dl!} size={40} stroke={2.5} className="relative bg-black/30 rounded-full">
             <X className="h-4 w-4" />
           </ProgressRing>
         ) : failed ? (
           <RotateCw className="relative h-5 w-5" />
-        ) : urls?.thumb ? null : (
-          <span className="relative flex flex-col items-center">
-            <Icon className="h-5 w-5" />
-            {ext && <span className="mt-0.5 text-[8.5px] leading-none font-bold tracking-wide">{ext}</span>}
-          </span>
-        )}
+        ) : null}
       </button>
       <button type="button" onClick={open} className="min-w-0 flex-1 text-left" tabIndex={-1}>
         <div className="truncate text-[14.5px] leading-tight font-semibold" title={name}>
