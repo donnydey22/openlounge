@@ -9,6 +9,12 @@ mediasoup_validate_pilot_range "$min" "$max"
 controllers=$(cat /sys/fs/cgroup/cgroup.controllers)
 [[ " $controllers " == *" cpu "* && " $controllers " == *" memory "* ]] || { echo "cpu and memory cgroup controllers are required" >&2; exit 2; }
 
+for command in bash curl getent journalctl rsync sha256sum systemctl systemd-notify tar ufw; do
+  command -v "$command" >/dev/null || { echo "Required command is unavailable: $command" >&2; exit 2; }
+done
+rsync --help | grep -F -- '--chown' >/dev/null || { echo "rsync must support --chown for non-root dependency installation" >&2; exit 2; }
+getent group systemd-journal >/dev/null || { echo "systemd-journal group is required for persistent journal ownership" >&2; exit 2; }
+
 echo "--- current listeners (must show coturn only before install) ---"
 ss -lntup || true
 echo "--- coturn status ---"

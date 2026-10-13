@@ -23,6 +23,7 @@ const ip = (value, key) => {
 
 const gatewayUrl = (env) => {
   const expectedHost = required(env, "OPENLOUNGE_GATEWAY_HOST").toLowerCase();
+  if (!new Set(["openlounge.app", "staging.openlounge.app"]).has(expectedHost)) throw new Error("OPENLOUNGE_GATEWAY_HOST is not an approved Open Lounge gateway");
   let value;
   try {
     value = new URL(required(env, "OPENLOUNGE_GATEWAY_WS_URL"));
@@ -55,6 +56,8 @@ export function readConfig(env = process.env) {
   const maxCalls = positive(env, "MEDIASOUP_MAX_CALLS", 2);
   const maxSessions = positive(env, "MEDIASOUP_MAX_SESSIONS", maxCalls * 2);
   if (maxSessions > maxCalls * 2) throw new Error("MEDIASOUP_MAX_SESSIONS may not exceed two sessions per pilot call");
+  const healthHost = env.MEDIASOUP_HEALTH_HOST ?? "127.0.0.1";
+  if (healthHost !== "127.0.0.1") throw new Error("MEDIASOUP_HEALTH_HOST must remain 127.0.0.1");
   return {
     gatewayUrl: gatewayUrl(env),
     gatewaySecret,
@@ -66,7 +69,7 @@ export function readConfig(env = process.env) {
     // A one-core coturn co-location pilot must stay deliberately tiny. Capacity only expands after measured review.
     maxCalls,
     maxSessions,
-    healthHost: env.MEDIASOUP_HEALTH_HOST ?? "127.0.0.1",
+    healthHost,
     healthPort: port(env, "MEDIASOUP_HEALTH_PORT", 8081),
   };
 }
