@@ -1,0 +1,6 @@
+[Unit]
+Description=Journal alert for failed Open Lounge backup restore verification %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger --priority user.err --tag openlounge-db-restore-verify "FAILED: %i; inspect journalctl -u %i and journalctl -u openlounge-db-restore-verify-failure@%i"

@@ -7,6 +7,10 @@ ios
 .env
 .env.*
 !.env.example
+ops/db-backup/backup.env
+ops/db-backup/railway/backup.env
+ops/db-backup/**/restore-test-age-identity.txt
+ops/db-backup/**/manifest-signing.key
 npm-debug.log*
 .git
 *.apk

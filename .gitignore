@@ -13,6 +13,10 @@ next-env.d.ts
 *.key
 *.keystore
 *.jks
+ops/db-backup/backup.env
+ops/db-backup/railway/backup.env
+ops/db-backup/**/restore-test-age-identity.txt
+ops/db-backup/**/manifest-signing.key
 
 # runtime data (db.json fallback, uploaded avatars, any local data dirs)
 data/*
