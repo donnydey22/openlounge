@@ -1,0 +1,6 @@
+[Unit]
+Description=Journal alert for failed Open Lounge backup service %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger --priority user.err --tag openlounge-db-backup "FAILED: %i; inspect journalctl -u %i and journalctl -u openlounge-db-backup-failure@%i"
