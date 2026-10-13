@@ -16,11 +16,11 @@ for line in \
   grep -Fx "$line" "$attestation" >/dev/null || { echo "Cloud-firewall attestation is missing: $line" >&2; exit 2; }
 done
 status=$(ufw status)
-printf '%s\n' "$status" | grep -E '^40000:49999/udp[[:space:]]+ALLOW IN[[:space:]]+Anywhere$' >/dev/null || {
+printf '%s\n' "$status" | grep -E '^40000:49999/udp[[:space:]]+ALLOW( IN)?[[:space:]]+Anywhere([[:space:]]+#.*)?$' >/dev/null || {
   echo "Missing reviewed IPv4 UFW allow rule for 40000:49999/udp" >&2
   exit 2
 }
-printf '%s\n' "$status" | grep -E '^40000:49999/udp[[:space:]]+ALLOW IN[[:space:]]+Anywhere \(v6\)$' >/dev/null || {
+printf '%s\n' "$status" | grep -E '^40000:49999/udp \(v6\)[[:space:]]+ALLOW( IN)?[[:space:]]+Anywhere \(v6\)([[:space:]]+#.*)?$' >/dev/null || {
   echo "Missing reviewed IPv6 UFW allow rule for 40000:49999/udp" >&2
   exit 2
 }
