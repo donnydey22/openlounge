@@ -112,3 +112,18 @@ test("call/video stack features are fully supported at the floor (caniuse data)"
     }
   }
 });
+
+test("Safari 18.4/18.5 (LambdaTest macOS) is gated on every page-navigation shape, incl. Accept */* and /index.html", async () => {
+  const { isPageNavigation, gateExempt } = await import("../../src/lib/browserFloor");
+  const lt184 = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15";
+  assert.equal(belowFloor(lt184), true);
+  assert.equal(isPageNavigation("GET", { accept: "*/*" }), true);
+  assert.equal(isPageNavigation("GET", {}), true);
+  assert.equal(isPageNavigation("GET", { accept: "*/*", "sec-fetch-dest": "document", "sec-fetch-mode": "navigate" }), true);
+  assert.equal(isPageNavigation("GET", { accept: "*/*", "sec-fetch-dest": "script" }), false);
+  assert.equal(isPageNavigation("GET", { accept: "*/*", rsc: "1" }), false);
+  assert.equal(isPageNavigation("POST", { accept: "text/html" }), false);
+  assert.equal(gateExempt("/index.html"), false);
+  assert.equal(gateExempt("/download"), true);
+  assert.equal(gateExempt("/app.js"), true);
+});
