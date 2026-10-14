@@ -2,20 +2,38 @@
 
 // Mounts the call engine for the whole app: binds it to the socket + signed-in user, resumes a live call after a
 // reconnect / reload, and renders the call screen (or the minimized green bar) above every page.
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useApp } from "@/components/AppProvider";
 import { callEngine } from "@/lib/calls/engine";
 import { installAudioUnlock } from "@/lib/audioUnlock";
+import { installAppLockPresence } from "@/lib/calls/appLockPresence";
+import { needsBackgroundRing, startBackgroundRing, stopBackgroundRing } from "@/lib/calls/backgroundRing";
+import { appVisible, NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT } from "@/lib/realtime";
+import { native } from "@/lib/native";
 import { useCall } from "./useCall";
 
 // the call UI (and livekit-client inside the engine's dynamic import) only loads when a call exists
 const CallOverlay = dynamic(() => import("./CallOverlay").then((m) => m.CallOverlay), { ssr: false });
 
+/** Page → native (same transport as engine.postNative; kept here so we don't touch engine.ts / tones.ts). */
+function postNativeCall(msg: Record<string, unknown>) {
+  if (typeof window === "undefined" || !(window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls) return;
+  const s = JSON.stringify(msg);
+  try {
+    const rn = (window as unknown as { ReactNativeWebView?: { postMessage(s: string): void } }).ReactNativeWebView;
+    if (rn) rn.postMessage(s);
+    else native()?.postMessage?.(s);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function CallProvider({ children }: { children: React.ReactNode }) {
   const { socket, connected, me, toast } = useApp();
   const s = useCall();
   const meId = me?.id ?? null;
+  const lastIncomingNative = useRef<string | null>(null);
 
   useEffect(() => {
     callEngine?.bind(socket, meId);
@@ -24,6 +42,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // unlock the shared AudioContext on the first tap anywhere (and after iOS interruptions) so an incoming call's
   // ringtone can play even though it arrives over the WebSocket, outside any gesture
   useEffect(() => installAudioUnlock(), []);
+  useEffect(() => installAppLockPresence(), []);
 
   useEffect(() => {
     if (connected && meId) void callEngine?.resume();
@@ -66,6 +85,65 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("openlounge:native-call", onNative);
     return () => window.removeEventListener("openlounge:native-call", onNative);
   }, []);
+
+  // Service-worker Accept / Decline (background ring notification)
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data || {};
+      const e_ = callEngine;
+      if (!e_) return;
+      const st = e_.snapshot();
+      if (d.type === "openlounge:call-accept" && st.ui === "incoming" && (!d.callId || d.callId === st.call?.id)) {
+        void e_.accept(st.call?.video ?? false);
+      } else if (d.type === "openlounge:call-decline" && st.ui === "incoming" && (!d.callId || d.callId === st.call?.id)) {
+        void e_.decline();
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onMsg);
+    return () => navigator.serviceWorker.removeEventListener("message", onMsg);
+  }, []);
+
+  // Background / App Lock: SW insistent notification + audio keepalive; hand off to native ring UI.
+  useEffect(() => {
+    const sync = () => {
+      if (s.ui === "incoming" && s.call) {
+        const info = {
+          callId: s.call.id,
+          name: s.call.caller?.name || "Incoming call",
+          video: !!s.call.video,
+          expiresAt: s.call.expiresAt || Date.now() + 45_000,
+        };
+        if (needsBackgroundRing()) startBackgroundRing(info);
+        else stopBackgroundRing(s.call.id);
+        // While App Lock / backgrounded, ask the native shell to surface IncomingCallActivity / CallKit
+        // even if the FCM/VoIP push is still in flight (WS often wins the race).
+        if (!appVisible() && lastIncomingNative.current !== s.call.id) {
+          lastIncomingNative.current = s.call.id;
+          postNativeCall({
+            type: "call:incoming",
+            callId: s.call.id,
+            name: s.call.caller?.name || "",
+            photo: s.call.caller?.photoUrl || "",
+            video: !!s.call.video,
+            expiresAt: s.call.expiresAt || Date.now() + 45_000,
+          });
+        }
+      } else {
+        stopBackgroundRing(s.call?.id);
+        if (s.ui !== "incoming") lastIncomingNative.current = null;
+      }
+    };
+    sync();
+    window.addEventListener("visibilitychange", sync);
+    window.addEventListener(NATIVE_VISIBILITY_EVENT, sync);
+    window.addEventListener(NATIVE_LOCK_EVENT, sync);
+    return () => {
+      window.removeEventListener("visibilitychange", sync);
+      window.removeEventListener(NATIVE_VISIBILITY_EVENT, sync);
+      window.removeEventListener(NATIVE_LOCK_EVENT, sync);
+    };
+  }, [s.ui, s.call?.id, s.call?.expiresAt, s.call?.video, s.call?.caller?.name, s.call?.caller?.photoUrl]);
 
   return (
     <>
