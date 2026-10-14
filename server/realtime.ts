@@ -499,7 +499,6 @@ export function registerRealtime(io: WsHub) {
     socket.on("room:create", (input, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         const res = store.createRoom(userId, input ?? {});
-        if (res.ok) bg(push()?.roomStarted(res.roomId, store.rooms.get(res.roomId)?.title ?? "", userId));
         ack(res);
       }),
     );
@@ -521,9 +520,12 @@ export function registerRealtime(io: WsHub) {
         // Co-hosts are trusted only when the room host configured them in creator branding. They join directly
         // to the stage, but keep a speaker role so only the actual host can end the room.
         if (rec && creator().isCoHost(rec.hostId, userId)) store.promoteCoHost(roomId, userId);
-        // invite-only rooms (drop-in audio chats) never announce who's in them
-        if (rec && rec.hostId !== userId && !rec.private)
-          bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()] }, userId));
+        // A room is live only once its host has actually joined. Reconnects/additional devices never re-notify;
+        // invite-only drop-ins remain private and never announce their presence.
+        if (rec && res.newlyJoined && !rec.private) {
+          if (rec.hostId === userId) bg(push()?.roomStarted(rec.id, rec.title, userId, "public"));
+          else bg(push()?.roomJoined({ id: rec.id, title: rec.title, hostId: rec.hostId, participantIds: [...rec.participants.keys()], visibility: "public" }, userId));
+        }
         // the LiveKit join token rides on the ack (saves the /api/livekit/token round trip on the way into a room);
         // the client still falls back to the HTTP endpoint when it's missing or for reconnects
         let lk: { url: string; token: string } | null = null;

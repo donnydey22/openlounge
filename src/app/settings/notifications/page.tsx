@@ -19,6 +19,7 @@ const GROUPS: { title: string; items: { key: Key; label: string; hint: string }[
       { key: "followedRoom", label: "People you follow", hint: "Someone you follow starts or joins a room" },
       { key: "trendingRoom", label: "Popular rooms", hint: "Several people you follow are in the same room" },
       { key: "scheduledRoom", label: "Scheduled rooms", hint: "A room you RSVP'd to is starting" },
+      { key: "roomMemberActivity", label: "Room activity", hint: "Joins in public rooms you're in, and when their host starts another room" },
       { key: "recentRoom", label: "Live again", hint: "A host whose room you were in recently goes live" },
     ],
   },

@@ -39,7 +39,7 @@ export interface NotifierDeps {
   now?(): number;
 }
 
-export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "recentRoom"];
+export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "roomMemberActivity", "recentRoom"];
 export const ACTIVE_ROOM_INTERVAL_MS = 0; // dropped 10-min active-room cap so every join can notify
 export const DEDUPE_MS = 60_000; // loosened from 30 min; join events use per-joiner dedupe keys
 export const HOURLY_CAP = 20; // all non-DM pushes per user per hour
@@ -56,8 +56,6 @@ export class Notifier {
   private dedupe = new Map<string, number>();
   private hourly = new Map<string, number[]>();
   private followerBuf = new Map<string, { names: string[]; ids: string[]; timer: NodeJS.Timeout | null; lastSentAt: number }>();
-  /** host -> (userId -> last time they were in that host's room) */
-  private recentByHost = new Map<string, Map<string, number>>();
   constructor(private d: NotifierDeps) {}
 
   private now() {
@@ -260,13 +258,18 @@ export class Notifier {
     );
   }
 
-  /** host opens a room: followers (followedRoom) + people recently in their rooms (recentRoom). Fires on room:create. */
-  async roomStarted(roomId: string, roomTitle: string, hostId: string) {
+  /** A host starts a live public room: followers plus people who joined this host's rooms recently. The latter is
+   * durable so a deploy/restart cannot silently erase the audience. Fires once the host actually joins the room. */
+  async roomStarted(roomId: string, roomTitle: string, hostId: string, visibility: "public" | "private") {
+    if (visibility !== "public") return {};
     const name = this.d.userName(hostId) ?? "Someone";
     const out: Record<string, Outcome> = {};
     const followers = new Set(this.d.followerIds(hostId));
     const live = { actorId: hostId, roomId };
-    for (const uid of followers) {
+    const recentMembers = new Set(await this.d.repo.roomActivityMembers(hostId, this.now() - RECENT_ROOM_MS));
+
+    // First, serve the people who explicitly participated with this host. This audience is independent from follows.
+    for (const uid of recentMembers) {
       if (uid === hostId) continue;
       if (this.d.blocked?.(uid, hostId)) {
         out[uid] = "skip:blocked";
@@ -274,18 +277,33 @@ export class Notifier {
       }
       out[uid] = await this.deliver(
         uid,
-        "followedRoom",
-        { type: "followedRoom", title: `🎙️ ${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        "roomMemberActivity",
+        { type: "roomMemberActivity", title: `🎙️ ${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
         { dedupeKey: `room:${roomId}`, live },
       );
+      // Preserve the existing optional “Live again” setting for members who intentionally turn room activity off.
+      if (out[uid] === "skip:pref")
+        out[uid] = await this.deliver(
+          uid,
+          "recentRoom",
+          { type: "recentRoom", title: `🔴 ${name} is live again`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+          { dedupeKey: `room:${roomId}`, live },
+        );
     }
-    const now = this.now();
-    for (const [uid, at] of this.recentByHost.get(hostId) ?? []) {
-      if (uid === hostId || followers.has(uid) || now - at > RECENT_ROOM_MS || this.d.blocked?.(uid, hostId)) continue;
+
+    // Keep the follow graph behaviour intact. If a recent member turned this room-activity switch off but still
+    // follows the host, their existing followed-room preference remains a valid fallback.
+    for (const uid of followers) {
+      if (uid === hostId) continue;
+      if (this.d.blocked?.(uid, hostId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
+      if (recentMembers.has(uid) && out[uid] !== "skip:pref") continue;
       out[uid] = await this.deliver(
         uid,
-        "recentRoom",
-        { type: "recentRoom", title: `🔴 ${name} is live again`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
+        "followedRoom",
+        { type: "followedRoom", title: `🎙️ ${name} started a room`, body: roomTitle, channel: "rooms", tag: `room:${roomId}`, url: `/room/${roomId}`, data: { roomId } },
         { dedupeKey: `room:${roomId}`, live },
       );
     }
@@ -296,12 +314,11 @@ export class Notifier {
    * someone joined a room.
    * 1) Every other room member with notifications enabled hears about it (not only the joiner's followers).
    * 2) Followers of the joiner still get followedRoom / trendingRoom (existing feature kept).
-   * Dedupe is per joiner (`join:room:user`) so every join can notify; the 15s active-room throttle is the burst floor.
+   * Dedupe is per joiner (`join:room:user`) so every join can notify; the active-room throttle is disabled.
    */
-  async roomJoined(room: { id: string; title: string; hostId: string; participantIds: string[] }, userId: string) {
-    const recent = this.recentByHost.get(room.hostId) ?? new Map();
-    recent.set(userId, this.now());
-    this.recentByHost.set(room.hostId, recent);
+  async roomJoined(room: { id: string; title: string; hostId: string; participantIds: string[]; visibility: "public" | "private" }, userId: string) {
+    if (room.visibility !== "public") return {};
+    await this.d.repo.noteRoomMember(room.hostId, userId, this.now());
     const inRoom = new Set(room.participantIds);
     const name = this.d.userName(userId) ?? "Someone";
     const out: Record<string, Outcome> = {};
@@ -317,9 +334,9 @@ export class Notifier {
       }
       out[uid] = await this.deliver(
         uid,
-        "followedRoom",
+        "roomMemberActivity",
         {
-          type: "followedRoom",
+          type: "roomMemberActivity",
           title: `${name} joined`,
           body: room.title,
           channel: "rooms",
