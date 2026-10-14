@@ -10,7 +10,7 @@
 // screen is laid out and painted; posters are lazy-loaded.
 
 import { readReactionSet, saveReactionSet } from "@/lib/emoji/reactionSet";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { AnimatedEmoji } from "./AnimatedEmoji";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,16 @@ type FRow = [emoji: string, key: string, name: string, cat: number, durationMs: 
 type FCatalog = { cats: string[]; rows: FRow[] };
 let fluentP: Promise<FCatalog> | null = null;
 const loadFluent = () => (fluentP ??= import("@/lib/emoji/fluent.json").then((m) => (m.default ?? m) as unknown as FCatalog));
+
+/**
+ * Fetch catalog metadata ahead of an intentional picker open. This deliberately loads only compact JSON indexes;
+ * posters and animation payloads remain visibility/interaction gated in AnimatedEmoji, so it cannot turn a picker
+ * warmup into hundreds of image downloads on an iPhone or Android WebView.
+ */
+export async function preloadEmojiPicker() {
+  await Promise.all([loadCatalog(), loadGoogle(), loadFluent()]);
+}
+
 const G_ICON = ["😀", "🙋", "🐻", "🍔", "✈️", "🎉", "💡", "❤️", "🏁", "⋯"];
 const TAB_KEY = "ol:emojiTab";
 
@@ -164,12 +174,17 @@ export function EmojiPicker({
     }
   };
 
-  const pick = (e: string) => {
-    if (purpose === "reaction" && tab !== "emoji") saveReactionSet(tab);
-    pushRecent(e);
-    setRecent(recentEmoji());
-    onPick(e);
-  };
+  // Scrolling changes the active category tab. Keep this callback stable so memoized picker cells do not all rerender
+  // on each category change — especially important for the 746-item Fluent and 880-item Google catalogs.
+  const pick = useCallback(
+    (e: string) => {
+      if (purpose === "reaction" && tab !== "emoji") saveReactionSet(tab);
+      pushRecent(e);
+      setRecent(recentEmoji());
+      onPick(e);
+    },
+    [onPick, purpose, tab],
+  );
 
   const byCat = useMemo(() => {
     if (!cat) return [];

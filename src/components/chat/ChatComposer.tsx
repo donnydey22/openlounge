@@ -11,6 +11,13 @@ import { enterSends, indentLines, newline, tabIndents } from "@/lib/composer/key
 
 const COMPOSER_MAX_H = 200; // ~8 lines, then it scrolls
 const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && !window.matchMedia?.("(any-pointer: fine)").matches;
+const canBackgroundPreload = () => {
+  if (typeof navigator === "undefined") return false;
+  const connection = navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } };
+  return !connection.connection?.saveData && !/(^|-)2g$/.test(connection.connection?.effectiveType ?? "");
+};
+// Keep the initial picker chunk and its lightweight indexes warm; individual posters/animations stay gated by visibility.
+const warmEmojiPicker = () => void import("./emoji/EmojiPicker").then(({ preloadEmojiPicker }) => preloadEmojiPicker()).catch(() => {});
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
 import { useEmojiPanelHeight } from "@/lib/emoji/fit";
@@ -68,6 +75,11 @@ export function ChatComposer({
   const [panel, setPanel] = useState(false);
   const [coarse, setCoarse] = useState(false);
   useEffect(() => setCoarse(coarsePointer()), []);
+  useEffect(() => {
+    if (!emojiPanel || !canBackgroundPreload()) return;
+    const timer = window.setTimeout(warmEmojiPicker, 1_200);
+    return () => window.clearTimeout(timer);
+  }, [emojiPanel]);
 
   const panelH = useEmojiPanelHeight(!!emojiPanel && panel); // fits landscape phones / follows the keyboard
   // edit mode: park the draft, load the message text, put the caret at the end; restore the draft when it ends
@@ -439,7 +451,10 @@ export function ChatComposer({
         {emojiPanel && (
           <button
             type="button"
-            onPointerDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => {
+              warmEmojiPicker();
+              e.preventDefault();
+            }}
             onClick={() => {
               if (panel) {
                 setPanel(false);
@@ -452,6 +467,8 @@ export function ChatComposer({
             aria-label={panel ? "Show keyboard" : "Emoji"}
             aria-expanded={panel}
             data-testid="emoji-toggle"
+            onPointerEnter={warmEmojiPicker}
+            onFocus={warmEmojiPicker}
             className="absolute right-1.5 bottom-1 flex h-[34px] w-[34px] items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
           >
             {panel ? <Keyboard className="h-5 w-5" /> : <Smile className="h-5 w-5" />}

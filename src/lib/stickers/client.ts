@@ -123,6 +123,55 @@ async function fetchPack(id: string) {
     return null;
   }
 }
+
+/** Fetch a small batch at a time so free-pack warmup never competes with visible artwork or the composer. */
+async function preloadPacks(ids: string[], concurrency: number) {
+  let cursor = 0;
+  const unique = [...new Set(ids)];
+  const worker = async () => {
+    while (cursor < unique.length) {
+      const id = unique[cursor++];
+      if (id) await loadPack(id);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, unique.length) }, worker));
+}
+
+function scheduleBackgroundWork(work: () => void) {
+  if (typeof window === "undefined") return;
+  const nav = navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } };
+  // A panel tap still warms its first packs immediately. This background tail is skipped for data-saving/2G users.
+  if (nav.connection?.saveData || /(^|-)2g$/.test(nav.connection?.effectiveType ?? "")) return;
+  const browser = window as Window & { requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number };
+  if (browser.requestIdleCallback) browser.requestIdleCallback(work, { timeout: 1_500 });
+  else window.setTimeout(work, 250);
+}
+
+let stickerPanelWarm: Promise<void> | null = null;
+/**
+ * Telegram-style panel warmup: use the public catalog to fill the first visible packs before a tap completes, then
+ * hydrate the remaining free packs in bounded idle batches. Pack and artwork fetches still share the normal cache.
+ */
+export function warmStickerPanel(): Promise<void> {
+  hydrate();
+  if (stickerPanelWarm) return stickerPanelWarm;
+  stickerPanelWarm = loadCatalog()
+    .then(async () => {
+      const ids = (state.catalog?.packs ?? []).filter((pack) => !pack.priceCents).map((pack) => pack.id);
+      if (!ids.length) {
+        stickerPanelWarm = null;
+        return;
+      }
+      // A two-pack foreground budget gives the opening panel immediate content without a burst of metadata requests.
+      await preloadPacks(ids.slice(0, 2), 2);
+      scheduleBackgroundWork(() => void preloadPacks(ids.slice(2), 3));
+    })
+    .catch(() => {
+      // A later hover/tap can retry after a transient offline failure.
+      stickerPanelWarm = null;
+    });
+  return stickerPanelWarm;
+}
 export const findSticker = (packId: string, stickerId: string): Sticker | null => state.packs[packId]?.stickers.find((s) => s.id === stickerId) ?? null;
 
 let configP: Promise<void> | null = null;

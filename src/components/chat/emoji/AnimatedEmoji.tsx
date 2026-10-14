@@ -142,7 +142,9 @@ export const AnimatedEmoji = memo(function AnimatedEmoji({
     setStage((s) => s + 1);
   }, [step]);
   if (asset === null) return <Glyph emoji={emoji} size={size} className={className} />;
-  if (asset === undefined) return <span className={cn("inline-block shrink-0", className)} style={{ width: size, height: size }} role="img" aria-label={emoji} />;
+  // A remote-source probe or a cache retry must never leave a picker cell empty. The native glyph is the stable
+  // first frame until the self-hosted poster/animation for this stage is ready (or the chain falls back again).
+  if (asset === undefined) return <Glyph emoji={emoji} size={size} className={className} />;
   return asset.type === "webp" ? (
     <WebpEmoji key={stage} asset={asset} emoji={emoji} size={size} mode={mode} replay={replay} className={className} autoPlay={autoPlay} onCycleEnd={onCycleEnd} onBroken={fail} />
   ) : (
@@ -235,17 +237,11 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
       onPointerUp={mode === "hover" ? (e) => e.pointerType !== "mouse" && setHover(false) : undefined}
       onPointerCancel={mode === "hover" ? () => setHover(false) : undefined}
     >
-      {/* poster: always underneath (first frame == resting frame), hidden only once the animation is painting */}
-      {!asset.poster && (
-        // upstream file (no poster): the native glyph is the resting frame
-        <span
-          aria-hidden
-          className={cn("pointer-events-none absolute inset-0 flex items-center justify-center leading-none", animSrc && loaded && "opacity-0")}
-          style={{ fontSize: Math.round(size * 0.82) }}
-        >
-          {emoji}
-        </span>
-      )}
+      {/* The glyph is always painted first. Posters and decoded animation cover it, but a slow/failed fetch never
+          produces an empty cell while the source chain moves to its next cached fallback. */}
+      <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center leading-none" style={{ fontSize: Math.round(size * 0.82) }}>
+        {emoji}
+      </span>
       {asset.poster && posterSrc && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -366,6 +362,10 @@ function LottieEmoji({ asset, emoji, size, mode, replay, className, autoPlay, on
       onPointerUp={mode === "hover" ? (e) => e.pointerType !== "mouse" && setHover(false) : undefined}
       onPointerCancel={mode === "hover" ? () => setHover(false) : undefined}
     >
+      {/* Same permanent first-frame fallback as WebP: keep an emoji visible while lazy poster/Lottie work starts. */}
+      <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center leading-none" style={{ fontSize: Math.round(size * 0.82) }}>
+        {emoji}
+      </span>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={posterSrc ?? undefined}
