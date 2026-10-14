@@ -217,6 +217,16 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   expose();
 }
 
+// iOS wrapper: CallKit activating the AVAudioSession interrupts WebKit audio; the wrapper's audioResumeScript calls
+// this to resume the context and re-play the ring <audio> loop (it only kicks srcObject elements on its own).
+if (typeof window !== "undefined")
+  (window as unknown as { __olRingResume?: () => void }).__olRingResume = () => {
+    if (!cur) return;
+    resumeAudio();
+    const e = primedAudioElement();
+    if (cur.state.path === "element" && e?.paused) void e.play().catch(() => {});
+  };
+
 export function stopTones() {
   const c = cur;
   cur = null;
