@@ -411,6 +411,8 @@ export interface NotifPrefsClient {
   followedRoom: boolean;
   trendingRoom: boolean;
   scheduledRoom: boolean;
+  /** Public rooms you have joined: member joins and the host starting another room. */
+  roomMemberActivity: boolean;
   recentRoom: boolean;
   newFollower: boolean;
   contactJoined: boolean;

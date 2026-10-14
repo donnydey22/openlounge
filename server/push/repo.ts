@@ -30,6 +30,10 @@ export interface PushRepo {
   /** owners that have `hash` (uploaded within the TTL, or kept) */
   ownersOfHash(hash: string): Promise<string[]>;
   purgeExpiredHashes(now?: number): Promise<number>;
+  /** Durable audience for a host's room activity. A participant explicitly joined one of this host's public rooms. */
+  noteRoomMember(hostId: string, userId: string, joinedAt: number): Promise<void>;
+  /** Recent non-host participants, pruning rows older than `since` as part of the lookup. */
+  roomActivityMembers(hostId: string, since: number): Promise<string[]>;
   /** account deletion: device tokens, notification prefs and contact hashes owned by the user */
   deleteUserData(userId: string): Promise<void>;
   close(): Promise<void>;
@@ -39,6 +43,7 @@ export class MemoryPushRepo implements PushRepo {
   tokens = new Map<string, DeviceToken>();
   prefs = new Map<string, NotifPrefs>();
   hashes = new Map<string, { set: Set<string>; at: number; keep?: boolean }>();
+  roomMembers = new Map<string, Map<string, number>>();
   async upsertToken(t: DeviceToken) {
     this.tokens.set(t.token, { ...t });
   }
@@ -75,10 +80,25 @@ export class MemoryPushRepo implements PushRepo {
     for (const [k, v] of this.hashes) if (!v.keep && now - v.at >= UNMATCHED_HASH_TTL_MS) (this.hashes.delete(k), n++);
     return n;
   }
+  async noteRoomMember(hostId: string, userId: string, joinedAt: number) {
+    if (hostId === userId) return;
+    const members = this.roomMembers.get(hostId) ?? new Map<string, number>();
+    members.set(userId, joinedAt);
+    this.roomMembers.set(hostId, members);
+  }
+  async roomActivityMembers(hostId: string, since: number) {
+    const members = this.roomMembers.get(hostId);
+    if (!members) return [];
+    for (const [userId, at] of members) if (at < since) members.delete(userId);
+    if (!members.size) this.roomMembers.delete(hostId);
+    return [...members.keys()];
+  }
   async deleteUserData(userId: string) {
     for (const [k, t] of this.tokens) if (t.userId === userId) this.tokens.delete(k);
     this.prefs.delete(userId);
     this.hashes.delete(userId);
+    this.roomMembers.delete(userId);
+    for (const members of this.roomMembers.values()) members.delete(userId);
   }
   async close() {}
 }
@@ -150,6 +170,20 @@ export class PgPushRepo implements PushRepo {
     const r = await this.pool.query("DELETE FROM contact_hashes WHERE NOT keep AND created_at <= to_timestamp($1::double precision / 1000)", [now - UNMATCHED_HASH_TTL_MS]);
     return r.rowCount ?? 0;
   }
+  async noteRoomMember(hostId: string, userId: string, joinedAt: number) {
+    if (hostId === userId) return;
+    await this.pool.query(
+      `INSERT INTO room_activity_members (host_id, user_id, last_joined_at)
+       VALUES ($1, $2, to_timestamp($3::double precision / 1000))
+       ON CONFLICT (host_id, user_id) DO UPDATE SET last_joined_at = EXCLUDED.last_joined_at`,
+      [hostId, userId, joinedAt],
+    );
+  }
+  async roomActivityMembers(hostId: string, since: number) {
+    await this.pool.query("DELETE FROM room_activity_members WHERE host_id = $1 AND last_joined_at < to_timestamp($2::double precision / 1000)", [hostId, since]);
+    const r = await this.pool.query<{ user_id: string }>("SELECT user_id FROM room_activity_members WHERE host_id = $1 ORDER BY last_joined_at DESC", [hostId]);
+    return r.rows.map((x) => x.user_id);
+  }
   async deleteUserData(userId: string) {
     const c = await this.pool.connect();
     try {
@@ -157,6 +191,7 @@ export class PgPushRepo implements PushRepo {
       await c.query("DELETE FROM device_tokens WHERE user_id = $1", [userId]);
       await c.query("DELETE FROM notification_prefs WHERE user_id = $1", [userId]);
       await c.query("DELETE FROM contact_hashes WHERE owner_id = $1", [userId]);
+      await c.query("DELETE FROM room_activity_members WHERE host_id = $1 OR user_id = $1", [userId]);
       await c.query("COMMIT");
     } catch (e) {
       await c.query("ROLLBACK").catch(() => {});

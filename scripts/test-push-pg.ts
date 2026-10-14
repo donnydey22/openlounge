@@ -13,6 +13,7 @@ async function main() {
   const repo = new PgPushRepo(url);
   const raw = new pg.Pool({ connectionString: url });
   await raw.query("DELETE FROM contact_hashes WHERE owner_id LIKE 'npt_%'");
+  await raw.query("DELETE FROM room_activity_members WHERE host_id LIKE 'npt_%' OR user_id LIKE 'npt_%'");
   await repo.replaceContactHashes("npt_a", ["h1", "h2"], false, false);
   await repo.replaceContactHashes("npt_b", ["h1"], false, true);
   await raw.query("UPDATE contact_hashes SET created_at = now() - interval '25 hours' WHERE owner_id LIKE 'npt_%'");
@@ -27,7 +28,15 @@ async function main() {
   assert.equal((await raw.query("SELECT keep FROM contact_hashes WHERE owner_id = 'npt_a'")).rows[0].keep, false);
   await repo.deleteContactHashes("npt_a");
   await repo.deleteContactHashes("npt_b");
-  console.log("PASSED (pg contact-hash retention)");
+  await repo.noteRoomMember("npt_host", "npt_a", Date.now());
+  await repo.noteRoomMember("npt_host", "npt_b", Date.now());
+  await repo.noteRoomMember("npt_host", "npt_host", Date.now()); // a host is never their own activity audience
+  assert.deepEqual((await repo.roomActivityMembers("npt_host", Date.now() - 1_000)).sort(), ["npt_a", "npt_b"]);
+  await raw.query("UPDATE room_activity_members SET last_joined_at = now() - interval '8 days' WHERE host_id = 'npt_host' AND user_id = 'npt_a'");
+  assert.deepEqual(await repo.roomActivityMembers("npt_host", Date.now() - 7 * 24 * 3600_000), ["npt_b"], "expired activity members are pruned");
+  await repo.deleteUserData("npt_host");
+  assert.deepEqual(await repo.roomActivityMembers("npt_host", 0), [], "account deletion removes the host activity audience");
+  console.log("PASSED (pg contact-hash retention and room activity audience)");
   await raw.end();
   await repo.close();
   process.exit(0);

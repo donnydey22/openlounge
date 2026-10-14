@@ -1407,10 +1407,12 @@ export class Store {
     this.awayTimers.delete(timerKey);
 
     let p = room.participants.get(userId);
+    let newlyJoined = false;
     if (p) {
       if (p.socketId && p.socketId !== socketId) this.events?.kickSocket(p.socketId, roomId, "You joined this room from another tab");
       p.socketId = socketId;
     } else {
+      newlyJoined = true;
       const hostPresent = room.participants.has(room.hostId);
       const becomesHost = room.hostId === userId || !hostPresent;
       if (becomesHost) {
@@ -1443,7 +1445,8 @@ export class Store {
     room.emptySince = null;
     this.events?.roomChanged(roomId);
     this.events?.roomsListChanged();
-    return { ok: true as const };
+    // Reconnects and an additional device reclaim the existing seat; callers use this to avoid re-notifying rooms.
+    return { ok: true as const, newlyJoined };
   }
 
   /** Foreground/background report for a connection; re-broadcasts the room it's seated in when the dot changes. */

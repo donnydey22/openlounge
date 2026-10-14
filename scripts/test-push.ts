@@ -123,13 +123,13 @@ await t("followed user starts a room → followers; quiet hours respected; activ
   await s.tok("b");
   await s.tok("c");
   await s.n.updatePrefs("c", { quietHours: { start: "00:00", end: "23:59", tz: "UTC" } });
-  const r = await s.n.roomStarted("r1", "Morning", "h");
+  const r = await s.n.roomStarted("r1", "Morning", "h", "public");
   assert.equal(r.b, "sent");
   assert.equal(r.c, "skip:quiet");
   // ACTIVE_ROOM_INTERVAL_MS is 0 — back-to-back room starts both notify (join/start caps loosened)
-  const r2 = await s.n.roomStarted("r2", "Another", "a");
+  const r2 = await s.n.roomStarted("r2", "Another", "a", "public");
   assert.equal(r2.b, "sent");
-  assert.equal((await s.n.roomStarted("r3", "Later", "a")).b, "sent");
+  assert.equal((await s.n.roomStarted("r3", "Later", "a", "public")).b, "sent");
   void ACTIVE_ROOM_INTERVAL_MS; // kept exported for callers / docs
 });
 
@@ -139,7 +139,7 @@ await t("room members notified on join; ≥3 followed in room → trending for o
   await s.tok("e");
   await s.tok("h"); // host is a room member
   await s.tok("a");
-  const out = await s.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a", "b", "c"] }, "c");
+  const out = await s.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a", "b", "c"], visibility: "public" }, "c");
   assert.equal(out.h, "sent"); // host (room member) gets the join
   assert.equal(out.a, "sent"); // other member
   assert.equal(out.e, "sent"); // follower outside room
@@ -148,19 +148,70 @@ await t("room members notified on join; ≥3 followed in room → trending for o
   s2.follows.e = ["a"];
   await s2.tok("e");
   await s2.tok("h");
-  await s2.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a"] }, "a");
+  await s2.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a"], visibility: "public" }, "a");
   assert.equal(s2.sender.sent.find((x) => x.tokens[0].userId === "h")?.msg.title.includes("joined"), true);
   assert.equal(s2.sender.sent.find((x) => x.tokens[0].userId === "e")?.msg.type, "followedRoom");
+});
+
+await t("room activity reaches every opted-in seated member even when they do not follow the joiner", async () => {
+  const s = setup();
+  await s.tok("h");
+  await s.n.updatePrefs("h", { followedRoom: false, roomMemberActivity: true });
+  const out = await s.n.roomJoined({ id: "r-activity", title: "Builders", hostId: "h", participantIds: ["h", "a"], visibility: "public" }, "a");
+  assert.equal(out.h, "sent");
+  const sent = s.sender.sent.at(-1)?.msg;
+  assert.equal(sent?.type, "roomMemberActivity");
+  assert.match(sent?.title ?? "", /Ana joined/);
+});
+
+await t("private room activity fails closed and never exposes a title or deep link", async () => {
+  const s = setup();
+  await s.tok("h");
+  assert.deepEqual(
+    await s.n.roomJoined({ id: "secret", title: "Private planning", hostId: "h", participantIds: ["h", "a"], visibility: "private" }, "a"),
+    {},
+  );
+  assert.deepEqual(await s.n.roomStarted("secret", "Private planning", "h", "private"), {});
+  assert.equal(s.sender.sent.length, 0);
+});
+
+await t("recent room members survive notifier recreation and are notified when the host becomes live", async () => {
+  const s = setup();
+  // Bea joins one of Host's public rooms. There is no follower edge in this fixture.
+  await s.n.roomJoined({ id: "r-old", title: "Earlier", hostId: "h", participantIds: ["h", "b"], visibility: "public" }, "b");
+  await s.tok("b");
+  const rebooted = new Notifier((s.n as unknown as { d: ConstructorParameters<typeof Notifier>[0] }).d);
+  const out = await rebooted.roomStarted("r-new", "Now live", "h", "public");
+  assert.equal(out.b, "sent");
+  const sent = s.sender.sent.at(-1)?.msg;
+  assert.equal(sent?.type, "roomMemberActivity");
+  assert.match(sent?.title ?? "", /Host started a room/);
 });
 
 await t("every join can notify (per-joiner dedupe; 10/30 min caps loosened)", async () => {
   const s = setup();
   await s.tok("h");
-  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a"] }, "a")).h, "sent");
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a"], visibility: "public" }, "a")).h, "sent");
   // different joiner → not blocked by old 30-min room-wide dedupe or 10-min throttle
-  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"] }, "b")).h, "sent");
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"], visibility: "public" }, "b")).h, "sent");
   // same joiner again immediately → dedupe (60s floor)
-  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"] }, "b")).h, "skip:dedupe");
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"], visibility: "public" }, "b")).h, "skip:dedupe");
+});
+
+await t("room seats mark only the first entry as newly joined", async () => {
+  const { Store } = await import("../server/store");
+  const store = new Store();
+  const host = store.createAccount("+15555550101", { firstName: "Host", username: "activityhost" });
+  const member = store.createAccount("+15555550102", { firstName: "Member", username: "activitymember" });
+  assert.ok(host.ok && member.ok);
+  if (!host.ok || !member.ok) return;
+  const room = store.createRoom(host.user.id, { title: "Activity test" });
+  assert.ok(room.ok);
+  if (!room.ok) return;
+  assert.equal(store.join(room.roomId, host.user.id, "host-a").newlyJoined, true);
+  assert.equal(store.join(room.roomId, host.user.id, "host-b").newlyJoined, false, "another host device reclaims its seat");
+  assert.equal(store.join(room.roomId, member.user.id, "member-a").newlyJoined, true);
+  assert.equal(store.join(room.roomId, member.user.id, "member-b").newlyJoined, false, "a reconnect does not create a second join event");
 });
 
 await t("hallway presence notifies followers", async () => {
@@ -180,10 +231,10 @@ await t("hallway presence notifies followers", async () => {
 await t("room you were in recently is live again (recentRoom, opt-in)", async () => {
   const s = setup();
   await s.tok("d");
-  await s.n.updatePrefs("d", { recentRoom: true });
-  await s.n.roomJoined({ id: "r1", title: "Old", hostId: "h", participantIds: ["h", "d"] }, "d");
+  await s.n.updatePrefs("d", { recentRoom: true, roomMemberActivity: false });
+  await s.n.roomJoined({ id: "r1", title: "Old", hostId: "h", participantIds: ["h", "d"], visibility: "public" }, "d");
   s.adv(3600_000);
-  assert.equal((await s.n.roomStarted("r2", "New", "h")).d, "sent");
+  assert.equal((await s.n.roomStarted("r2", "New", "h", "public")).d, "sent");
   assert.equal(s.sender.sent.at(-1)?.msg.type, "recentRoom");
 });
 
@@ -334,7 +385,7 @@ await t("live activity: room started / joined → in-app banner while open (no p
   s.follows.c = ["h"];
   for (const u of ["a", "b", "c"]) await s.tok(u);
   s.fg.add("a");
-  const r = await s.n.roomStarted("r1", "Late night jazz", "h");
+  const r = await s.n.roomStarted("r1", "Late night jazz", "h", "public");
   assert.equal(r.a, "in-app");
   assert.equal(r.b, "sent");
   assert.equal(r.c, "skip:blocked");
@@ -343,17 +394,17 @@ await t("live activity: room started / joined → in-app banner while open (no p
   assert.deepEqual([shown[0].uid, shown[0].n.type, shown[0].n.roomId, shown[0].n.actorId], ["a", "followedRoom", "r1", "h"]);
   // active-room 10-min throttle dropped: a join right after a start still notifies (per-joiner dedupe)
   s.adv(60_000);
-  const j = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
+  const j = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"], visibility: "public" }, "h");
   assert.equal(j.a, "in-app");
   assert.equal(shown.at(-1)!.n.actorId, "h");
   // same joiner again within dedupe window → skipped
-  const j2 = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
+  const j2 = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"], visibility: "public" }, "h");
   assert.equal(j2.a, "skip:dedupe");
   // a hidden tab (online, not foreground) gets the in-app copy AND the device push
   s.fg.delete("a");
   s.adv(61_000);
   const before = s.sender.sent.length;
-  const r3 = await s.n.roomStarted("r3", "Morning", "h");
+  const r3 = await s.n.roomStarted("r3", "Morning", "h", "public");
   assert.equal(r3.a, "sent");
   assert.equal(shown.at(-1)!.n.roomId, "r3");
   assert.ok(s.sender.sent.slice(before).some((x) => x.tokens[0].userId === "a"));
