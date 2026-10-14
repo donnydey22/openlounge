@@ -26,6 +26,7 @@ import {
 import {
   APP_SCHEME,
   APP_VERSION,
+  APP_BUILD,
   AUTH_CALLBACK,
   COLORS,
   EDGE_TO_EDGE_TOP,
@@ -96,7 +97,7 @@ function Shell() {
   const [sourceUri, setSourceUri] = useState(START_URL);
   const [kbHeight, setKbHeight] = useState(0);
 
-  const injected = useMemo(() => injectedBeforeContentLoaded(Platform.OS, APP_VERSION, nativeCallsAvailable()), []);
+  const injected = useMemo(() => injectedBeforeContentLoaded(Platform.OS, APP_VERSION, nativeCallsAvailable(), APP_BUILD), []);
 
   // ---- refs read from long-lived listeners ----
   const offlineRef = useRef(false);
@@ -668,7 +669,7 @@ function Shell() {
           keyboardDisplayRequiresUserAction={false}
           hideKeyboardAccessoryView
           decelerationRate="normal"
-          applicationNameForUserAgent={`OpenLoungeiOS/${APP_VERSION} OpenLoungeExpo/${APP_VERSION}`}
+          applicationNameForUserAgent={`OpenLounge/ios/${APP_VERSION}(${APP_BUILD}) OpenLoungeiOS/${APP_VERSION} OpenLoungeExpo/${APP_VERSION}`}
           webviewDebuggingEnabled={__DEV__}
           originWhitelist={['https://*', 'http://*', 'about:*', 'blob:*', 'data:*', `${APP_SCHEME}:*`]}
           onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}

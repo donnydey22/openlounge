@@ -29,6 +29,11 @@ export const APP_HOSTS = new Set([
 ]);
 
 export const APP_VERSION = Constants.expoConfig?.version ?? '0';
+/** Native build number (CFBundleVersion / eas buildNumber). */
+export const APP_BUILD =
+  Constants.nativeBuildVersion ??
+  Constants.expoConfig?.ios?.buildNumber ??
+  '0';
 
 /** Theme colours of the web app (src/lib/theme.ts THEME_COLORS) and the native launch background. */
 export const COLORS = {

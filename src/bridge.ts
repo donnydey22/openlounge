@@ -208,7 +208,7 @@ export function audioResumeScript(reason: string): string {
 }catch(e){}})();true;`;
 }
 
-export function injectedBeforeContentLoaded(platform: string, appVersion: string, nativeCalls = false): string {
+export function injectedBeforeContentLoaded(platform: string, appVersion: string, nativeCalls = false, appBuild = ''): string {
   return `(function(){
   try {
     if (window.OpenLoungeNative && window.OpenLoungeNative.__expo) return;
@@ -257,6 +257,9 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       __expo: true,
       platform: ${JSON.stringify(platform)},
       version: ${JSON.stringify(appVersion)},
+      buildNumber: ${JSON.stringify(appBuild)},
+      getVersion: function () { return ${JSON.stringify(appVersion)}; },
+      getBuildNumber: function () { return ${JSON.stringify(appBuild)}; },
       capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics', 'phoneAuth'${nativeCalls ? ", 'calls'" : ''}]),
       getPlatform: function () { return ${JSON.stringify(platform)}; },
       // the native side sets window.__olExpoPushToken and calls window.__olPushToken(token) when FCM hands one out
