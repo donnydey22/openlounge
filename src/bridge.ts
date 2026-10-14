@@ -89,6 +89,7 @@ export type BridgeRequest =
 
 /** Page → native call messages (NATIVE_SPEC.md §5), sent as plain {type:"call:*"} JSON (no __ol envelope). */
 export type PageCallMessage =
+  | { type: 'call:incoming'; callId: string; name: string; video: boolean; photo?: string; expiresAt?: number }
   | { type: 'call:outgoing'; callId: string; name: string; video: boolean }
   | { type: 'call:connected'; callId: string }
   | { type: 'call:ended'; callId: string }
@@ -101,6 +102,17 @@ function parseCallMessage(m: Record<string, unknown>): BridgeRequest | null {
   const id = typeof m.callId === 'string' && CALL_ID.test(m.callId) ? m.callId : '';
   const wrap = (value: PageCallMessage): BridgeRequest => ({ __ol: 1, method: 'call', value });
   switch (m.type) {
+    case 'call:incoming':
+      return id
+        ? wrap({
+            type: 'call:incoming',
+            callId: id,
+            name: typeof m.name === 'string' ? m.name.slice(0, 80) : '',
+            video: m.video === true,
+            photo: typeof m.photo === 'string' ? m.photo.slice(0, 500) : undefined,
+            expiresAt: typeof m.expiresAt === 'number' ? m.expiresAt : undefined,
+          })
+        : null;
     case 'call:outgoing':
       return id ? wrap({ type: 'call:outgoing', callId: id, name: typeof m.name === 'string' ? m.name.slice(0, 80) : '', video: m.video === true }) : null;
     case 'call:connected':
@@ -204,6 +216,7 @@ export function audioResumeScript(reason: string): string {
   var els=document.querySelectorAll('audio,video');
   for(var j=0;j<els.length;j++){var el=els[j];
     if(el.srcObject&&el.paused&&!el.ended&&!el.muted&&el.autoplay){try{var p=el.play();if(p&&p.catch)p.catch(function(){});n++;}catch(e){}}}
+  if(window.__olRingResume){try{window.__olRingResume();n++;}catch(e){}}
   window.dispatchEvent(new CustomEvent('openlounge:native-audio-resume',{detail:{reason:${JSON.stringify(reason)},kicked:n}}));
 }catch(e){}})();true;`;
 }

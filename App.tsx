@@ -13,7 +13,9 @@ import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTyp
 
 import { LaunchOverlay } from './src/LaunchOverlay';
 import { LockScreen } from './src/LockScreen';
+import { IncomingCallCard } from './src/IncomingCallCard';
 import * as BioLock from './src/biometricLock';
+import { isCallAcceptPath, shouldReportVisible } from './src/lockPolicy';
 import { OfflineScreen } from './src/OfflineScreen';
 import {
   audioResumeScript,
@@ -142,6 +144,25 @@ function Shell() {
   lockRef.current = lock;
   const prompting = useRef(false);
   const backgroundedAt = useRef(0);
+  const [incomingCard, setIncomingCard] = useState<{ callId: string; name: string; video: boolean } | null>(null);
+
+  const unlockForCall = useCallback(() => {
+    setLock('unlocked');
+    setPrivacy(false);
+    setLockActions(false);
+    setLockFailed(false);
+  }, []);
+
+  // Keep the page's presence:visible in sync with App Lock (server sends CallKit/FCM only when not-visible).
+  const reportLockAndVisibility = useCallback(
+    (nextLock: 'checking' | 'locked' | 'unlocked', appActive: boolean) => {
+      const visible = shouldReportVisible(appActive, nextLock);
+      inject(nativeEventScript('openlounge:native-lock', { locked: nextLock !== 'unlocked' }));
+      inject(nativeEventScript('openlounge:native-visibility', { visible }));
+    },
+    [inject],
+  );
+
 
   const promptUnlock = useCallback(async (otherWay: boolean) => {
     if (prompting.current) return;
@@ -181,6 +202,7 @@ function Shell() {
       if (next === 'background') backgroundedAt.current = Date.now();
       if (next !== 'active') {
         if (lockEnabled.current) setPrivacy(true);
+        reportLockAndVisibility(lockRef.current, false);
         return;
       }
       setPrivacy(false);
@@ -189,10 +211,17 @@ function Shell() {
       if (since > 0 && lockRef.current === 'unlocked' && BioLock.shouldLock(lockEnabled.current, since, Date.now())) {
         setLock('locked');
         promptUnlock(false);
+        reportLockAndVisibility('locked', true);
+      } else {
+        reportLockAndVisibility(lockRef.current, true);
       }
     });
     return () => sub.remove();
-  }, [promptUnlock]);
+  }, [promptUnlock, reportLockAndVisibility]);
+
+  useEffect(() => {
+    reportLockAndVisibility(lock, appState.current === 'active');
+  }, [lock, reportLockAndVisibility]);
 
   // ---------------- splash ----------------
   const hideSplash = useCallback(() => {
@@ -304,9 +333,10 @@ function Shell() {
 
   const handleIncomingUrl = useCallback(
     (url: string | null) => {
+    if (url && isCallAcceptPath(url)) unlockForCall();
       if (url) openTarget(resolveIncomingLink(url, currentUrl.current));
     },
-    [openTarget],
+    [openTarget, unlockForCall],
   );
 
   // Google / Apple: ASWebAuthenticationSession, callback openlounge://auth?code=… → /auth/complete in the WebView.
@@ -411,15 +441,22 @@ function Shell() {
   );
   const onCallAction = useCallback(
     (a: CallAction, coldStart: boolean) => {
+      if (a.type === 'audio') {
+        if (!coldStart && everLoaded.current) inject(audioResumeScript(a.reason));
+        return;
+      }
       if (a.type === 'answer') {
+        unlockForCall();
+        setIncomingCard(null);
         navigate(acceptUrl(appOrigin(), a.callId)); // /call/<id>?accept=1: the web layer joins instantly
         return;
       }
+      if (a.type === 'decline' || a.type === 'hangup') setIncomingCard(null);
       if (coldStart || !everLoaded.current) return; // nothing to tell a page that isn't loaded
       const detail = a.type === 'mute' ? { type: 'call:mute', muted: a.muted } : { type: a.type === 'decline' ? 'call:decline' : 'call:hangup' };
       inject(nativeEventScript('openlounge:native-call', detail));
     },
-    [navigate, inject],
+    [navigate, inject, unlockForCall],
   );
   useEffect(() => {
     if (!nativeCallsAvailable()) return;
@@ -454,8 +491,8 @@ function Shell() {
       if (next === 'background') {
         inject(nativeEventScript('openlounge:native-visibility', { visible: false }));
       } else if (next === 'active' && prev !== 'active') {
-        // 'inactive' → 'active' covers phone calls, Siri, Control Center; 'background' → 'active' a real resume.
-        inject(nativeEventScript('openlounge:native-visibility', { visible: true }));
+        // Only report visible when App Lock is not covering the WebView.
+        inject(nativeEventScript('openlounge:native-visibility', { visible: shouldReportVisible(true, lockRef.current) }));
         flushForegroundPush();
         inject(audioResumeScript(prev === 'background' ? 'foreground' : 'interruption'));
         if (offlineRef.current) retryNow();
@@ -531,9 +568,18 @@ function Shell() {
             })
             .catch(() => {});
           return;
-        case 'call':
+        case 'call': {
+          const v = msg.value as { type?: string; callId?: string; name?: string; video?: boolean };
           forwardPageCallMessage(msg.value);
+          if (v?.type === 'call:incoming' && typeof v.callId === 'string' && lockRef.current !== 'unlocked') {
+            // Fallback card above LockScreen if CallKit is delayed / refused; CallKit still gets the page message.
+            setIncomingCard({ callId: v.callId, name: typeof v.name === 'string' ? v.name : 'Incoming call', video: v.video === true });
+          } else if (v?.type === 'call:ended' || v?.type === 'call:connected') {
+            setIncomingCard(null);
+            if (v?.type === 'call:connected') unlockForCall();
+          }
           return;
+        }
         case 'phoneAuthStart':
         case 'phoneAuthConfirm': {
           const v = msg.value;
@@ -713,6 +759,22 @@ function Shell() {
           failed={lockFailed}
           onRetry={() => promptUnlock(false)}
           onOtherWay={() => promptUnlock(true)}
+        />
+      )}
+      {incomingCard && (
+        <IncomingCallCard
+          name={incomingCard.name}
+          video={incomingCard.video}
+          onAccept={() => {
+            const id = incomingCard.callId;
+            unlockForCall();
+            setIncomingCard(null);
+            navigate(acceptUrl(appOrigin(), id));
+          }}
+          onDecline={() => {
+            inject(nativeEventScript('openlounge:native-call', { type: 'call:decline' }));
+            setIncomingCard(null);
+          }}
         />
       )}
     </View>

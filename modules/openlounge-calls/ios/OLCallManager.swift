@@ -433,6 +433,10 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
     configureAudio()
+    // CallKit activating the session (outgoing CXStartCallAction, or answer) interrupts WebKit's AudioContext and
+    // pauses the page's ring <audio>: the web ringback went silent the moment the call was mirrored into CallKit.
+    // Tell JS so it re-runs the page's audio resume (AudioContext + ring element) on the new session.
+    emit(["type": "audio", "reason": "callkit-activate"])
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {}
@@ -445,6 +449,41 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
           let type = m["type"] as? String else { return }
     let callId = (m["callId"] as? String) ?? ""
     switch type {
+    case "call:incoming":
+      // Page got call:incoming over WS while App Lock is up — report CallKit the same way a VoIP push would.
+      guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { return }
+      let video = (m["video"] as? Bool) ?? false
+      var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
+      if name.isEmpty { name = "Open Lounge" }
+      let expires: Date? = {
+        if let ms = m["expiresAt"] as? Double { return Date(timeIntervalSince1970: ms / 1000) }
+        if let ms = m["expiresAt"] as? Int { return Date(timeIntervalSince1970: Double(ms) / 1000) }
+        return Date().addingTimeInterval(45)
+      }()
+      let uuid = UUID()
+      let c = OLCall(callId: callId, uuid: uuid, incoming: true, video: video)
+      c.expiresAt = expires
+      calls[uuid] = c
+      let update = CXCallUpdate()
+      update.remoteHandle = CXHandle(type: .generic, value: name)
+      update.localizedCallerName = name
+      update.hasVideo = video
+      update.supportsHolding = false
+      update.supportsGrouping = false
+      update.supportsUngrouping = false
+      update.supportsDTMF = false
+      provider?.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+        DispatchQueue.main.async {
+          guard let self = self else { return }
+          if let error = error {
+            NSLog("[OLCalls] page incoming CallKit refused: %@", error.localizedDescription)
+            self.calls[uuid] = nil
+            return
+          }
+          self.armRinging(c)
+        }
+      }
+
     case "call:outgoing":
       let video = (m["video"] as? Bool) ?? false
       callVideo = video
