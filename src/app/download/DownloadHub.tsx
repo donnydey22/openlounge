@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
 
 const ANDROID = {
-  file: "/downloads/openlounge-0.3.2.apk",
-  version: "0.3.2 (build 14)",
-  size: "6.9 MB",
-  sha256: "7c9f0490eb01de0d9997602bbcbf4f59eda1e6348fdf826074b727deaec41d12",
+  file: "/downloads/openlounge-0.3.4.apk",
+  version: "0.3.4 (build 16)",
+  size: "7.1 MB",
+  sha256: "f801502ade881635cb4c7cc2d64be908ec93763fd839e9c51b46ae48688a6dfd",
 };
 const TESTFLIGHT = "https://testflight.apple.com/join/A4khvX7x";
 const IOS = {
@@ -89,6 +89,7 @@ export function DownloadHub() {
           >
             Get it on TestFlight
           </a>
+          <p className="mt-3 text-zinc-500">Latest: version 0.3.2 (build 21). The public TestFlight link starts serving build 21 once Apple finishes its beta review.</p>
           <p className="mt-3 text-zinc-400">Install Apple&rsquo;s free TestFlight app first.</p>
         </section>
 
@@ -112,6 +113,7 @@ export function DownloadHub() {
 
         <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-base font-semibold text-zinc-100">iPhone: Direct install (registered devices only)</h2>
+          <p className="text-xs text-zinc-500">Older direct-install build. For the latest (build 21), use TestFlight above.</p>
           <p className="text-zinc-500">Version {IOS.version} · {IOS.size}</p>
           <a
             href={IOS.install}
