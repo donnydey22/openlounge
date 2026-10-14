@@ -1,9 +1,10 @@
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
+import { nativePlatform } from "@/lib/native";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
-import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS } from "./audioPolicy";
-import { applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, mediasoupCameraEncodings } from "./videoPolicy";
+import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS, useRawDirectCallMicrophone } from "./audioPolicy";
+import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
 
@@ -167,7 +168,8 @@ export class MediasoupCallSession {
     // A suspended destination track is silent on iOS 15 and older Android WebViews. Match the LiveKit path: only
     // build the bounded gain/compressor graph after a user gesture has the shared context running; otherwise retain
     // the browser's raw AEC/NS/AGC microphone with no interruption.
-    const context = audioContext();
+    const rawNativeMic = useRawDirectCallMicrophone({ ua: navigator.userAgent, nativePlatform: nativePlatform() });
+    const context = rawNativeMic ? null : audioContext();
     if (context && isAudioContextRunning(context)) {
       const processor = await this.createMicProcessor(context);
       if (processor?.processedTrack) {
@@ -188,8 +190,8 @@ export class MediasoupCallSession {
       return;
     }
     this.producers.set("audio", producer);
-    // The raw track is published again on interruption, then the processed track is restored only after the shared
-    // context is actually running. This prevents the UDP-first path from ever retaining a silent destination track.
+    // Desktop can restore the processed track after an interruption. Native phone calls publish the raw AEC/NS/AGC
+    // microphone throughout, so a stale MediaStreamAudioDestinationNode can never silence a later call.
     context?.addEventListener("statechange", this.onMicAudioState);
     void this.queueMicProcessorSync();
   }
@@ -269,7 +271,10 @@ export class MediasoupCallSession {
     applyCameraQualityHint(track);
     this.camera = track;
     this.opts.onLocalVideo(track);
-    const producer = await this.send.produce({ track, encodings: mediasoupCameraEncodings(tier), appData: { source: "camera" } });
+    // Restore the proven direct producer path: Mediasoup/browser congestion control can use the camera's healthy
+    // native bitrate instead of being pinned to the #41 400 kbps / 24 fps middle layer. Network-tier capture still
+    // requests 360p/24 on constrained links, and LiveKit's adaptive fallback remains unchanged.
+    const producer = await this.send.produce({ track, appData: { source: "camera" } });
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
       track.stop();
@@ -287,6 +292,11 @@ export class MediasoupCallSession {
     this.camera?.stop();
     this.camera = null;
     this.opts.onLocalVideo(null);
+  }
+
+  /** Raises or lowers an already-running desktop capture without renegotiation; native WebViews retain their sensor frame. */
+  async refreshCameraQuality(facing: "user" | "environment", tier: NetworkTier) {
+    return applyCameraCaptureQuality(this.camera, facing, tier);
   }
 
   async flipCamera(facing: "user" | "environment") {

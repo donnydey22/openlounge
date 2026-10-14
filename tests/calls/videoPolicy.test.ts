@@ -14,9 +14,10 @@ import {
   VIDEO_LAYERS_PORTRAIT,
   AUDIO_SPEECH,
   cameraCaptureConstraints,
+  applyCameraCaptureQuality,
   CALL_VIDEO_CONTENT_HINT,
   applyCameraQualityHint,
-  mediasoupCameraEncodings,
+  browserUsesNativeMobileCameraFrame,
   networkTier,
   captureResolution,
 } from "../../src/lib/calls/videoPolicy";
@@ -184,16 +185,25 @@ test("portrait calls request upright 720x1280 camera capture and portrait simulc
   assert.equal(portrait.videoEncoding?.maxBitrate, VIDEO_LAYERS_PORTRAIT.top.maxBitrate);
 });
 
-test("direct UDP producer uses the same bounded smooth-video ladder as LiveKit", () => {
-  assert.deepEqual(mediasoupCameraEncodings("normal"), [
-    { maxBitrate: 1_200_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
-    { maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
-    { maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 4 },
-  ]);
-  assert.deepEqual(mediasoupCameraEncodings("low"), [
-    { maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 1 },
-    { maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 2 },
-  ]);
+test("native wrappers keep the device-selected camera frame rather than requesting a cropped portrait sensor mode", () => {
+  assert.equal(browserUsesNativeMobileCameraFrame({ ua: UA.iosApp, nativePlatform: "ios" }), true);
+  assert.equal(browserUsesNativeMobileCameraFrame({ ua: UA.androidWebView, nativePlatform: "android" }), true);
+  assert.equal(browserUsesNativeMobileCameraFrame({ ua: UA.desktopChrome }), false);
+});
+
+test("desktop capture recovers from the low-network camera preset when bandwidth returns, while native frames stay untouched", async () => {
+  const seen: MediaTrackConstraints[] = [];
+  const desktopTrack = { applyConstraints: async (constraints: MediaTrackConstraints) => { seen.push(constraints); } } as unknown as MediaStreamTrack;
+  assert.equal(await applyCameraCaptureQuality(desktopTrack, "user", "normal", false), true);
+  assert.deepEqual(seen, [{
+    facingMode: { ideal: "user" },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    aspectRatio: { ideal: 16 / 9 },
+    frameRate: { ideal: 30, max: 30 },
+  }]);
+  assert.equal(await applyCameraCaptureQuality(desktopTrack, "user", "low", true), false, "iOS/Android retain the platform-selected camera frame");
+  assert.equal(seen.length, 1);
 });
 
 test("camera tracks prefer motion encoding where the browser supports content hints", () => {
