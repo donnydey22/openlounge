@@ -1,5 +1,5 @@
 import { Hand, Mic, MicOff } from "lucide-react";
-import type { Participant } from "@/lib/types";
+import type { Participant, RoomReaction } from "@/lib/types";
 import { Avatar } from "../Avatar";
 import { firstName } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -13,8 +13,9 @@ export function ParticipantTile({
   onClick,
   level = 0,
   onPodium = false,
-  floatingEmoji,
+  floatingReactions = [],
   onToggleMute,
+  onReact,
 }: {
   p: Participant;
   isHost: boolean;
@@ -25,10 +26,12 @@ export function ParticipantTile({
   /** 0–1 audio level for glow */
   level?: number;
   onPodium?: boolean;
-  /** ephemeral reaction emoji floating above this tile */
-  floatingEmoji?: string | null;
+  /** Ephemeral reactions emitted from this participant's speaking ring. */
+  floatingReactions?: RoomReaction[];
   /** Own stage tile: tapping the mic badge mutes/unmutes (Clubhouse-style) */
   onToggleMute?: () => void;
+  /** Own tile: tapping the speaking-ring hit target opens the rapid reaction tray. */
+  onReact?: () => void;
 }) {
   const onStage = p.role !== "listener";
   const selfMic = onStage && !!onToggleMute;
@@ -55,6 +58,18 @@ export function ParticipantTile({
             onPodium={onPodium && onStage}
           />
         </button>
+        {isMe && onReact && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onReact();
+            }}
+            className="absolute -inset-2 z-[2] rounded-[46%] outline-none focus-visible:ring-2 focus-visible:ring-sky-400/90"
+            aria-label="Open rapid room reactions from your speaking ring"
+            title="React"
+          />
+        )}
         {selfMic && (
           <button
             onClick={(e) => {
@@ -77,11 +92,16 @@ export function ParticipantTile({
             <Hand className="h-3.5 w-3.5 text-ink" />
           </span>
         )}
-        {floatingEmoji && (
-          <span className="reaction-float pointer-events-none absolute -top-2 left-1/2 z-[4] -translate-x-1/2 text-2xl" aria-hidden>
-            {floatingEmoji}
+        {floatingReactions.map((reaction, index) => (
+          <span
+            key={reaction.id}
+            className="reaction-float pointer-events-none absolute -top-2 z-[4] -translate-x-1/2 text-2xl"
+            style={{ left: `calc(50% + ${(index - (floatingReactions.length - 1) / 2) * 13}px)`, animationDelay: `${index * 45}ms` }}
+            aria-hidden
+          >
+            {reaction.emoji}
           </span>
-        )}
+        ))}
         {onPodium && onStage && (
           <span className="absolute -top-1 left-1/2 z-[3] -translate-x-1/2 rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-ink shadow">
             Podium

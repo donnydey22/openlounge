@@ -3,7 +3,7 @@ import type { RealtimeClient } from "@/lib/realtime";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
 import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS } from "./audioPolicy";
-import { cameraCaptureConstraints } from "./videoPolicy";
+import { applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, mediasoupCameraEncodings } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
 
@@ -259,15 +259,17 @@ export class MediasoupCallSession {
 
   async enableCamera(facing: "user" | "environment", generation?: number) {
     if (!this.send || this.camera) return this.camera;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: cameraCaptureConstraints(facing) });
+    const tier = browserNetworkTier();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: cameraCaptureConstraints(facing, tier) });
     const track = stream.getVideoTracks()[0];
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return null;
     }
+    applyCameraQualityHint(track);
     this.camera = track;
     this.opts.onLocalVideo(track);
-    const producer = await this.send.produce({ track, appData: { source: "camera" } });
+    const producer = await this.send.produce({ track, encodings: mediasoupCameraEncodings(tier), appData: { source: "camera" } });
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
       track.stop();
@@ -297,6 +299,7 @@ export class MediasoupCallSession {
       for (const candidate of stream.getTracks()) candidate.stop();
       throw new Error("Camera unavailable");
     }
+    applyCameraQualityHint(next);
     try {
       await producer.replaceTrack({ track: next });
     } catch (error) {

@@ -1,4 +1,4 @@
-import { cameraCaptureConstraints } from "./videoPolicy";
+import { applyCameraQualityHint, cameraCaptureConstraints } from "./videoPolicy";
 
 export type CameraFacing = "user" | "environment";
 
@@ -22,7 +22,10 @@ export type CameraCapture = (constraints: MediaStreamConstraints) => Promise<Vid
 export async function captureCameraForFlip(facing: CameraFacing, capture: CameraCapture = (constraints) => navigator.mediaDevices.getUserMedia(constraints)) {
   const stream = await capture({ audio: false, video: cameraCaptureConstraints(facing) });
   const track = stream.getVideoTracks()[0];
-  if (track) return track;
+  if (track) {
+    applyCameraQualityHint(track);
+    return track;
+  }
   for (const candidate of stream.getTracks()) candidate.stop();
   throw new Error("Camera unavailable");
 }

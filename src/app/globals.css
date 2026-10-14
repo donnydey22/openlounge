@@ -103,6 +103,11 @@ body {
   /* vertical pans only: no horizontal drag/drift, no double-tap zoom delay */
   touch-action: pan-y pinch-zoom;
 }
+/* A joined drop-in room is intentionally route-persistent. Reserve space for its return/leave bar
+   whenever the user browses elsewhere, so page controls and composers stay tappable above it. */
+html[data-live-room-bar] .app-shell {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+}
 /* full-screen overlays (room drawers): exactly the visible area, above the keyboard */
 .ol-vv-fixed {
   top: var(--ol-vv-top, 0px);
