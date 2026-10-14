@@ -93,6 +93,12 @@ export const StickerView = memo(function StickerView({
   };
   const anim = useRef<LottieAnim | null>(null);
   const counted = useRef(false);
+  const slotGeneration = useRef(0);
+  const releaseSlot = () => {
+    if (!counted.current) return;
+    counted.current = false;
+    playing = Math.max(0, playing - 1);
+  };
 
   useEffect(() => {
     const el = box.current;
@@ -102,18 +108,22 @@ export const StickerView = memo(function StickerView({
 
   const isLottie = sticker.format === "lottie";
   useEffect(() => {
-    if (!isLottie || !animate) return;
+    const generation = ++slotGeneration.current;
+    if (!isLottie || !animate) {
+      anim.current?.pause();
+      releaseSlot();
+      return;
+    }
     if (!visible) {
       anim.current?.pause();
-      if (counted.current) {
-        counted.current = false;
-        playing--;
-      }
+      releaseSlot();
       return;
     }
     if (playing >= budget()) return;
-    playing++;
-    counted.current = true;
+    if (!counted.current) {
+      playing++;
+      counted.current = true;
+    }
     if (anim.current) {
       anim.current.play();
       return;
@@ -121,7 +131,10 @@ export const StickerView = memo(function StickerView({
     let cancelled = false;
     Promise.all([loadLottie(), loadData(fileUrl(sticker.file))])
       .then(([lottie, data]) => {
-        if (cancelled || !holder.current) return;
+        if (cancelled || !holder.current) {
+          if (slotGeneration.current === generation) releaseSlot();
+          return;
+        }
         const a = lottie.loadAnimation({
           container: holder.current,
           renderer: "canvas",
@@ -134,7 +147,9 @@ export const StickerView = memo(function StickerView({
         anim.current = a;
       })
       .catch(() => {
-        /* poster stays */
+        // A failed/cancelled JSON load must give its slot back; otherwise a few failures can permanently exhaust
+        // the global animation budget and make later on-screen stickers look slow or inert.
+        if (slotGeneration.current === generation) releaseSlot();
       });
     return () => {
       cancelled = true;
@@ -143,10 +158,10 @@ export const StickerView = memo(function StickerView({
 
   useEffect(
     () => () => {
+      slotGeneration.current++;
       anim.current?.destroy();
       anim.current = null;
-      if (counted.current) playing--;
-      counted.current = false;
+      releaseSlot();
     },
     [],
   );

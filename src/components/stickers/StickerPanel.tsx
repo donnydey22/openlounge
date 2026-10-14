@@ -33,6 +33,9 @@ export function StickerPanel({ onPick, onClose }: { onPick: Pick; onClose: () =>
   const [storeOpen, setStoreOpen] = useState(false);
   const [active, setActive] = useState<string>("recent");
   const scroller = useRef<HTMLDivElement>(null);
+  const activeRef = useRef(active);
+  const scrollFrame = useRef<number | null>(null);
+  activeRef.current = active;
 
   useEffect(() => {
     void loadCatalog();
@@ -55,13 +58,24 @@ export function StickerPanel({ onPick, onClose }: { onPick: Pick; onClose: () =>
   useEffect(() => {
     const n = q.trim();
     if (!n) return setResults(null);
+    let alive = true;
     const t = setTimeout(() => {
       api<{ results: { packId: string; sticker: Sticker }[] }>(`/search?q=${encodeURIComponent(n)}`, { auth: false })
-        .then((r) => setResults(r.results))
-        .catch(() => setResults([]));
+        .then((r) => alive && setResults(r.results))
+        .catch(() => alive && setResults([]));
     }, 150);
-    return () => clearTimeout(t);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
   }, [q]);
+
+  useEffect(
+    () => () => {
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    },
+    [],
+  );
 
   const resolve = useCallback((refs: { packId: string; stickerId: string }[]) => refs.map((r) => ({ packId: r.packId, sticker: packs[r.packId]?.stickers.find((s) => s.id === r.stickerId) })).filter((x): x is { packId: string; sticker: Sticker } => !!x.sticker), [packs]);
   const recents = useMemo(() => resolve(mine?.recents ?? []).slice(0, 16), [mine?.recents, resolve]);
@@ -86,18 +100,26 @@ export function StickerPanel({ onPick, onClose }: { onPick: Pick; onClose: () =>
   }, [onClose, preview]);
 
   const jump = (id: string) => {
+    activeRef.current = id;
     setActive(id);
     const el = scroller.current?.querySelector<HTMLElement>(`[data-section="${id}"]`);
     if (el && scroller.current) scroller.current.scrollTo({ top: el.offsetTop - 4, behavior: "smooth" });
   };
-  // keep the active tab in sync while scrolling
+  // Keep the active tab in sync while scrolling without doing layout reads and React state work for every scroll event.
   const onScroll = () => {
-    const sc = scroller.current;
-    if (!sc) return;
-    const secs = sc.querySelectorAll<HTMLElement>("[data-section]");
-    let cur = active;
-    for (const s of secs) if (s.offsetTop - sc.scrollTop <= 24) cur = s.dataset.section!;
-    if (cur !== active) setActive(cur);
+    if (scrollFrame.current !== null) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const sc = scroller.current;
+      if (!sc) return;
+      const secs = sc.querySelectorAll<HTMLElement>("[data-section]");
+      let cur = activeRef.current;
+      for (const s of secs) if (s.offsetTop - sc.scrollTop <= 24) cur = s.dataset.section!;
+      if (cur !== activeRef.current) {
+        activeRef.current = cur;
+        setActive(cur);
+      }
+    });
   };
 
   return (
@@ -153,7 +175,7 @@ export function StickerPanel({ onPick, onClose }: { onPick: Pick; onClose: () =>
               const p = packs[id];
               return (
                 <Section key={id} id={id} title={p?.title ?? "…"} action={featured ? <button type="button" onClick={() => setSheetPack(id)} className="rounded-full px-2 py-0.5 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-500/10">Add</button> : undefined}>
-                  {p ? <Grid items={p.stickers.map((s) => ({ packId: id, sticker: s }))} onSend={send} onPreview={setPreview} /> : <div style={{ height: CELL * 2 }} />}
+                  {p ? <PackGrid packId={id} stickers={p.stickers} onSend={send} onPreview={setPreview} /> : <div style={{ height: CELL * 2 }} />}
                 </Section>
               );
             })}
@@ -218,7 +240,14 @@ const Grid = memo(function Grid({ items, onSend, onPreview }: { items: { packId:
   );
 });
 
-function Cell({ item, onSend, onPreview }: { item: { packId: string; sticker: Sticker }; onSend: Pick; onPreview: (x: { packId: string; sticker: Sticker }) => void }) {
+const PackGrid = memo(function PackGrid({ packId, stickers, onSend, onPreview }: { packId: string; stickers: Sticker[]; onSend: Pick; onPreview: (x: { packId: string; sticker: Sticker }) => void }) {
+  // The parent changes its active tab as the panel scrolls. Derive items here so a tab highlight cannot recreate and
+  // rerender every sticker cell in every already-loaded pack.
+  const items = useMemo(() => stickers.map((sticker) => ({ packId, sticker })), [packId, stickers]);
+  return <Grid items={items} onSend={onSend} onPreview={onPreview} />;
+});
+
+const Cell = memo(function Cell({ item, onSend, onPreview }: { item: { packId: string; sticker: Sticker }; onSend: Pick; onPreview: (x: { packId: string; sticker: Sticker }) => void }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const long = useRef(false);
   const clear = () => {
@@ -258,7 +287,7 @@ function Cell({ item, onSend, onPreview }: { item: { packId: string; sticker: St
       <StickerView sticker={item.sticker} size={60} still />
     </button>
   );
-}
+});
 
 function Preview({ item, onClose, onSend, onOpenPack }: { item: { packId: string; sticker: Sticker }; onClose: () => void; onSend: Pick; onOpenPack: (id: string) => void }) {
   const mine = useStickers((s) => s.mine);

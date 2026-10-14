@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Sticker as StickerIcon } from "lucide-react";
 import { StickerPanel } from "./StickerPanel";
 import { stickerText } from "@/lib/stickers/token";
-import { loadCatalog } from "@/lib/stickers/client";
+import { warmStickerPanel } from "@/lib/stickers/client";
 import type { Sticker } from "@/lib/stickers/types";
 import { cn } from "@/lib/utils";
 
@@ -14,8 +14,15 @@ export function StickerButton({ onSend, disabled, compact }: { onSend: (text: st
   const root = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  // prefetch the catalog on hover/focus so the panel opens filled
-  const warm = () => void loadCatalog();
+  // Desktop hover/focus and touch pointer-down both begin warming before the panel can paint.
+  const warm = useCallback(() => void warmStickerPanel(), []);
+
+  useEffect(() => {
+    if (disabled) return;
+    // Most people open the composer before they decide to send a sticker. A quiet warmup makes that first tap fast.
+    const timer = window.setTimeout(warm, 1_200);
+    return () => window.clearTimeout(timer);
+  }, [disabled, warm]);
 
   useEffect(() => {
     if (!open) return;
@@ -42,8 +49,10 @@ export function StickerButton({ onSend, disabled, compact }: { onSend: (text: st
         type="button"
         disabled={disabled}
         onPointerEnter={warm}
+        onPointerDown={warm}
         onFocus={warm}
         onClick={() => {
+          warm();
           setOpen((o) => !o);
           // Telegram-like: the panel replaces the keyboard
           (document.activeElement as HTMLElement | null)?.blur?.();
