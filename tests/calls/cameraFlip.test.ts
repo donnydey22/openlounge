@@ -28,7 +28,16 @@ test("camera flip acquires the requested lens before replacing the active source
     },
   };
   const result = await replaceCameraForFlip(current, "environment", async (constraints) => {
-    assert.deepEqual(constraints, { audio: false, video: { facingMode: "environment" } });
+    assert.deepEqual(constraints, {
+      audio: false,
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        aspectRatio: { ideal: 16 / 9 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+    });
     assert.equal(old.stopped, 0, "the active front camera remains live while the back camera is acquired");
     return { getVideoTracks: () => [next], getTracks: () => [next] };
   });
@@ -109,6 +118,62 @@ test("Mediasoup flip keeps the current camera when its producer rejects the repl
     assert.equal(internal.camera, old, "the current local camera is not cleared on a failed flip");
     assert.equal(old.stopped, 0, "the caller keeps their existing self-view");
     assert.equal(next.stopped, 1, "the failed replacement capture is released");
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+  }
+});
+
+test("Mediasoup camera enable and flip use the shared orientation-aware capture policy", async () => {
+  const front = videoTrack("front");
+  const back = videoTrack("back");
+  const seen: MediaStreamConstraints[] = [];
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async (constraints: MediaStreamConstraints) => {
+          seen.push(constraints);
+          const next = seen.length === 1 ? front : back;
+          return { getVideoTracks: () => [next], getTracks: () => [next] };
+        },
+      },
+    },
+  });
+  try {
+    const session = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, { provider: "mediasoup", url: "broker", token: "t", callId: "call" } as any, {
+      onRemoteTrack() {},
+      onState() {},
+      onLocalVideo() {},
+    });
+    const internal = session as any;
+    internal.send = {
+      produce: async () => ({ close() {}, replaceTrack: async () => {} }),
+    };
+    await session.enableCamera("user");
+    await session.flipCamera("environment");
+    assert.deepEqual(seen, [
+      {
+        video: {
+          facingMode: { ideal: "user" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          aspectRatio: { ideal: 16 / 9 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+      },
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          aspectRatio: { ideal: 16 / 9 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+      },
+    ]);
+    assert.equal(front.stopped, 1, "the replaced first capture is released after a successful flip");
   } finally {
     if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
     else Reflect.deleteProperty(globalThis, "navigator");

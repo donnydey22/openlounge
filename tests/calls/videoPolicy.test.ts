@@ -11,7 +11,9 @@ import {
   publishDefaults,
   publishCamera,
   VIDEO_LAYERS,
+  VIDEO_LAYERS_PORTRAIT,
   AUDIO_SPEECH,
+  cameraCaptureConstraints,
 } from "../../src/lib/calls/videoPolicy";
 
 const UA = {
@@ -148,8 +150,8 @@ test("network tier: Data Saver, 2g/3g, slow downlink â†’ low; 4g / missing API â
   assert.equal(networkTier(null, "low"), "low");
 });
 test("low tier caps capture at 360p and publishes 360p/400k top + one 180p layer; normal unchanged", () => {
-  assert.deepEqual(captureResolution("low"), { width: 640, height: 360, frameRate: 24 });
-  assert.equal(captureResolution("normal").height, 720);
+  assert.deepEqual(captureResolution("low", "landscape"), { width: 640, height: 360, frameRate: 24, aspectRatio: 16 / 9 });
+  assert.equal(captureResolution("normal", "landscape").height, 720);
   const lo = cameraPublishOptions({ VideoPreset }, { codec: "vp8", backup: false }, "low");
   assert.equal(lo.simulcast, true);
   assert.equal(lo.videoEncoding?.maxBitrate, VIDEO_LAYERS.mid.maxBitrate);
@@ -159,4 +161,21 @@ test("low tier caps capture at 360p and publishes 360p/400k top + one 180p layer
   const hi = cameraPublishOptions({ VideoPreset }, { codec: "h264", backup: "vp8" });
   assert.equal(hi.videoEncoding?.maxBitrate, VIDEO_LAYERS.top.maxBitrate);
   assert.equal(hi.videoSimulcastLayers?.length, 2);
+});
+
+test("portrait calls request upright 720x1280 camera capture and portrait simulcast presets", () => {
+  assert.deepEqual(captureResolution("normal", "portrait"), { width: 720, height: 1280, frameRate: 30, aspectRatio: 9 / 16 });
+  assert.deepEqual(captureResolution("low", "portrait"), { width: 360, height: 640, frameRate: 24, aspectRatio: 9 / 16 });
+  assert.deepEqual(cameraCaptureConstraints("environment", "normal", "portrait"), {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 720 },
+    height: { ideal: 1280 },
+    aspectRatio: { ideal: 9 / 16 },
+    frameRate: { ideal: 30, max: 30 },
+  });
+  const portrait = cameraPublishOptions({ VideoPreset }, { codec: "vp8", backup: false }, "normal", "portrait");
+  const [low, mid] = portrait.videoSimulcastLayers!;
+  assert.deepEqual([low.width, low.height], [VIDEO_LAYERS_PORTRAIT.low.width, VIDEO_LAYERS_PORTRAIT.low.height]);
+  assert.deepEqual([mid.width, mid.height], [VIDEO_LAYERS_PORTRAIT.mid.width, VIDEO_LAYERS_PORTRAIT.mid.height]);
+  assert.equal(portrait.videoEncoding?.maxBitrate, VIDEO_LAYERS_PORTRAIT.top.maxBitrate);
 });

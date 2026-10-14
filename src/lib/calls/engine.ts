@@ -569,6 +569,7 @@ export class CallEngine {
         return null;
       }
       this.camTrack = t;
+      this.logCameraTrack(t.mediaStreamTrack, "livekit-capture");
       if (this.videoEls.local) t.attach(this.videoEls.local);
       this.set({ camOn: true });
       return t;
@@ -726,6 +727,7 @@ export class CallEngine {
 
   private setMediasoupLocalVideo(track: MediaStreamTrack | null) {
     this.mediasoupLocalVideo = track;
+    if (track) this.logCameraTrack(track, "mediasoup-capture");
     this.attachRawVideo(this.videoEls.local, track);
   }
 
@@ -883,6 +885,23 @@ export class CallEngine {
       (w.__olCallNet ??= []).push({ ev, t: Date.now(), ...extra });
     } catch {
       /* ignore */
+    }
+  }
+
+  /** Debug-only in-memory trace for verifying portrait capture without recording media or device identifiers. */
+  private logCameraTrack(track: MediaStreamTrack, source: string) {
+    try {
+      const settings = track.getSettings?.();
+      const width = settings?.width;
+      const height = settings?.height;
+      this.netLog("camera-track", {
+        source,
+        width,
+        height,
+        aspectRatio: typeof width === "number" && typeof height === "number" && height > 0 ? Number((width / height).toFixed(4)) : undefined,
+      });
+    } catch {
+      this.netLog("camera-track", { source });
     }
   }
 
@@ -1203,7 +1222,8 @@ export class CallEngine {
         // Do not call LocalVideoTrack.restartTrack(): it stops and detaches the active camera before requesting the
         // other lens. Pre-acquiring and replacing keeps the existing self-preview / publication live on an iOS or
         // Android capture failure.
-        await flipCameraTrack(t, facing);
+        const next = await flipCameraTrack(t, facing);
+        this.logCameraTrack(next, "livekit-flip");
       }
       this.set({ facing });
     } catch {

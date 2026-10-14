@@ -3,6 +3,7 @@ import type { RealtimeClient } from "@/lib/realtime";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
 import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS } from "./audioPolicy";
+import { cameraCaptureConstraints } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
 
@@ -258,7 +259,7 @@ export class MediasoupCallSession {
 
   async enableCamera(facing: "user" | "environment", generation?: number) {
     if (!this.send || this.camera) return this.camera;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: cameraCaptureConstraints(facing) });
     const track = stream.getVideoTracks()[0];
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
@@ -290,7 +291,7 @@ export class MediasoupCallSession {
     if (!this.camera) return this.enableCamera(facing);
     const producer = this.producers.get("video") as { replaceTrack?: (input: { track: MediaStreamTrack }) => Promise<void> } | undefined;
     if (!producer?.replaceTrack) throw new Error("Camera producer unavailable");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: cameraCaptureConstraints(facing) });
     const next = stream.getVideoTracks()[0];
     if (!next) {
       for (const candidate of stream.getTracks()) candidate.stop();

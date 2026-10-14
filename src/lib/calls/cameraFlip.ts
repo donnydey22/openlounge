@@ -1,3 +1,5 @@
+import { cameraCaptureConstraints } from "./videoPolicy";
+
 export type CameraFacing = "user" | "environment";
 
 type VideoStreamLike = {
@@ -18,7 +20,7 @@ export type CameraCapture = (constraints: MediaStreamConstraints) => Promise<Vid
  * requested lens is unavailable.
  */
 export async function captureCameraForFlip(facing: CameraFacing, capture: CameraCapture = (constraints) => navigator.mediaDevices.getUserMedia(constraints)) {
-  const stream = await capture({ audio: false, video: { facingMode: facing } });
+  const stream = await capture({ audio: false, video: cameraCaptureConstraints(facing) });
   const track = stream.getVideoTracks()[0];
   if (track) return track;
   for (const candidate of stream.getTracks()) candidate.stop();
