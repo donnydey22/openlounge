@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, Volume2, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
+import { holdFrames, videoFit } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import css from "./calls.module.css";
@@ -83,14 +84,15 @@ function Background({ s }: { s: CallSnapshot }) {
 function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
-  const fill = useRef<HTMLVideoElement>(null);
+  const hold = useRef<HTMLCanvasElement>(null);
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
   const [corner, setCorner] = useState<"tl" | "tr" | "bl" | "br">("tr");
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
   const start = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   useEffect(() => {
     const el = vid.current;
-    callEngine.attachVideo(which, [el, fill.current].filter((candidate): candidate is HTMLVideoElement => candidate !== null));
+    callEngine.attachVideo(which, el);
+    const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
     const syncAspect = () => {
       const width = el?.videoWidth ?? 0;
       const height = el?.videoHeight ?? 0;
@@ -105,6 +107,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
       el?.removeEventListener("loadedmetadata", syncAspect);
       el?.removeEventListener("resize", syncAspect);
       window.removeEventListener("resize", syncAspect);
+      release();
       callEngine.attachVideo(which, null);
     };
   }, [which]);
@@ -184,23 +187,39 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={fill} autoPlay playsInline muted aria-hidden className="pointer-events-none absolute -inset-4 h-[calc(100%+2rem)] w-[calc(100%+2rem)] scale-110 object-cover opacity-60 blur-xl" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
-      <video ref={vid} autoPlay playsInline muted className="relative z-[1] h-full w-full object-contain" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
+      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn("relative z-[1] h-full w-full object-contain", css.callVideo)} style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} data-testid={`call-pip-video-${which}`} />
+      <canvas ref={hold} aria-hidden className={cn("pointer-events-none absolute inset-0 z-[2] h-full w-full object-contain", css.holdFrame)} style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} data-testid={`call-pip-hold-${which}`} />
     </div>
   );
 }
 
 function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: boolean }) {
   const vid = useRef<HTMLVideoElement>(null);
-  const fill = useRef<HTMLVideoElement>(null);
+  const hold = useRef<HTMLCanvasElement>(null);
+  const [fit, setFit] = useState<"cover" | "contain">("cover");
   useEffect(() => {
-    callEngine.attachVideo(which, [vid.current, fill.current].filter((candidate): candidate is HTMLVideoElement => candidate !== null));
-    return () => callEngine.attachVideo(which, null);
+    const el = vid.current;
+    callEngine.attachVideo(which, el);
+    const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
+    const sync = () => el && setFit(videoFit(el.videoWidth, el.videoHeight, window.innerWidth, window.innerHeight));
+    el?.addEventListener("loadedmetadata", sync);
+    el?.addEventListener("resize", sync);
+    window.addEventListener("resize", sync);
+    sync();
+    return () => {
+      el?.removeEventListener("loadedmetadata", sync);
+      el?.removeEventListener("resize", sync);
+      window.removeEventListener("resize", sync);
+      release();
+      callEngine.attachVideo(which, null);
+    };
   }, [which]);
+  // #50: one full-viewport stage, video edge to edge (object-fit: cover), no blurred/gradient filler behind it.
+  const flip = mirrored ? "-scale-x-100" : undefined;
   return (
-    <div className="absolute inset-0 overflow-hidden bg-zinc-950">
-      <video ref={fill} autoPlay playsInline muted aria-hidden className={cn("pointer-events-none absolute -inset-8 h-[calc(100%+4rem)] w-[calc(100%+4rem)] scale-110 object-cover opacity-65 blur-3xl", mirrored && "-scale-x-100")} data-testid={`call-video-${which}-fill`} />
-      <video ref={vid} autoPlay playsInline muted className={cn("relative z-[1] h-full w-full object-contain", mirrored && "-scale-x-100")} data-testid={`call-video-${which}`} />
+    <div className={css.videoStage} data-testid="call-video-stage" data-fit={fit}>
+      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ objectFit: fit }} data-testid={`call-video-${which}`} />
+      <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} style={{ objectFit: fit }} data-testid={`call-hold-${which}`} />
     </div>
   );
 }

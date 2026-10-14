@@ -5,6 +5,7 @@
 // loads the LiveKit client, pre-opens the signalling connection (prepareConnection) and, if mic permission is
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
+import { swapVideoTrack } from "./frameHold";
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
@@ -306,7 +307,7 @@ export class CallEngine {
     };
     this.set({ ...initial(), call: optimistic, role: "caller", ui: "outgoing", camOn: video, v: this.s.v + 1 });
     // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
-    playRingback({ video, untilMs: optimistic.expiresAt + 2000 });
+    playRingback({ video, untilMs: ringUntil(optimistic) });
     void loadLK().catch(() => {});
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip
     this.preMic = this.acquireMic();
@@ -325,7 +326,7 @@ export class CallEngine {
       return { ok: false, error: r.error };
     }
     if (this.s.ui !== "outgoing") return { ok: true }; // hung up while the request was in flight
-    if (ringing() !== "outgoing") playRingback({ video, untilMs: r.call.expiresAt + 2000 });
+    if (ringing() !== "outgoing") playRingback({ video, untilMs: ringUntil(r.call) });
     this.media = r.media ?? null;
     this.set({ call: r.call });
     if (!this.media) {
@@ -350,7 +351,7 @@ export class CallEngine {
     this.metricSent = false;
     this.set({ ...initial(), call, role: "callee", ui: "incoming", v: this.s.v + 1 });
     void this.req("call:ack", { callId: call.id }).catch(() => {});
-    playRingtone({ video: call.video, untilMs: call.expiresAt + 2000 });
+    playRingtone({ video: call.video, untilMs: ringUntil(call) });
     mark("ring");
     // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
     // a UDP transport before the user consents to answer.
@@ -433,7 +434,7 @@ export class CallEngine {
     const role = this.s.role;
     if (call.phase === "ringing" && role === "caller" && this.s.ui === "outgoing") {
       this.set({ call });
-      if (ringing() !== "outgoing") playRingback({ video: call.video, untilMs: call.expiresAt + 2000 }); // already ringing since the tap
+      if (ringing() !== "outgoing") playRingback({ video: call.video, untilMs: ringUntil(call) }); // already ringing since the tap
       return;
     }
     if (call.phase === "active") {
@@ -749,10 +750,9 @@ export class CallEngine {
   }
 
   private attachRawVideo(els: readonly HTMLVideoElement[], track: MediaStreamTrack | null) {
-    for (const el of els) {
-      el.srcObject = track ? new MediaStream([track]) : null;
-      if (track) void el.play().catch(() => {});
-    }
+    // #49: never clear or replace srcObject mid-call: swap the video track inside the same MediaStream so the
+    // element keeps its last frame (frameHold.ts covers the gap) and resumes without a poster/blank flash.
+    for (const el of els) swapVideoTrack(el, track);
   }
 
   private onMediasoupState(state: "connected" | "disconnected" | "failed") {
@@ -1306,7 +1306,7 @@ export class CallEngine {
     this.set({ needsGesture: this.room ? !this.room.canPlaybackAudio : false });
   }
 
-  /** Video elements from the UI: native-aspect foreground plus its blurred duplicate fill. */
+  /** Video elements from the UI (one per surface; the last-frame hold canvas lives in the component). */
   attachVideo(which: "local" | "remote", elements: HTMLVideoElement | readonly HTMLVideoElement[] | null) {
     const prev = this.videoEls[which];
     const next = (Array.isArray(elements) ? elements : elements ? [elements] : []).filter((el, index, all) => all.indexOf(el) === index);
@@ -1330,6 +1330,17 @@ async function micPermission(): Promise<"granted" | "denied" | "prompt" | "unkno
   } catch {
     return "unknown"; // Firefox / old Safari: don't pre-acquire (it would prompt before Accept)
   }
+}
+
+/**
+ * Local deadline for the ring sound. The server's ring window is expiresAt - createdAt (both server clock), so it is
+ * applied from now on this device: comparing the server's absolute expiresAt with Date.now() cut the ring short (down
+ * to the 3 s floor) whenever the phone's clock ran ahead of the server. The real stop is the ring state ending
+ * (answer / decline / cancel / server timeout → stopTones); this is only the safety net, 2 s past the window.
+ */
+export function ringUntil(call: Pick<CallInfo, "createdAt" | "expiresAt">, now = Date.now()): number {
+  const windowMs = call.expiresAt - call.createdAt;
+  return now + (windowMs > 0 && windowMs < 120_000 ? windowMs : 45_000) + 2000;
 }
 
 export const fmt = (s: number) => {
