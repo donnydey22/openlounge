@@ -68,6 +68,8 @@ export interface CallDeps {
     cancel(calleeId: string, callId: string, reason: string): void;
   };
   now?(): number;
+  /** number of live sockets for a user (ring-delivery diagnostics only) */
+  connCount?(userId: string): number;
   log?(msg: string, extra?: Record<string, unknown>): void;
 }
 
@@ -93,6 +95,8 @@ interface CallRec {
   orphanSince: number | null;
   /** active call: when each participant lost their last socket (reconnect grace) */
   goneSince: Map<string, number>;
+  /** connections (socket ids) that are actually in this call per participant: bound by start/accept/get/media, dropped on close */
+  conns: Map<string, Set<string>>;
 }
 
 export type StartResult =
@@ -215,16 +219,45 @@ export class CallService {
     for (const u of [c.callerId, c.calleeId]) this.d.emitUser(u, ev, { call: info, ...extra });
   }
 
-  async start(callerId: string, calleeId: string, video: boolean): Promise<StartResult> {
+  private bind(c: CallRec, userId: string, connId?: string) {
+    if (!connId || c.phase === "ended") return;
+    let set = c.conns.get(userId);
+    if (!set) c.conns.set(userId, (set = new Set()));
+    set.add(connId);
+  }
+
+  /** A socket closed: it is no longer in any call. */
+  connClosed(connId: string, userId: string) {
+    const id = this.live.get(userId);
+    const c = id ? this.calls.get(id) : undefined;
+    c?.conns.get(userId)?.delete(connId);
+  }
+
+  /** An ACTIVE call whose other participant once joined from a connection and has none left in the call (page/app gone,
+   *  possibly already back with a fresh page that doesn't know the call). Re-dialing must not re-attach to it. */
+  private staleFor(c: CallRec, userId: string) {
+    if (c.phase !== "active") return false;
+    const other = c.callerId === userId ? c.calleeId : c.callerId;
+    const set = c.conns.get(other);
+    return !!set && set.size === 0;
+  }
+
+  async start(callerId: string, calleeId: string, video: boolean, connId?: string): Promise<StartResult> {
     const pol = this.d.policy(callerId, calleeId);
     if (!pol.ok) return { ok: false, error: pol.error, reason: pol.reason };
     // already in a call with this same person (double tap / second tab) → hand back that call
     const mine = this.live.get(callerId);
     if (mine) {
       const c = this.calls.get(mine)!;
-      if ((c.callerId === callerId && c.calleeId === calleeId) || (c.calleeId === callerId && c.callerId === calleeId))
+      const samePair = (c.callerId === callerId && c.calleeId === calleeId) || (c.calleeId === callerId && c.callerId === calleeId);
+      if (samePair && this.staleFor(c, callerId)) {
+        // re-dial during the reconnect grace while the other side's page is gone: end the stale call, ring fresh
+        this.d.log?.("call stale redial", { callId: c.id });
+        this.finish(c, "completed", { by: c.callerId === callerId ? c.calleeId : c.callerId, reason: "connection_lost" });
+      } else if (samePair) {
+        this.bind(c, callerId, connId);
         return { ok: true, call: this.info(c), media: await this.media(c, callerId) };
-      return { ok: false, error: "You're already in a call", reason: "self_busy" };
+      } else return { ok: false, error: "You're already in a call", reason: "self_busy" };
     }
     if (this.d.inRoom(callerId)) return { ok: false, error: "Leave the room you're in to start a call", reason: "self_busy" };
     if (this.limited(callerId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
@@ -249,6 +282,7 @@ export class CallService {
       pushed: false,
       orphanSince: null,
       goneSince: new Map(),
+      conns: new Map(),
     };
     this.calls.set(c.id, c);
     if (this.isBusy(calleeId)) {
@@ -258,6 +292,7 @@ export class CallService {
     }
     this.live.set(callerId, c.id);
     this.live.set(calleeId, c.id);
+    this.bind(c, callerId, connId);
     // Preserve ring-time prewarming for the established LiveKit path. For direct UDP, only the caller has a
     // credential until the callee atomically accepts; the server enforces that consent boundary below as well.
     this.mint(c, callerId);
@@ -268,6 +303,7 @@ export class CallService {
     const calleeMedia = await this.media(c, calleeId);
     if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
     this.d.emitUser(calleeId, "call:incoming", { call: info, media: calleeMedia });
+    this.d.log?.("call ring emit", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null, foreground: this.d.isForeground(calleeId) });
     this.d.emitUser(callerId, "call:state", { call: info }); // caller's other tabs show "Calling…"
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
@@ -296,6 +332,7 @@ export class CallService {
     if (c.phase === "calling") {
       c.phase = "ringing";
       c.ackAt = this.now();
+      this.d.log?.("call ring ack", { callId: c.id, ms: c.ackAt - c.createdAt });
       this.metrics.ringMs.push(c.ackAt - c.createdAt);
       if (this.metrics.ringMs.length > METRIC_KEEP) this.metrics.ringMs.shift();
       this.broadcast(c, "call:state");
@@ -303,10 +340,11 @@ export class CallService {
     return { ok: true as const, call: this.info(c) };
   }
 
-  async accept(callId: unknown, userId: string) {
+  async accept(callId: unknown, userId: string, connId?: string) {
     const c = this.get(callId, userId);
     if (!c || c.calleeId !== userId) return { ok: false as const, error: "No such call", reason: "unknown" };
     if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
+    this.bind(c, userId, connId);
     if (c.phase !== "active") {
       c.phase = "active";
       c.answeredAt = this.now();
@@ -351,9 +389,10 @@ export class CallService {
     return { ok: true as const };
   }
 
-  async get_(callId: unknown, userId: string) {
+  async get_(callId: unknown, userId: string, connId?: string) {
     const c = this.get(callId, userId);
     if (!c) return { ok: false as const, error: "This call isn't available", reason: "unknown" };
+    this.bind(c, userId, connId);
     return { ok: true as const, call: this.info(c), media: c.phase === "ended" ? null : await this.media(c, userId) };
   }
 
@@ -383,6 +422,7 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.phase === "ended" || c.backend.provider !== "mediasoup" || !c.backend.relay) return { ok: false as const, error: "UDP media isn't available" };
     if (userId === c.calleeId && c.phase !== "active") return { ok: false as const, error: "Answer the call before joining direct media" };
+    this.bind(c, userId, connectionId);
     const media = await this.media(c, userId);
     if (!media || media.provider !== "mediasoup") return { ok: false as const, error: "UDP media credential expired" };
     const result = await c.backend.relay({ callId: c.id, userId, connectionId, method, payload, token: media.token });
@@ -422,7 +462,10 @@ export class CallService {
 
   private timeout(callId: string) {
     const c = this.calls.get(callId);
-    if (c && (c.phase === "calling" || c.phase === "ringing")) this.finish(c, "missed");
+    if (c && (c.phase === "calling" || c.phase === "ringing")) {
+      this.d.log?.("call ring timeout", { callId: c.id, acked: c.phase === "ringing", calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
+      this.finish(c, "missed");
+    }
   }
 
   private finish(c: CallRec, outcome: CallOutcome, opts: { by?: string; silentToCallee?: boolean; reason?: string } = {}) {
