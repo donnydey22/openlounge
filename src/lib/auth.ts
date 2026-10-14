@@ -31,8 +31,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export function deviceHint(): string {
   if (typeof navigator === "undefined") return "";
   const ua = navigator.userAgent;
-  if (/OpenLoungeAndroid/i.test(ua)) return "android-app";
-  if (/OpenLoungeiOS/i.test(ua)) return "ios-app";
+  if (/OpenLounge\/android\//i.test(ua) || /OpenLoungeAndroid/i.test(ua)) return "android-app";
+  if (/OpenLounge\/ios\//i.test(ua) || /OpenLoungeiOS/i.test(ua)) return "ios-app";
   return "";
 }
 

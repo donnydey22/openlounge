@@ -1,6 +1,16 @@
 import type { NextConfig } from "next";
 
+// Short git SHA for Settings "Open Lounge web · <sha>" (Railway sets RAILWAY_GIT_COMMIT_SHA at build).
+const gitCommit =
+  process.env.NEXT_PUBLIC_GIT_COMMIT ||
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  "";
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_GIT_COMMIT: gitCommit,
+  },
   // Strict mode double-mounts effects in dev, which would churn room joins,
   // WebSocket subscriptions and LiveKit connections. Off for a smoother realtime dev experience.
   reactStrictMode: false,

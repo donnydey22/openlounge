@@ -5,6 +5,7 @@
 import { getAccessToken } from "./auth";
 import { hasNativeStore } from "./session";
 import type { Me } from "./types";
+import { uaLooksNative, uaNativePlatform } from "@/lib/appBuild";
 
 export type ProviderFlags = { phone: boolean; email: boolean; google: boolean; apple: boolean };
 export type OAuthProvider = "google" | "apple";
@@ -72,7 +73,7 @@ type NativeAuthBridge = { openAuth?: (url: string) => void | Promise<void>; getP
 const nativeBridge = () => (typeof window === "undefined" ? null : ((window as unknown as { OpenLoungeNative?: NativeAuthBridge }).OpenLoungeNative ?? null));
 
 /** Inside a native shell (Android WebView / iOS wrapper)? */
-export const inNativeShell = () => typeof navigator !== "undefined" && (hasNativeStore() || /OpenLounge(Android|iOS)/i.test(navigator.userAgent));
+export const inNativeShell = () => typeof navigator !== "undefined" && (hasNativeStore() || uaLooksNative());
 
 /**
  * Can this client run Google/Apple sign-in? On the web: yes (full-page redirect). In a native shell only when the
@@ -84,7 +85,7 @@ export const inNativeShell = () => typeof navigator !== "undefined" && (hasNativ
  * Native wrapper platform ("android" | "ios"), or null on the plain web (desktop and mobile browsers, incl. iOS Safari).
  * Explicit native signals only, in order: the wrapper's bridge (OpenLoungeNative.getPlatform() / .platform — the iOS
  * Expo app and the Android app both inject it before the page's scripts run), then the wrapper's user-agent suffix
- * ("OpenLoungeiOS/<v>" from the iOS app, "OpenLoungeAndroid/<v>" from the Android app). Plain-browser UA sniffing is only
+ * ("OpenLounge/<android|ios>/<v>(<build>)", plus legacy OpenLoungeiOS/<v> / OpenLoungeAndroid/<v>). Plain-browser UA sniffing is only
  * a last resort inside a shell that identified itself (native session store) but gave no platform.
  */
 export function nativePlatform(): "android" | "ios" | null {
@@ -96,8 +97,8 @@ export function nativePlatform(): "android" | "ios" | null {
     /* ignore */
   }
   const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  if (/OpenLoungeiOS\b/i.test(ua)) return "ios";
-  if (/OpenLoungeAndroid\b/i.test(ua)) return "android";
+  const fromUa = uaNativePlatform(ua);
+  if (fromUa) return fromUa;
   if (!inNativeShell()) return null;
   return /Android/i.test(ua) ? "android" : /iPhone|iPad|iPod|Macintosh/i.test(ua) ? "ios" : null;
 }

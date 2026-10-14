@@ -21,6 +21,7 @@ import { useSafety } from "@/lib/safety";
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "@/lib/support";
 import { MonetSettingsRows } from "@/components/premium/MonetSettingsRows";
 import { DataSaverRow } from "@/components/media/DataSaverRow";
+import { appBuildLabel } from "@/lib/appBuild";
 
 export default function SettingsPage() {
   const { me, signOut, updateMe, setMeLocal, toast, reportError } = useApp();
@@ -29,7 +30,12 @@ export default function SettingsPage() {
   const [interestsOpen, setInterestsOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>(me?.interests ?? []);
   const [busy, setBusy] = useState(false);
+  const [buildLabel, setBuildLabel] = useState("Open Lounge web");
   const { admin } = useSafety(me?.id);
+
+  useEffect(() => {
+    setBuildLabel(appBuildLabel());
+  }, []);
 
   useEffect(() => {
     if (interestsOpen) setSelected(me?.interests ?? []);
@@ -181,6 +187,14 @@ export default function SettingsPage() {
           </p>
           <p className="mt-3 text-xs text-zinc-500" data-testid="about-copyright">© Global Network LLC 2026</p>
         </section>
+
+        <p
+          className="mt-10 mb-2 text-center text-[11px] leading-snug text-zinc-600"
+          data-testid="app-version"
+          aria-label="App version"
+        >
+          {buildLabel}
+        </p>
       </main>
 
       <Sheet open={interestsOpen} onClose={() => setInterestsOpen(false)} title="Your interests">

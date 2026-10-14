@@ -41,7 +41,7 @@ const isAppleWebKit = () => {
   const ua = navigator.userAgent;
   const iOS = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   const safari = /Safari\//.test(ua) && !/(Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg|OPR|Android)\//.test(ua);
-  return iOS || safari || /OpenLoungeiOS/i.test(ua);
+  return iOS || safari || /OpenLounge\/ios\//i.test(ua) || /OpenLoungeiOS/i.test(ua);
 };
 const nativeHls = (v: HTMLVideoElement) => !!v.canPlayType?.("application/vnd.apple.mpegurl");
 const hasMse = () =>
