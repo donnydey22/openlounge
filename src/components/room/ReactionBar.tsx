@@ -6,11 +6,9 @@ import { cn } from "@/lib/utils";
 export function ReactionBar({
   open,
   onPick,
-  onClose,
 }: {
   open: boolean;
   onPick: (emoji: string) => void;
-  onClose: () => void;
 }) {
   if (!open) return null;
   return (
@@ -19,10 +17,7 @@ export function ReactionBar({
         <button
           key={e}
           type="button"
-          onClick={() => {
-            onPick(e);
-            onClose();
-          }}
+          onClick={() => onPick(e)}
           className={cn(
             "flex h-10 w-10 items-center justify-center rounded-full text-xl transition hover:scale-110 hover:bg-white/10 active:scale-95",
           )}

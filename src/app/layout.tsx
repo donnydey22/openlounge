@@ -13,6 +13,7 @@ import { ChatSearchHost } from "@/components/search/ChatSearch";
 import { MonetBoot } from "@/components/premium/MonetBoot";
 import { legacyPolyfills } from "@/lib/legacyPolyfills";
 import { CallProvider } from "@/components/calls/CallProvider";
+import { LiveRoomProvider } from "@/components/room/LiveRoomProvider";
 
 // Inside the Android/iPhone apps the page is an app screen: no pinch/double-tap zoom (which pans the whole UI).
 // The public website keeps zoom for accessibility; fields are 16px on touch devices so focus never zooms anyway.
@@ -59,11 +60,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <LinkConfirmHost />
               <ChatSearchHost />
               <MonetBoot />
-              <CallProvider>
-                <AppShell>
-                  <AuthGate>{children}</AuthGate>
-                </AppShell>
-              </CallProvider>
+              <LiveRoomProvider>
+                <CallProvider>
+                  <AppShell>
+                    <AuthGate>{children}</AuthGate>
+                  </AppShell>
+                </CallProvider>
+              </LiveRoomProvider>
             </Notifier>
           </AppProvider>
         </ThemeProvider>

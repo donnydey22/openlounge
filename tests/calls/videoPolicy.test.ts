@@ -14,6 +14,11 @@ import {
   VIDEO_LAYERS_PORTRAIT,
   AUDIO_SPEECH,
   cameraCaptureConstraints,
+  CALL_VIDEO_CONTENT_HINT,
+  applyCameraQualityHint,
+  mediasoupCameraEncodings,
+  networkTier,
+  captureResolution,
 } from "../../src/lib/calls/videoPolicy";
 
 const UA = {
@@ -138,7 +143,6 @@ test("publishCamera: H.264 publish failure retries once with VP8; VP8 failure pr
 });
 
 // ---------- low-bandwidth tier ----------
-import { networkTier, captureResolution } from "../../src/lib/calls/videoPolicy";
 test("network tier: Data Saver, 2g/3g, slow downlink → low; 4g / missing API → normal; override wins", () => {
   assert.equal(networkTier(null), "normal");
   assert.equal(networkTier({ effectiveType: "4g", downlink: 10 }), "normal");
@@ -178,4 +182,22 @@ test("portrait calls request upright 720x1280 camera capture and portrait simulc
   assert.deepEqual([low.width, low.height], [VIDEO_LAYERS_PORTRAIT.low.width, VIDEO_LAYERS_PORTRAIT.low.height]);
   assert.deepEqual([mid.width, mid.height], [VIDEO_LAYERS_PORTRAIT.mid.width, VIDEO_LAYERS_PORTRAIT.mid.height]);
   assert.equal(portrait.videoEncoding?.maxBitrate, VIDEO_LAYERS_PORTRAIT.top.maxBitrate);
+});
+
+test("direct UDP producer uses the same bounded smooth-video ladder as LiveKit", () => {
+  assert.deepEqual(mediasoupCameraEncodings("normal"), [
+    { maxBitrate: 1_200_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+    { maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
+    { maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 4 },
+  ]);
+  assert.deepEqual(mediasoupCameraEncodings("low"), [
+    { maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 1 },
+    { maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 2 },
+  ]);
+});
+
+test("camera tracks prefer motion encoding where the browser supports content hints", () => {
+  const track = { contentHint: "" } as unknown as MediaStreamTrack;
+  applyCameraQualityHint(track);
+  assert.equal(track.contentHint, CALL_VIDEO_CONTENT_HINT);
 });

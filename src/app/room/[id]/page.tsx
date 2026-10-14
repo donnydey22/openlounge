@@ -1,12 +1,11 @@
 "use client";
 
 import { RoomBranding } from "@/components/creator/RoomBranding";
-import { friendlyMessage, isTransient } from "@/lib/errors";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronDown, Flag, Hand, Link2, Loader2, Lock, MessageSquare, Mic, MicOff, MoreHorizontal, Power, SmilePlus, UserPlus, Volume2 } from "lucide-react";
-import { ROOM_CHAT_HISTORY, type ChatMessage, type Participant, type RoomPresenceEvent, type RoomReaction, type RoomState } from "@/lib/types";
+import { type ChatMessage, type Participant, type RoomPresenceEvent } from "@/lib/types";
 import { TOPIC_EMOJI, cn, timeAgo } from "@/lib/utils";
 import { formatFull, serverNow, useClockTick } from "@/lib/time";
 import { useApp } from "@/components/AppProvider";
@@ -14,7 +13,6 @@ import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 import { ParticipantTile } from "@/components/room/ParticipantTile";
 import { UserActionSheet } from "@/components/room/UserActionSheet";
-import { useLiveKitAudio } from "@/hooks/useLiveKitAudio";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { unlockAudio } from "@/lib/audioUnlock";
 import { RoomChatPanel } from "@/components/chat/RoomChatPanel";
@@ -29,22 +27,34 @@ import { useNotifier } from "@/components/Notifier";
 import { OPEN_DM_EVENT } from "@/lib/notify";
 import { InviteToRoomSheet } from "@/components/rooms/InviteToRoomSheet";
 import { DropInStatus } from "@/components/rooms/DropInStatus";
-import { markAudio } from "@/hooks/useLiveKitAudio";
 import { useScrollLock } from "@/lib/scrollLock";
 import { LinkifiedText } from "@/components/chat/LinkifiedText";
-
-type Gone = { kind: "ended" | "kicked" | "error"; message: string } | null;
+import { useLiveRoom } from "@/components/room/LiveRoomProvider";
 
 export default function RoomPage() {
   const { id: roomId } = useParams<{ id: string }>();
   useClockTick(); // "Live · 12m" / "raised 2m ago" keep counting
   const router = useRouter();
   const { socket, connected, me, request, following, toast, reportError } = useApp();
-  const [joinAttempt, setJoinAttempt] = useState(0);
-
-  const [room, setRoom] = useState<RoomState | null>(null);
-  const [joined, setJoined] = useState(false);
-  const [gone, setGone] = useState<Gone>(null);
+  const {
+    roomId: activeRoomId,
+    room,
+    chat,
+    joined,
+    gone,
+    audio,
+    burstReactions,
+    tileReactions,
+    reactionTrayOpen: reactOpen,
+    activate,
+    leave: leaveRoom,
+    setReactionTrayOpen,
+    sendReaction,
+    sendChat,
+    editChat,
+    deleteChat,
+    setSelfMuted,
+  } = useLiveRoom();
   const [selected, setSelected] = useState<string | null>(null);
   const [handsOpen, setHandsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -52,105 +62,34 @@ export default function RoomPage() {
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [blockTarget, setBlockTarget] = useState<{ id: string; name: string } | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [lkPrefetched, setLkPrefetched] = useState<{ url: string; token: string } | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [showDesc, setShowDesc] = useState(false);
-  const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
   const [preview, setPreview] = useState<ChatMessage | null>(null);
   const [dmPeer, setDmPeer] = useState<string | null>(null);
   const [presenceFeed, setPresenceFeed] = useState<RoomPresenceEvent[]>([]);
-  const [burstReactions, setBurstReactions] = useState<RoomReaction[]>([]);
-  const [tileReactions, setTileReactions] = useState<Record<string, string>>({});
-  const [reactOpen, setReactOpen] = useState(false);
-  const leftRef = useRef(false);
   const notifier = useNotifier();
 
-  // join / re-join on (re)connect
+  // The provider owns room:join, LiveKit, and room state above the route boundary. Mounting this
+  // page joins the requested room; navigating elsewhere deliberately does not emit room:leave.
   useEffect(() => {
-    if (!socket || !connected || !me || gone) return;
-    leftRef.current = false;
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    markAudio("room-join-req");
-    request<{ room: RoomState; chat: ChatMessage[]; audio: { enabled: boolean; url?: string; token?: string } }>("room:join", { roomId })
-      .then((res) => {
-        if (cancelled) return;
-        markAudio("room-joined");
-        setRoom(res.room);
-        setChat(res.chat ?? []);
-        if (res.audio?.url && res.audio?.token) setLkPrefetched({ url: res.audio.url, token: res.audio.token });
-        setAudioEnabled(!!res.audio?.enabled);
-        setJoined(true);
-      })
-      .catch((e: Error) => {
-        if (cancelled) return;
-        // connection trouble: try again quietly (a reconnect also re-runs this effect)
-        if (isTransient(e)) {
-          retryTimer = setTimeout(() => setJoinAttempt((n) => n + 1), 2_000);
-          return;
-        }
-        setGone({ kind: /ended/i.test(e.message) ? "ended" : "error", message: friendlyMessage(e, "This room isn't available right now.") });
-      });
-    return () => {
-      cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
-    };
-  }, [socket, connected, me, roomId, request, gone, joinAttempt]);
+    activate(roomId);
+  }, [activate, roomId]);
 
-  // NOTE: a WebSocket blip no longer tears down LiveKit audio (we used to set joined=false here).
-  // The join effect above re-joins the room as soon as the socket is back, so the app-level
-  // seat matches the still-running LiveKit connection.
-
-  // live updates
+  // Presence feed is display-only page state. The session provider keeps the actual room and audio
+  // alive while this page is unmounted.
   useEffect(() => {
     if (!socket) return;
-    const onState = (s: RoomState) => s.id === roomId && setRoom(s);
-    const onEnded = ({ roomId: rid }: { roomId: string }) => {
-      if (rid !== roomId) return;
-      setJoined(false);
-      setGone({ kind: "ended", message: "The host ended this room." });
-    };
-    const onKicked = ({ roomId: rid, reason }: { roomId: string; reason: string }) => {
-      if (rid !== roomId) return;
-      setJoined(false);
-      setGone({ kind: "kicked", message: reason });
-    };
     const onPresence = (ev: RoomPresenceEvent) => {
       if (ev.roomId !== roomId) return;
       // skip own join toast noise
       if (ev.type === "join" && ev.userId === me?.id) return;
       setPresenceFeed((f) => [...f.slice(-4), ev]);
     };
-    const onReaction = (r: RoomReaction) => {
-      if (r.roomId !== roomId) return;
-      setBurstReactions((b) => [...b.slice(-12), r]);
-      setTileReactions((m) => ({ ...m, [r.userId]: r.emoji }));
-      window.setTimeout(() => {
-        setTileReactions((m) => {
-          if (m[r.userId] !== r.emoji) return m;
-          const next = { ...m };
-          delete next[r.userId];
-          return next;
-        });
-      }, 1600);
-      window.setTimeout(() => {
-        setBurstReactions((b) => b.filter((x) => x.id !== r.id));
-      }, 1800);
-    };
-    socket.on("room:state", onState);
-    socket.on("room:ended", onEnded);
-    socket.on("room:kicked", onKicked);
     socket.on("room:presence", onPresence);
-    socket.on("room:reaction", onReaction);
     return () => {
-      socket.off("room:state", onState);
-      socket.off("room:ended", onEnded);
-      socket.off("room:kicked", onKicked);
       socket.off("room:presence", onPresence);
-      socket.off("room:reaction", onReaction);
     };
   }, [socket, roomId, me?.id]);
 
@@ -161,27 +100,12 @@ export default function RoomPage() {
     return () => clearTimeout(t);
   }, [presenceFeed]);
 
-  // leave when navigating away
-  useEffect(() => {
-    return () => {
-      if (!leftRef.current) socket?.emit("room:leave", { roomId });
-    };
-  }, [socket, roomId]);
-
   const participants = room?.participants ?? [];
   const meP = participants.find((p) => p.userId === me?.id);
   const isHost = !!meP && room?.hostId === me?.id;
   const isCoHost = !!meP?.isCoHost && !isHost && meP.role !== "listener";
   const canModerate = isHost || isCoHost;
 
-  const audio = useLiveKitAudio({
-    roomId,
-    enabled: audioEnabled,
-    prefetched: lkPrefetched,
-    joined: joined && !!meP,
-    isSpeaker: !!meP && meP.role !== "listener",
-    muted: meP?.muted ?? true,
-  });
   const localLevel = audio.localLevel;
   // humans: LiveKit active-speaker detection + levels; demo bots: simulated by the server
   const isSpeaking = (p: Participant) => {
@@ -231,8 +155,7 @@ export default function RoomPage() {
   }, [participants, following, me?.id]);
 
   const leave = () => {
-    leftRef.current = true;
-    socket?.emit("room:leave", { roomId });
+    leaveRoom();
     router.push("/");
   };
 
@@ -242,8 +165,7 @@ export default function RoomPage() {
     const nextMuted = !meP.muted;
     if (!nextMuted && audio.status === "unavailable") toast("🔇 Live audio is off on this server — others see you as unmuted, but no sound is sent.");
     // optimistic: flip the local mic + icon now; the server broadcasts room:state to everyone
-    setRoom((r) => (r ? { ...r, participants: r.participants.map((p) => (p.userId === meP.userId ? { ...p, muted: nextMuted, speaking: false } : p)) } : r));
-    socket?.emit("self:mute", { roomId, muted: nextMuted });
+    setSelfMuted(nextMuted);
   };
 
   const toggleHand = () => {
@@ -255,14 +177,6 @@ export default function RoomPage() {
   const invite = async (userId: string) => {
     try {
       await request("host:invite", { roomId, userId });
-    } catch (e) {
-      reportError(e);
-    }
-  };
-
-  const sendReaction = async (emoji: string) => {
-    try {
-      await request("reaction:send", { roomId, emoji });
     } catch (e) {
       reportError(e);
     }
@@ -280,8 +194,8 @@ export default function RoomPage() {
 
   const endRoom = async () => {
     try {
-      leftRef.current = true;
       await request("room:end", { roomId });
+      leaveRoom();
       router.push("/");
     } catch (e) {
       reportError(e);
@@ -309,25 +223,14 @@ export default function RoomPage() {
     if (!socket) return;
     const onMessage = (m: ChatMessage) => {
       if (m.roomId !== roomId) return;
-      setChat((c) => (c.some((x) => x.id === m.id) ? c : [...c, m].slice(-ROOM_CHAT_HISTORY)));
       if (!chatVisibleRef.current && m.authorId !== meId) {
         setChatUnread((n) => n + 1);
         setPreview(m);
       }
     };
-    const onDeleted = ({ roomId: rid, messageId }: { roomId: string; messageId: string }) => {
-      if (rid === roomId) setChat((c) => c.filter((x) => x.id !== messageId));
-    };
-    const onEdited = (m: ChatMessage) => {
-      if (m.roomId === roomId) setChat((c) => c.map((x) => (x.id === m.id ? { ...x, text: m.text, editedAt: m.editedAt } : x)));
-    };
     socket.on("chat:message", onMessage);
-    socket.on("chat:deleted", onDeleted);
-    socket.on("chat:edited", onEdited);
     return () => {
       socket.off("chat:message", onMessage);
-      socket.off("chat:deleted", onDeleted);
-      socket.off("chat:edited", onEdited);
     };
   }, [socket, roomId, meId]);
 
@@ -336,45 +239,6 @@ export default function RoomPage() {
     const t = setTimeout(() => setPreview(null), 5000);
     return () => clearTimeout(t);
   }, [preview]);
-
-  const sendChat = useCallback(
-    async (text: string) => {
-      try {
-        await request("chat:send", { roomId, text });
-        return true;
-      } catch (e) {
-        reportError(e);
-        return false;
-      }
-    },
-    [request, roomId, toast],
-  );
-
-  const editChat = useCallback(
-    async (messageId: string, text: string) => {
-      try {
-        const r = await request<{ message?: ChatMessage }>("chat:edit", { roomId, messageId, text });
-        const m = r?.message;
-        if (m) setChat((c) => c.map((x) => (x.id === m.id ? { ...x, text: m.text, editedAt: m.editedAt } : x)));
-        return true;
-      } catch (e) {
-        reportError(e);
-        return false;
-      }
-    },
-    [request, roomId, toast],
-  );
-
-  const deleteChat = useCallback(
-    async (messageId: string) => {
-      try {
-        await request("chat:delete", { roomId, messageId });
-      } catch (e) {
-        reportError(e);
-      }
-    },
-    [request, roomId, toast],
-  );
 
   if (gone) {
     return (
@@ -389,7 +253,7 @@ export default function RoomPage() {
     );
   }
 
-  if (!room || !meP) {
+  if (activeRoomId !== roomId || !room || !meP) {
     return (
       <div className="flex min-h-dvh items-center justify-center gap-2 text-zinc-500">
         <Loader2 className="h-5 w-5 animate-spin" /> Joining room…
@@ -409,7 +273,7 @@ export default function RoomPage() {
      <div className="flex min-h-dvh min-w-0 flex-col">
       {/* header */}
       <header data-app-header className="sticky top-0 z-30 flex h-[calc(4rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] items-center justify-between bg-app/80 px-3 backdrop-blur-xl">
-        <button onClick={() => router.push("/")} className="flex items-center gap-1 rounded-full px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-white/5" title="Back to hallway (leaves the room)">
+        <button onClick={() => router.push("/")} className="flex items-center gap-1 rounded-full px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-white/5" title="Browse the hallway while staying live">
           <ChevronDown className="h-5 w-5" /> Hallway
         </button>
         <div className="flex items-center gap-1">
@@ -502,9 +366,10 @@ export default function RoomPage() {
                   followed={following.has(p.userId)}
                   level={audioLevelOf(p)}
                   onPodium={p.userId === podiumId}
-                  floatingEmoji={tileReactions[p.userId] ?? null}
+                  floatingReactions={tileReactions[p.userId] ?? []}
                   onClick={() => setSelected(p.userId)}
                   onToggleMute={p.userId === me?.id ? toggleMute : undefined}
+                  onReact={p.userId === me?.id ? () => setReactionTrayOpen(true) : undefined}
                 />
               ))}
             </div>
@@ -524,8 +389,9 @@ export default function RoomPage() {
                   isHost={false}
                   isMe={p.userId === me?.id}
                   followed={following.has(p.userId)}
-                  floatingEmoji={tileReactions[p.userId] ?? null}
+                  floatingReactions={tileReactions[p.userId] ?? []}
                   onClick={() => setSelected(p.userId)}
+                  onReact={p.userId === me?.id ? () => setReactionTrayOpen(true) : undefined}
                 />
               ))}
             </div>
@@ -562,14 +428,14 @@ export default function RoomPage() {
           {onStage && !meP.muted && audio.micError && (
             <p className="mb-2 text-center text-xs text-amber-400">{audio.micError} — others see you as unmuted, but no audio is being sent.</p>
           )}
-          <ReactionBar open={reactOpen} onPick={sendReaction} onClose={() => setReactOpen(false)} />
+          <ReactionBar open={reactOpen} onPick={sendReaction} />
           <div className="flex min-w-0 items-center justify-between gap-2 rounded-full border border-white/5 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur max-[359px]:gap-1.5 max-[359px]:p-1.5">
             <button onClick={leave} className="shrink-0 whitespace-nowrap rounded-full bg-zinc-800 px-4 py-3 text-sm font-semibold text-red-300 transition hover:bg-zinc-700 max-[359px]:px-3 sm:px-5">
               ✌️ Leave<span className="max-[359px]:hidden"> quietly</span>
             </button>
             <div className="flex min-w-0 items-center gap-2 max-[359px]:gap-1.5 max-[359px]:[&>button]:p-3">
               <button
-                onClick={() => setReactOpen((v) => !v)}
+                onClick={() => setReactionTrayOpen(!reactOpen)}
                 className={cn(
                   "rounded-full p-3.5 transition",
                   reactOpen ? "bg-sky-500 text-on-accent" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700",

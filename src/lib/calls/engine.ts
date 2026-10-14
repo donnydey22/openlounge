@@ -9,7 +9,7 @@ import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
 import { native, nativePlatform } from "@/lib/native";
-import { browserNetworkTier, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
+import { applyCameraQualityHint, browserNetworkTier, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
@@ -564,6 +564,7 @@ export class CallEngine {
     try {
       const LK = await loadLK();
       const t = await LK.createLocalVideoTrack({ facingMode: this.s.facing, resolution: captureResolution(browserNetworkTier()) });
+      applyCameraQualityHint(t.mediaStreamTrack);
       if (!this.busy) {
         t.stop();
         return null;

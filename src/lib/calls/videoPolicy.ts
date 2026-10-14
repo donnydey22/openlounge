@@ -88,6 +88,12 @@ export interface LayerCap {
   maxBitrate: number;
   maxFramerate: number;
 }
+export interface CameraEncoding {
+  maxBitrate: number;
+  maxFramerate: number;
+  /** Native-size layer is 1; lower simulcast layers are downscaled from it. */
+  scaleResolutionDownBy: number;
+}
 /** 16:9 landscape simulcast presets. */
 export const VIDEO_LAYERS = {
   low: { width: 320, height: 180, maxBitrate: 150_000, maxFramerate: 15 },
@@ -167,6 +173,40 @@ export function cameraCaptureConstraints(facing: "user" | "environment", tier: N
     aspectRatio: { ideal: resolution.aspectRatio },
     frameRate: { ideal: resolution.frameRate, max: resolution.frameRate },
   };
+}
+
+/** Video calls prioritise natural motion and low latency over a static-screen text optimisation. */
+export const CALL_VIDEO_CONTENT_HINT = "motion" as const;
+
+/**
+ * Apply the only cross-browser per-track control that does not require reaching through a vendor SDK's private
+ * RTCPeerConnection. Browsers that do not support contentHint simply keep their normal encoder behaviour.
+ */
+export function applyCameraQualityHint(track: MediaStreamTrack | null | undefined) {
+  if (!track) return;
+  try {
+    track.contentHint = CALL_VIDEO_CONTENT_HINT;
+  } catch {
+    // Older WebViews expose MediaStreamTrack without a writable contentHint.
+  }
+}
+
+/**
+ * Mediasoup does not inherit LiveKit's publish defaults. Cap the direct-UDP producer explicitly so video steps down
+ * before audio queues under congestion, while healthy calls retain 720p/30 quality.
+ */
+export function mediasoupCameraEncodings(tier: NetworkTier = "normal"): CameraEncoding[] {
+  if (tier === "low") {
+    return [
+      { maxBitrate: VIDEO_LAYERS.mid.maxBitrate, maxFramerate: VIDEO_LAYERS.mid.maxFramerate, scaleResolutionDownBy: 1 },
+      { maxBitrate: VIDEO_LAYERS.low.maxBitrate, maxFramerate: VIDEO_LAYERS.low.maxFramerate, scaleResolutionDownBy: 2 },
+    ];
+  }
+  return [
+    { maxBitrate: VIDEO_LAYERS.top.maxBitrate, maxFramerate: VIDEO_LAYERS.top.maxFramerate, scaleResolutionDownBy: 1 },
+    { maxBitrate: VIDEO_LAYERS.mid.maxBitrate, maxFramerate: VIDEO_LAYERS.mid.maxFramerate, scaleResolutionDownBy: 2 },
+    { maxBitrate: VIDEO_LAYERS.low.maxBitrate, maxFramerate: VIDEO_LAYERS.low.maxFramerate, scaleResolutionDownBy: 4 },
+  ];
 }
 
 /**
