@@ -12,15 +12,15 @@ test("emoji keys strip FE0F", () => {
 // Telegram set disabled (no license, Oct 10 2026): Telegram-chain tests skipped until a licensed set returns.
 test.skip("chain: our Telegram copy → upstream file → our Noto copy; static skips upstream", async () => {
   const c = assetChain("🎉", "telegram");
-  assert.deepEqual(c.map((s) => (s.type === "remote" ? "remote" : s.source)), ["telegram", "remote", "noto", "fluent"]);
+  assert.deepEqual(c.map((s) => ((s.type as string) === "remote" ? "remote" : s.source)), ["telegram", "remote", "noto", "fluent"]);
   assert.equal((c[0] as { src: string }).src, "/emoji/telegram/1f389.webp");
   assert.equal((c[2] as { src: string }).src, "/emoji/noto/1f389.json");
   assert.equal((c[3] as { src: string }).src, "/emoji/fluent/1f389.webp");
-  const r = await resolveRemote(c[1] as { key: string; durationMs: number });
+  const r = await resolveRemote(c[1] as unknown as { key: string; durationMs: number });
   assert.equal(r?.src, "https://raw.githubusercontent.com/Tarikul-Islam-Anik/Telegram-Animated-Emojis/main/Activity/Party%20Popper.webp");
   assert.deepEqual(assetChain("🎉", "telegram", false).map((s) => s.type), ["webp", "lottie", "webp"]);
-  assert.deepEqual(assetChain("🎉", "noto").map((s) => (s.type === "remote" ? "remote" : s.source)), ["noto", "telegram", "remote", "fluent"]);
-  assert.deepEqual(assetChain("🎉", "fluent").map((s) => (s.type === "remote" ? "remote" : s.source)), ["fluent", "telegram", "remote", "noto"]);
+  assert.deepEqual(assetChain("🎉", "noto").map((s) => ((s.type as string) === "remote" ? "remote" : s.source)), ["noto", "telegram", "remote", "fluent"]);
+  assert.deepEqual(assetChain("🎉", "fluent").map((s) => ((s.type as string) === "remote" ? "remote" : s.source)), ["fluent", "telegram", "remote", "noto"]);
   assert.equal(animatedAsset("🎉", "fluent")?.src, "/emoji/fluent/1f389.webp");
 });
 
