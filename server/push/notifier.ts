@@ -143,16 +143,17 @@ export class Notifier {
     return "sent";
   }
 
-  /** every push carries the current total unread as data.badge (Android launcher badge / iOS aps.badge) */
+  /** Every push is stamped for client-side stale-delivery suppression and carries the current unread badge. */
   private withBadge(userId: string, msg: PushMessage): PushMessage {
-    if (!this.d.badgeCount) return msg;
+    const data = { ...(msg.data ?? {}), sentAt: String(this.now()) };
+    if (!this.d.badgeCount) return { ...msg, data };
     let n = 0;
     try {
       n = Math.max(0, Math.floor(this.d.badgeCount(userId)) || 0);
     } catch {
-      return msg;
+      return { ...msg, data };
     }
-    return { ...msg, badge: n, data: { ...(msg.data ?? {}), badge: String(n) } };
+    return { ...msg, badge: n, data: { ...data, badge: String(n) } };
   }
 
   // ---------- triggers ----------
