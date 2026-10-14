@@ -11,6 +11,7 @@ import { AppShell } from "@/components/AppShell";
 import { LinkConfirmHost } from "@/components/chat/LinkConfirm";
 import { ChatSearchHost } from "@/components/search/ChatSearch";
 import { MonetBoot } from "@/components/premium/MonetBoot";
+import { BrowserSupportedNote } from "@/components/BrowserSupportedNote";
 import { legacyPolyfills } from "@/lib/legacyPolyfills";
 import { CallProvider } from "@/components/calls/CallProvider";
 import { LiveRoomProvider } from "@/components/room/LiveRoomProvider";
@@ -57,6 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AppProvider>
             <Notifier>
               <Toasts />
+              <BrowserSupportedNote />
               <LinkConfirmHost />
               <ChatSearchHost />
               <MonetBoot />
