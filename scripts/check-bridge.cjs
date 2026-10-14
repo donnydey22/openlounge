@@ -96,3 +96,10 @@ for (const js of [B.injectedBeforeContentLoaded('ios', '0.2.3'), B.injectedBefor
 }
 console.log(failed ? `${failed} FAILED` : 'bridge/link checks: all OK');
 process.exit(failed ? 1 : 0);
+// ring: CallKit audio activation must re-arm the page ring (AudioContext + <audio> loop)
+{
+  const fs = require('fs');
+  t(/__olRingResume/.test(B.audioResumeScript('callkit-activate')), true, 'audio resume re-arms the page ring');
+  t(/emit\(\["type": "audio"/.test(fs.readFileSync(path.join(root, 'modules/openlounge-calls/ios/OLCallManager.swift'), 'utf8')), true, 'CallKit didActivate tells JS');
+  t(/a\.type === 'audio'[\s\S]{0,120}audioResumeScript/.test(fs.readFileSync(path.join(root, 'App.tsx'), 'utf8')), true, 'App injects resume on CallKit audio');
+}

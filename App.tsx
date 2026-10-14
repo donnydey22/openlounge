@@ -411,6 +411,10 @@ function Shell() {
   );
   const onCallAction = useCallback(
     (a: CallAction, coldStart: boolean) => {
+      if (a.type === 'audio') {
+        if (!coldStart && everLoaded.current) inject(audioResumeScript(a.reason));
+        return;
+      }
       if (a.type === 'answer') {
         navigate(acceptUrl(appOrigin(), a.callId)); // /call/<id>?accept=1: the web layer joins instantly
         return;

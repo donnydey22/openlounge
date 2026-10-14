@@ -433,6 +433,10 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
     configureAudio()
+    // CallKit activating the session (outgoing CXStartCallAction, or answer) interrupts WebKit's AudioContext and
+    // pauses the page's ring <audio>: the web ringback went silent the moment the call was mirrored into CallKit.
+    // Tell JS so it re-runs the page's audio resume (AudioContext + ring element) on the new session.
+    emit(["type": "audio", "reason": "callkit-activate"])
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {}

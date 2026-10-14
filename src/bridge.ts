@@ -204,6 +204,7 @@ export function audioResumeScript(reason: string): string {
   var els=document.querySelectorAll('audio,video');
   for(var j=0;j<els.length;j++){var el=els[j];
     if(el.srcObject&&el.paused&&!el.ended&&!el.muted&&el.autoplay){try{var p=el.play();if(p&&p.catch)p.catch(function(){});n++;}catch(e){}}}
+  if(window.__olRingResume){try{window.__olRingResume();n++;}catch(e){}}
   window.dispatchEvent(new CustomEvent('openlounge:native-audio-resume',{detail:{reason:${JSON.stringify(reason)},kicked:n}}));
 }catch(e){}})();true;`;
 }

@@ -8,7 +8,9 @@ export type CallAction =
   | { type: 'answer'; callId: string; video?: boolean; at?: number }
   | { type: 'decline'; callId: string; at?: number }
   | { type: 'hangup'; callId: string; at?: number }
-  | { type: 'mute'; muted: boolean; at?: number };
+  | { type: 'mute'; muted: boolean; at?: number }
+  /** CallKit activated the audio session: page audio (ringback / ringtone) must be resumed */
+  | { type: 'audio'; reason: string; at?: number };
 
 type Sub = { remove(): void };
 type NativeCalls = {
@@ -40,6 +42,7 @@ export function parseCallAction(raw: unknown): CallAction | null {
   try {
     const a = (typeof raw === 'string' ? JSON.parse(raw) : raw) as Record<string, unknown>;
     if (!a || typeof a.type !== 'string') return null;
+    if (a.type === 'audio') return { type: 'audio', reason: typeof a.reason === 'string' ? a.reason.slice(0, 40) : 'callkit' };
     if (a.type === 'mute') return typeof a.muted === 'boolean' ? { type: 'mute', muted: a.muted } : null;
     if ((a.type === 'answer' || a.type === 'decline' || a.type === 'hangup') && typeof a.callId === 'string') {
       if (a.type !== 'hangup' && !CALL_ID.test(a.callId)) return null;
