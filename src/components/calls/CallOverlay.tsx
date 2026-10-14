@@ -83,13 +83,26 @@ function Background({ s }: { s: CallSnapshot }) {
 function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
+  const [aspectRatio, setAspectRatio] = useState(16 / 9);
   const [corner, setCorner] = useState<"tl" | "tr" | "bl" | "br">("tr");
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
   const start = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   useEffect(() => {
     const el = vid.current;
     callEngine.attachVideo(which, el);
-    return () => callEngine.attachVideo(which, null);
+    const syncAspect = () => {
+      const width = el?.videoWidth ?? 0;
+      const height = el?.videoHeight ?? 0;
+      if (width > 0 && height > 0) setAspectRatio(width / height);
+    };
+    el?.addEventListener("loadedmetadata", syncAspect);
+    el?.addEventListener("resize", syncAspect);
+    syncAspect();
+    return () => {
+      el?.removeEventListener("loadedmetadata", syncAspect);
+      el?.removeEventListener("resize", syncAspect);
+      callEngine.attachVideo(which, null);
+    };
   }, [which]);
   const M = 12;
   const pos = (c: typeof corner) => {
@@ -111,8 +124,8 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   return (
     <div
       ref={ref}
-      className={cn(css.pip, "aspect-video w-36 max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-black", drag && css.pipDragging)}
-      style={{ transform: `translate3d(${p.x}px, ${p.y}px, 0)`, left: 0, top: 0 }}
+      className={cn(css.pip, "w-36 max-h-[38vh] max-w-[40vw] overflow-hidden max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-black", drag && css.pipDragging)}
+      style={{ transform: `translate3d(${p.x}px, ${p.y}px, 0)`, left: 0, top: 0, aspectRatio }}
       data-testid="call-pip"
       onPointerDown={(e) => {
         try {
@@ -153,7 +166,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={vid} autoPlay playsInline muted className={cn("h-full w-full object-cover object-center", mirrored && "-scale-x-100")} />
+      <video ref={vid} autoPlay playsInline muted className="h-full w-full object-cover object-center" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
     </div>
   );
 }

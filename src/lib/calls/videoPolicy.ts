@@ -88,11 +88,18 @@ export interface LayerCap {
   maxBitrate: number;
   maxFramerate: number;
 }
-/** 16:9 landscape dims; LiveKit scales by the short side, so portrait phone capture gets the same caps. */
+/** 16:9 landscape simulcast presets. */
 export const VIDEO_LAYERS = {
   low: { width: 320, height: 180, maxBitrate: 150_000, maxFramerate: 15 },
   mid: { width: 640, height: 360, maxBitrate: 400_000, maxFramerate: 24 },
   top: { width: 1280, height: 720, maxBitrate: 1_200_000, maxFramerate: 30 },
+} as const satisfies Record<string, LayerCap>;
+
+/** 9:16 counterparts keep phone camera pixels upright instead of requesting a landscape crop. */
+export const VIDEO_LAYERS_PORTRAIT = {
+  low: { width: 180, height: 320, maxBitrate: 150_000, maxFramerate: 15 },
+  mid: { width: 360, height: 640, maxBitrate: 400_000, maxFramerate: 24 },
+  top: { width: 720, height: 1280, maxBitrate: 1_200_000, maxFramerate: 30 },
 } as const satisfies Record<string, LayerCap>;
 
 /** 48 kbps leaves Opus enough bandwidth for a fuller, more natural voice while DTX, RED and priority protect calls under loss. */
@@ -135,17 +142,39 @@ export function browserNetworkTier(): NetworkTier {
   } catch {}
   return networkTier((navigator as Navigator & { connection?: NetInfoLike }).connection ?? null, override);
 }
+export type CameraOrientation = "portrait" | "landscape";
+
+/** Browser orientation is intentionally a preference only: camera constraints below are all ideal, never mandatory. */
+export function browserCameraOrientation(): CameraOrientation {
+  if (typeof window === "undefined") return "landscape";
+  return window.innerHeight >= window.innerWidth ? "portrait" : "landscape";
+}
+
 /** Camera capture size per tier: 360p on low networks (smaller encode, less CPU/heat), 720p otherwise. */
-export function captureResolution(tier: NetworkTier): { width: number; height: number; frameRate: number } {
-  return tier === "low" ? { width: 640, height: 360, frameRate: 24 } : { width: 1280, height: 720, frameRate: 30 };
+export function captureResolution(tier: NetworkTier, orientation: CameraOrientation = browserCameraOrientation()): { width: number; height: number; frameRate: number; aspectRatio: number } {
+  const portrait = orientation === "portrait";
+  if (tier === "low") return portrait ? { width: 360, height: 640, frameRate: 24, aspectRatio: 9 / 16 } : { width: 640, height: 360, frameRate: 24, aspectRatio: 16 / 9 };
+  return portrait ? { width: 720, height: 1280, frameRate: 30, aspectRatio: 9 / 16 } : { width: 1280, height: 720, frameRate: 30, aspectRatio: 16 / 9 };
+}
+
+/** Shared getUserMedia request for direct Mediasoup capture and pre-acquired LiveKit camera tracks. */
+export function cameraCaptureConstraints(facing: "user" | "environment", tier: NetworkTier = browserNetworkTier(), orientation: CameraOrientation = browserCameraOrientation()): MediaTrackConstraints {
+  const resolution = captureResolution(tier, orientation);
+  return {
+    facingMode: { ideal: facing },
+    width: { ideal: resolution.width },
+    height: { ideal: resolution.height },
+    aspectRatio: { ideal: resolution.aspectRatio },
+    frameRate: { ideal: resolution.frameRate, max: resolution.frameRate },
+  };
 }
 
 /**
  * Camera publish options for the chosen codec (simulcast with capped layers, VP8 backup when H.264 is primary).
  * Low tier: top layer capped at 360p / 400 kbps / 24 fps with a single 180p layer under it.
  */
-export function cameraPublishOptions(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal"): Partial<TrackPublishOptions> {
-  const { low, mid, top } = VIDEO_LAYERS;
+export function cameraPublishOptions(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal", orientation: CameraOrientation = browserCameraOrientation()): Partial<TrackPublishOptions> {
+  const { low, mid, top } = orientation === "portrait" ? VIDEO_LAYERS_PORTRAIT : VIDEO_LAYERS;
   if (tier === "low")
     return {
       simulcast: true,
@@ -172,8 +201,8 @@ export function micPublishOptions(): Partial<TrackPublishOptions> {
 }
 
 /** Room publishDefaults built from the policy. */
-export function publishDefaults(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal"): Partial<TrackPublishOptions> {
-  return { ...micPublishOptions(), ...cameraPublishOptions(LK, choice, tier) };
+export function publishDefaults(LK: LKLike, choice: Pick<CodecChoice, "codec" | "backup">, tier: NetworkTier = "normal", orientation: CameraOrientation = browserCameraOrientation()): Partial<TrackPublishOptions> {
+  return { ...micPublishOptions(), ...cameraPublishOptions(LK, choice, tier, orientation) };
 }
 
 /**
@@ -186,13 +215,14 @@ export async function publishCamera(
   cam: LocalVideoTrack,
   choice: Pick<CodecChoice, "codec" | "backup">,
   tier: NetworkTier = "normal",
+  orientation: CameraOrientation = browserCameraOrientation(),
 ) {
   const base = { source: LK.Track.Source.Camera };
   try {
-    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, choice, tier), ...base });
+    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, choice, tier, orientation), ...base });
   } catch (e) {
     if (choice.codec === "vp8") throw e;
     if (cached) cached = { ...cached, codec: "vp8", backup: false, reason: "h264-publish-failed" };
-    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, { codec: "vp8", backup: false }, tier), ...base });
+    return await room.localParticipant.publishTrack(cam, { ...cameraPublishOptions(LK, { codec: "vp8", backup: false }, tier, orientation), ...base });
   }
 }
