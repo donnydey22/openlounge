@@ -1,4 +1,5 @@
 // Custom Node server: Next.js app + raw WebSocket endpoint (/ws) + small HTTP API on one port.
+import { belowFloor, gateExempt, unsupportedPageHtml } from "../src/lib/browserFloor";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import next from "next";
 import { WsHub } from "./ws";
@@ -75,6 +76,16 @@ async function main() {
   });
 
   const route = (req: IncomingMessage, res: ServerResponse) => {
+    // Unsupported-browser gate (below the last-2-majors floor, by engine version): a static blocking page for page
+    // navigations only. Wrapper apps, /download, legal pages, APIs and assets are never gated.
+    if ((req.method === "GET" || req.method === "HEAD") && /text\/html/.test(String(req.headers.accept ?? ""))) {
+      const p = (req.url ?? "/").split("?")[0];
+      const ua = String(req.headers["user-agent"] ?? "");
+      if (!gateExempt(p) && belowFloor(ua)) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "User-Agent" }).end(req.method === "HEAD" ? undefined : unsupportedPageHtml(ua));
+        return;
+      }
+    }
     // Short link for the Android APK download (302 so the target can change via ANDROID_DOWNLOAD_URL).
     if (req.method === "GET" || req.method === "HEAD") {
       const p = (req.url ?? "").split("?")[0];

@@ -77,12 +77,11 @@
     "typescript": "^5.9.3"
   },
   "browserslist": [
-    "chrome >= 69",
-    "and_chr >= 69",
-    "safari >= 12",
-    "ios_saf >= 12",
-    "firefox >= 78",
-    "edge >= 79",
-    "samsung >= 10"
+    "chrome >= 154",
+    "and_chr >= 154",
+    "edge >= 154",
+    "firefox >= 157",
+    "safari >= 26",
+    "ios_saf >= 26"
   ]
 }
