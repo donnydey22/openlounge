@@ -328,6 +328,15 @@ export interface DmReadReceipt {
   readAt: number;
 }
 
+/** "dm:read-state" — authoritative direct-inbox state for all of the reader's sessions. */
+export interface DmReadStateEvent {
+  peerId: string;
+  /** Unread messages still remaining in this direct conversation (normally zero after opening it). */
+  unread: number;
+  /** Combined direct + group unread total used by header and native app-icon badges. */
+  total: number;
+}
+
 // ---------- auth ----------
 
 export const INTERESTS = [
