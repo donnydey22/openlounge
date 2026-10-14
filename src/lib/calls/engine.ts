@@ -15,6 +15,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
+import { replaceCameraForFlip } from "./cameraFlip";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -126,6 +127,8 @@ export class CallEngine {
   private preMic: Promise<LocalAudioTrack | null> | null = null;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
   private camTrack: LocalVideoTrack | null = null;
+  /** Ignore repeated taps while a mobile camera capture / sender replacement is in flight. */
+  private flippingCamera = false;
   private remoteVideo: RemoteTrack | null = null;
   private audioEls: HTMLMediaElement[] = [];
   private videoEls = { local: null as HTMLVideoElement | null, remote: null as HTMLVideoElement | null };
@@ -1161,24 +1164,29 @@ export class CallEngine {
   }
 
   async flip() {
+    if (this.flippingCamera) return;
     const facing = this.s.facing === "user" ? "environment" : "user";
     buzz("light");
-    if (this.mediasoup) {
-      try {
-        await this.mediasoup.flipCamera(facing);
-        this.set({ facing });
-      } catch {
-        this.set({ error: "Couldn't switch camera" });
-      }
-      return;
-    }
-    const t = this.camTrack;
-    if (!t) return this.set({ facing });
+    this.flippingCamera = true;
     try {
-      await t.restartTrack({ facingMode: facing });
+      if (this.mediasoup) {
+        await this.mediasoup.flipCamera(facing);
+      } else {
+        const t = this.camTrack;
+        if (!t) {
+          this.set({ facing });
+          return;
+        }
+        // Do not call LocalVideoTrack.restartTrack(): it stops and detaches the active camera before requesting the
+        // other lens. Pre-acquiring and replacing keeps the existing self-preview / publication live on an iOS or
+        // Android capture failure.
+        await replaceCameraForFlip(t, facing);
+      }
       this.set({ facing });
     } catch {
       this.set({ error: "Couldn't switch camera" });
+    } finally {
+      this.flippingCamera = false;
     }
   }
 
