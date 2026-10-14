@@ -119,6 +119,11 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     p.setDelegate(self, queue: nil) // main queue
     provider = p
 
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(onRouteChange(_:)),
+      name: AVAudioSession.routeChangeNotification, object: nil)
+    prepareHeadsetSession()
+
     let r = PKPushRegistry(queue: DispatchQueue.main)
     r.delegate = self
     r.desiredPushTypes = [.voIP]
@@ -561,18 +566,46 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   // MARK: - audio session
 
+  /// Wired, USB-C/Lightning, Bluetooth HFP/LE and CarPlay outputs that carry their own mic / are personal audio.
+  static func headsetAttached(_ route: AVAudioSessionRouteDescription = AVAudioSession.sharedInstance().currentRoute) -> Bool {
+    let ports: Set<AVAudioSession.Port> = [.headphones, .headsetMic, .bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .usbAudio, .carAudio]
+    return route.outputs.contains { ports.contains($0.portType) } || route.inputs.contains { ports.contains($0.portType) }
+  }
+
+  /// Rooms (WebRTC in WKWebView) and calls: playAndRecord that lets a headset's mic and speaker route automatically,
+  /// and the loudspeaker only when nothing is attached.
+  private func prepareHeadsetSession() {
+    let s = AVAudioSession.sharedInstance()
+    var opts: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+    if !Self.headsetAttached() { opts.insert(.defaultToSpeaker) }
+    try? s.setCategory(.playAndRecord, mode: .default, options: opts)
+  }
+
+  @objc private func onRouteChange(_ n: Notification) {
+    DispatchQueue.main.async {
+      let headset = Self.headsetAttached()
+      if self.savedAudio != nil { self.configureAudio() } else { self.prepareHeadsetSession() }
+      let out = AVAudioSession.sharedInstance().currentRoute.outputs.first
+      var reason = 0
+      if let v = n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt { reason = Int(v) }
+      self.emit(["type": "audioRoute", "headset": headset, "port": out?.portType.rawValue ?? "", "name": out?.portName ?? "", "reason": reason])
+    }
+  }
+
   private func configureAudio() {
     let s = AVAudioSession.sharedInstance()
     if savedAudio == nil { savedAudio = (s.category, s.mode, s.categoryOptions) }
-    var opts: AVAudioSession.CategoryOptions = [.allowBluetooth]
-    if speaker { opts.insert(.defaultToSpeaker) }
+    var opts: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+    let headset = Self.headsetAttached()
+    // never force the loudspeaker while a headset is attached; it falls back to speaker when removed
+    if speaker && !headset { opts.insert(.defaultToSpeaker) }
     do {
       try s.setCategory(.playAndRecord, mode: callVideo ? .videoChat : .voiceChat, options: opts)
     } catch {
       NSLog("[OLCalls] setCategory failed: %@", error.localizedDescription)
     }
     do {
-      try s.overrideOutputAudioPort(speaker ? .speaker : .none)
+      try s.overrideOutputAudioPort(speaker && !headset ? .speaker : .none)
     } catch {
       // fails while the session is inactive; defaultToSpeaker covers that case
     }
@@ -587,6 +620,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     let s = AVAudioSession.sharedInstance()
     try? s.overrideOutputAudioPort(.none)
     try? s.setCategory(saved.0, mode: saved.1, options: saved.2)
+    prepareHeadsetSession()
     _ = force
   }
 }
