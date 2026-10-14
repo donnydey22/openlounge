@@ -8,6 +8,12 @@ import { Circle, RotateCcw, SendHorizontal, Square, SwitchCamera } from "lucide-
 import { Sheet } from "../Sheet";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/media/types";
+import {
+  CHAT_AUDIO_CAPTURE_CONSTRAINTS,
+  VIDEO_NOTE_AUDIO_BITS_PER_SECOND,
+  VIDEO_NOTE_CAPTURE_CONSTRAINTS,
+  VIDEO_NOTE_VIDEO_BITS_PER_SECOND,
+} from "@/lib/media/recordingPolicy";
 
 export const VIDEO_NOTE_MAX_MS = 60_000;
 const MIN_MS = 700;
@@ -50,8 +56,8 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
     setErr(null);
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: f, width: { ideal: 640 }, height: { ideal: 640 }, frameRate: { ideal: 30, max: 30 } },
-        audio: { echoCancellation: true, noiseSuppression: true },
+        video: { facingMode: f, ...VIDEO_NOTE_CAPTURE_CONSTRAINTS },
+        audio: CHAT_AUDIO_CAPTURE_CONSTRAINTS,
       });
       stream.current = s;
       if (live.current) {
@@ -111,7 +117,11 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
     const mime = videoRecorderMime() || undefined;
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(s, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 1_000_000, audioBitsPerSecond: 64_000 });
+      mr = new MediaRecorder(s, {
+        ...(mime ? { mimeType: mime } : {}),
+        videoBitsPerSecond: VIDEO_NOTE_VIDEO_BITS_PER_SECOND,
+        audioBitsPerSecond: VIDEO_NOTE_AUDIO_BITS_PER_SECOND,
+      });
     } catch {
       mr = new MediaRecorder(s);
     }
