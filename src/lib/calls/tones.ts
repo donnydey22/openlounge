@@ -19,7 +19,7 @@
 //    the element is re-played if the OS pauses it, for as long as the ring state lasts.
 //  - Fallback: if Web Audio still isn't running 400 ms after a ring starts, the same tone (rendered to a WAV) plays on
 //    the <audio> element primed during an earlier tap.
-import { audioContext, onAudioState, primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
+import { audioContext, onAudioState, ringAudioElement as primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
 
 export type RingKind = "incoming" | "outgoing";
 type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none"; ctx: string };
