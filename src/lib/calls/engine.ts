@@ -16,6 +16,7 @@ import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringin
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
+import { CALL_AUDIO_CONSTRAINTS } from "./audioPolicy";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -51,7 +52,6 @@ export interface CallSnapshot {
   v: number;
 }
 
-const MIC = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 const ENDED_LINGER_MS = 1800;
 
 const initial = (): CallSnapshot => ({
@@ -500,7 +500,7 @@ export class CallEngine {
     return new LK.Room({
       adaptiveStream: true,
       dynacast: true,
-      audioCaptureDefaults: MIC,
+      audioCaptureDefaults: CALL_AUDIO_CONSTRAINTS,
       videoCaptureDefaults: { resolution: captureResolution(browserNetworkTier()), facingMode: "user" },
       // videoPolicy: Opus speech + DTX + RED at high priority; H.264 on capable phones (VP8 backup) else VP8;
       // simulcast q 180p/15fps/150k, h 360p/24fps/400k, f 1.2M/30fps
@@ -511,7 +511,7 @@ export class CallEngine {
   private async acquireMic(): Promise<LocalAudioTrack | null> {
     try {
       const LK = await loadLK();
-      const t = await LK.createLocalAudioTrack(MIC);
+      const t = await LK.createLocalAudioTrack(CALL_AUDIO_CONSTRAINTS);
       if (!this.busy) {
         t.stop();
         return null;
