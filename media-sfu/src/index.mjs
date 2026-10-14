@@ -208,6 +208,15 @@ async function routeRpc(input) {
     }
     return { consumers };
   }
+  if (method === "transport:restartIce") {
+    // Audio reliability: a phone that hops Wi-Fi <-> cellular gets fresh ICE credentials on the same transport, so
+    // producers/consumers survive without a full renegotiation or a TCP fallback.
+    const transport = [...s.transports.values()].find((t) => t.id === payload.transportId);
+    if (!transport) throw new Error("Unknown transport");
+    const iceParameters = await transport.restartIce();
+    if (s.closed) throw new Error("Media session closed");
+    return { iceParameters };
+  }
   if (method === "consumer:resume") {
     for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
       await consumer.resume();

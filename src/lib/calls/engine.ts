@@ -16,7 +16,7 @@ import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringin
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
-import { CALL_AUDIO_CONSTRAINTS } from "./audioPolicy";
+import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio } from "./audioPolicy";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -703,8 +703,16 @@ export class CallEngine {
     this.camTrack = null;
   }
 
+  /** Foreground return on iOS/Android WebViews: replay any remote voice element the OS paused while hidden. */
+  private onVisibleCallAudio = () => {
+    if (document.visibilityState !== "visible" || this.audioEls.length === 0) return;
+    void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
+  };
+
   private onMediasoupTrack({ kind, track, close }: MediasoupRemoteTrack) {
     if (kind === "audio") {
+      // One element per remote track: a repeated consumer notice or SFU re-consume must never play the voice twice.
+      if (this.audioEls.some((x) => (x.srcObject as MediaStream | null)?.getAudioTracks?.().some((t) => t.id === track.id))) return;
       const el = document.createElement("audio");
       el.dataset.olCallAudio = "1";
       el.autoplay = true;
@@ -712,6 +720,7 @@ export class CallEngine {
       el.srcObject = new MediaStream([track]);
       document.body.appendChild(el);
       this.audioEls.push(el);
+      document.addEventListener("visibilitychange", this.onVisibleCallAudio);
       const onPlay = () => this.firstAudio();
       el.addEventListener("playing", onPlay, { once: true });
       void el.play().catch(() => this.set({ needsGesture: true }));
@@ -939,6 +948,7 @@ export class CallEngine {
     this.camTrack = null;
     for (const el of this.audioEls) el.remove();
     this.audioEls = [];
+    document.removeEventListener("visibilitychange", this.onVisibleCallAudio);
   }
 
   /** Rejoin the call's LiveKit room: re-sync with the server (call:get → still on? fresh token), reconnect, republish. */

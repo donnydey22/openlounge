@@ -21,7 +21,37 @@ export const OPUS_VOICE_CODEC_OPTIONS = {
   opusStereo: false,
   opusMaxPlaybackRate: 48_000,
   opusMaxAverageBitrate: 48_000,
+  // 20 ms frames: Opus' standard voice packetization, the best balance of header overhead and loss recovery.
+  opusPtime: 20,
 } as const;
+
+/**
+ * Single RTP encoding for the UDP voice producer. Voice is tiny next to video, so it is marked high priority for both
+ * the browser's bandwidth allocator and DSCP network priority; it stays independent of every video bitrate cap.
+ */
+export const MIC_AUDIO_ENCODING = {
+  maxBitrate: 48_000,
+  priority: "high",
+  networkPriority: "high",
+} as const satisfies RTCRtpEncodingParameters & { networkPriority?: RTCPriorityType };
+
+/** ICE states where the same transport should try fresh ICE credentials before the call drops to the TCP fallback. */
+export function shouldRestartIce(state: string): boolean {
+  return state === "disconnected" || state === "failed";
+}
+
+/** True when the live microphone must be recaptured: the track ended, or its device vanished (unplugged headset). */
+export function micNeedsRecovery(
+  track: Pick<MediaStreamTrack, "readyState"> & { getSettings?(): { deviceId?: string } } | null | undefined,
+  availableAudioInputIds?: readonly string[] | null,
+): boolean {
+  if (!track) return false;
+  if (track.readyState === "ended") return true;
+  if (!availableAudioInputIds || availableAudioInputIds.length === 0) return false;
+  const id = track.getSettings?.().deviceId;
+  if (!id || id === "default" || id === "communications") return false;
+  return !availableAudioInputIds.includes(id);
+}
 
 export interface DirectAudioEnvironment {
   ua?: string | null;
@@ -37,4 +67,14 @@ export interface DirectAudioEnvironment {
 export function useRawDirectCallMicrophone(env: DirectAudioEnvironment = {}): boolean {
   if (env.nativePlatform === "ios" || env.nativePlatform === "android") return true;
   return /iPhone|iPad|iPod|Android|Mobi/i.test(env.ua ?? "");
+}
+
+/**
+ * Restart remote call audio that a WebView paused (app backgrounded, autoplay block, iOS audio interruption).
+ * Returns whether any element is still blocked so the UI can keep its existing "tap to enable audio" prompt.
+ */
+export async function resumePausedCallAudio(els: readonly Pick<HTMLMediaElement, "paused" | "play">[]): Promise<boolean> {
+  let blocked = false;
+  await Promise.all(els.filter((el) => el.paused).map((el) => el.play().catch(() => { blocked = true; })));
+  return blocked;
 }

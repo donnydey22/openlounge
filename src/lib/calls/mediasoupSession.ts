@@ -3,7 +3,7 @@ import type { RealtimeClient } from "@/lib/realtime";
 import { nativePlatform } from "@/lib/native";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
-import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS, useRawDirectCallMicrophone } from "./audioPolicy";
+import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, micNeedsRecovery, shouldRestartIce, useRawDirectCallMicrophone } from "./audioPolicy";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
@@ -63,6 +63,11 @@ export class MediasoupCallSession {
   private generation = 0;
   private readonly onAvailable = () => void this.syncConsumers().catch(() => {});
   private readonly onMicAudioState = () => void this.queueMicProcessorSync();
+  /** Transports whose ICE restart already ran in the current outage; a second failure goes to the TCP fallback. */
+  private iceRestarted = new Set<string>();
+  private micRecovering: Promise<void> | null = null;
+  private readonly onMicEnded = () => void this.recoverMic();
+  private readonly onDeviceChange = () => void this.checkMicDevice();
 
   constructor(
     private socket: RealtimeClient,
@@ -142,7 +147,20 @@ export class MediasoupCallSession {
     });
     transport.on("connectionstatechange", (state) => {
       if (this.closed) return;
-      if (state === "connected") return;
+      if (state === "connected") {
+        this.iceRestarted.delete(direction);
+        // Report recovery after an in-place ICE restart; the initial connect reports through connectInner.
+        if (this.connected) this.opts.onState("connected");
+        return;
+      }
+      // First outage on this transport: restart ICE in place (same producers/consumers, no renegotiation) and report
+      // "disconnected" so the engine's existing grace timer still falls back to TCP if the restart does not land.
+      if (this.connected && shouldRestartIce(state) && !this.iceRestarted.has(direction)) {
+        this.iceRestarted.add(direction);
+        void this.restartIce(transport, direction);
+        this.opts.onState("disconnected");
+        return;
+      }
       if (state === "failed" || state === "closed") this.opts.onState("failed");
       else if (state === "disconnected") this.opts.onState("disconnected");
     });
@@ -152,6 +170,18 @@ export class MediasoupCallSession {
           .then((r) => (r.ok && r.id ? callback({ id: r.id }) : errback(new Error("Mediasoup producer rejected"))))
           .catch(errback);
       });
+    }
+  }
+
+  private async restartIce(transport: TransportLike | RecvTransportLike, direction: "send" | "recv") {
+    try {
+      const r = await this.req<{ ok: boolean; iceParameters?: Parameters<TransportLike["restartIce"]>[0]["iceParameters"] }>(
+        "ms:transport:restartIce", { direction, transportId: transport.id },
+      );
+      if (!r.ok || !r.iceParameters || this.closed) return;
+      await transport.restartIce({ iceParameters: r.iceParameters });
+    } catch {
+      // Older SFU or a dead socket: the engine's disconnected grace timer still switches to the TCP path.
     }
   }
 
@@ -179,7 +209,12 @@ export class MediasoupCallSession {
     }
     this.micOutbound = outbound;
     this.micProcessorContext = context;
-    const producer = await this.send.produce({ track: outbound, codecOptions: OPUS_VOICE_CODEC_OPTIONS, appData: { source: "microphone" } });
+    const producer = await this.send.produce({
+      track: outbound,
+      codecOptions: OPUS_VOICE_CODEC_OPTIONS,
+      encodings: [{ ...MIC_AUDIO_ENCODING }],
+      appData: { source: "microphone" },
+    });
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
       this.micProcessorContext = null;
@@ -193,7 +228,52 @@ export class MediasoupCallSession {
     // Desktop can restore the processed track after an interruption. Native phone calls publish the raw AEC/NS/AGC
     // microphone throughout, so a stale MediaStreamAudioDestinationNode can never silence a later call.
     context?.addEventListener("statechange", this.onMicAudioState);
+    track.addEventListener("ended", this.onMicEnded);
+    navigator.mediaDevices.addEventListener?.("devicechange", this.onDeviceChange);
     void this.queueMicProcessorSync();
+  }
+
+  private async checkMicDevice() {
+    if (this.closed || !this.mic) return;
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
+    const ids = devices.filter((d) => d.kind === "audioinput" && d.deviceId).map((d) => d.deviceId);
+    if (micNeedsRecovery(this.mic, ids)) await this.recoverMic();
+  }
+
+  /**
+   * The microphone ended (OS interruption, Bluetooth/headset unplugged, permission blip). Recapture with the same
+   * AEC/NS/AGC constraints and swap it into the existing producer: no renegotiation, and mute state is preserved
+   * because a paused producer stays paused across replaceTrack.
+   */
+  recoverMic(): Promise<void> {
+    if (this.micRecovering) return this.micRecovering;
+    this.micRecovering = (async () => {
+      const producer = this.producers.get("audio");
+      const old = this.mic;
+      if (this.closed || !producer?.replaceTrack || !old) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }).catch(() => null);
+      const next = stream?.getAudioTracks()[0];
+      if (!next) return;
+      if (this.closed) return void next.stop();
+      try {
+        await producer.replaceTrack({ track: next });
+      } catch {
+        next.stop();
+        return;
+      }
+      old.removeEventListener("ended", this.onMicEnded);
+      old.stop();
+      const processor = this.micProcessor;
+      this.micProcessor = null;
+      this.mic = next;
+      this.micOutbound = next;
+      next.addEventListener("ended", this.onMicEnded);
+      await processor?.destroy();
+      void this.queueMicProcessorSync();
+    })().finally(() => {
+      this.micRecovering = null;
+    });
+    return this.micRecovering;
   }
 
   private async createMicProcessor(context: AudioContext): Promise<CallVoiceProcessor | null> {
@@ -408,6 +488,8 @@ export class MediasoupCallSession {
     this.send?.close();
     this.recv?.close();
     this.micProcessorContext?.removeEventListener("statechange", this.onMicAudioState);
+    this.mic?.removeEventListener("ended", this.onMicEnded);
+    if (typeof navigator !== "undefined") navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
     this.micProcessorContext = null;
     void this.micProcessor?.destroy();
     this.micProcessor = null;

@@ -203,6 +203,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:leave", relay("leave"));
   socket.on("ms:transport:create", relay("transport:create"));
   socket.on("ms:transport:connect", relay("transport:connect"));
+  socket.on("ms:transport:restartIce", relay("transport:restartIce"));
   socket.on("ms:produce", relay("produce"));
   socket.on("ms:consume", relay("consume"));
   socket.on("ms:consumer:resume", relay("consumer:resume"));

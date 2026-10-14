@@ -90,6 +90,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "ms:leave": { callId: "id" },
   "ms:transport:create": { callId: "id", direction: "string" },
   "ms:transport:connect": { callId: "id", direction: "string", transportId: "id" },
+  "ms:transport:restartIce": { callId: "id", direction: "string", transportId: "id" },
   "ms:produce": { callId: "id", transportId: "id", kind: "string" },
   "ms:consume": { callId: "id", transportId: "id" },
   "ms:consumer:resume": { callId: "id", consumerId: "id" },

@@ -17,6 +17,7 @@ test("UDP Mediasoup voice producer requests Opus FEC and DTX without stereo over
     opusStereo: false,
     opusMaxPlaybackRate: 48_000,
     opusMaxAverageBitrate: 48_000,
+    opusPtime: 20,
   });
 });
 
