@@ -9,7 +9,7 @@ const sleep = (m: number) => new Promise((x) => setTimeout(x, m));
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, x = "") => { ok ? pass++ : fail++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : x); };
 const ENGS = (process.env.ENGS || "chromium,firefox").split(",") as ("chromium" | "firefox")[];
 const SIZES: [number, number][] = process.env.DBG ? [[1280, 800]] : [[375, 812], [1280, 800]];
-const launch = (e: string) => pw[e].launch(e === "chromium" ? { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"] } : { firefoxUserPrefs: { "media.navigator.streams.fake": true, "media.navigator.permission.disabled": true, "media.autoplay.default": 0, "media.autoplay.block-webaudio": false } });
+const launch = (e: string) => pw[e].launch(e === "chromium" ? { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"] } : { firefoxUserPrefs: { "media.navigator.streams.fake": true, "media.navigator.permission.disabled": true, "media.autoplay.default": 0, "media.autoplay.block-webaudio": false, "media.peerconnection.ice.loopback": true, "media.peerconnection.ice.obfuscate_host_addresses": false } });
 async function open(br: any, eng: string, u: any, w: number, h: number) {
   const ctx = await br.newContext({ viewport: { width: w, height: h }, ...(eng === "chromium" ? { permissions: ["camera", "microphone"] } : {}) });
   await ctx.addInitScript((u: any) => { if (localStorage.getItem("openlounge:uid")) return; localStorage.setItem("openlounge:session", u.refresh); localStorage.setItem("openlounge:access", JSON.stringify({ t: u.access, exp: Date.now() + 3e6 })); localStorage.setItem("openlounge:uid", u.uid); }, u);
@@ -37,7 +37,8 @@ for (const ea of ENGS) for (const eb of ENGS) for (const [w, h] of SIZES) for (c
     const ma = await media(A.p), mb = await media(B.p);
     check(`${t}: remote media live both sides`, ma.some((m: any) => m.live) && mb.some((m: any) => m.live), JSON.stringify({ ma, mb }));
     if (video) check(`${t}: remote video frames both sides`, ma.some((m: any) => m.k === "VIDEO" && m.w > 0) && mb.some((m: any) => m.k === "VIDEO" && m.w > 0), JSON.stringify({ ma, mb }));
-    await A.p.locator("[data-testid=call-decline]:visible, button[aria-label*='End' i]:visible, button[aria-label*='Hang' i]:visible").first().click().catch(() => {});
+    await A.p.locator("[data-testid=call-screen]").click({ position: { x: 20, y: 200 } }).catch(() => {}); await sleep(400); // video controls auto-hide; tap to reveal
+    await A.p.locator("[data-testid=call-end]").first().click({ force: true }).catch(() => {});
     await sleep(2500);
     check(`${t}: hang-up closes both screens`, !(await A.p.locator("[data-testid=call-screen]").isVisible().catch(() => false)) && !(await B.p.locator("[data-testid=call-screen]").isVisible().catch(() => false)));
     check(`${t}: no page errors`, A.errs.length + B.errs.length === 0, [...A.errs, ...B.errs].join(" | ").slice(0, 300));

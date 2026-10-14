@@ -1,5 +1,5 @@
-import pw from "/workspace/e2e/node_modules/playwright/index.js";
-import { phoneLogin } from "/workspace/ol-q8/tests/unified-auth/harness";
+const pw = (await import(process.env.PW_MODULE || "playwright")).default;
+import { phoneLogin } from "../unified-auth/harness";
 const BASE = "http://127.0.0.1:3350", WS = "ws://127.0.0.1:3350/ws";
 const ph = () => `+1555${Math.floor(Math.random() * 9e6 + 1e6)}`; const r = () => Math.random().toString(36).slice(2, 7);
 const sleep = (m: number) => new Promise((x) => setTimeout(x, m));
