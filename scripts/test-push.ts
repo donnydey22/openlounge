@@ -9,7 +9,7 @@ delete process.env.DATABASE_URL;
 process.env.DEMO_SEED = "0";
 
 async function main() {
-const { Notifier, ACTIVE_ROOM_INTERVAL_MS, FOLLOWER_BATCH_MS, HOURLY_CAP } = await import("../server/push/notifier");
+const { Notifier, ACTIVE_ROOM_INTERVAL_MS, FOLLOWER_BATCH_MS, HALLWAY_DEDUPE_MS, HOURLY_CAP } = await import("../server/push/notifier");
 const { MemoryPushRepo } = await import("../server/push/repo");
 const { MemorySender } = await import("../server/push/sender");
 const { mergePrefs, inQuietHours, DEFAULT_PREFS } = await import("../server/push/prefs");
@@ -169,7 +169,12 @@ await t("hallway presence notifies followers", async () => {
   await s.tok("b");
   assert.equal((await s.n.hallwayPresence("a")).b, "sent");
   assert.equal(s.sender.sent[0].msg.type, "hallwayPresence");
+  s.adv(61_000); // ordinary room-event dedupe has elapsed
+  assert.equal((await s.n.hallwayPresence("a")).b, "skip:dedupe", "presence reconnects remain suppressed");
+  s.adv(HALLWAY_DEDUPE_MS - 61_001);
   assert.equal((await s.n.hallwayPresence("a")).b, "skip:dedupe");
+  s.adv(1);
+  assert.equal((await s.n.hallwayPresence("a")).b, "sent");
 });
 
 await t("room you were in recently is live again (recentRoom, opt-in)", async () => {

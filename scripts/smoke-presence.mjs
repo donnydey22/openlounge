@@ -55,6 +55,9 @@ async function signup(phone, first, username) {
   const v = await c.req("auth:verifyCode", { phone, code: r.demoCode ?? "000000" });
   const reg = await c.req("auth:register", { ticket: v.ticket, firstName: first, lastName: "Presence", username, bio: "", color: "#34d399", interests: [] });
   check(reg.ok && reg.token, `signup ${first}`, reg);
+  // Match the web/native client contract: every authenticated socket reports its actual
+  // foreground state instead of relying on a server-side visible-by-default assumption.
+  c.emit("presence:visible", { visible: true });
   return { c, token: reg.token, id: reg.user.id };
 }
 
@@ -63,6 +66,7 @@ async function tab(token, opts) {
   await c.open;
   const r = await c.req("session:resume", { token });
   if (!r.ok) throw new Error("resume failed");
+  c.emit("presence:visible", { visible: true });
   return c;
 }
 

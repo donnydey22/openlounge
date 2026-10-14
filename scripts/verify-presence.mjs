@@ -27,6 +27,7 @@ async function signup(phone, first, username) {
   const v = await c.req("auth:verifyCode", { phone, code: r.demoCode });
   const reg = await c.req("auth:register", { ticket: v.ticket, firstName: first, lastName: "T", username, bio: "", color: "#34d399", interests: ["Tech"] });
   if (!reg.ok) throw new Error(JSON.stringify(reg));
+  c.emit("presence:visible", { visible: true });
   return { c, token: reg.token, user: reg.user };
 }
 const stamp = Date.now().toString().slice(-6);
@@ -46,14 +47,14 @@ check(prof.profile.user.lastSeenAt === seen, "profile lastSeenAt === presence:up
 
 // 2) a fresh client's snapshot carries the same value
 const C = client(); await C.open; const snapP = C.wait("presence:snapshot");
-await C.req("session:resume", { token: B.token }); const snap = (await snapP).data;
+await C.req("session:resume", { token: B.token }); C.emit("presence:visible", { visible: true }); const snap = (await snapP).data;
 check(snap.lastSeen[A.user.id] === seen && !snap.onlineIds.includes(A.user.id), "reconnect snapshot: A offline, same lastSeenAt", snap.lastSeen[A.user.id]);
 check(typeof snap.now === "number" && Math.abs(snap.now - Date.now()) < 1000, "snapshot carries server now", snap.now);
 check(!(B.user.id in snap.lastSeen), "online user has no stale lastSeen in snapshot");
 
 // 3) reconnect → online immediately
 const A2 = client(); await A2.open; t = Date.now();
-const onP = B.c.wait("presence:update", isA("online")); await A2.req("session:resume", { token: A.token });
+const onP = B.c.wait("presence:update", isA("online")); await A2.req("session:resume", { token: A.token }); A2.emit("presence:visible", { visible: true });
 const on = await onP; check(on.at - t < 500, `online flip after connect: ${on.at - t} ms`);
 
 // 4) backgrounded then socket dies → offline in seconds (was 120 s amber)

@@ -42,6 +42,8 @@ export interface NotifierDeps {
 export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "recentRoom"];
 export const ACTIVE_ROOM_INTERVAL_MS = 0; // dropped 10-min active-room cap so every join can notify
 export const DEDUPE_MS = 60_000; // loosened from 30 min; join events use per-joiner dedupe keys
+/** Hallway presence is a person-availability signal, not a room join: suppress repeat reconnect notices for longer. */
+export const HALLWAY_DEDUPE_MS = 30 * 60_000;
 export const HOURLY_CAP = 20; // all non-DM pushes per user per hour
 export const DM_HOURLY_CAP = 30; // DM pushes per user per hour (collapse per thread anyway)
 export const FOLLOWER_BATCH_MS = 10 * 60_000;
@@ -102,7 +104,7 @@ export class Notifier {
    * while one of them is visible (same rule as DMs: the in-app banner already showed it). Same gates either way.
    * opts.skipPlatforms: leave those devices out (calls: the iPhone already rings through CallKit).
    */
-  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; live?: { actorId?: string; roomId?: string }; skipPlatforms?: Platform[] } = {}): Promise<Outcome> {
+  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; dedupeMs?: number; live?: { actorId?: string; roomId?: string }; skipPlatforms?: Platform[] } = {}): Promise<Outcome> {
     if (this.d.isBot?.(userId)) return "skip:bot";
     const now = this.now();
     const prefs: NotifPrefs = await this.d.repo.getPrefs(userId);
@@ -111,7 +113,7 @@ export class Notifier {
     if (opts.dedupeKey) {
       const k = `${userId}|${opts.dedupeKey}`;
       const at = this.dedupe.get(k);
-      if (at !== undefined && now - at < DEDUPE_MS) return "skip:dedupe";
+      if (at !== undefined && now - at < (opts.dedupeMs ?? DEDUPE_MS)) return "skip:dedupe";
     }
     if (ACTIVE_ROOM_TYPES.includes(type)) {
       const last = this.lastActiveRoom.get(userId);
@@ -438,7 +440,7 @@ export class Notifier {
           url: `/profile/${userId}`,
           data: { userId },
         },
-        { dedupeKey: `hallway:${userId}` },
+        { dedupeKey: `hallway:${userId}`, dedupeMs: HALLWAY_DEDUPE_MS },
       );
     }
     return out;

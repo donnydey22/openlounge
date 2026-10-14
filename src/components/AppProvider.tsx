@@ -313,7 +313,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (res?.ok) {
           resumeAttempt = 0;
           applySession(res);
-          if (!appVisible()) reportVisibility();
+          // A new WebSocket is unknown to the server until it receives this explicit report. Send it
+          // after every resume, including foreground ones, so a backgrounded native WebView can never
+          // be advertised as a present hallway member during its reconnect window.
+          reportVisibility();
           void catchUp();
           return;
         }
