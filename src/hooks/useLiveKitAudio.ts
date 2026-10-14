@@ -11,6 +11,7 @@
 // If the server has no LiveKit credentials, `status` is "unavailable" and the UI says so.
 
 import { meterHz } from "@/lib/device";
+import { followAudioDevices } from "@/lib/audioDevices";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalAudioTrack, Participant as LkParticipant, RemoteTrack, Room } from "livekit-client";
 
@@ -293,6 +294,18 @@ export function useLiveKitAudio({
         setMicError(/permission|denied|notallowed/i.test(err.message + err.name) ? "Microphone permission denied" : "Couldn't use the microphone. Tap to try again.");
       });
   }, [isSpeaker, muted, status, permVersion]);
+
+  // Headset follow (rooms): when a wired/USB-C/Bluetooth headset connects or is removed, re-acquire the published
+  // mic on the OS default input so the headset mic is used (or the phone mic again). Listeners have no mic to move.
+  useEffect(() => {
+    const room = roomRef.current;
+    if (!room || status !== "connected" || !lk) return;
+    const micOf = () => room.localParticipant.getTrackPublication(lk!.Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+    return followAudioDevices(
+      () => { const t = micOf(); if (t && roomRef.current === room) micChain.current = micChain.current.then(() => t.restartTrack()).catch(() => {}); },
+      () => micOf()?.mediaStreamTrack?.getSettings?.().deviceId,
+    );
+  }, [status]);
 
   // Poll LiveKit audioLevel for glow intensity (local + remotes)
   useEffect(() => {

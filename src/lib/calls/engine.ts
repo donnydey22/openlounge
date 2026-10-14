@@ -18,6 +18,7 @@ import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio } from "./audioPolicy";
+import { followAudioDevices } from "../audioDevices";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -125,6 +126,8 @@ export class CallEngine {
   private mediasoupDegradeTimer: ReturnType<typeof setTimeout> | null = null;
   private fallbackInFlight = false;
   private micTrack: LocalAudioTrack | null = null;
+  /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
+  private stopDeviceFollow: (() => void) | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
   private camTrack: LocalVideoTrack | null = null;
@@ -622,6 +625,11 @@ export class CallEngine {
           this.micTrack = mic;
           if (this.s.muted) await mic.mute();
           await room.localParticipant.publishTrack(mic, { ...micPublishOptions(), source: LK.Track.Source.Microphone });
+          this.stopDeviceFollow?.();
+          this.stopDeviceFollow = followAudioDevices(
+            () => { const t = this.micTrack; if (t && this.room === room) void t.restartTrack().catch(() => {}); },
+            () => this.micTrack?.mediaStreamTrack?.getSettings?.().deviceId,
+          );
         }
         if (this.s.camOn) {
           const cam = await this.ensureCamPreview();
@@ -698,6 +706,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((track) => track?.stop());
     this.preMic = null;
+    this.stopDeviceFollow?.();
+    this.stopDeviceFollow = null;
     this.micTrack?.stop();
     this.micTrack = null;
     this.camTrack?.stop();
@@ -942,6 +952,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    this.stopDeviceFollow?.();
+    this.stopDeviceFollow = null;
     this.micTrack?.stop();
     this.micTrack = null;
     this.camTrack?.stop();
@@ -1178,6 +1190,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    this.stopDeviceFollow?.();
+    this.stopDeviceFollow = null;
     this.micTrack?.stop();
     this.micTrack = null;
     this.camTrack?.stop();
