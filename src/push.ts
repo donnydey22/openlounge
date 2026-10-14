@@ -5,6 +5,7 @@
 // (+1.5 s). Every call is wrapped so a missing/broken native module or missing Firebase config just disables push.
 
 import { endNativeCall } from './calls';
+import { type ForegroundPushData, foregroundPushData, shouldForwardForegroundPush } from './pushPayload';
 
 /** call_cancel {callId, reason} (caller hung up / answered elsewhere) → stop the CallKit ring (NATIVE_SPEC §1). */
 function endRingingCall(data: Record<string, unknown> | undefined) {
@@ -12,12 +13,14 @@ function endRingingCall(data: Record<string, unknown> | undefined) {
 }
 
 export type PushTokenListener = (token: string) => void;
+export type ForegroundPushListener = (data: ForegroundPushData) => void;
 
 type Messaging = typeof import('@react-native-firebase/messaging');
 
 let msgMod: Messaging | null = null;
 let initDone = false;
 let available = false;
+const foregroundListeners = new Set<ForegroundPushListener>();
 
 function log(where: string, e: unknown) {
   try {
@@ -43,6 +46,14 @@ function firebaseConfigured(): boolean {
 function messaging(): Messaging | null {
   if (!available) return null;
   return msgMod;
+}
+
+function emitForegroundPush(data: ForegroundPushData) {
+  for (const listener of [...foregroundListeners]) {
+    try {
+      listener(data);
+    } catch {}
+  }
 }
 
 /** Call once, after the app mounted and the WebView finished its first load. Returns whether push is usable. */
@@ -83,10 +94,14 @@ export function initPush(): boolean {
     log('setBackgroundMessageHandler', e);
   }
   try {
-    // foreground data messages: only call_cancel matters here (the page shows everything else itself)
+    // Foreground FCM notifications are not rendered by iOS. Hand bounded non-call data to the already-visible
+    // WebView so it follows the same in-app banner, collapse-tag and badge reconciliation path as WebSocket events.
     msgMod.onMessage(msgMod.getMessaging(), (m) => {
       try {
+        const data = foregroundPushData(m.data);
+        if (data.clear === '1' && data.tag) void clearDelivered(data.tag);
         endRingingCall(m.data);
+        if (shouldForwardForegroundPush(data)) emitForegroundPush(data);
       } catch {}
     });
   } catch (e) {
@@ -131,6 +146,12 @@ export function onTokenRefresh(cb: PushTokenListener): () => void {
     log('onTokenRefresh', e);
     return () => {};
   }
+}
+
+/** Subscribe after the WebView loads; failures in one listener never affect FCM delivery or CallKit handling. */
+export function onForegroundPush(cb: ForegroundPushListener): () => void {
+  foregroundListeners.add(cb);
+  return () => foregroundListeners.delete(cb);
 }
 
 const pathOf = (data: Record<string, unknown> | undefined): string | null => {

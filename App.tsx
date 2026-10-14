@@ -36,7 +36,9 @@ import {
 } from './src/config';
 import { playHaptic } from './src/haptics';
 import { readContactsForPage } from './src/contacts';
-import { initPush, onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
+import { initPush, onForegroundPush, onNotificationOpen, onTokenRefresh, requestPushPermissionAndToken } from './src/push';
+import type { ForegroundPushData } from './src/pushPayload';
+import { ForegroundPushQueue } from './src/foregroundPushQueue';
 import { type LinkTarget, isNativeAuthStart, resolveIncomingLink } from './src/links';
 import * as Session from './src/sessionStore';
 import {
@@ -107,8 +109,26 @@ function Shell() {
   const authBusy = useRef(false);
   const handledCodes = useRef(new Set<string>());
   const appState = useRef<AppStateStatus>(AppState.currentState);
+  // Retain separate notifications during a brief WebView/lifecycle race. A new event for an existing collapse tag
+  // replaces the older one, matching FCM's per-thread/per-room collapse behavior without dropping other activity.
+  const pendingForegroundPushes = useRef(new ForegroundPushQueue());
 
   const inject = useCallback((js: string) => webRef.current?.injectJavaScript(js), []);
+  const forwardForegroundPush = useCallback((data: ForegroundPushData) => {
+    // A push can win a foreground/background race while WebKit is loading or transitionally inactive. Retain every
+    // distinct collapse tag until the app has a visible page instead of silently losing its reconciliation update.
+    if (!everLoaded.current || appState.current !== 'active') {
+      pendingForegroundPushes.current.enqueue(data);
+      return;
+    }
+    inject(nativeEventScript('openlounge:native-notification', data));
+  }, [inject]);
+  const flushForegroundPush = useCallback(() => {
+    if (!everLoaded.current || appState.current !== 'active') return;
+    const queued = pendingForegroundPushes.current.drain();
+    if (!queued.length) return;
+    for (const data of queued) inject(nativeEventScript('openlounge:native-notification', data));
+  }, [inject]);
 
   // ---------------- opt-in biometric app lock (src/biometricLock.ts) ----------------
   // 'checking' (cold start, until the stored setting is read) and 'locked' both cover the WebView.
@@ -336,8 +356,10 @@ function Shell() {
     if (!pushReady) return;
     let offRefresh = () => {};
     let offOpen = () => {};
+    let offForeground = () => {};
     try {
       offRefresh = onTokenRefresh(deliverPushToken);
+      offForeground = onForegroundPush(forwardForegroundPush);
       // notification tap → open its deep link (/messages/<peer>, /room/<id>) in the WebView
       offOpen = onNotificationOpen((path) => {
         try {
@@ -350,8 +372,9 @@ function Shell() {
     return () => {
       offRefresh();
       offOpen();
+      offForeground();
     };
-  }, [pushReady, deliverPushToken, navigate]);
+  }, [pushReady, deliverPushToken, forwardForegroundPush, navigate]);
 
   // ---------------- native call ringing (CallKit/PushKit, src/calls.ts) ----------------
   const access = useRef<{ access: string; exp: number } | null>(null);
@@ -432,12 +455,13 @@ function Shell() {
       } else if (next === 'active' && prev !== 'active') {
         // 'inactive' → 'active' covers phone calls, Siri, Control Center; 'background' → 'active' a real resume.
         inject(nativeEventScript('openlounge:native-visibility', { visible: true }));
+        flushForegroundPush();
         inject(audioResumeScript(prev === 'background' ? 'foreground' : 'interruption'));
         if (offlineRef.current) retryNow();
       }
     });
     return () => sub.remove();
-  }, [inject, retryNow]);
+  }, [flushForegroundPush, inject, retryNow]);
 
   // ---------------- keyboard ----------------
   useEffect(() => {
@@ -661,6 +685,7 @@ function Shell() {
           onLoadEnd={() => {
             if (navFailed.current) return;
             everLoaded.current = true;
+            flushForegroundPush();
             retryAttempt.current = 0;
             clearRetry();
             if (offlineRef.current) setOfflineBoth(false);
