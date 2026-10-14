@@ -343,6 +343,11 @@ export function registerRealtime(io: WsHub) {
       sessionOfSocket.set(socket.id, sessionId);
       socket.join(`user:${userId}`);
       socket.join(PRESENCE_CHANNEL);
+      // Presence starts fail-closed until the client sends its post-resume `presence:visible`
+      // confirmation. This keeps a reconnecting backgrounded WebView from being treated as foreground
+      // by either the hallway dot or the in-app-notification routing decision.
+      socket.hidden = true;
+      store.setSocketVisible(socket.id, false);
       presence.attach(socket.id, userId, sessionId);
       socket.emit("rooms:update", store.listRooms());
       socket.emit("presence:snapshot", presence.snapshot());

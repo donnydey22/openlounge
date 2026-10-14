@@ -33,10 +33,14 @@ export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
 /** generic ws interaction while away/offline: at most one persist+broadcast per user per this window */
 export const ACTIVITY_THROTTLE_MS = envMs("PRESENCE_ACTIVITY_THROTTLE_MS", 10_000);
 export const SWEEP_MS = envMs("PRESENCE_SWEEP_MS", 2_000);
+/** A reconnect must remain explicitly foreground for this long before it can announce hallway presence. */
+export const HALLWAY_ONLINE_GRACE_MS = envMs("PRESENCE_HALLWAY_ONLINE_GRACE_MS", 30_000);
 
 interface ConnState {
   userId: string;
   token: string;
+  /** false until the browser/native shell explicitly reports document/app visibility after auth */
+  visibilityConfirmed: boolean;
   visible: boolean;
 }
 
@@ -60,6 +64,7 @@ export class Presence {
   private status = new Map<string, Exclude<PresenceStatus, "offline">>();
   private departed = new Map<string, { at: number; token: string }>();
   private timers = new Map<string, { t: NodeJS.Timeout; at: number; to: PresenceStatus }>();
+  private hallwayTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private io: WsHub,
@@ -68,7 +73,7 @@ export class Presence {
     /** persist a last-seen timestamp against the session token */
     private persistLastSeen: (token: string, at: number) => void,
     private lastSeen: Map<string, number> = new Map(),
-    /** hallway presence: fired once when a user becomes online (not away→online from already-connected) */
+    /** hallway presence: fired after a newly-online user remains explicitly foreground through the stability window */
     private onBecameOnline: ((userId: string) => void) | null = null,
   ) {
     // Catch state changes that don't come with an explicit event (room ended while backgrounded, …)
@@ -83,6 +88,8 @@ export class Presence {
     clearInterval(this.sweep);
     for (const p of this.timers.values()) clearTimeout(p.t);
     this.timers.clear();
+    for (const t of this.hallwayTimers.values()) clearTimeout(t);
+    this.hallwayTimers.clear();
   }
 
   isOnline(userId: string) {
@@ -119,7 +126,10 @@ export class Presence {
     if (c) {
       c.token = token;
     } else {
-      this.conns.set(connId, { userId, token, visible: true });
+      // A new socket must not be assumed foreground. Native WebViews can reconnect while the app is
+      // backgrounded, and a server-side default of `visible: true` produced false green hallway dots.
+      // The client confirms its real state immediately after session resume via presence:visible.
+      this.conns.set(connId, { userId, token, visible: false, visibilityConfirmed: false });
       let set = this.byUser.get(userId);
       if (!set) this.byUser.set(userId, (set = new Set()));
       set.add(connId);
@@ -136,6 +146,7 @@ export class Presence {
     const set = this.byUser.get(c.userId);
     set?.delete(connId);
     if (set && set.size === 0) this.byUser.delete(c.userId);
+    if (!this.hasConfirmedForeground(c.userId)) this.cancelHallwayPresence(c.userId);
     if (wasActive && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
     // backgrounded app whose socket died: keep the amber dot for a while instead of flipping to offline
     this.update(c.userId, !wasActive && graceMs === CLOSE_GRACE_MS ? Math.max(graceMs, HIDDEN_GRACE_MS) : graceMs);
@@ -144,8 +155,12 @@ export class Presence {
   /** Client reported foreground/background (document.visibilityState). */
   setVisible(connId: string, visible: boolean) {
     const c = this.conns.get(connId);
-    if (!c || c.visible === visible) return;
+    if (!c) return;
+    const changed = c.visible !== visible || !c.visibilityConfirmed;
+    c.visibilityConfirmed = true;
+    if (!changed) return;
     c.visible = visible;
+    if (!visible && !this.hasConfirmedForeground(c.userId)) this.cancelHallwayPresence(c.userId);
     if (!visible && !this.active(c.userId)) this.departed.set(c.userId, { at: Date.now(), token: c.token });
     this.update(c.userId);
   }
@@ -178,9 +193,47 @@ export class Presence {
     return false;
   }
 
+  /** A backgrounded-but-connected app is away only after it reported its visibility at least once. */
+  private hasConfirmedConnection(userId: string) {
+    for (const connId of this.byUser.get(userId) ?? []) if (this.conns.get(connId)?.visibilityConfirmed) return true;
+    return false;
+  }
+
+  /** Hallway notices require a confirmed foreground connection, never just a socket reconnect. */
+  private hasConfirmedForeground(userId: string) {
+    for (const connId of this.byUser.get(userId) ?? []) {
+      const c = this.conns.get(connId);
+      if (c?.visibilityConfirmed && c.visible) return true;
+    }
+    return false;
+  }
+
+  private cancelHallwayPresence(userId: string) {
+    const t = this.hallwayTimers.get(userId);
+    if (t) clearTimeout(t);
+    this.hallwayTimers.delete(userId);
+  }
+
+  private scheduleHallwayPresence(userId: string) {
+    this.cancelHallwayPresence(userId);
+    const t = setTimeout(() => {
+      this.hallwayTimers.delete(userId);
+      if (this.statusOf(userId) !== "online" || !this.hasConfirmedForeground(userId)) return;
+      try {
+        this.onBecameOnline?.(userId);
+      } catch (e) {
+        console.warn("[presence] onBecameOnline failed:", (e as Error).message);
+      }
+    }, HALLWAY_ONLINE_GRACE_MS);
+    t.unref();
+    this.hallwayTimers.set(userId, t);
+  }
+
   private target(userId: string): PresenceStatus {
     if (this.active(userId)) return "online";
-    return (this.byUser.get(userId)?.size ?? 0) > 0 ? "away" : "offline";
+    // Do not render a dot until the client has explicitly told us whether it is visible. This is
+    // especially important after an iOS/Android WebView reconnects while its app is backgrounded.
+    return this.hasConfirmedConnection(userId) ? "away" : "offline";
   }
 
   /**
@@ -224,6 +277,7 @@ export class Presence {
     if (to === was) return;
     if (to === "offline") this.status.delete(userId);
     else this.status.set(userId, to);
+    if (to !== "online") this.cancelHallwayPresence(userId);
     let lastSeenAt: number | null = null;
     if (to === "online") {
       this.departed.delete(userId);
@@ -241,13 +295,11 @@ export class Presence {
     }
     if (to === "offline") this.departed.delete(userId);
     this.broadcast({ userId, online: to === "online", status: to, lastSeenAt, now: Date.now() });
-    // Hallway presence: only when newly online (was offline). away→online is "came back to tab" — skip to avoid noise.
-    if (to === "online" && was === "offline") {
-      try {
-        this.onBecameOnline?.(userId);
-      } catch (e) {
-        console.warn("[presence] onBecameOnline failed:", (e as Error).message);
-      }
+    // Hallway presence: only after an explicitly foreground client stays newly online through the
+    // stability window. A raw WebSocket reconnect, a brief connectivity flap, or an in-room socket
+    // that never confirmed foreground visibility is not a hallway visit.
+    if (to === "online" && was !== "online" && this.hasConfirmedForeground(userId)) {
+      this.scheduleHallwayPresence(userId);
     }
   }
 
