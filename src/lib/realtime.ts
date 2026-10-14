@@ -18,34 +18,15 @@ type Listener = (data: any) => void; // eslint-disable-line @typescript-eslint/n
 // WebView inside a backgrounded app often still reports document.visibilityState === "visible":
 //   window.dispatchEvent(new CustomEvent("openlounge:native-visibility", { detail: { visible: false } }))
 let nativeHidden = false;
-/** Biometric App Lock overlay is up (native shells). While locked, appVisible() is false so the server rings natively. */
-let nativeLocked = false;
 export const NATIVE_VISIBILITY_EVENT = "openlounge:native-visibility";
-export const NATIVE_LOCK_EVENT = "openlounge:native-lock";
 if (typeof window !== "undefined") {
   window.addEventListener(NATIVE_VISIBILITY_EVENT, (e) => {
     nativeHidden = (e as CustomEvent<{ visible?: boolean }>).detail?.visible === false;
   });
-  window.addEventListener(NATIVE_LOCK_EVENT, (e) => {
-    nativeLocked = (e as CustomEvent<{ locked?: boolean }>).detail?.locked === true;
-  });
 }
-export function appLocked() {
-  return nativeLocked;
-}
-/** Native shells call this (and/or dispatch NATIVE_LOCK_EVENT) when the App Lock overlay shows/hides. */
-export function setAppLocked(locked: boolean) {
-  if (nativeLocked === locked) return;
-  nativeLocked = locked;
-  if (typeof window === "undefined") return;
-  // AppProvider listens for NATIVE_LOCK_EVENT and re-emits presence:visible via appVisible().
-  window.dispatchEvent(new CustomEvent(NATIVE_LOCK_EVENT, { detail: { locked } }));
-}
-/** Is the app in the foreground (tab visible AND native shell not backgrounded AND App Lock not up)? */
+/** Is the app in the foreground (tab visible AND, inside a native shell, the app not backgrounded)? */
 export function appVisible() {
-  if (nativeLocked || nativeHidden) return false;
-  if (typeof document === "undefined") return true;
-  return document.visibilityState !== "hidden";
+  return typeof document === "undefined" || (document.visibilityState !== "hidden" && !nativeHidden);
 }
 
 export class RealtimeClient {
