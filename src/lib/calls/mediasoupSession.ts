@@ -194,8 +194,22 @@ export class MediasoupCallSession {
     if (!producer?.replaceTrack) throw new Error("Camera producer unavailable");
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
     const next = stream.getVideoTracks()[0];
-    if (!next) throw new Error("Camera unavailable");
-    await producer.replaceTrack({ track: next });
+    if (!next) {
+      for (const candidate of stream.getTracks()) candidate.stop();
+      throw new Error("Camera unavailable");
+    }
+    try {
+      await producer.replaceTrack({ track: next });
+    } catch (error) {
+      // The old producer remains live until replaceTrack succeeds. Release the failed capture so a retry does not
+      // contend for the camera on mobile browsers.
+      next.stop();
+      throw error;
+    }
+    if (this.closed || this.camera === null) {
+      next.stop();
+      return null;
+    }
     this.camera.stop();
     this.camera = next;
     this.opts.onLocalVideo(next);
