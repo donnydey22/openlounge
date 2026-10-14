@@ -12,10 +12,10 @@ const ANDROID = {
 const TESTFLIGHT = "https://testflight.apple.com/join/A4khvX7x";
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
-  file: "/downloads/openlounge-0.3.1-b19.ipa",
-  version: "0.3.1 (build 19)",
-  size: "9.3 MB",
-  sha256: "f8a12f0702589c8c895504f09f8a7a9d885803fbbde62deca3136ebb3a553e82",
+  file: "/downloads/openlounge-0.3.3-b23.ipa",
+  version: "0.3.3 (build 23)",
+  size: "8.9 MB",
+  sha256: "6856bc24f5f638df0aede9fdb5fb59bb85b37ceaecb47a8c08a5a331bae69ab5",
 };
 
 function Sha({ value }: { value: string }) {
@@ -113,7 +113,6 @@ export function DownloadHub() {
 
         <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-base font-semibold text-zinc-100">iPhone: Direct install (registered devices only)</h2>
-          <p className="text-xs text-zinc-500">Older direct-install build. For the latest (build 21), use TestFlight above.</p>
           <p className="text-zinc-500">Version {IOS.version} · {IOS.size}</p>
           <a
             href={IOS.install}
@@ -128,7 +127,7 @@ export function DownloadHub() {
             <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
           </ul>
           <p className="mt-3 text-xs text-zinc-500">
-            Direct file: <a className="underline" href={IOS.file}>openlounge-0.3.1-b19.ipa</a>
+            Direct file: <a className="underline" href={IOS.file}>openlounge-0.3.3-b23.ipa</a>
           </p>
           <Sha value={IOS.sha256} />
         </section>
