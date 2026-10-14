@@ -89,7 +89,7 @@ export default function NotificationSettingsPage() {
                         <span className="block text-sm font-medium">{it.label}</span>
                         <span className="block text-xs text-zinc-500">{it.hint}</span>
                       </span>
-                      <Switch label={it.label} on={prefs[it.key]} onChange={(v) => patch({ [it.key]: v })} />
+                      <Switch label={it.label} on={!!prefs[it.key]} onChange={(v) => patch({ [it.key]: v })} />
                     </label>
                   ))}
                 </div>
