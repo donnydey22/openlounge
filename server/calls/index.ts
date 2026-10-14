@@ -81,6 +81,11 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       return false;
     },
     isForeground,
+    connCount: (userId) => {
+      let n = 0;
+      for (const _ of io.members(`user:${userId}`)) n++;
+      return n;
+    },
     peer: (id) => {
       const u = store.publicUser(id);
       return u ? { id: u.id, name: u.name, username: u.username, color: u.color, photoUrl: u.photoUrl ?? null } : null;
@@ -131,18 +136,23 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   const s = () => svc!;
   // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
   // normal app-side socket teardown; browser code cannot address another connection id.
-  socket.onClose(() => mediaGateway().closeConnection(socket.id));
+  // The user this socket made call requests as: on close it leaves whatever call it was in (stale re-dial detection).
+  let callUser: string | null = null;
+  socket.onClose(() => {
+    mediaGateway().closeConnection(socket.id);
+    if (callUser) svc?.connClosed(socket.id, callUser);
+  });
   // This is the sole gateway authentication route. It is intentionally outside `authed`: the SFU has no user session,
   // but must prove knowledge of a server-only secret before it can receive any brokered media command.
   socket.on("ms:gateway:hello", ({ secret }: { secret?: unknown }, ack: AckFn = noop) => ack(mediaGateway().attach(socket, secret)));
   socket.on("ms:gateway:response", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleResponse(socket, data)));
   socket.on("ms:gateway:notice", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleNotice(socket, data)));
   socket.on("call:start", ({ peerId, video }: { peerId: string; video?: boolean }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void s().start(uid, peerId, !!video).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId }: { callId: string }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void s().accept(callId, uid).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
+    authed(ack, (uid) => void ((callUser = uid), s().accept(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
   );
   socket.on("call:decline", ({ callId, message }: { callId: string; message?: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
@@ -155,7 +165,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:hangup", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().hangup(callId, uid))));
   socket.on("call:video", ({ callId, on }: { callId: string; on: boolean }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().setVideo(callId, uid, !!on))));
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void s().get_(callId, uid).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
+    authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
   );
   socket.on("call:current", (_: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack({ ok: true, call: s().liveCallOf(uid) })));
   socket.on("call:history", ({ before }: { before?: number }, ack: AckFn = noop) =>
@@ -179,6 +189,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     authed(ack, (uid) => {
       const { callId, ...payload } = input ?? {};
       if (typeof callId !== "string") return ack({ ok: false, error: "callId required" });
+      callUser = uid;
       void s()
         .mediaRequest(callId, uid, socket.id, method, payload)
         .then((r) => {
