@@ -77,6 +77,7 @@ test("csp: production policy covers LiveKit (self-hosted + cloud), Firebase, /ws
   for (const s of ["wss://livekit-production-5c67.up.railway.app", "https://livekit-production-5c67.up.railway.app", "wss://x.livekit.cloud", "https://*.googleapis.com", "https://www.gstatic.com", "https://www.google.com/recaptcha/", "https://*.firebaseapp.com", "wss://openlounge.app", "frame-ancestors 'none'"])
     assert.ok(csp.includes(s), s);
   assert.ok(!csp.includes("unsafe-eval"));
+  assert.ok(!csp.includes("raw.githubusercontent.com"), "Telegram remote emoji host must stay out of CSP");
   assert.ok(buildCsp({}, true).includes("'unsafe-eval'"));
 });
 

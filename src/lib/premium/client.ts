@@ -30,7 +30,7 @@ export const savePrefs = (body: { appIcon?: string; badgeVisible?: boolean }) =>
 export const subscribe = (plan: PremiumPlan) => monetApi<{ subscriptionId: string; approveUrl: string | null }>("/api/premium/subscribe", { body: { plan } });
 export const syncSubscription = (subscriptionId: string) => monetApi<{ me: PremiumMe }>("/api/premium/subscription/sync", { body: { subscriptionId } }).then((r) => r.me);
 export const cancelSubscription = () => monetApi<{ me: PremiumMe }>("/api/premium/cancel", { body: {} }).then((r) => r.me);
-export const inApp = () => inNativeShell() || (typeof navigator !== "undefined" && /OpenLounge(Android|iOS)/i.test(navigator.userAgent));
+export const inApp = () => inNativeShell() || (typeof navigator !== "undefined" && /OpenLounge(\/(android|ios)\/|(Android|iOS))/i.test(navigator.userAgent));
 
 // ---------- app icon ----------
 const LS_ICON = "ol:premium:icon";

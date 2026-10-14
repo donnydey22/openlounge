@@ -10,7 +10,7 @@
 // The poster is always painted underneath, so there's no flash while the animation decodes. Reduced motion → posters.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { assetChain, FALLBACK_TIMEOUT_MS, noteAssetFailure, REMOTE_TIMEOUT_MS, resolveRemote, type EmojiAsset, type EmojiSource } from "@/lib/emoji/assets";
+import { assetChain, FALLBACK_TIMEOUT_MS, noteAssetFailure, type EmojiAsset, type EmojiSource } from "@/lib/emoji/assets";
 import { cn } from "@/lib/utils";
 
 export type EmojiMode = "loop" | "once" | "hover" | "static";
@@ -120,31 +120,17 @@ export const AnimatedEmoji = memo(function AnimatedEmoji({
   autoPlay?: boolean;
   onCycleEnd?: () => void;
 }) {
-  // fallback chain (assets.ts): our Telegram copy → upstream Telegram file → our Noto copy → native glyph
+  // fallback chain (assets.ts): local Telegram (off) → Noto → Fluent → native glyph
   const chain = useMemo(() => assetChain(emoji, source, mode !== "static"), [emoji, source, mode]);
   const [stage, setStage] = useState(0);
-  const [resolved, setResolved] = useState<{ stage: number; asset: EmojiAsset | null } | null>(null);
   useEffect(() => setStage(0), [chain]);
   const step = chain[stage];
-  useEffect(() => {
-    if (step?.type !== "remote") return;
-    let alive = true;
-    resolveRemote(step)
-      .then((a) => alive && (a ? setResolved({ stage, asset: a }) : setStage((s) => s + 1)))
-      .catch(() => alive && setStage((s) => s + 1));
-    return () => {
-      alive = false;
-    };
-  }, [step, stage]);
-  const asset: EmojiAsset | null | undefined = !step ? null : step.type === "remote" ? (resolved?.stage === stage ? resolved.asset : undefined) : step;
+  const asset: EmojiAsset | null = step ?? null;
   const fail = useCallback(() => {
     if (step) noteAssetFailure(step);
     setStage((s) => s + 1);
   }, [step]);
   if (asset === null) return <Glyph emoji={emoji} size={size} className={className} />;
-  // A remote-source probe or a cache retry must never leave a picker cell empty. The native glyph is the stable
-  // first frame until the self-hosted poster/animation for this stage is ready (or the chain falls back again).
-  if (asset === undefined) return <Glyph emoji={emoji} size={size} className={className} />;
   return asset.type === "webp" ? (
     <WebpEmoji key={stage} asset={asset} emoji={emoji} size={size} mode={mode} replay={replay} className={className} autoPlay={autoPlay} onCycleEnd={onCycleEnd} onBroken={fail} />
   ) : (
@@ -184,7 +170,7 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
     let url: string | null = null;
     let done: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
-    blobOf(asset.src, asset.remote ? REMOTE_TIMEOUT_MS : FALLBACK_TIMEOUT_MS)
+    blobOf(asset.src, FALLBACK_TIMEOUT_MS)
       .then((b) => {
         if (cancelled) return;
         url = URL.createObjectURL(b);
@@ -220,9 +206,9 @@ function WebpEmoji({ asset, emoji, size, mode, replay, className, autoPlay, onCy
   const streamed = animSrc && !animSrc.startsWith("blob:") ? animSrc : null;
   useEffect(() => {
     if (!streamed) return;
-    const t = setTimeout(() => !loadedRef.current && brokenRef.current(), asset.remote ? REMOTE_TIMEOUT_MS : FALLBACK_TIMEOUT_MS);
+    const t = setTimeout(() => !loadedRef.current && brokenRef.current(), FALLBACK_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [streamed, asset.remote]);
+  }, [streamed]);
 
   return (
     <span

@@ -40,5 +40,5 @@ export function mediaNative(): MediaNativeBridge | null {
   return ((window as unknown as { OpenLoungeNative?: MediaNativeBridge }).OpenLoungeNative as MediaNativeBridge) ?? null;
 }
 export function inNativeApp() {
-  return typeof navigator !== "undefined" && (/OpenLounge(Android|iOS)/i.test(navigator.userAgent) || !!mediaNative()?.getPlatform);
+  return typeof navigator !== "undefined" && (/OpenLounge(\/(android|ios)\/|(Android|iOS))/i.test(navigator.userAgent) || !!mediaNative()?.getPlatform);
 }

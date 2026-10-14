@@ -29,7 +29,7 @@ function ua() {
 
 /** Our Android APK wraps the site in a WebView and tags its user agent. */
 export function isAndroidApp() {
-  return /OpenLoungeAndroid/.test(ua());
+  return /OpenLounge\/android\//i.test(ua()) || /OpenLoungeAndroid/.test(ua());
 }
 
 export function isIOS() {
