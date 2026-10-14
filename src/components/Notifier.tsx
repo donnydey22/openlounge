@@ -6,6 +6,7 @@ import { Bell, Share } from "lucide-react";
 import { useApp } from "./AppProvider";
 import type { ActivityNotice, ChatMessage, DirectMessage, RoomPresenceEvent, RoomState } from "@/lib/types";
 import { nativePlatform } from "@/lib/native";
+import { NATIVE_NOTIFICATION_EVENT, parseNativePushNotice } from "@/lib/nativeNotification";
 import { firstName } from "@/lib/utils";
 import {
   getPermission,
@@ -94,6 +95,9 @@ export function Notifier({ children }: { children: React.ReactNode }) {
   };
   // unseen counts while hidden (reset when you come back)
   const unseen = useRef(new Map<string, number>());
+  // FCM can arrive late after a newer replacement for the same collapse tag. Keep a tiny per-tag high-water mark
+  // so a delayed payload never replaces a newer in-app notice.
+  const nativeNoticeAt = useRef(new Map<string, number>());
   const bump = (tag: string) => {
     const n = (unseen.current.get(tag) ?? 0) + 1;
     unseen.current.set(tag, n);
@@ -230,6 +234,28 @@ export function Notifier({ children }: { children: React.ReactNode }) {
       joinTimer.current = null;
     }
   }, []);
+
+  // Native FCM messages are normally only presented while the app is backgrounded. If a visibility change races a
+  // delivery, Android/iOS forward the bounded data payload here instead of showing a duplicate system notification.
+  // The WebSocket remains authoritative; its later event replaces this banner by the same collapse tag.
+  useEffect(() => {
+    const onNativeNotification = (event: Event) => {
+      const n = parseNativePushNotice((event as CustomEvent<unknown>).detail);
+      if (!n || n.clear || pageHidden() || n.type === "call_incoming" || n.type === "call_cancel") return;
+      if (n.sentAt !== undefined) {
+        const previous = nativeNoticeAt.current.get(n.tag) ?? 0;
+        if (n.sentAt < previous) return;
+        nativeNoticeAt.current.set(n.tag, n.sentAt);
+        if (nativeNoticeAt.current.size > 500) nativeNoticeAt.current.delete(nativeNoticeAt.current.keys().next().value as string);
+      }
+      if (n.roomId && roomCtx.current?.room.id === n.roomId) return;
+      const conversationId = n.groupId ?? n.peerId;
+      if (n.type === "dm" && conversationId && getActiveDm() === conversationId) return;
+      banner({ title: n.title, body: n.body || undefined, avatar: "app", href: n.url, key: n.tag });
+    };
+    window.addEventListener(NATIVE_NOTIFICATION_EVENT, onNativeNotification);
+    return () => window.removeEventListener(NATIVE_NOTIFICATION_EVENT, onNativeNotification);
+  }, [banner, getActiveDm]);
 
   // ---- socket events ----
   useEffect(() => {

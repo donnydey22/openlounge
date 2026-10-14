@@ -10,6 +10,8 @@ export interface OpenLoungeNativeBridge {
   contactsPermission?(): string; // "granted" | "denied" | "prompt"
   openAppSettings?(): void;
   requestNotificationPermission?(): void;
+  /** Native launcher / app-icon unread badge. */
+  setBadge?(count: number): void;
   /** iOS RN WebView fallback */
   postMessage?(s: string): void;
 }

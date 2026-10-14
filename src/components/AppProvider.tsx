@@ -3,6 +3,8 @@
 import { markDeleted } from "@/lib/userDisplay";
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
+import { native } from "@/lib/native";
+import { NATIVE_NOTIFICATION_EVENT, parseNativePushNotice } from "@/lib/nativeNotification";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { bumpClock } from "@/lib/time";
 import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
@@ -142,11 +144,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // (+ unread notifications once there is a notification inbox). Opening a DM lowers dm:unread → badge updates/clears.
   useEffect(() => {
     try {
-      (window as unknown as { OpenLoungeNative?: { setBadge?: (n: number) => void } }).OpenLoungeNative?.setBadge?.(unreadDms);
+      native()?.setBadge?.(unreadDms);
     } catch {
       /* older shells */
     }
   }, [unreadDms]);
+  // A foreground FCM arrival is rare (the server normally chooses WebSocket banners for a visible app), but it can
+  // race a visibility change. Reconcile its authoritative unread count without a full reload.
+  useEffect(() => {
+    const onNativeNotification = (event: Event) => {
+      const notice = parseNativePushNotice((event as CustomEvent<unknown>).detail);
+      if (notice && notice.badge !== null) setUnreadDms(notice.badge);
+    };
+    window.addEventListener(NATIVE_NOTIFICATION_EVENT, onNativeNotification);
+    return () => window.removeEventListener(NATIVE_NOTIFICATION_EVENT, onNativeNotification);
+  }, []);
   const [onboarding, setOnboarding] = useState(false);
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [lastSeen, setLastSeen] = useState<Map<string, number>>(new Map());
