@@ -57,6 +57,7 @@ export function registerRealtime(io: WsHub) {
     (connId) => store.roomOfSocket(connId) !== null,
     (sessionId, at) => store.touchSession(sessionId, at),
     store.lastSeenByUser(),
+    (uid) => bg(push()?.hallwayPresence(uid)),
   );
   const withOnline = <T extends { id: string }>(u: T): T & { online: boolean; lastSeenAt: number | null; presence: PresenceStatus } => ({
     ...u,
