@@ -5,6 +5,12 @@
  * It exists so Android Chrome (where `new Notification()` throws) can show notifications via
  * registration.showNotification(), and so clicking a notification focuses the tab and opens
  * the right room / DM.
+ *
+ * Incoming calls (hidden tab / device locked): the page posts openlounge:call-ring-start and we
+ * show a persistent CATEGORY_CALL-style notification (requireInteraction, renotify, vibrate,
+ * Accept / Decline) re-shown every few seconds until stop / answer / decline / expiry.
+ * Browsers will not let a page keep Web Audio ringing while fully backgrounded — this notification
+ * is the audible/visible fallback. See docs/calls-background-ring.md.
  */
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -14,15 +20,138 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+const CALL_TAG_PREFIX = "call:";
+const RING_TICK_MS = 3000;
+/** @type {Map<string, { title: string, body: string, url: string, acceptUrl: string, expiresAt: number, video: boolean, timer: number|null }>} */
+const ringing = new Map();
+
+function callTag(callId) {
+  return CALL_TAG_PREFIX + callId;
+}
+
+async function showCallRing(info) {
+  const tag = callTag(info.callId);
+  try {
+    await self.registration.showNotification(info.title || "Incoming call", {
+      body: info.body || "Incoming call",
+      tag,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: [400, 200, 400, 200, 400],
+      data: {
+        url: info.url,
+        acceptUrl: info.acceptUrl,
+        callId: info.callId,
+        kind: "call_ring",
+      },
+      actions: [
+        { action: "accept", title: "Accept" },
+        { action: "decline", title: "Decline" },
+      ],
+    });
+  } catch (e) {
+    /* actions unsupported in some browsers — retry without them */
+    try {
+      await self.registration.showNotification(info.title || "Incoming call", {
+        body: info.body || "Incoming call",
+        tag,
+        renotify: true,
+        requireInteraction: true,
+        silent: false,
+        vibrate: [400, 200, 400],
+        data: { url: info.url, acceptUrl: info.acceptUrl, callId: info.callId, kind: "call_ring" },
+      });
+    } catch (e2) {
+      /* ignore */
+    }
+  }
+}
+
+function armRing(info) {
+  const prev = ringing.get(info.callId);
+  if (prev && prev.timer) clearInterval(prev.timer);
+  const tick = () => {
+    const cur = ringing.get(info.callId);
+    if (!cur) return;
+    if (Date.now() > cur.expiresAt) {
+      stopRing(info.callId);
+      return;
+    }
+    void showCallRing(cur);
+  };
+  const entry = { ...info, timer: setInterval(tick, RING_TICK_MS) };
+  ringing.set(info.callId, entry);
+  void showCallRing(entry);
+}
+
+async function stopRing(callId) {
+  if (callId) {
+    const cur = ringing.get(callId);
+    if (cur?.timer) clearInterval(cur.timer);
+    ringing.delete(callId);
+    const notes = await self.registration.getNotifications({ tag: callTag(callId) });
+    for (const n of notes) n.close();
+    return;
+  }
+  for (const [id, cur] of ringing) {
+    if (cur.timer) clearInterval(cur.timer);
+    ringing.delete(id);
+    const notes = await self.registration.getNotifications({ tag: callTag(id) });
+    for (const n of notes) n.close();
+  }
+}
+
+self.addEventListener("message", (event) => {
+  const msg = event.data || {};
+  if (msg.type === "openlounge:call-ring-start" && typeof msg.callId === "string") {
+    armRing({
+      callId: msg.callId,
+      title: typeof msg.title === "string" ? msg.title : "Incoming call",
+      body: typeof msg.body === "string" ? msg.body : "Incoming call",
+      url: typeof msg.url === "string" ? msg.url : "/",
+      acceptUrl: typeof msg.acceptUrl === "string" ? msg.acceptUrl : msg.url || "/",
+      expiresAt: typeof msg.expiresAt === "number" ? msg.expiresAt : Date.now() + 45_000,
+      video: !!msg.video,
+    });
+    return;
+  }
+  if (msg.type === "openlounge:call-ring-stop") {
+    void stopRing(typeof msg.callId === "string" ? msg.callId : undefined);
+  }
+});
+
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
   const data = event.notification.data || {};
+  const action = event.action;
+  event.notification.close();
+  if (data.kind === "call_ring" && data.callId) void stopRing(data.callId);
+
   let url = "/";
   try {
-    url = new URL(data.url || "/", self.location.origin).href;
+    if (action === "accept" && data.acceptUrl) url = new URL(data.acceptUrl, self.location.origin).href;
+    else if (action === "decline" && data.callId) {
+      // Decline without focusing or opening a window: every open client gets one decline message.
+      event.waitUntil(
+        (async () => {
+          const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+          for (const c of wins) {
+            try {
+              c.postMessage({ type: "openlounge:call-decline", callId: data.callId });
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        })(),
+      );
+      return;
+    } else {
+      url = new URL(data.url || "/", self.location.origin).href;
+    }
   } catch (e) {
-    /* keep "/" */
+    url = self.location.origin + "/";
   }
+
   event.waitUntil(
     (async () => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -33,19 +162,35 @@ self.addEventListener("notificationclick", (event) => {
           return false;
         }
       });
-      // prefer the tab that raised the notification, then a visible/focused one, then any
       const target =
         same.find((c) => data.clientId && c.id === data.clientId) ||
         same.find((c) => c.focused) ||
         same.find((c) => c.visibilityState === "visible") ||
         same[0];
+      if (action === "accept" || action === "" || action === undefined) {
+        if (target) {
+          try {
+            await target.focus();
+          } catch (e) {
+            /* focus can be refused; still navigate */
+          }
+          if (action === "accept") {
+            target.postMessage({ type: "openlounge:navigate", url });
+            target.postMessage({ type: "openlounge:call-accept", callId: data.callId });
+          } else {
+            target.postMessage({ type: "openlounge:navigate", url });
+          }
+          return;
+        }
+        if (self.clients.openWindow) await self.clients.openWindow(url);
+        return;
+      }
       if (target) {
         try {
           await target.focus();
         } catch (e) {
-          /* focus can be refused; still navigate */
+          /* ignore */
         }
-        // the page routes client-side (keeps the room's audio/WebSocket alive)
         target.postMessage({ type: "openlounge:navigate", url });
         return;
       }
