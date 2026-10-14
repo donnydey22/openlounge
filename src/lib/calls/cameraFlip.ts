@@ -43,3 +43,21 @@ export async function replaceCameraForFlip(track: CameraTrackLike, facing: Camer
     throw error;
   }
 }
+
+export type FlippableCameraTrack = CameraTrackLike & {
+  sender?: unknown;
+  restartTrack(options: { facingMode: CameraFacing }): Promise<unknown>;
+};
+
+/**
+ * LiveKit's replaceTrack() throws on a track that is not yet published (no RTCRtpSender), which is the case for the
+ * ringing / pre-connect self-preview. Before publish nothing remote can go black, so keep restartTrack() there and use
+ * the pre-acquire + replace path only once the track has a sender.
+ */
+export async function flipCameraTrack(track: FlippableCameraTrack, facing: CameraFacing, capture?: CameraCapture) {
+  if (!track.sender) {
+    await track.restartTrack({ facingMode: facing });
+    return track.mediaStreamTrack;
+  }
+  return replaceCameraForFlip(track, facing, capture);
+}

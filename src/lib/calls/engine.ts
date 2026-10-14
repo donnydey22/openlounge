@@ -15,7 +15,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { replaceCameraForFlip } from "./cameraFlip";
+import { flipCameraTrack } from "./cameraFlip";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -1180,7 +1180,7 @@ export class CallEngine {
         // Do not call LocalVideoTrack.restartTrack(): it stops and detaches the active camera before requesting the
         // other lens. Pre-acquiring and replacing keeps the existing self-preview / publication live on an iOS or
         // Android capture failure.
-        await replaceCameraForFlip(t, facing);
+        await flipCameraTrack(t, facing);
       }
       this.set({ facing });
     } catch {

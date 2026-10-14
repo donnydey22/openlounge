@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { captureCameraForFlip, replaceCameraForFlip } from "../../src/lib/calls/cameraFlip";
+import { captureCameraForFlip, flipCameraTrack, replaceCameraForFlip } from "../../src/lib/calls/cameraFlip";
 import { MediasoupCallSession } from "../../src/lib/calls/mediasoupSession";
 
 type Track = MediaStreamTrack & { stopped: number };
@@ -113,4 +113,43 @@ test("Mediasoup flip keeps the current camera when its producer rejects the repl
     if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
     else Reflect.deleteProperty(globalThis, "navigator");
   }
+});
+
+const lkLike = (old: Track, published: boolean) => {
+  const calls: string[] = [];
+  const t = {
+    mediaStreamTrack: old as MediaStreamTrack,
+    sender: published ? {} : undefined,
+    async replaceTrack(track: MediaStreamTrack) {
+      // mirrors livekit-client LocalTrack.replaceTrack
+      if (!t.sender) throw new Error("unable to replace an unpublished track");
+      calls.push("replace");
+      t.mediaStreamTrack = track;
+    },
+    async restartTrack(opts: { facingMode: string }) {
+      calls.push(`restart:${opts.facingMode}`);
+    },
+  };
+  return { t, calls };
+};
+
+test("flip while ringing (unpublished preview) restarts instead of replacing", async () => {
+  const { t, calls } = lkLike(videoTrack("front"), false);
+  let captured = false;
+  await flipCameraTrack(t, "environment", async () => {
+    captured = true;
+    throw new Error("should not capture");
+  });
+  assert.deepEqual(calls, ["restart:environment"]);
+  assert.equal(captured, false, "no second camera opened for an unpublished preview");
+});
+
+test("flip after publish pre-acquires and replaces", async () => {
+  const old = videoTrack("front");
+  const next = videoTrack("back");
+  const { t, calls } = lkLike(old, true);
+  const r = await flipCameraTrack(t, "environment", async () => ({ getVideoTracks: () => [next], getTracks: () => [next] }));
+  assert.equal(r, next);
+  assert.deepEqual(calls, ["replace"]);
+  assert.equal(old.stopped, 0);
 });
