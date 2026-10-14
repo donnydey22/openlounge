@@ -27,6 +27,9 @@ dump_pid=""
 cleanup() {
   local rc=$?
   set +e
+  if [[ -n "${snapshot_pid:-}" && -n "${PGHOST:-}" ]]; then
+    timeout 15 psql -X -q -At -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE usename = current_user AND pid <> pg_backend_pid() AND query LIKE 'SELECT pg_sleep(%'" >/dev/null 2>&1 || true
+  fi
   for pid in "${counts_pid:-}" "${dump_pid:-}" "${snapshot_pid:-}"; do
     [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null || true
   done
@@ -183,7 +186,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   printf 'table_count=%s\n' "$source_table_count"
 } >"$manifest"
 minisign -S -s "$signing_key" -m "$manifest" -x "$signature" >/dev/null
-chmod 600 "$archive" "$counts_archive" "$manifest" "$signature"
+chmod 640 "$archive" "$counts_archive" "$manifest" "$signature"
 
 # Encrypted payloads and signature arrive first; the signed manifest is published last.
 timeout --foreground "$BACKUP_SFTP_TIMEOUT_SEC" sftp -q -b - \

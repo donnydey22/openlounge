@@ -40,7 +40,7 @@ CREATE ROLE openlounge_backup_ro
   CONNECTION LIMIT 4
   PASSWORD '<generated-secret>';
 
-GRANT CONNECT ON DATABASE openlounge TO openlounge_backup_ro;
+GRANT CONNECT ON DATABASE railway TO openlounge_backup_ro;
 GRANT pg_read_all_data TO openlounge_backup_ro;
 ```
 
@@ -65,7 +65,7 @@ Four connections accommodate the snapshot holder, parallel row-count inventory, 
    |---|---|---|
    | `BACKUP_PGHOST` | `postgres.railway.internal` | Enforced private network address |
    | `BACKUP_PGPORT` | `5432` | Private Postgres port |
-   | `BACKUP_PGDATABASE` | application database name | Source database |
+   | `BACKUP_PGDATABASE` | `railway` | Source database (Railway Postgres database name) |
    | `BACKUP_PGUSER` | `openlounge_backup_ro` | Enforced read-only role |
    | `BACKUP_PGPASSWORD` | generated role password | Sealed only |
    | `BACKUP_PGSSLMODE` | `verify-full` | Authenticated TLS required |
@@ -77,6 +77,7 @@ Four connections accommodate the snapshot holder, parallel row-count inventory, 
    | `BACKUP_EXPORT_TIMEOUT_SEC` | `3600` | Maximum dump/inventory phase |
    | `BACKUP_SNAPSHOT_HOLD_SEC` | `3900` | Must exceed export timeout; holder is killed immediately after both consumers finish |
    | `BACKUP_SFTP_TIMEOUT_SEC` | `600` | Maximum transfer phase |
+| `BACKUP_SFTP_REMOTE_DIR` | `.` | Remote directory after chroot/`ForceCommand` lands in `incoming` |
 
    The service requires no public domain, persistent volume, inbound port, public Railway Postgres TCP proxy, or app `DATABASE_URL`.
 
@@ -172,6 +173,15 @@ The path unit has both `PathChanged` and `PathExistsGlob`: an already-received m
 - A failing or unsigned receipt is moved to the verifier-only `quarantine/` directory with a timestamp and reason, emits `user.err`, and does not block later valid manifests. Inspect it before deletion.
 - The verifier stores the latest accepted signed receipt timestamp under its private state directory and rejects a replay or stale receipt.
 - Retention is **7 daily** and **4 weekly** verified receipt quartets: encrypted dump, encrypted counts, signed manifest, and signature. A Sunday weekly copy keeps its original signed names and signature intact.
+
+
+## Production facts (as deployed)
+
+- The Railway Postgres database name is **`railway`** (`BACKUP_PGDATABASE=railway`).
+- The exporter sets artifact mode to **`0640`** (`chmod 640`) on the encrypted dump, counts archive, signed manifest, and signature **before** SFTP upload so the ingress setgid/`-u 0007` path yields group-readable files for the verifier.
+- Set **`BACKUP_SFTP_REMOTE_DIR=.`**. With `ChrootDirectory /srv/openlounge-backups` and `ForceCommand internal-sftp -d /incoming`, the client session already starts in `incoming`; a remote dir of `incoming` would be wrong.
+- The verifier uses lock file **`/srv/openlounge-backups/.restore.lock`**, owned by the **verify** account (`openlounge-backup-verify`), mode **`0600`**.
+- Do **not** use `ForceCommand` with external `sftp-server -m …`. That form breaks SFTP logins for this Match block; keep **`internal-sftp`** as documented above.
 
 ## Acceptance, restore, and failure drill
 
