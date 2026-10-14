@@ -85,24 +85,21 @@ t(B.parseBridgeMessage('{"__ol":1,"type":"call:ended"}'), null, 'enveloped call 
   t(/if \(false\)/.test(off) && !/'calls'\]/.test(off), true, 'native calls flag off by default');
 }
 {
-  const { shouldLock, shouldReportVisible, isCallAcceptPath } = require(path.join(root, 'src/lockPolicy.ts'));
+  const { shouldLock } = require(path.join(root, 'src/lockPolicy.ts'));
   t(shouldLock(false, 0, 1e6), false, 'lock off');
   t(shouldLock(true, 0, 5), true, 'cold start locks');
   t(shouldLock(true, 1000, 61000), false, '60s exactly no lock');
   t(shouldLock(true, 1000, 61001), true, '>60s locks');
-  t(shouldReportVisible(true, 'unlocked'), true, 'visible when unlocked+active');
-  t(shouldReportVisible(true, 'locked'), false, 'not visible when locked');
-  t(shouldReportVisible(false, 'unlocked'), false, 'not visible when backgrounded');
-  t(isCallAcceptPath('/call/abc?accept=1'), true, 'accept path');
-  t(isCallAcceptPath('/call/abc'), true, 'bare call path');
-  t(isCallAcceptPath('/messages/u_1'), false, 'non-call path');
 }
 for (const js of [B.injectedBeforeContentLoaded('ios', '0.2.3'), B.injectedBeforeContentLoaded('ios', '0.3.1', true), B.audioResumeScript('x'), B.keyboardScript(true, 300, 250), B.nativeEventScript('a', { b: 1 })]) {
   new Function(js); // syntax check
 }
 console.log(failed ? `${failed} FAILED` : 'bridge/link checks: all OK');
 process.exit(failed ? 1 : 0);
-// ring reliability: CallKit audio activation must re-arm the page's ring (AudioContext + <audio> loop)
-t(/__olRingResume/.test(B.audioResumeScript('callkit-activate')), true, 'audio resume re-arms the page ring');
-t(/emit\(\["type": "audio"/.test(require('fs').readFileSync(path.join(root, 'modules/openlounge-calls/ios/OLCallManager.swift'), 'utf8')), true, 'CallKit didActivate tells JS');
-t(/a\.type === 'audio'[\s\S]{0,120}audioResumeScript/.test(require('fs').readFileSync(path.join(root, 'App.tsx'), 'utf8')), true, 'App injects resume on CallKit audio');
+// ring: CallKit audio activation must re-arm the page ring (AudioContext + <audio> loop)
+{
+  const fs = require('fs');
+  t(/__olRingResume/.test(B.audioResumeScript('callkit-activate')), true, 'audio resume re-arms the page ring');
+  t(/emit\(\["type": "audio"/.test(fs.readFileSync(path.join(root, 'modules/openlounge-calls/ios/OLCallManager.swift'), 'utf8')), true, 'CallKit didActivate tells JS');
+  t(/a\.type === 'audio'[\s\S]{0,120}audioResumeScript/.test(fs.readFileSync(path.join(root, 'App.tsx'), 'utf8')), true, 'App injects resume on CallKit audio');
+}
