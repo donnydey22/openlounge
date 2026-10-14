@@ -41,7 +41,7 @@ export function belowFloor(ua: string | null | undefined): boolean {
 
 /** Paths that stay reachable for every browser: downloads, legal, APIs, assets, health. */
 export function gateExempt(path: string): boolean {
-  return /^\/(download|android|terms|privacy|privacy-policy|terms-of-service|api|auth|_next|avatars|media|emoji|stickers\/assets|healthz|readyz|metrics|ws|favicon\.ico|icon\.svg|apple-icon\.png|manifest\.webmanifest|robots\.txt|sitemap\.xml|\.well-known)(\/|$|\?|\.)/.test(path) || /\.[a-z0-9]{2,5}$/i.test(path);
+  return /^\/(download|android|terms|privacy|privacy-policy|terms-of-service|api|auth|_next|avatars|media|emoji|stickers\/assets|healthz|readyz|metrics|ws|favicon\.ico|icon\.svg|apple-icon\.png|manifest\.webmanifest|robots\.txt|sitemap\.xml|\.well-known)(\/|$|\?|\.)/.test(path) || (/\.[a-z0-9]{2,5}$/i.test(path) && !/\.html?$/i.test(path));
 }
 
 export const UPDATE_LINKS = {
@@ -69,4 +69,14 @@ export function shouldShowSupportedNote(ua: string, store: Pick<Storage, "getIte
   if (store.getItem(SUPPORTED_NOTE_KEY)) return false;
   const e = detectEngine(ua);
   return e.engine !== "unknown" && e.version != null && !belowFloor(ua);
+}
+
+/** A top-level page load. Safari/WebDriver and some navigations send Accept: *\/* (or none), so also trust Sec-Fetch-*. */
+export function isPageNavigation(method: string | undefined, h: Record<string, string | string[] | undefined>): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const accept = String(h.accept ?? "").trim();
+  const dest = String(h["sec-fetch-dest"] ?? ""), mode = String(h["sec-fetch-mode"] ?? "");
+  if (dest && dest !== "document") return false;
+  if (h.rsc || h["next-router-prefetch"]) return false;
+  return /text\/html/.test(accept) || dest === "document" || mode === "navigate" || accept === "" || accept === "*/*";
 }
