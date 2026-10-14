@@ -193,6 +193,32 @@ export class CallEngine {
     this.watchNetwork();
   }
 
+  /** Retryable start failures: the socket isn't open yet, or it is open but the session hasn't resumed on it yet. */
+  static isNotReady(r: { ok: boolean; error?: string }) {
+    return !r.ok && /not connected|not signed in|no connection/i.test(r.error ?? "");
+  }
+  static START_WAIT_MS = 8_000;
+  /** call:start, retried while the connection is (re)establishing — a tap right after page load / resume isn't lost.
+   *  Safe to repeat: the server hands back the same call for the same pair. Times out to "Couldn't start the call". */
+  private async startWhenConnected(peerId: string, video: boolean): Promise<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string }> {
+    const until = Date.now() + CallEngine.START_WAIT_MS;
+    let attempt = 0;
+    for (;;) {
+      let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string } | null = null;
+      try {
+        r = await this.req("call:start", { peerId, video }, Math.max(1_000, Math.min(10_000, until - Date.now())));
+      } catch {
+        r = null;
+      }
+      if (r && !CallEngine.isNotReady(r)) return r;
+      // no reply at all (not open / dropped / timed out) is always retryable until the deadline
+      if (!this.busy || this.s.ui !== "outgoing") return { ok: false, reason: "cancelled" };
+      if (Date.now() >= until) return { ok: false, error: "Couldn't start the call" };
+      this.netLog("start-retry", { attempt: ++attempt });
+      await new Promise((res) => setTimeout(res, Math.min(250 * attempt, 1_000)));
+    }
+  }
+
   private req<T = Record<string, unknown>>(ev: string, data: unknown, ms = 10_000): Promise<T> {
     if (!this.socket) return Promise.reject(new Error("Not connected"));
     return this.socket.request<T>(ev, data, ms);
@@ -285,11 +311,8 @@ export class CallEngine {
     this.preMic = this.acquireMic();
     if (video) void this.ensureCamPreview();
     let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string };
-    try {
-      r = await this.req("call:start", { peerId: peer.id, video });
-    } catch {
-      r = { ok: false, error: "No connection. Try again." };
-    }
+    r = await this.startWhenConnected(peer.id, video);
+    if (r.reason === "cancelled") return; // hung up while the connection was coming back
     if (!r.ok || !r.call) {
       if (r.reason === "busy") {
         playBusy();
