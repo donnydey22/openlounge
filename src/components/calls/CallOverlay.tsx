@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, Volume2, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
-import { holdFrames, videoFit } from "@/lib/calls/frameHold";
+import { holdFrames } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import css from "./calls.module.css";
@@ -196,20 +196,11 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
 function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: boolean }) {
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
-  const [fit, setFit] = useState<"cover" | "contain">("cover");
   useEffect(() => {
     const el = vid.current;
     callEngine.attachVideo(which, el);
     const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
-    const sync = () => el && setFit(videoFit(el.videoWidth, el.videoHeight, window.innerWidth, window.innerHeight));
-    el?.addEventListener("loadedmetadata", sync);
-    el?.addEventListener("resize", sync);
-    window.addEventListener("resize", sync);
-    sync();
     return () => {
-      el?.removeEventListener("loadedmetadata", sync);
-      el?.removeEventListener("resize", sync);
-      window.removeEventListener("resize", sync);
       release();
       callEngine.attachVideo(which, null);
     };
@@ -217,9 +208,9 @@ function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: bo
   // #50: one full-viewport stage, video edge to edge (object-fit: cover), no blurred/gradient filler behind it.
   const flip = mirrored ? "-scale-x-100" : undefined;
   return (
-    <div className={css.videoStage} data-testid="call-video-stage" data-fit={fit}>
-      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ objectFit: fit }} data-testid={`call-video-${which}`} />
-      <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} style={{ objectFit: fit }} data-testid={`call-hold-${which}`} />
+    <div className={css.videoStage} data-testid="call-video-stage" data-fit="cover">
+      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} data-testid={`call-video-${which}`} />
+      <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} data-testid={`call-hold-${which}`} />
     </div>
   );
 }

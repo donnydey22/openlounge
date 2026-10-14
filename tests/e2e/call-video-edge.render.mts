@@ -105,7 +105,7 @@ for (const eng of ENGS) {
     });
     check(`${t}: #50 stage fills viewport`, r.stage[0] === 0 && r.stage[1] === 0 && Math.round(r.stage[2]) === w && Math.round(r.stage[3]) === h, JSON.stringify(r.stage));
     check(`${t}: #50 video box edge to edge`, Math.round(r.video[2]) === w && Math.round(r.video[3]) === h, JSON.stringify(r.video));
-    check(`${t}: #50 object-fit ${r.expectFit} (no bars on phones/tablets)`, r.fit === "cover" && (w >= 1024 || r.expectFit === "cover"), `${r.fit}/${r.expectFit}`);
+    check(`${t}: #50 object-fit cover on every size (no bars)`, r.fit === "cover" && r.expectFit === "cover", `${r.fit}/${r.expectFit}`);
     check(`${t}: #49 no poster, no controls`, r.poster === "" && !r.controls, r.poster);
     check(`${t}: #49 srcObject never replaced across blip`, r.sameStream);
     check(`${t}: #49 last frame held during stall (pixels not blank/white)`, r.heldPixelsDuringStall === "ok" && r.stats.heldSeen > 0, JSON.stringify(r));
