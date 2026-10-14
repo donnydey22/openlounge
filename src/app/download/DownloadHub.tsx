@@ -9,7 +9,6 @@ const ANDROID = {
   size: "6.8 MB",
   sha256: "6fa1992216f5913322a2c749c45e200d6a7cd5fddb9c25f405840d7763b4f89c",
 };
-const TESTFLIGHT = "https://testflight.apple.com/join/A4khvX7x";
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
   file: "/downloads/openlounge-0.3.4-b24.ipa",
@@ -77,26 +76,11 @@ export function DownloadHub() {
         <h1 className="mb-1 text-2xl font-bold text-zinc-100">Get the app</h1>
         <p className="mb-6 text-zinc-500">Test builds for family and friends.</p>
 
-        <section className="mb-5 rounded-2xl border border-sky-400/40 bg-sky-500/[0.06] p-5" data-testid="testflight-section">
-          <h2 className="text-base font-semibold text-zinc-100">iPhone: TestFlight (App Store-signed, works on any iPhone)</h2>
-          <a
-            ref={firstRef}
-            href={TESTFLIGHT}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 block rounded-full bg-sky-500 px-5 py-3 text-center font-semibold text-black"
-            data-testid="download-ios-testflight"
-          >
-            Get it on TestFlight
-          </a>
-          <p className="mt-3 text-zinc-500">Latest: version 0.3.2 (build 21). The public TestFlight link starts serving build 21 once Apple finishes its beta review.</p>
-          <p className="mt-3 text-zinc-400">Install Apple&rsquo;s free TestFlight app first.</p>
-        </section>
-
         <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-base font-semibold text-zinc-100">Android</h2>
           <p className="text-zinc-500">Version {ANDROID.version} · {ANDROID.size}</p>
           <a
+            ref={firstRef}
             href={ANDROID.file}
             download
             className="mt-4 block rounded-full bg-emerald-500 px-5 py-3 text-center font-semibold text-black"
