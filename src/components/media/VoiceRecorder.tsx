@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { formatDuration, VOICE_MAX_MS_CLIENT } from "./voiceConst";
 import { canRecordVoice, recorderMime } from "@/lib/media/capabilities";
 import { haptic } from "@/lib/native";
+import { CHAT_AUDIO_CAPTURE_CONSTRAINTS, VOICE_NOTE_AUDIO_BITS_PER_SECOND } from "@/lib/media/recordingPolicy";
 
 export interface Recorded {
   blob: Blob;
@@ -104,7 +105,7 @@ export function VoiceRecordButton({ disabled, onRecorded, compact }: { disabled?
     const t = Date.now();
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: CHAT_AUDIO_CAPTURE_CONSTRAINTS });
     } catch (e) {
       setPhase("idle");
       flash((e as Error).name === "NotAllowedError" ? "Allow microphone access to record voice messages" : "No microphone found");
@@ -120,7 +121,7 @@ export function VoiceRecordButton({ disabled, onRecorded, compact }: { disabled?
     const mime = recorderMime();
     let mr: MediaRecorder;
     try {
-      mr = mime ? new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 48_000 }) : new MediaRecorder(stream);
+      mr = mime ? new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: VOICE_NOTE_AUDIO_BITS_PER_SECOND }) : new MediaRecorder(stream);
     } catch {
       mr = new MediaRecorder(stream);
     }
