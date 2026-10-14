@@ -56,41 +56,11 @@ export function primedAudioElement(): HTMLAudioElement | null {
   return elPrimed ? el : null;
 }
 
-/** The shared element even if priming never succeeded: with sticky user activation (Chrome / Firefox / Safari after
- *  any tap on the page) play() is still allowed, so the ring fallback must try it rather than give up silently. */
-export function ringAudioElement(): HTMLAudioElement | null {
-  if (elPrimed) return el;
-  if (typeof window === "undefined" || typeof Audio === "undefined") return null;
-  try {
-    if (!el) {
-      el = new Audio();
-      el.setAttribute("playsinline", "");
-      el.preload = "auto";
-    }
-    el.muted = false;
-    return el;
-  } catch {
-    return null;
-  }
-}
-
-// 0.1 s of real (zero) samples: the old header-only WAV had an EMPTY data chunk, which Firefox (and some WebKit builds)
-// refuse to decode ("could not be decoded"), so play() rejected, the element was never primed and the ring's
-// <audio> fallback had nothing to play whenever Web Audio wasn't running → silent ring.
-export function silentWavBytes(ms = 100, rate = 8000): Uint8Array<ArrayBuffer> {
-  const n = Math.round((rate * ms) / 1000);
-  const b = new Uint8Array(44 + n * 2);
-  const v = new DataView(b.buffer);
-  const w = (o: number, s: string) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
-  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
-  v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true);
-  v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
-  return b;
-}
+const SILENT_WAV_B64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
 // a blob: URL, not data: — the CSP's media-src allows 'self' blob: only (data: was refused on WebKit / Firefox)
 let silentUrl: string | null = null;
 const silentWav = () =>
-  (silentUrl ??= URL.createObjectURL(new Blob([silentWavBytes()], { type: "audio/wav" })));
+  (silentUrl ??= URL.createObjectURL(new Blob([Uint8Array.from(atob(SILENT_WAV_B64), (c) => c.charCodeAt(0))], { type: "audio/wav" })));
 
 export function unlockAudio(): void {
   if (typeof window === "undefined") return;
