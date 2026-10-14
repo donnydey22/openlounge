@@ -10,6 +10,9 @@ type RVFCVideo = HTMLVideoElement & { requestVideoFrameCallback?: (cb: FrameCb) 
 export const CAPTURE_EVERY_MS = 200;
 /** No new frame for this long while playing counts as a stall (covers stacks that fire no event). */
 export const STALL_AFTER_MS = 700;
+/** Live frames needed before a held picture is released. WebKit reports the first frame of a swapped-in track
+ *  (videoWidth set, rVFC fired) a few frames before it actually paints it, so releasing on frame 1 flashes blank. */
+export const RELEASE_AFTER_FRAMES = 4;
 
 /** Copy the video's current frame to the canvas; false when nothing is decodable (keeps the previous copy). */
 export function captureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): boolean {
@@ -42,10 +45,12 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
   let lastCaptureAt = 0;
   let rvfc = 0;
   let disposed = false;
+  let liveRun = 0;
   const tracked = new Set<MediaStreamTrack>();
 
   const setHeld = (on: boolean) => {
     on = on && hasFrame; // nothing captured yet → nothing to hold; the element's own background stays
+    if (on) liveRun = 0;
     if (held === on) return;
     held = on;
     canvas.style.visibility = on ? "visible" : "hidden";
@@ -60,10 +65,12 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     return ts.some((t) => t.readyState === "live" && !t.muted);
   };
   const onFrame = () => {
-    if (!live()) return;
+    if (!live()) { liveRun = 0; return; }
     const now = performance.now();
     lastFrameAt = now;
     if (video.videoWidth > 0) {
+      // while holding, keep the held picture: frames right after a swap may not be painted yet (would capture blank)
+      if (held && liveRun + 1 < RELEASE_AFTER_FRAMES) { liveRun++; return; }
       if (!hasFrame || now - lastCaptureAt >= CAPTURE_EVERY_MS) {
         if (captureFrame(video, canvas)) {
           hasFrame = true;
