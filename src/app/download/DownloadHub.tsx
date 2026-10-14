@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
 
 const ANDROID = {
-  file: "/downloads/openlounge-0.3.5.apk",
-  version: "0.3.5 (build 17)",
-  size: "7.0 MB",
-  sha256: "8c584af9405025e8467abd5688a5d5be62f4face147fab86a6134502c3647a44",
+  file: "/downloads/openlounge-0.3.6.apk",
+  version: "0.3.6 (build 18)",
+  size: "6.8 MB",
+  sha256: "6fa1992216f5913322a2c749c45e200d6a7cd5fddb9c25f405840d7763b4f89c",
 };
 const TESTFLIGHT = "https://testflight.apple.com/join/A4khvX7x";
 const IOS = {
