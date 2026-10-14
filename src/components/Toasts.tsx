@@ -19,6 +19,33 @@ const EXIT_MS = 200;
  * Tap opens the room/DM, swipe up (or tap a plain one) dismisses. Slides in/out; fade only with
  * prefers-reduced-motion (see .banner-in / .banner-out in globals.css).
  */
+
+/** Soft in-app banner chime (Web Audio). No asset file; skipped when the user prefers reduced motion. */
+function playBannerSound() {
+  try {
+    if (typeof window === "undefined") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    g.gain.value = 0.0001;
+    o.connect(g);
+    g.connect(ctx.destination);
+    const now = ctx.currentTime;
+    g.gain.exponentialRampToValueAtTime(0.05, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+    o.start(now);
+    o.stop(now + 0.2);
+    o.onended = () => void ctx.close().catch(() => {});
+  } catch {
+    /* ignore autoplay / unsupported */
+  }
+}
+
 export function Toasts() {
   const { toasts, dismissToast } = useApp();
   const current = toasts[0];
@@ -85,6 +112,11 @@ function Banner({ t, queued, onDone }: { t: Toast; queued: boolean; onDone: (id:
     setLeaving(true);
     window.setTimeout(() => onDone(t.id), EXIT_MS);
   }, [onDone, t.id]);
+
+  // sound once when the banner first appears (not on silent in-place updates)
+  useEffect(() => {
+    if (t.rev === 0) playBannerSound();
+  }, [t.id]);
 
   // auto-dismiss (restarts when the content is replaced in place, shortens when others wait)
   useEffect(() => {

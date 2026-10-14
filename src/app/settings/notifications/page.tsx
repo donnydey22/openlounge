@@ -28,6 +28,7 @@ const GROUPS: { title: string; items: { key: Key; label: string; hint: string }[
     items: [
       { key: "newFollower", label: "New followers", hint: "Grouped so you don't get one per follow" },
       { key: "contactJoined", label: "Friends joining", hint: "A contact just joined Open Lounge (needs Find friends in Invite friends)" },
+      { key: "hallwayPresence", label: "Hallway presence", hint: "Someone you follow opens the app" },
     ],
   },
 ];

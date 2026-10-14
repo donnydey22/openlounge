@@ -116,7 +116,7 @@ await t("ping → roomInvite push; ignores quiet hours", async () => {
   assert.equal(s.sender.sent[0].msg.type, "roomPing");
 });
 
-await t("followed user starts a room → followers; active-rooms throttle 1/10min; quiet hours respected", async () => {
+await t("followed user starts a room → followers; quiet hours respected; active-room throttle dropped", async () => {
   const s = setup();
   s.follows.b = ["h", "a"];
   s.follows.c = ["h"];
@@ -126,24 +126,50 @@ await t("followed user starts a room → followers; active-rooms throttle 1/10mi
   const r = await s.n.roomStarted("r1", "Morning", "h");
   assert.equal(r.b, "sent");
   assert.equal(r.c, "skip:quiet");
+  // ACTIVE_ROOM_INTERVAL_MS is 0 — back-to-back room starts both notify (join/start caps loosened)
   const r2 = await s.n.roomStarted("r2", "Another", "a");
-  assert.equal(r2.b, "skip:throttle");
-  s.adv(ACTIVE_ROOM_INTERVAL_MS + 1);
+  assert.equal(r2.b, "sent");
   assert.equal((await s.n.roomStarted("r3", "Later", "a")).b, "sent");
+  void ACTIVE_ROOM_INTERVAL_MS; // kept exported for callers / docs
 });
 
-await t("followed user joins a room; ≥3 followed in room → trending push", async () => {
+await t("room members notified on join; ≥3 followed in room → trending for outside followers", async () => {
   const s = setup();
   s.follows.e = ["a", "b", "c"];
   await s.tok("e");
+  await s.tok("h"); // host is a room member
+  await s.tok("a");
   const out = await s.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a", "b", "c"] }, "c");
-  assert.equal(out.e, "sent");
-  assert.equal(s.sender.sent[0].msg.type, "trendingRoom");
+  assert.equal(out.h, "sent"); // host (room member) gets the join
+  assert.equal(out.a, "sent"); // other member
+  assert.equal(out.e, "sent"); // follower outside room
+  assert.equal(s.sender.sent.find((x) => x.tokens[0].userId === "e")?.msg.type, "trendingRoom");
   const s2 = setup();
   s2.follows.e = ["a"];
   await s2.tok("e");
+  await s2.tok("h");
   await s2.n.roomJoined({ id: "r9", title: "Jazz", hostId: "h", participantIds: ["h", "a"] }, "a");
-  assert.equal(s2.sender.sent[0].msg.type, "followedRoom");
+  assert.equal(s2.sender.sent.find((x) => x.tokens[0].userId === "h")?.msg.title.includes("joined"), true);
+  assert.equal(s2.sender.sent.find((x) => x.tokens[0].userId === "e")?.msg.type, "followedRoom");
+});
+
+await t("every join can notify (per-joiner dedupe; 10/30 min caps loosened)", async () => {
+  const s = setup();
+  await s.tok("h");
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a"] }, "a")).h, "sent");
+  // different joiner → not blocked by old 30-min room-wide dedupe or 10-min throttle
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"] }, "b")).h, "sent");
+  // same joiner again immediately → dedupe (60s floor)
+  assert.equal((await s.n.roomJoined({ id: "r1", title: "R", hostId: "h", participantIds: ["h", "a", "b"] }, "b")).h, "skip:dedupe");
+});
+
+await t("hallway presence notifies followers", async () => {
+  const s = setup();
+  s.follows.b = ["a"];
+  await s.tok("b");
+  assert.equal((await s.n.hallwayPresence("a")).b, "sent");
+  assert.equal(s.sender.sent[0].msg.type, "hallwayPresence");
+  assert.equal((await s.n.hallwayPresence("a")).b, "skip:dedupe");
 });
 
 await t("room you were in recently is live again (recentRoom, opt-in)", async () => {
@@ -310,17 +336,17 @@ await t("live activity: room started / joined → in-app banner while open (no p
   assert.equal(s.sender.sent.length, 1);
   assert.equal(s.sender.sent[0].tokens[0].userId, "b");
   assert.deepEqual([shown[0].uid, shown[0].n.type, shown[0].n.roomId, shown[0].n.actorId], ["a", "followedRoom", "r1", "h"]);
-  // the 1-per-10-min active-room throttle covers the in-app copy too
+  // active-room 10-min throttle dropped: a join right after a start still notifies (per-joiner dedupe)
   s.adv(60_000);
   const j = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
-  assert.equal(j.a, "skip:throttle");
-  s.adv(10 * 60_000);
-  const j2 = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
-  assert.equal(j2.a, "in-app");
+  assert.equal(j.a, "in-app");
   assert.equal(shown.at(-1)!.n.actorId, "h");
+  // same joiner again within dedupe window → skipped
+  const j2 = await s.n.roomJoined({ id: "r2", title: "Other", hostId: "z", participantIds: ["z", "h"] }, "h");
+  assert.equal(j2.a, "skip:dedupe");
   // a hidden tab (online, not foreground) gets the in-app copy AND the device push
   s.fg.delete("a");
-  s.adv(11 * 60_000);
+  s.adv(61_000);
   const before = s.sender.sent.length;
   const r3 = await s.n.roomStarted("r3", "Morning", "h");
   assert.equal(r3.a, "sent");

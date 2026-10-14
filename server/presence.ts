@@ -68,6 +68,8 @@ export class Presence {
     /** persist a last-seen timestamp against the session token */
     private persistLastSeen: (token: string, at: number) => void,
     private lastSeen: Map<string, number> = new Map(),
+    /** hallway presence: fired once when a user becomes online (not away→online from already-connected) */
+    private onBecameOnline: ((userId: string) => void) | null = null,
   ) {
     // Catch state changes that don't come with an explicit event (room ended while backgrounded, …)
     this.sweep = setInterval(() => {
@@ -239,6 +241,14 @@ export class Presence {
     }
     if (to === "offline") this.departed.delete(userId);
     this.broadcast({ userId, online: to === "online", status: to, lastSeenAt, now: Date.now() });
+    // Hallway presence: only when newly online (was offline). away→online is "came back to tab" — skip to avoid noise.
+    if (to === "online" && was === "offline") {
+      try {
+        this.onBecameOnline?.(userId);
+      } catch (e) {
+        console.warn("[presence] onBecameOnline failed:", (e as Error).message);
+      }
+    }
   }
 
   private broadcast(u: PresenceUpdate) {

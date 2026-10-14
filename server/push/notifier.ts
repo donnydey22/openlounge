@@ -40,8 +40,8 @@ export interface NotifierDeps {
 }
 
 export const ACTIVE_ROOM_TYPES: NotifType[] = ["followedRoom", "trendingRoom", "scheduledRoom", "recentRoom"];
-export const ACTIVE_ROOM_INTERVAL_MS = 10 * 60_000; // max 1 "active rooms" push per user per 10 min
-export const DEDUPE_MS = 30 * 60_000; // same (user, dedupe key) at most once per 30 min
+export const ACTIVE_ROOM_INTERVAL_MS = 0; // dropped 10-min active-room cap so every join can notify
+export const DEDUPE_MS = 60_000; // loosened from 30 min; join events use per-joiner dedupe keys
 export const HOURLY_CAP = 20; // all non-DM pushes per user per hour
 export const DM_HOURLY_CAP = 30; // DM pushes per user per hour (collapse per thread anyway)
 export const FOLLOWER_BATCH_MS = 10 * 60_000;
@@ -260,7 +260,7 @@ export class Notifier {
     );
   }
 
-  /** someone started a room: their followers (followedRoom) + people recently in their rooms (recentRoom) */
+  /** host opens a room: followers (followedRoom) + people recently in their rooms (recentRoom). Fires on room:create. */
   async roomStarted(roomId: string, roomTitle: string, hostId: string) {
     const name = this.d.userName(hostId) ?? "Someone";
     const out: Record<string, Outcome> = {};
@@ -293,8 +293,10 @@ export class Notifier {
   }
 
   /**
-   * someone joined a room. Their followers hear about it (followedRoom); when ≥3 people you follow are in a
-   * room it's "trending for you" (trendingRoom). One push per room per user (dedupe), max 1/10 min overall.
+   * someone joined a room.
+   * 1) Every other room member with notifications enabled hears about it (not only the joiner's followers).
+   * 2) Followers of the joiner still get followedRoom / trendingRoom (existing feature kept).
+   * Dedupe is per joiner (`join:room:user`) so every join can notify; the 15s active-room throttle is the burst floor.
    */
   async roomJoined(room: { id: string; title: string; hostId: string; participantIds: string[] }, userId: string) {
     const recent = this.recentByHost.get(room.hostId) ?? new Map();
@@ -303,9 +305,36 @@ export class Notifier {
     const inRoom = new Set(room.participantIds);
     const name = this.d.userName(userId) ?? "Someone";
     const out: Record<string, Outcome> = {};
+    const joinKey = `join:${room.id}:${userId}`;
+    const live = { actorId: userId, roomId: room.id };
+
+    // Room members already seated (host/speakers/listeners) — notify them first.
+    for (const uid of room.participantIds) {
+      if (uid === userId) continue;
+      if (this.d.blocked?.(uid, userId)) {
+        out[uid] = "skip:blocked";
+        continue;
+      }
+      out[uid] = await this.deliver(
+        uid,
+        "followedRoom",
+        {
+          type: "followedRoom",
+          title: `${name} joined`,
+          body: room.title,
+          channel: "rooms",
+          tag: `room:${room.id}`,
+          url: `/room/${room.id}`,
+          data: { roomId: room.id, joinerId: userId },
+        },
+        { dedupeKey: joinKey, live },
+      );
+    }
+
+    // Followers of the joiner who are not already in the room (existing Clubhouse-style fan-out).
     for (const uid of this.d.followerIds(userId)) {
       if (inRoom.has(uid)) continue;
-      if (this.d.blocked?.(uid, userId) || this.d.blocked?.(uid, room.hostId)) {
+      if (this.d.blocked?.(uid, userId)) {
         out[uid] = "skip:blocked";
         continue;
       }
@@ -324,14 +353,14 @@ export class Notifier {
             url: `/room/${room.id}`,
             data: { roomId: room.id },
           },
-          { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
+          { dedupeKey: joinKey, live },
         );
       } else {
         out[uid] = await this.deliver(
           uid,
           "followedRoom",
           { type: "followedRoom", title: `${name} joined a room`, body: room.title, channel: "rooms", tag: `room:${room.id}`, url: `/room/${room.id}`, data: { roomId: room.id } },
-          { dedupeKey: `room:${room.id}`, live: { actorId: userId, roomId: room.id } },
+          { dedupeKey: joinKey, live },
         );
       }
     }
@@ -389,6 +418,30 @@ export class Notifier {
       url: names.length === 1 ? `/profile/${ids[0]}` : `/profile/${targetId}`,
       data: { userIds: ids.slice(0, 20).join(",") },
     });
+  }
+
+  /** someone you follow opened the app / appeared in the hallway (online). */
+  async hallwayPresence(userId: string) {
+    const name = this.d.userName(userId) ?? "Someone";
+    const out: Record<string, Outcome> = {};
+    for (const uid of this.d.followerIds(userId)) {
+      if (uid === userId) continue;
+      out[uid] = await this.deliver(
+        uid,
+        "hallwayPresence",
+        {
+          type: "hallwayPresence",
+          title: `${name} is in the hallway`,
+          body: "Open Open Lounge to say hi",
+          channel: "social",
+          tag: `hallway:${userId}`,
+          url: `/profile/${userId}`,
+          data: { userId },
+        },
+        { dedupeKey: `hallway:${userId}` },
+      );
+    }
+    return out;
   }
 
   // ---------- contacts ----------

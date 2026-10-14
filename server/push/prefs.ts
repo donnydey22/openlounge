@@ -1,4 +1,4 @@
-export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "newFollower", "contactJoined"] as const;
+export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "newFollower", "contactJoined", "hallwayPresence"] as const;
 export type NotifType = (typeof NOTIF_TYPES)[number];
 
 export interface QuietHours {
@@ -19,6 +19,8 @@ export const DEFAULT_PREFS: NotifPrefs = {
   recentRoom: false,
   newFollower: true,
   contactJoined: true,
+  /** a person you follow opens the app / appears in the hallway */
+  hallwayPresence: true,
   quietHours: null,
   contactsOptIn: false,
   contactsKeep: false,
