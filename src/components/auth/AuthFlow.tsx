@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Camera, Check, Loader2, Phone } from "lucide-react";
+import { ArrowRight, Camera, Check, Fingerprint, Loader2, Mail, Phone } from "lucide-react";
 import { AVATAR_COLORS, USERNAME_RE, type PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { fileToAvatarDataUrl } from "@/lib/image";
@@ -17,6 +17,8 @@ import { useApp, type SessionPayload } from "../AppProvider";
 import { COUNTRIES, formatNational } from "./countries";
 import { ErrorText, Footer, PasswordInput, PrimaryButton, Shell, TextInput, Title } from "./ui";
 import { IconSlot, ProviderButtons } from "./ProviderButtons";
+import { biometricAuthenticate, biometricsBridge, quickSignInReady } from "@/lib/biometrics";
+import { forgetParked, readParked, unparkSession, type ParkedSession } from "@/lib/session";
 import { AuthFormError, authPost, linkPendingToPhone, markSuggestLink, takePendingSignup, type PendingSignup, type SessionResult, type SignInResult } from "@/lib/authApi";
 import type { PhoneSession } from "@/lib/firebaseClient";
 
@@ -25,10 +27,10 @@ function initialEntry(): { step: Step; pending: PendingSignup | null } {
   if (typeof window === "undefined") return { step: "welcome", pending: null };
   const pending = takePendingSignup();
   if (pending) return { step: pending.linkCode ? "linkChoice" : "name", pending };
-  return { step: new URLSearchParams(location.search).get("signin") === "email" ? "email" : "welcome", pending: null };
+  return { step: new URLSearchParams(location.search).get("signin") ? "signin" : "welcome", pending: null };
 }
 
-type Step = "linkChoice" | "welcome" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
+type Step = "linkChoice" | "welcome" | "signin" | "phone" | "code" | "emailCode" | "emailOtp" | "email" | "emailSignup" | "emailSent" | "name" | "username" | "photo" | "bio" | "interests" | "follow";
 
 // Welcome wordmark: big staggered letter entrance, then a strong steady pulse (globals.css .ol-splash-*).
 function SplashWordmark() {
@@ -55,6 +57,24 @@ export function AuthFlow() {
   const [mode, setMode] = useState<"signup" | "signin">("signup");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // unified sign-in: one field = email OR screen name
+  const [identifier, setIdentifier] = useState(entry.pending?.email ?? "");
+  // App lock quick sign-in: a parked session for this screen name in the native encrypted store
+  const [parked, setParked] = useState<ParkedSession | null>(null);
+  useEffect(() => {
+    let off = false;
+    void (async () => {
+      if (!(await quickSignInReady(biometricsBridge()))) return;
+      const p = await readParked();
+      if (!off && p) setParked(p);
+    })();
+    return () => {
+      off = true;
+    };
+  }, []);
+  // SMS trouble (error / timeout / no text) → offer "Email me a code instead"
+  const [smsTrouble, setSmsTrouble] = useState(false);
 
   // phone + code
   const [country, setCountry] = useState(COUNTRIES[0]);
@@ -110,13 +130,16 @@ export function AuthFlow() {
   const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
 
   async function sendCode() {
+    if (busy) return;
     setBusy(true);
     setError(null);
+    setSmsTrouble(false);
     try {
       if (authCfg?.firebase) {
         const e164 = `+${(country.dial + digits).replace(/\D/g, "")}`;
         const { sendPhoneCode } = await import("@/lib/firebaseClient");
-        confirmation.current = await sendPhoneCode(e164, "recaptcha-container");
+        // reCAPTCHA / SMS can hang (blocked script, flaky network): never spin forever
+        confirmation.current = await withTimeout(sendPhoneCode(e164, "recaptcha-container"), SMS_SEND_TIMEOUT_MS, "We couldn't send the text. Try again, or get a code by email instead.");
         setPhoneE164(e164);
         setDemoCode(null);
         setResendIn(30);
@@ -134,6 +157,50 @@ export function AuthFlow() {
       go("code");
     } catch (e) {
       setError((e as Error).message);
+      setSmsTrouble(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // on the code screen: no text after a while → show the email option too
+  useEffect(() => {
+    if (step !== "code") return;
+    const t = setTimeout(() => setSmsTrouble(true), SMS_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [step, phoneE164]);
+
+  async function signIn() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authPost<SessionResult>("/auth/email/login", { identifier: identifier.trim(), password });
+      completeLogin(res.token, res, { resumeSocket: true });
+      toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
+    } catch (e) {
+      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function quickSignIn() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!(await biometricAuthenticate(biometricsBridge()))) {
+        setError("Face ID / fingerprint didn't go through. Try again, or use your password.");
+        return;
+      }
+      if (!(await unparkSession())) {
+        setParked(null);
+        setError("That saved sign-in has expired. Use your password, a text code or an email code.");
+        return;
+      }
+      location.replace("/"); // boots with the restored session (server re-validates and rotates it)
     } finally {
       setBusy(false);
     }
@@ -223,21 +290,6 @@ export function AuthFlow() {
     }
   }
 
-  async function emailSignIn() {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await authPost<SessionResult>("/auth/email/login", { email, password });
-      completeLogin(res.token, res, { resumeSocket: true });
-      toast(`👋 Welcome back, ${res.user.name.split(" ")[0]}!`);
-    } catch (e) {
-      setError(e instanceof AuthFormError ? e.message : "Something went wrong. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function emailSignUp() {
     if (busy) return;
     setBusy(true);
@@ -255,6 +307,10 @@ export function AuthFlow() {
   }
 
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const idTrim = identifier.trim();
+  const idIsEmail = idTrim.includes("@") && !idTrim.startsWith("@");
+  const idOk = idIsEmail ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(idTrim) : USERNAME_RE.test(idTrim.replace(/^@/, "").toLowerCase());
+  const quickMatch = !!parked && !idIsEmail && idTrim.replace(/^@/, "").toLowerCase() === parked.username.toLowerCase();
 
   // live username availability
   useEffect(() => {
@@ -395,11 +451,14 @@ export function AuthFlow() {
           </button>
           <ProviderButtons onEmail={() => go("emailCode")} />
           <button
+            type="button"
             onClick={() => {
               setMode("signin");
-              go("phone");
+              if (parked && !identifier) setIdentifier(parked.username);
+              go("signin");
             }}
             className="auth-alt-link text-sky-400 hover:underline"
+            data-testid="welcome-signin"
           >
             Already have an account? Sign in →
           </button>
@@ -453,6 +512,7 @@ export function AuthFlow() {
             />
           </div>
           <ErrorText>{error}</ErrorText>
+          {smsTrouble && !linking && <EmailFallback onClick={() => go("emailCode")} />}
           <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500">
             By entering your number, you agree to our <Link href="/terms" className="underline hover:text-zinc-300">Terms of Use</Link> and <Link href="/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>, including our zero-tolerance policy for objectionable content and abusive behavior. We&apos;ll text you a 6-digit code.
           </p>
@@ -503,7 +563,7 @@ export function AuthFlow() {
             <PrimaryButton type="submit" disabled={!emailOk} busy={busy}>
               Send code <ArrowRight className="h-4 w-4" />
             </PrimaryButton>
-            <button type="button" onClick={() => go("email")} className="auth-alt-link text-sky-400 hover:underline">
+            <button type="button" onClick={() => go("signin")} className="auth-alt-link text-sky-400 hover:underline">
               Use a password instead →
             </button>
           </Footer>
@@ -544,36 +604,113 @@ export function AuthFlow() {
     );
   }
 
-  if (step === "email") {
+  if (step === "signin" || step === "email") {
+    // enabled as soon as both fields have text, so Enter / Go always gives feedback (validation message) instead of nothing
+    const canSubmit = !!idTrim && (!!password || quickMatch);
     return (
-      <Shell stepKey={step} onBack={() => go("welcome")}>
-        <Title sub="Sign in with your email and password.">Welcome back!</Title>
+      <Shell stepKey="signin" onBack={() => go("welcome")}>
+        <Title sub="Use your email or screen name.">Welcome back!</Title>
         <form
           className="contents"
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
-            if (emailOk && password) emailSignIn();
+            if (!idOk) return setError(idTrim ? "Enter a valid email or screen name (3–20 letters, numbers or _)." : "Enter your email or screen name.");
+            if (quickMatch && !password) return void quickSignIn();
+            if (!password) return setError("Enter your password.");
+            void signIn();
           }}
         >
           <div className="mt-8 space-y-3">
-            <TextInput autoFocus type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} aria-label="Email" placeholder="you@example.com" value={email} onChange={setEmail} maxLength={254} />
-            <PasswordInput autoComplete="current-password" aria-label="Password" placeholder="Password" value={password} onChange={setPassword} />
+            <TextInput
+              autoFocus={!identifier}
+              type="text"
+              name="username"
+              id="signin-identifier"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="next"
+              aria-label="Email or screen name"
+              placeholder="Email or screen name"
+              value={identifier}
+              onChange={(v) => {
+                setIdentifier(v);
+                setError(null);
+              }}
+              maxLength={254}
+              data-testid="signin-identifier"
+            />
+            <PasswordInput
+              autoFocus={!!identifier && !quickMatch}
+              name="password"
+              id="signin-password"
+              autoComplete="current-password"
+              enterKeyHint="go"
+              aria-label="Password"
+              placeholder={quickMatch ? "Password (optional with Face ID / fingerprint)" : "Password"}
+              value={password}
+              onChange={(v) => {
+                setPassword(v);
+                setError(null);
+              }}
+              data-testid="signin-password"
+            />
           </div>
-          <ErrorText>{error}</ErrorText>
+          <div role="alert" aria-live="polite">
+            <ErrorText>{error}</ErrorText>
+          </div>
           <div className="mt-4 text-center">
-            <a href="/forgot-password" className="text-sm font-semibold text-sky-400 hover:underline">
+            <a href={`/forgot-password${idTrim ? `?id=${encodeURIComponent(idTrim)}` : ""}`} className="text-sm font-semibold text-sky-400 hover:underline" data-testid="forgot-link">
               Forgot password?
             </a>
           </div>
           <Footer>
-            <PrimaryButton type="submit" disabled={!emailOk || !password} busy={busy}>
-              Sign in <ArrowRight className="h-4 w-4" />
-            </PrimaryButton>
-            <button type="button" onClick={() => go("emailSignup")} className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
-              New here? Create an account with email →
+            {quickMatch && !password ? (
+              <PrimaryButton type="submit" busy={busy}>
+                <Fingerprint className="h-5 w-5" /> Sign in with Face ID / fingerprint
+              </PrimaryButton>
+            ) : (
+              <PrimaryButton type="submit" disabled={!canSubmit} busy={busy}>
+                Sign in <ArrowRight className="h-4 w-4" />
+              </PrimaryButton>
+            )}
+            {parked && quickMatch && (
+              <button
+                type="button"
+                onClick={() => {
+                  void forgetParked();
+                  setParked(null);
+                  setIdentifier("");
+                }}
+                className="mt-3 w-full text-center text-xs text-zinc-500 hover:underline"
+              >
+                Not @{parked.username}? Forget this device
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setMode("signin");
+                go("phone");
+              }}
+              className="mt-4 w-full text-center text-sm font-semibold text-sky-400 hover:underline"
+            >
+              Text me a code instead →
             </button>
-            <button type="button" onClick={() => go("emailCode")} className="mt-3 w-full text-center text-sm font-semibold text-sky-400 hover:underline">
-              Email me a sign-in code instead →
+            <button
+              type="button"
+              onClick={() => {
+                if (idIsEmail) setEmail(idTrim);
+                go("emailCode");
+              }}
+              className="mt-3 w-full text-center text-sm font-semibold text-sky-400 hover:underline"
+            >
+              Email me a code instead →
+            </button>
+            <button type="button" onClick={() => go("emailSignup")} className="mt-3 w-full text-center text-sm text-zinc-400 hover:underline">
+              New here? Create an account with email →
             </button>
           </Footer>
         </form>
@@ -583,7 +720,7 @@ export function AuthFlow() {
 
   if (step === "emailSignup") {
     return (
-      <Shell stepKey={step} onBack={() => go("email")}>
+      <Shell stepKey={step} onBack={() => go("signin")}>
         <Title sub="We'll email you a link to confirm it's you.">Sign up with email</Title>
         <form
           className="contents"
@@ -659,11 +796,12 @@ export function AuthFlow() {
           {resendIn > 0 ? (
             <span>Resend in {resendIn}s</span>
           ) : (
-            <button onClick={sendCode} className="font-semibold text-sky-400 hover:underline">
+            <button type="button" onClick={sendCode} className="font-semibold text-sky-400 hover:underline">
               Tap to resend
             </button>
           )}
         </div>
+        {smsTrouble && !linking && <EmailFallback onClick={() => go("emailCode")} />}
         <Footer>
           <PrimaryButton onClick={() => verify(code)} disabled={code.length !== 6} busy={busy}>
             Verify <ArrowRight className="h-4 w-4" />
@@ -895,6 +1033,40 @@ export function AuthFlow() {
 
 // ---------------- building blocks ----------------
 
+/** reCAPTCHA + SMS send budget on the web (native shells have their own 120 s timeout). */
+const SMS_SEND_TIMEOUT_MS = 25_000;
+/** No text after this long on the code screen → also offer the email code. */
+const SMS_WAIT_MS = 20_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(message)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+function EmailFallback({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid="sms-email-fallback"
+      className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 py-3 text-[15px] font-semibold text-zinc-100 hover:bg-white/5"
+    >
+      <Mail className="h-4 w-4" /> Email me a code instead
+    </button>
+  );
+}
+
 /** Six boxes backed by one hidden input (works with SMS autofill / paste). */
 function CodeInput({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -909,7 +1081,7 @@ function CodeInput({ value, onChange, disabled }: { value: string; onChange: (v:
         disabled={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
-        className="absolute inset-0 opacity-0"
+        className="absolute inset-0 text-base opacity-0"
       />
       <div className="flex justify-center gap-2" aria-hidden>
         {Array.from({ length: 6 }).map((_, i) => (

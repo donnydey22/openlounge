@@ -129,7 +129,8 @@ export function decodeNative(raw: unknown): Creds | null {
   const s = raw.trim();
   if (s.startsWith("{")) {
     try {
-      const v = JSON.parse(s) as Partial<Creds> & { v?: number };
+      const v = JSON.parse(s) as Partial<Creds> & { v?: number; parked?: boolean };
+      if (v.parked) return null; // a "quick sign-in" copy kept behind App lock: never an automatic sign-in
       if (typeof v.refresh !== "string" || v.refresh.length < 20) return null;
       return {
         refresh: v.refresh,
@@ -238,7 +239,8 @@ export function clearToken() {
   // only clear the shared copy if it's ours (another tab may have signed in as someone else)
   if (!mine || get(localStorage, KEY) === mine) {
     wipe(localStorage);
-    toNative(null);
+    if (keepParked) keepParked = false; // parkSession just wrote the parked copy: leave it
+    else toNative(null);
   }
   // legacy demo identity from earlier versions
   set(localStorage, "clubroom:identity", null);
@@ -246,5 +248,103 @@ export function clearToken() {
   for (const legacy of LEGACY_KEYS) {
     set(localStorage, legacy, null);
     set(sessionStorage, legacy, null);
+  }
+}
+
+// ---------- quick sign-in (App lock on: screen name + Face ID / fingerprint) ----------
+//
+// When someone signs out while App lock is on, the session is "parked" in the native encrypted store (Android
+// Keystore / iOS Keychain) instead of being thrown away: {"v":1,"parked":true,"username":"…",…creds}. A parked copy
+// is never adopted on launch (decodeNative ignores it), so the app really is signed out. On the sign-in screen,
+// typing that screen name offers "Sign in with Face ID / fingerprint": after a successful OS prompt the copy is
+// un-parked and the page reloads signed in. The refresh token is still validated (and rotated) by the server, so a
+// revoked / expired parked session simply fails and falls back to the password. Shells need no changes: it is the
+// same opaque getSession/setSession string.
+
+let keepParked = false;
+
+export interface ParkedSession {
+  username: string;
+  name: string | null;
+}
+
+export function encodeParked(c: Creds, username: string, name: string | null): string {
+  return JSON.stringify({ v: 1, parked: true, username, name, refresh: c.refresh, access: null, accessExp: 0, uid: c.uid, savedAt: Date.now() });
+}
+
+export function decodeParked(raw: unknown): (ParkedSession & { creds: Creds }) | null {
+  if (typeof raw !== "string" || !raw.trim().startsWith("{")) return null;
+  try {
+    const v = JSON.parse(raw) as { parked?: boolean; username?: unknown; name?: unknown; refresh?: unknown; uid?: unknown };
+    if (v.parked !== true || typeof v.username !== "string" || !v.username || typeof v.refresh !== "string" || v.refresh.length < 20) return null;
+    return {
+      username: v.username,
+      name: typeof v.name === "string" ? v.name : null,
+      creds: { refresh: v.refresh, access: null, accessExp: 0, uid: typeof v.uid === "string" ? v.uid : null, savedAt: Date.now() },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Sign out locally but keep the session parked in the native store (call only when App lock is on). */
+export async function parkSession(username: string, name: string | null): Promise<boolean> {
+  const n = nativeStore();
+  const c = loadCreds();
+  if (!n || !c) return false;
+  try {
+    const r = await fetch("/api/auth/forget-cookie", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!r.ok) return false;
+  } catch {
+    return false; // offline: fall back to a normal sign-out
+  }
+  keepParked = true;
+  wipe(sessionStorage);
+  wipe(localStorage);
+  try {
+    await nativeChain;
+    await n.setSession(encodeParked(c, username, name));
+    return true;
+  } catch {
+    keepParked = false;
+    saveCreds(c); // couldn't park: put the session back so the normal sign-out revokes it
+    return false;
+  }
+}
+
+export async function readParked(): Promise<ParkedSession | null> {
+  const n = nativeStore();
+  if (!n) return null;
+  try {
+    const p = decodeParked(await Promise.race([Promise.resolve(n.getSession()), new Promise<null>((r) => setTimeout(() => r(null), 2500))]));
+    return p ? { username: p.username, name: p.name } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** After a successful biometric prompt: restore the parked session as the live one. */
+export async function unparkSession(): Promise<Creds | null> {
+  const n = nativeStore();
+  if (!n) return null;
+  try {
+    const p = decodeParked(await n.getSession());
+    if (!p) return null;
+    saveCreds(p.creds);
+    await nativeChain;
+    return p.creds;
+  } catch {
+    return null;
+  }
+}
+
+/** "Not you?" / forget this device: drop the parked copy. */
+export async function forgetParked() {
+  const n = nativeStore();
+  if (!n) return;
+  try {
+    if (decodeParked(await n.getSession())) await n.clearSession();
+  } catch {
+    /* ignore */
   }
 }
