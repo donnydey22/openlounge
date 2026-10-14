@@ -3,7 +3,7 @@
     "name": "Open Lounge",
     "slug": "openlounge",
     "scheme": "openlounge",
-    "version": "0.3.1",
+    "version": "0.3.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -22,7 +22,7 @@
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Open Lounge uses your microphone so you can speak in live rooms, drop-in chats and calls. Audio is only sent while you’re speaking on stage or in a call.",
+        "NSMicrophoneUsageDescription": "Open Lounge uses your microphone so you can speak in live rooms, drop-in chats and calls. Audio is only sent while you\u2019re speaking on stage or in a call.",
         "NSCameraUsageDescription": "Open Lounge uses your camera when you turn on video in a call or take a photo, for example for your profile picture.",
         "NSPhotoLibraryUsageDescription": "Open Lounge lets you pick a photo, for example for your profile picture.",
         "UIBackgroundModes": [
@@ -32,7 +32,7 @@
         ],
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": false,
-        "NSContactsUsageDescription": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on “Tell me when contacts join”, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime.",
+        "NSContactsUsageDescription": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on \u201cTell me when contacts join\u201d, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime.",
         "ITSAppUsesNonExemptEncryption": false,
         "NSFaceIDUsageDescription": "Open Lounge uses Face ID to unlock the app when you turn on App lock."
       },
@@ -213,7 +213,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on “Tell me when contacts join”, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime."
+          "contactsPermission": "Open Lounge uses the phone numbers in your contacts to show which friends are already here and, if you turn on \u201cTell me when contacts join\u201d, to let you know when one joins. Numbers are sent only as one-way codes, never shared, and you can delete them anytime."
         }
       ],
       "expo-localization",
