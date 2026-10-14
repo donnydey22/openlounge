@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Circle, RotateCcw, SendHorizontal, Square, SwitchCamera } from "lucide-react";
 import { Sheet } from "../Sheet";
-import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/media/types";
 import {
   CHAT_AUDIO_CAPTURE_CONSTRAINTS,
@@ -14,6 +13,7 @@ import {
   VIDEO_NOTE_CAPTURE_CONSTRAINTS,
   VIDEO_NOTE_VIDEO_BITS_PER_SECOND,
 } from "@/lib/media/recordingPolicy";
+import { createVideoMessageRecordingStream } from "@/lib/media/videoOrientation";
 
 export const VIDEO_NOTE_MAX_MS = 60_000;
 const MIN_MS = 700;
@@ -43,7 +43,8 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
   const [review, setReview] = useState<{ file: File; url: string } | null>(null);
   const live = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
-  const rec = useRef<{ mr: MediaRecorder; chunks: Blob[]; t0: number; timer: ReturnType<typeof setInterval> } | null>(null);
+  const rec = useRef<{ mr: MediaRecorder; chunks: Blob[]; t0: number; timer: ReturnType<typeof setInterval>; release: () => void } | null>(null);
+  const recorderStarting = useRef(false);
 
   const stopStream = useCallback(() => {
     stream.current?.getTracks().forEach((t) => t.stop());
@@ -88,6 +89,7 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
       const r = rec.current;
       if (r) {
         clearInterval(r.timer);
+        r.release();
         r.mr.ondataavailable = null;
         r.mr.onstop = null;
         try {
@@ -95,6 +97,7 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
         } catch {}
         rec.current = null;
       }
+      recorderStarting.current = false;
       stopStream();
       clearReview();
       setElapsed(0);
@@ -111,19 +114,39 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
     } catch {}
   }, []);
 
-  const start = () => {
+  const start = async () => {
     const s = stream.current;
-    if (!s || rec.current) return;
+    if (!s || rec.current || recorderStarting.current) return;
+    recorderStarting.current = true;
+    setPhase("starting");
+    // The selfie mirror belongs only to the live preview. The recording stream normalizes
+    // the front camera before MediaRecorder sees it, so recipients never see a mirrored clip.
+    const recording = await createVideoMessageRecordingStream(s, facing).catch(() => null);
+    // The sheet may have closed or switched lenses while the helper awaited its first frame.
+    if (!recording || stream.current !== s || rec.current) {
+      recording?.release();
+      recorderStarting.current = false;
+      if (stream.current === s) setPhase("ready");
+      return;
+    }
     const mime = videoRecorderMime() || undefined;
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(s, {
+      mr = new MediaRecorder(recording.stream, {
         ...(mime ? { mimeType: mime } : {}),
         videoBitsPerSecond: VIDEO_NOTE_VIDEO_BITS_PER_SECOND,
         audioBitsPerSecond: VIDEO_NOTE_AUDIO_BITS_PER_SECOND,
       });
     } catch {
-      mr = new MediaRecorder(s);
+      try {
+        mr = new MediaRecorder(recording.stream);
+      } catch {
+        recording.release();
+        recorderStarting.current = false;
+        setErr("Video recording couldn't start");
+        setPhase("error");
+        return;
+      }
     }
     const chunks: Blob[] = [];
     const t0 = Date.now();
@@ -131,6 +154,7 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
     mr.onstop = () => {
       const dur = Date.now() - t0;
       rec.current = null;
+      recording.release();
       if (dur < MIN_MS || !chunks.length) {
         setPhase("ready");
         setElapsed(0);
@@ -148,8 +172,19 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
       setElapsed(ms);
       if (ms >= VIDEO_NOTE_MAX_MS) stop();
     }, 200);
-    rec.current = { mr, chunks, t0, timer };
-    mr.start(1000);
+    rec.current = { mr, chunks, t0, timer, release: recording.release };
+    try {
+      mr.start(1000);
+    } catch {
+      clearInterval(timer);
+      rec.current = null;
+      recording.release();
+      recorderStarting.current = false;
+      setErr("Video recording couldn't start");
+      setPhase("error");
+      return;
+    }
+    recorderStarting.current = false;
     setElapsed(0);
     setPhase("recording");
   };
@@ -183,7 +218,16 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
             {review ? (
               <video key={review.url} src={review.url} playsInline controls autoPlay loop className="h-full w-full object-cover" data-testid="video-recorder-review" />
             ) : (
-              <video ref={live} playsInline muted autoPlay className={cn("h-full w-full object-cover", facing === "user" && "-scale-x-100")} data-testid="video-recorder-live" />
+              <video
+                ref={live}
+                playsInline
+                muted
+                autoPlay
+                className="h-full w-full object-cover"
+                // Deliberately display-only: the recorder receives an unstyled, normalized stream.
+                style={{ transform: facing === "user" ? "scaleX(-1) translateZ(0)" : "translateZ(0)" }}
+                data-testid="video-recorder-live"
+              />
             )}
           </div>
           {phase === "error" && <div className="absolute inset-0 flex items-center justify-center rounded-full p-6 text-center text-sm text-zinc-300">{err}</div>}
