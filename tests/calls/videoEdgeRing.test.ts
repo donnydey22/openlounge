@@ -9,14 +9,21 @@ const css = readFileSync("src/components/calls/calls.module.css", "utf8");
 const engine = readFileSync("src/lib/calls/engine.ts", "utf8");
 const tones = readFileSync("src/lib/calls/tones.ts", "utf8");
 
-test("#50 phones/tablets always cover edge to edge (375/412/820)", () => {
-  for (const [sw, sh] of [[375, 812], [412, 915], [820, 1180]]) {
-    for (const [vw, vh] of [[720, 1280], [1280, 720], [480, 640], [640, 480]]) assert.equal(videoFit(vw, vh, sw, sh), "cover", `${vw}x${vh} on ${sw}`);
+test("phones (portrait + landscape) cover edge to edge", () => {
+  for (const [sw, sh] of [[375, 667], [375, 812], [412, 915], [667, 375], [812, 375], [915, 412]]) {
+    for (const [vw, vh] of [[720, 1280], [1280, 720], [480, 640], [640, 480]]) assert.equal(videoFit(vw, vh, sw, sh), "cover", `${vw}x${vh} on ${sw}x${sh}`);
   }
 });
-test("#50 desktop also always covers (no exception for portrait feeds)", () => {
-  for (const [vw, vh] of [[1280, 720], [720, 1280], [480, 640]]) assert.equal(videoFit(vw, vh, 1280, 800), "cover");
-  assert.doesNotMatch(css + overlay, /object-contain[^"]*" style=\{\{ objectFit|data-fit=\{fit\}.*contain/);
+test("tablets/desktop show the whole picture (contain)", () => {
+  for (const [sw, sh] of [[820, 1180], [1180, 820], [1280, 800], [1920, 1080]]) assert.equal(videoFit(720, 1280, sw, sh, sw === 820 || sw === 1180), "contain");
+  assert.equal(videoFit(720, 1280, 1280, 500, false), "contain");
+});
+test("stage = viewport; contain + blurred backdrop, cover on phones", () => {
+  assert.match(css, /\.videoStage[\s\S]*position: fixed[\s\S]*100dvh/);
+  assert.match(css, /\.stageVideo[\s\S]*object-fit: contain/);
+  assert.match(css, /\.stageBackdrop[\s\S]*blur\(30px\)[\s\S]*pointer-events: none/);
+  assert.match(css, /@media \(max-width: 600px\), \(pointer: coarse\) and \(max-height: 600px\)[\s\S]*object-fit: cover[\s\S]*display: none/);
+  assert.match(overlay, /mirrorBackdrop\(el, back\.current\)/);
 });
 test("#50 no blurred / gradient filler video behind the call picture", () => {
   assert.doesNotMatch(overlay, /-fill`|ref=\{fill\}|blur-3xl|blur-xl" style/);

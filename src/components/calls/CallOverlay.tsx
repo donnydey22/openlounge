@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, Volume2, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
-import { holdFrames } from "@/lib/calls/frameHold";
+import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import css from "./calls.module.css";
@@ -196,20 +196,24 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
 function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: boolean }) {
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
+  const back = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const el = vid.current;
     callEngine.attachVideo(which, el);
     const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
+    const stopBackdrop = el && back.current ? mirrorBackdrop(el, back.current) : () => {};
     return () => {
+      stopBackdrop();
       release();
       callEngine.attachVideo(which, null);
     };
   }, [which]);
-  // #50: one full-viewport stage, video edge to edge (object-fit: cover), no blurred/gradient filler behind it.
+  // Phones: cover edge to edge (no backdrop). Tablets/desktop: contain over a blurred copy of the same stream.
   const flip = mirrored ? "-scale-x-100" : undefined;
   return (
-    <div className={css.videoStage} data-testid="call-video-stage" data-fit="cover">
-      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} data-testid={`call-video-${which}`} />
+    <div className={css.videoStage} data-testid="call-video-stage">
+      <video ref={back} aria-hidden autoPlay playsInline muted controls={false} disablePictureInPicture tabIndex={-1} className={cn(css.stageBackdrop, flip)} data-testid={`call-backdrop-${which}`} />
+      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ zIndex: 1 }} data-testid={`call-video-${which}`} />
       <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} data-testid={`call-hold-${which}`} />
     </div>
   );

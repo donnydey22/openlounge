@@ -171,9 +171,31 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
   };
 }
 
-/** #46/#50 fit: always cover edge to edge on every size (no bars, like Telegram), never a filler. */
-export function videoFit(_vw: number, _vh: number, _sw: number, _sh: number): "cover" {
-  return "cover";
+/** Phone viewport: <=600px wide, or a touch device in landscape <=600px tall (matches calls.module.css). */
+export function isPhoneViewport(sw: number, sh: number, coarse = true): boolean {
+  return sw <= 600 || (coarse && sh <= 600 && sw > sh);
+}
+
+/** Phones cover edge to edge (Telegram); tablets/desktop contain (whole picture) over a blurred backdrop. */
+export function videoFit(_vw: number, _vh: number, sw: number, sh: number, coarse = true): "cover" | "contain" {
+  return isPhoneViewport(sw, sh, coarse) ? "cover" : "contain";
+}
+
+/** Keep `backdrop` showing the same MediaStream as `video` (shared stream object, no extra decode setup). */
+export function mirrorBackdrop(video: HTMLVideoElement, backdrop: HTMLVideoElement): () => void {
+  const sync = () => {
+    if (backdrop.srcObject !== video.srcObject) backdrop.srcObject = video.srcObject;
+    if (backdrop.srcObject && backdrop.paused) void backdrop.play?.()?.catch?.(() => {});
+  };
+  sync();
+  const evs = ["loadedmetadata", "playing", "emptied"] as const;
+  for (const e of evs) video.addEventListener(e, sync);
+  const id = setInterval(sync, 1000);
+  return () => {
+    clearInterval(id);
+    for (const e of evs) video.removeEventListener(e, sync);
+    backdrop.srcObject = null;
+  };
 }
 
 /**

@@ -10,7 +10,8 @@ const moduleCss = (inset: { t: number; l: number; r: number }) =>
   readFileSync("src/components/calls/calls.module.css", "utf8")
     .replace(/:global\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, "$1")
     .replace(/env\(safe-area-inset-top, 0px\)/g, `${inset.t}px`).replace(/env\(safe-area-inset-left, 0px\)/g, `${inset.l}px`).replace(/env\(safe-area-inset-right, 0px\)/g, `${inset.r}px`);
-const SIZES: [number, number][] = [[375, 812], [412, 915], [820, 1180], [1280, 800]];
+const SIZES: [number, number][] = (process.env.SIZES ? process.env.SIZES.split(",").map((x) => x.split("x").map(Number)) : [[375, 667], [375, 812], [412, 915], [812, 375], [915, 412], [820, 1180], [1280, 800], [1920, 1080]]) as [number, number][];
+const PHONE = (w: number, h: number) => w <= 600 || (h <= 600 && w > h && w < 1000);
 const INSETS = [{ name: "none", t: 0, l: 0, r: 0 }, { name: "dynamic-island", t: 59, l: 0, r: 0 }, { name: "android-status", t: 24, l: 0, r: 0 }, { name: "landscape-notch", t: 0, l: 47, r: 0 }];
 const ENGS = (process.env.ENGS || "chromium,firefox,webkit").split(",") as ("chromium" | "firefox" | "webkit")[];
 let pass = 0, fail = 0;
@@ -19,7 +20,7 @@ const sleep = (m: number) => new Promise((r) => setTimeout(r, m));
 
 const videoPage = (css: string) => `<!doctype html><html><head><script>window.__name=(f)=>f</script><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>html,body{margin:0;background:#fff}${css}</style></head><body>
 <div class="screen" style="position:fixed;inset:0">
-  <div class="videoStage" id=stage><video id=big class="stageVideo callVideo" autoplay playsinline muted></video><canvas id=bighold class="stageVideo holdFrame"></canvas></div>
+  <div class="videoStage" id=stage><video id=back class="stageBackdrop" autoplay playsinline muted></video><video id=big style="z-index:1" class="stageVideo callVideo" autoplay playsinline muted></video><canvas id=bighold class="stageVideo holdFrame"></canvas></div>
   <div id=pip style="position:absolute;right:12px;top:12px;width:144px;aspect-ratio:9/16;overflow:hidden;background:#09090b;z-index:5"><video id=small class="callVideo" style="position:relative;z-index:1;width:100%;height:100%;object-fit:contain" autoplay playsinline muted></video><canvas id=smallhold class="holdFrame" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas></div>
 </div><script>${bundle}</script></body></html>`;
 
@@ -32,7 +33,8 @@ for (const eng of ENGS) {
   const br = await pw[eng].launch(eng === "chromium" ? { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-ui-for-media-stream"] } : eng === "firefox" ? { firefoxUserPrefs: { "media.autoplay.default": 0, "media.autoplay.block-webaudio": false, "media.autoplay.blocking_policy": 0, "media.navigator.permission.disabled": true } } : {});
   for (const [w, h] of SIZES) {
     const t = `${eng} ${w}`;
-    const ctx = await br.newContext({ viewport: { width: w, height: h } });
+    const phone = PHONE(w, h);
+    const ctx = await br.newContext({ viewport: { width: w, height: h }, hasTouch: phone || w === 820, ...(eng !== "firefox" && (phone || w === 820) ? { isMobile: true } : {}) });
     const page = await ctx.newPage();
     const errs: string[] = [];
     page.on("pageerror", (e) => errs.push(e.message));
@@ -53,7 +55,7 @@ for (const eng of ENGS) {
       const small = document.getElementById("small") as HTMLVideoElement, sh = document.getElementById("smallhold") as HTMLCanvasElement;
       W.holdFrames(big, bh); W.holdFrames(small, sh);
       const remote = cam(200, 720, 1280), local = cam(20, 720, 1280);
-      W.swapVideoTrack(big, remote.track); W.swapVideoTrack(small, local.track);
+      W.swapVideoTrack(big, remote.track); W.swapVideoTrack(small, local.track); W.mirrorBackdrop(big, document.getElementById("back"));
       const bigStream = big.srcObject, smallStream = small.srcObject;
       const probe = document.createElement("canvas"); probe.width = 8; probe.height = 8; const pg = probe.getContext("2d", { willReadFrequently: true })!;
       // classify what is actually visible in a tile: held canvas if shown, else the live video frame
@@ -73,6 +75,12 @@ for (const eng of ENGS) {
       const vr = big.getBoundingClientRect();
       const fit = getComputedStyle(big).objectFit;
       const expectFit = W.videoFit(big.videoWidth, big.videoHeight, innerWidth, innerHeight);
+      const back = document.getElementById("back") as HTMLVideoElement; const bs = getComputedStyle(back);
+      const backdrop = { shown: bs.display !== "none", filter: bs.filter, pe: bs.pointerEvents, fit: bs.objectFit, same: back.srcObject === big.srcObject && !!back.srcObject };
+      // painted picture rect inside the element (object-fit math), to prove nothing is cropped on contain
+      const sc = fit === "cover" ? Math.max(vr.width / big.videoWidth, vr.height / big.videoHeight) : Math.min(vr.width / big.videoWidth, vr.height / big.videoHeight);
+      const pic = { w: big.videoWidth * sc, h: big.videoHeight * sc };
+      const vp = { w: innerWidth, h: innerHeight };
       // sampler across the blip
       const stats = { big: { ok: 0, blank: 0, white: 0 }, small: { ok: 0, blank: 0, white: 0 }, heldSeen: 0 };
       let run = true;
@@ -98,14 +106,21 @@ for (const eng of ENGS) {
       run = false;
       remote2.stop(); local2.stop();
       return {
-        stage: [stage.left, stage.top, stage.width, stage.height], video: [vr.left, vr.top, vr.width, vr.height], fit, expectFit,
+        stage: [stage.left, stage.top, stage.width, stage.height], video: [vr.left, vr.top, vr.width, vr.height], fit, expectFit, backdrop, pic, vp,
         sameStream: big.srcObject === bigStream && small.srcObject === smallStream,
         poster: big.poster + small.poster, controls: big.controls || small.controls, stats, heldPixelsDuringStall, resumedIn, playing,
       };
     });
-    check(`${t}: #50 stage fills viewport`, r.stage[0] === 0 && r.stage[1] === 0 && Math.round(r.stage[2]) === w && Math.round(r.stage[3]) === h, JSON.stringify(r.stage));
-    check(`${t}: #50 video box edge to edge`, Math.round(r.video[2]) === w && Math.round(r.video[3]) === h, JSON.stringify(r.video));
-    check(`${t}: #50 object-fit cover on every size (no bars)`, r.fit === "cover" && r.expectFit === "cover", `${r.fit}/${r.expectFit}`);
+    const tt = `${eng} ${w}x${h}`;
+    check(`${tt}: container equals viewport`, r.stage[0] === 0 && r.stage[1] === 0 && Math.round(r.stage[2]) === r.vp.w && Math.round(r.stage[3]) === r.vp.h && r.vp.w === w && r.vp.h === h, JSON.stringify(r.stage));
+    check(`${tt}: video rect equals viewport`, Math.round(r.video[0]) === 0 && Math.round(r.video[1]) === 0 && Math.round(r.video[2]) === w && Math.round(r.video[3]) === h, JSON.stringify(r.video));
+    if (phone) {
+      check(`${tt}: phone uses cover edge to edge`, r.fit === "cover" && r.expectFit === "cover" && r.pic.w >= w - 1 && r.pic.h >= h - 1, JSON.stringify([r.fit, r.expectFit, r.pic]));
+      check(`${tt}: phone has no backdrop`, !r.backdrop.shown, JSON.stringify(r.backdrop));
+    } else {
+      check(`${tt}: main video fully visible (contain, as large as fits)`, r.fit === "contain" && r.expectFit === "contain" && r.pic.w <= w + 0.5 && r.pic.h <= h + 0.5 && (Math.abs(r.pic.w - w) < 1 || Math.abs(r.pic.h - h) < 1), JSON.stringify([r.fit, r.expectFit, r.pic]));
+      check(`${tt}: blurred backdrop present (same stream, cover, no pointer events)`, r.backdrop.shown && /blur\(30px\)/.test(r.backdrop.filter) && r.backdrop.pe === "none" && r.backdrop.fit === "cover" && r.backdrop.same, JSON.stringify(r.backdrop));
+    }
     check(`${t}: #49 no poster, no controls`, r.poster === "" && !r.controls, r.poster);
     check(`${t}: #49 srcObject never replaced across blip`, r.sameStream);
     check(`${t}: #49 last frame held during stall (pixels not blank/white)`, r.heldPixelsDuringStall === "ok" && r.stats.heldSeen > 0, JSON.stringify(r));

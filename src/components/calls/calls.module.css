@@ -150,10 +150,13 @@
   .pip, .controls { transition: opacity 200ms; }
 }
 
-/* #50: full-viewport call video, edge to edge (safe areas are covered by the picture; controls pad themselves). */
+/* Call video stage. The stage is the full viewport (fixed, inset 0 = layout viewport incl. safe areas with
+   viewport-fit=cover; tracks rotation/resize/URL-bar changes without JS). Phones (<=600px wide, or a touch device in
+   landscape <=600px tall): remote video covers edge to edge like Telegram, no backdrop. Tablets/desktop: whole picture
+   visible (contain, as large as fits) over a blurred, darkened cover copy of the same stream instead of black bars. */
 .videoStage {
-  position: absolute;
-  inset: 0;
+  position: fixed;
+  top: 0; right: 0; bottom: 0; left: 0;
   width: 100%;
   height: 100vh;
   height: 100dvh;
@@ -162,12 +165,31 @@
 }
 .stageVideo {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  top: 0; right: 0; bottom: 0; left: 0;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: contain;
   object-position: center;
   display: block;
+}
+.stageBackdrop {
+  position: absolute;
+  inset: -60px;
+  width: calc(100% + 120px) !important;
+  height: calc(100% + 120px) !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: cover;
+  filter: blur(30px) brightness(0.6);
+  pointer-events: none;
+  z-index: 0;
+  display: block;
+}
+@media (max-width: 600px), (pointer: coarse) and (max-height: 600px) {
+  .stageVideo { object-fit: cover; }
+  .stageBackdrop { display: none; }
 }
 /* #49: the element itself never paints a poster, controls or a light placeholder. */
 .callVideo { background: #000; }
