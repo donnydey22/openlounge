@@ -108,8 +108,10 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   const pos = (c: typeof corner) => {
     const w = ref.current?.offsetWidth ?? 100;
     const h = ref.current?.offsetHeight ?? 140;
-    const W = window.innerWidth;
-    const H = window.innerHeight;
+    // WebKit's innerWidth can include its transient mobile visual viewport while the fixed call screen is laid out
+    // against documentElement. Use the layout viewport so the PiP stays inside the rendered screen.
+    const W = document.documentElement.clientWidth || window.innerWidth;
+    const H = document.documentElement.clientHeight || window.innerHeight;
     const top = 64;
     const bottom = 150;
     return { x: c.endsWith("l") ? M : W - w - M, y: c.startsWith("t") ? top : H - h - bottom };
@@ -117,8 +119,20 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   const [, force] = useState(0);
   useEffect(() => {
     const r = () => force((x) => x + 1);
+    // iOS/WebKit can report a provisional visual viewport during the first render. Recompute after layout so a
+    // portrait self-view is never positioned beyond the right edge before a resize event arrives.
+    r();
+    const frame = requestAnimationFrame(r);
+    const settled = setTimeout(r, 250);
+    const viewport = window.visualViewport;
     window.addEventListener("resize", r);
-    return () => window.removeEventListener("resize", r);
+    viewport?.addEventListener("resize", r);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
+      window.removeEventListener("resize", r);
+      viewport?.removeEventListener("resize", r);
+    };
   }, []);
   const p = drag ?? (typeof window !== "undefined" ? pos(corner) : { x: 0, y: 0 });
   return (
