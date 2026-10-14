@@ -180,7 +180,6 @@ export default function SettingsPage() {
               CC BY 4.0
             </a>
             .{" "}
-            Animated emoji artwork © Telegram.{" "}
             <Link href="/terms#credits" className="underline hover:text-zinc-300">
               Credits
             </Link>

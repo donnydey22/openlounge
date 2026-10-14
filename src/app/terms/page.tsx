@@ -206,7 +206,6 @@ export default function Terms() {
           CC BY 4.0
         </a>{" "}
         (resized and re-encoded). Microsoft Fluent Emoji Animated © Microsoft, licensed under MIT (license included with the local asset collection).
-        Animated emoji artwork © Telegram (telegram.org), via the Telegram-Animated-Emojis collection.
       </p>
       <LegalFooter className="mt-10 border-t border-white/5 pt-6" />
     </main>

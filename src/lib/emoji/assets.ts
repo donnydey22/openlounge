@@ -8,9 +8,8 @@
 //   fluent:  Microsoft Fluent Emoji Animated (MIT), one self-hosted 160 px animated WebP per Unicode emoji with a static
 //            poster under /emoji/fluent. Skin-tone variants continue through the Noto fallback when Fluent has no matching asset.
 //
-// Load order for an emoji (assetChain): 1) our Telegram copy → 2) the upstream Telegram file (raw.githubusercontent.com — what
-// telegram-emojis.vercel.app itself renders) if ours errors or doesn't paint within ~3 s → 3) our Noto copy → 4) our Fluent copy
-// → 5) the native glyph.
+// Load order for an emoji (assetChain): 1) our Telegram copy (off in production — no license) → 2) our Noto copy → 3) our Fluent copy
+// → 4) the native glyph. The upstream raw.githubusercontent.com Telegram fallback was removed (Donny, Oct 2026).
 // Emoji Telegram's set lacks start at Noto. The switch is internal: NEXT_PUBLIC_EMOJI_SOURCE (build),
 // NEXT_PUBLIC_EMOJI_SOURCE_{WEB,IOS,ANDROID} (per platform), and — outside production builds or with localStorage "ol:dev" = "1" —
 // localStorage "ol:emojiSet" / ?emojiSet= for side-by-side comparisons (noto first, then Telegram).
@@ -134,27 +133,21 @@ export function animatedAsset(emoji: string, source: EmojiSource = emojiSource()
 }
 
 // ---- fallback chain ----
-// A step is either a ready asset or the (lazily resolved) upstream Telegram file. Session health: after 3 failures of a tier
-// we stop trying it first, so a dead origin costs three timeouts, not one per emoji.
-export type ChainStep = EmojiAsset | { type: "remote"; key: string; durationMs: number };
-const failures = { telegramLocal: 0, fluent: 0, remote: 0 };
+// Session health: after 3 failures of a tier we stop trying it first, so a dead origin costs three timeouts, not one per emoji.
+export type ChainStep = EmojiAsset;
+const failures = { telegramLocal: 0, fluent: 0 };
 export const FALLBACK_TIMEOUT_MS = 3000;
+/** @deprecated Upstream Telegram remote fallback removed; kept so callers compile. */
 export const REMOTE_TIMEOUT_MS = 6000;
 export function noteAssetFailure(step: ChainStep) {
-  if (step.type === "remote" || (step.type === "webp" && step.remote)) failures.remote++;
-  else if (step.type === "webp" && step.source === "telegram") failures.telegramLocal++;
+  if (step.type === "webp" && step.source === "telegram") failures.telegramLocal++;
   else if (step.type === "webp" && step.source === "fluent") failures.fluent++;
 }
-/** Ordered sources to try for one emoji. `animated` = false (static posters) skips the upstream file (it has no poster). */
-export function assetChain(emoji: string, source: EmojiSource = emojiSource(), animated = true): ChainStep[] {
+/** Ordered local sources to try for one emoji. */
+export function assetChain(emoji: string, source: EmojiSource = emojiSource(), _animated = true): ChainStep[] {
   const k = emojiKey(emoji);
   const tg = tgAsset(k);
-  const tgSteps: ChainStep[] = [];
-  if (tg) {
-    if (failures.telegramLocal < 3) tgSteps.push(tg);
-    if (animated && failures.remote < 3) tgSteps.push({ type: "remote", key: k, durationMs: tg.durationMs });
-    if (!tgSteps.length) tgSteps.push(tg);
-  }
+  const tgSteps: ChainStep[] = tg ? (failures.telegramLocal < 3 ? [tg] : [tg]) : [];
   const n = notoAsset(k);
   const f = fluentAsset(k);
   const fluentSteps: ChainStep[] = f ? [f] : [];
@@ -162,12 +155,9 @@ export function assetChain(emoji: string, source: EmojiSource = emojiSource(), a
   if (source === "noto") return [...(n ? [n] : []), ...tgSteps, ...fluentSteps];
   return [...tgSteps, ...(n ? [n] : []), ...fluentSteps];
 }
-let remoteMod: Promise<typeof import("./tgRemote")> | null = null;
-/** Resolve the upstream Telegram file for a key (separate chunk, loaded only on the first local failure). */
-export async function resolveRemote(step: { key: string; durationMs: number }): Promise<EmojiAsset | null> {
-  remoteMod ??= import("./tgRemote");
-  const url = (await remoteMod).tgRemoteUrl(step.key);
-  return url ? { type: "webp", src: url, poster: null, durationMs: step.durationMs, source: "telegram", remote: true } : null;
+/** Upstream Telegram (raw.githubusercontent.com) fallback removed — always null. */
+export async function resolveRemote(_step: { key: string; durationMs: number }): Promise<EmojiAsset | null> {
+  return null;
 }
 
 export const hasAnimated = (emoji: string) => animatedAsset(emoji) !== null;
