@@ -180,6 +180,28 @@ test("Mediasoup camera enable and flip use the shared orientation-aware capture 
   }
 });
 
+test("Mediasoup leaves a healthy video producer uncapped so congestion control can recover quality", async () => {
+  const camera = videoTrack("front");
+  const calls: unknown[] = [];
+  const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { getUserMedia: async () => ({ getVideoTracks: () => [camera], getTracks: () => [camera] }) } },
+  });
+  try {
+    const session = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, { provider: "mediasoup", url: "broker", token: "t", callId: "call" } as any, {
+      onRemoteTrack() {}, onState() {}, onLocalVideo() {},
+    });
+    const internal = session as any;
+    internal.send = { produce: async (options: unknown) => { calls.push(options); return { close() {}, replaceTrack: async () => {} }; } };
+    await session.enableCamera("user");
+    assert.deepEqual(calls, [{ track: camera, appData: { source: "camera" } }], "no fixed simulcast ceiling pins the direct call below its available bandwidth");
+  } finally {
+    if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+  }
+});
+
 const lkLike = (old: Track, published: boolean) => {
   const calls: string[] = [];
   const t = {

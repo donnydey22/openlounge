@@ -88,12 +88,6 @@ export interface LayerCap {
   maxBitrate: number;
   maxFramerate: number;
 }
-export interface CameraEncoding {
-  maxBitrate: number;
-  maxFramerate: number;
-  /** Native-size layer is 1; lower simulcast layers are downscaled from it. */
-  scaleResolutionDownBy: number;
-}
 /** 16:9 landscape simulcast presets. */
 export const VIDEO_LAYERS = {
   low: { width: 320, height: 180, maxBitrate: 150_000, maxFramerate: 15 },
@@ -148,6 +142,17 @@ export function browserNetworkTier(): NetworkTier {
   } catch {}
   return networkTier((navigator as Navigator & { connection?: NetInfoLike }).connection ?? null, override);
 }
+
+/**
+ * Native wrappers and mobile browsers already negotiate the camera sensor's upright, device-appropriate frame.
+ * Giving those stacks a portrait aspect-ratio preference can select a cropped sensor mode (notably WKWebView), so
+ * retain only the facing preference there. Desktop capture continues to use the quality presets below.
+ */
+export function browserUsesNativeMobileCameraFrame(env?: Pick<CodecEnv, "ua" | "maxTouchPoints" | "nativePlatform">): boolean {
+  if (env) return isPhoneLike(env);
+  if (typeof navigator === "undefined") return false;
+  return isPhoneLike({ ua: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints });
+}
 export type CameraOrientation = "portrait" | "landscape";
 
 /** Browser orientation is intentionally a preference only: camera constraints below are all ideal, never mandatory. */
@@ -165,6 +170,7 @@ export function captureResolution(tier: NetworkTier, orientation: CameraOrientat
 
 /** Shared getUserMedia request for direct Mediasoup capture and pre-acquired LiveKit camera tracks. */
 export function cameraCaptureConstraints(facing: "user" | "environment", tier: NetworkTier = browserNetworkTier(), orientation: CameraOrientation = browserCameraOrientation()): MediaTrackConstraints {
+  if (browserUsesNativeMobileCameraFrame()) return { facingMode: { ideal: facing } };
   const resolution = captureResolution(tier, orientation);
   return {
     facingMode: { ideal: facing },
@@ -173,6 +179,16 @@ export function cameraCaptureConstraints(facing: "user" | "environment", tier: N
     aspectRatio: { ideal: resolution.aspectRatio },
     frameRate: { ideal: resolution.frameRate, max: resolution.frameRate },
   };
+}
+
+/**
+ * Adjust an already-running desktop camera when network quality moves between low and normal tiers. Native wrappers
+ * retain their uncropped sensor frame and let WebRTC congestion control adapt the sender instead.
+ */
+export async function applyCameraCaptureQuality(track: MediaStreamTrack | null | undefined, facing: "user" | "environment", tier: NetworkTier, nativeMobile = browserUsesNativeMobileCameraFrame()): Promise<boolean> {
+  if (!track?.applyConstraints || nativeMobile) return false;
+  await track.applyConstraints(cameraCaptureConstraints(facing, tier));
+  return true;
 }
 
 /** Video calls prioritise natural motion and low latency over a static-screen text optimisation. */
@@ -189,24 +205,6 @@ export function applyCameraQualityHint(track: MediaStreamTrack | null | undefine
   } catch {
     // Older WebViews expose MediaStreamTrack without a writable contentHint.
   }
-}
-
-/**
- * Mediasoup does not inherit LiveKit's publish defaults. Cap the direct-UDP producer explicitly so video steps down
- * before audio queues under congestion, while healthy calls retain 720p/30 quality.
- */
-export function mediasoupCameraEncodings(tier: NetworkTier = "normal"): CameraEncoding[] {
-  if (tier === "low") {
-    return [
-      { maxBitrate: VIDEO_LAYERS.mid.maxBitrate, maxFramerate: VIDEO_LAYERS.mid.maxFramerate, scaleResolutionDownBy: 1 },
-      { maxBitrate: VIDEO_LAYERS.low.maxBitrate, maxFramerate: VIDEO_LAYERS.low.maxFramerate, scaleResolutionDownBy: 2 },
-    ];
-  }
-  return [
-    { maxBitrate: VIDEO_LAYERS.top.maxBitrate, maxFramerate: VIDEO_LAYERS.top.maxFramerate, scaleResolutionDownBy: 1 },
-    { maxBitrate: VIDEO_LAYERS.mid.maxBitrate, maxFramerate: VIDEO_LAYERS.mid.maxFramerate, scaleResolutionDownBy: 2 },
-    { maxBitrate: VIDEO_LAYERS.low.maxBitrate, maxFramerate: VIDEO_LAYERS.low.maxFramerate, scaleResolutionDownBy: 4 },
-  ];
 }
 
 /**

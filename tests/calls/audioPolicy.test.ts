@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS } from "../../src/lib/calls/audioPolicy";
+import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS, useRawDirectCallMicrophone } from "../../src/lib/calls/audioPolicy";
 
 test("call capture asks for browser AEC, noise suppression, AGC, and efficient full-band mono without making any capability mandatory", () => {
   assert.deepEqual(CALL_AUDIO_CONSTRAINTS.echoCancellation, { ideal: true });
@@ -18,4 +18,11 @@ test("UDP Mediasoup voice producer requests Opus FEC and DTX without stereo over
     opusMaxPlaybackRate: 48_000,
     opusMaxAverageBitrate: 48_000,
   });
+});
+
+test("native direct calls keep the browser's raw AEC/NS/AGC microphone instead of a fragile Web Audio destination", () => {
+  assert.equal(useRawDirectCallMicrophone({ nativePlatform: "ios" }), true);
+  assert.equal(useRawDirectCallMicrophone({ nativePlatform: "android" }), true);
+  assert.equal(useRawDirectCallMicrophone({ ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8)" }), true);
+  assert.equal(useRawDirectCallMicrophone({ ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Chrome/123" }), false);
 });

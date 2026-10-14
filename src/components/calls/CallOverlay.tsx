@@ -83,24 +83,28 @@ function Background({ s }: { s: CallSnapshot }) {
 function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
+  const fill = useRef<HTMLVideoElement>(null);
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
   const [corner, setCorner] = useState<"tl" | "tr" | "bl" | "br">("tr");
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
   const start = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   useEffect(() => {
     const el = vid.current;
-    callEngine.attachVideo(which, el);
+    callEngine.attachVideo(which, [el, fill.current].filter((candidate): candidate is HTMLVideoElement => candidate !== null));
     const syncAspect = () => {
       const width = el?.videoWidth ?? 0;
       const height = el?.videoHeight ?? 0;
+      // Never force a phone frame into the viewport's aspect ratio: use the decoded feed's native geometry.
       if (width > 0 && height > 0) setAspectRatio(width / height);
     };
     el?.addEventListener("loadedmetadata", syncAspect);
     el?.addEventListener("resize", syncAspect);
+    window.addEventListener("resize", syncAspect);
     syncAspect();
     return () => {
       el?.removeEventListener("loadedmetadata", syncAspect);
       el?.removeEventListener("resize", syncAspect);
+      window.removeEventListener("resize", syncAspect);
       callEngine.attachVideo(which, null);
     };
   }, [which]);
@@ -138,7 +142,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   return (
     <div
       ref={ref}
-      className={cn(css.pip, "w-36 max-h-[38vh] max-w-[40vw] overflow-hidden max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-black", drag && css.pipDragging)}
+      className={cn(css.pip, "w-36 max-h-[38vh] max-w-[40vw] overflow-hidden max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-zinc-950", drag && css.pipDragging)}
       style={{ transform: `translate3d(${p.x}px, ${p.y}px, 0)`, left: 0, top: 0, aspectRatio }}
       data-testid="call-pip"
       onPointerDown={(e) => {
@@ -180,18 +184,25 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={vid} autoPlay playsInline muted className="h-full w-full object-cover object-center" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
+      <video ref={fill} autoPlay playsInline muted aria-hidden className="pointer-events-none absolute -inset-4 h-[calc(100%+2rem)] w-[calc(100%+2rem)] scale-110 object-cover opacity-60 blur-xl" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
+      <video ref={vid} autoPlay playsInline muted className="relative z-[1] h-full w-full object-contain" style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} />
     </div>
   );
 }
 
 function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: boolean }) {
   const vid = useRef<HTMLVideoElement>(null);
+  const fill = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    callEngine.attachVideo(which, vid.current);
+    callEngine.attachVideo(which, [vid.current, fill.current].filter((candidate): candidate is HTMLVideoElement => candidate !== null));
     return () => callEngine.attachVideo(which, null);
   }, [which]);
-  return <video ref={vid} autoPlay playsInline muted className={cn("absolute inset-0 h-full w-full bg-black object-cover", mirrored && "-scale-x-100")} data-testid={`call-video-${which}`} />;
+  return (
+    <div className="absolute inset-0 overflow-hidden bg-zinc-950">
+      <video ref={fill} autoPlay playsInline muted aria-hidden className={cn("pointer-events-none absolute -inset-8 h-[calc(100%+4rem)] w-[calc(100%+4rem)] scale-110 object-cover opacity-65 blur-3xl", mirrored && "-scale-x-100")} data-testid={`call-video-${which}-fill`} />
+      <video ref={vid} autoPlay playsInline muted className={cn("relative z-[1] h-full w-full object-contain", mirrored && "-scale-x-100")} data-testid={`call-video-${which}`} />
+    </div>
+  );
 }
 
 function Incoming({ s }: { s: CallSnapshot }) {

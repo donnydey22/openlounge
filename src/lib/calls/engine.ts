@@ -9,7 +9,7 @@ import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { LocalAudioTrack, LocalVideoTrack, RemoteTrack, Room } from "livekit-client";
 import { native, nativePlatform } from "@/lib/native";
-import { applyCameraQualityHint, browserNetworkTier, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults } from "./videoPolicy";
+import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, browserUsesNativeMobileCameraFrame, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults, type NetworkTier } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
@@ -131,7 +131,8 @@ export class CallEngine {
   private flippingCamera = false;
   private remoteVideo: RemoteTrack | null = null;
   private audioEls: HTMLMediaElement[] = [];
-  private videoEls = { local: null as HTMLVideoElement | null, remote: null as HTMLVideoElement | null };
+  /** Each visible feed has a native-aspect foreground plus a blurred duplicate fill. */
+  private videoEls = { local: [] as HTMLVideoElement[], remote: [] as HTMLVideoElement[] };
   private acceptedHere = false;
   private acceptT0 = 0;
   private metricSent = false;
@@ -524,7 +525,9 @@ export class CallEngine {
       adaptiveStream: true,
       dynacast: true,
       audioCaptureDefaults: CALL_AUDIO_CONSTRAINTS,
-      videoCaptureDefaults: { resolution: captureResolution(browserNetworkTier()), facingMode: "user" },
+      // Phone cameras choose their own upright native frame. Constraining an iPhone WKWebView to 9:16 can select a
+      // cropped sensor mode; desktop capture keeps the quality preference below.
+      videoCaptureDefaults: browserUsesNativeMobileCameraFrame() ? { facingMode: "user" } : { resolution: captureResolution(browserNetworkTier()), facingMode: "user" },
       // videoPolicy: Opus speech + DTX + RED at high priority; H.264 on capable phones (VP8 backup) else VP8;
       // simulcast q 180p/15fps/150k, h 360p/24fps/400k, f 1.2M/30fps
       publishDefaults: publishDefaults(LK, currentCodecChoice(nativePlatform()), browserNetworkTier()),
@@ -563,7 +566,11 @@ export class CallEngine {
     if (this.camTrack) return this.camTrack;
     try {
       const LK = await loadLK();
-      const t = await LK.createLocalVideoTrack({ facingMode: this.s.facing, resolution: captureResolution(browserNetworkTier()) });
+      const t = await LK.createLocalVideoTrack(
+        browserUsesNativeMobileCameraFrame()
+          ? { facingMode: this.s.facing }
+          : { facingMode: this.s.facing, resolution: captureResolution(browserNetworkTier()) },
+      );
       applyCameraQualityHint(t.mediaStreamTrack);
       if (!this.busy) {
         t.stop();
@@ -571,7 +578,7 @@ export class CallEngine {
       }
       this.camTrack = t;
       this.logCameraTrack(t.mediaStreamTrack, "livekit-capture");
-      if (this.videoEls.local) t.attach(this.videoEls.local);
+      for (const el of this.videoEls.local) t.attach(el);
       this.set({ camOn: true });
       return t;
     } catch {
@@ -732,10 +739,11 @@ export class CallEngine {
     this.attachRawVideo(this.videoEls.local, track);
   }
 
-  private attachRawVideo(el: HTMLVideoElement | null, track: MediaStreamTrack | null) {
-    if (!el) return;
-    el.srcObject = track ? new MediaStream([track]) : null;
-    if (track) void el.play().catch(() => {});
+  private attachRawVideo(els: readonly HTMLVideoElement[], track: MediaStreamTrack | null) {
+    for (const el of els) {
+      el.srcObject = track ? new MediaStream([track]) : null;
+      if (track) void el.play().catch(() => {});
+    }
   }
 
   private onMediasoupState(state: "connected" | "disconnected" | "failed") {
@@ -819,7 +827,7 @@ export class CallEngine {
           if (!el.paused) this.firstAudio();
         } else if (track.kind === Track.Kind.Video) {
           this.remoteVideo = track;
-          if (this.videoEls.remote) track.attach(this.videoEls.remote);
+          for (const el of this.videoEls.remote) track.attach(el);
           this.set({ remoteCam: !track.isMuted, videoInvite: !this.s.camOn });
         }
       })
@@ -1044,6 +1052,7 @@ export class CallEngine {
 
   private netWatched = false;
   private lastNetType: string | null = null;
+  private lastNetworkTier: NetworkTier = "normal";
   private netTimer: ReturnType<typeof setTimeout> | null = null;
   /** Network changes (Wi-Fi ↔ cellular, IP change, offline/online): refresh the media path right away instead of
    *  waiting for ICE consent to time out. LiveKit resumes with an ICE restart; if it has given up, we rejoin. */
@@ -1052,6 +1061,7 @@ export class CallEngine {
     this.netWatched = true;
     const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
     this.lastNetType = conn?.type ?? null;
+    this.lastNetworkTier = browserNetworkTier();
     const refresh = (why: string) => {
       if (this.netTimer) clearTimeout(this.netTimer);
       this.netTimer = setTimeout(() => {
@@ -1082,10 +1092,32 @@ export class CallEngine {
     });
     conn?.addEventListener?.("change", () => {
       const ty = conn.type ?? null;
-      if (ty === this.lastNetType) return; // effectiveType wobble on the same network: ignore
+      const tier = browserNetworkTier();
+      const tierChanged = tier !== this.lastNetworkTier;
+      if (tierChanged) {
+        this.lastNetworkTier = tier;
+        void this.refreshCameraCaptureQuality(tier);
+      }
+      if (ty === this.lastNetType) return; // no interface migration; capture/encoder adaptation above is sufficient
       this.lastNetType = ty;
       if (navigator.onLine !== false) refresh(`connection:${ty}`);
     });
+  }
+
+  /** Preserve a live call while returning a desktop capture to 720p/30 after bandwidth recovers. */
+  private async refreshCameraCaptureQuality(tier: NetworkTier) {
+    try {
+      if (this.mediasoup) {
+        const changed = await this.mediasoup.refreshCameraQuality(this.s.facing, tier);
+        if (changed) this.netLog("camera-capture-tier", { tier, provider: "mediasoup" });
+        return;
+      }
+      const changed = await applyCameraCaptureQuality(this.camTrack?.mediaStreamTrack, this.s.facing, tier);
+      if (changed) this.netLog("camera-capture-tier", { tier, provider: "livekit" });
+    } catch {
+      // Congestion control continues even if a device refuses a live constraint update; never interrupt the call.
+      this.netLog("camera-capture-tier-rejected", { tier });
+    }
   }
 
   private setQuality(qy: Quality) {
@@ -1264,19 +1296,20 @@ export class CallEngine {
     this.set({ needsGesture: this.room ? !this.room.canPlaybackAudio : false });
   }
 
-  /** video elements from the UI (PiP / full screen); null detaches */
-  attachVideo(which: "local" | "remote", el: HTMLVideoElement | null) {
+  /** Video elements from the UI: native-aspect foreground plus its blurred duplicate fill. */
+  attachVideo(which: "local" | "remote", elements: HTMLVideoElement | readonly HTMLVideoElement[] | null) {
     const prev = this.videoEls[which];
+    const next = (Array.isArray(elements) ? elements : elements ? [elements] : []).filter((el, index, all) => all.indexOf(el) === index);
     if (this.mediasoup) {
-      this.videoEls[which] = el;
-      this.attachRawVideo(el, which === "local" ? this.mediasoupLocalVideo : this.mediasoupRemoteVideo);
-      if (prev && prev !== el) prev.srcObject = null;
+      this.videoEls[which] = next;
+      this.attachRawVideo(next, which === "local" ? this.mediasoupLocalVideo : this.mediasoupRemoteVideo);
+      for (const el of prev) if (!next.includes(el)) el.srcObject = null;
       return;
     }
     const track = which === "local" ? this.camTrack : this.remoteVideo;
-    if (prev && track) track.detach(prev);
-    this.videoEls[which] = el;
-    if (el && track) track.attach(el);
+    if (track) for (const el of prev) track.detach(el);
+    this.videoEls[which] = next;
+    if (track) for (const el of next) track.attach(el);
   }
 }
 

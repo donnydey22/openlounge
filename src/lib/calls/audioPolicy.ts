@@ -22,3 +22,19 @@ export const OPUS_VOICE_CODEC_OPTIONS = {
   opusMaxPlaybackRate: 48_000,
   opusMaxAverageBitrate: 48_000,
 } as const;
+
+export interface DirectAudioEnvironment {
+  ua?: string | null;
+  nativePlatform?: "ios" | "android" | null;
+}
+
+/**
+ * A direct SFU call must never depend on a MediaStreamAudioDestinationNode on phones. iOS/WKWebView can report a
+ * running AudioContext after a call/interrupt while that destination no longer produces samples; Android receivers
+ * then hear silence. The browser's raw microphone still has AEC, noise suppression and AGC from
+ * CALL_AUDIO_CONSTRAINTS, and is the durable native transport source.
+ */
+export function useRawDirectCallMicrophone(env: DirectAudioEnvironment = {}): boolean {
+  if (env.nativePlatform === "ios" || env.nativePlatform === "android") return true;
+  return /iPhone|iPad|iPod|Android|Mobi/i.test(env.ua ?? "");
+}
