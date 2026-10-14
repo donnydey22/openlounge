@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { videoFit, MAX_COVER_ZOOM } from "../../src/lib/calls/frameHold";
+import { videoFit } from "../../src/lib/calls/frameHold";
 
 const overlay = readFileSync("src/components/calls/CallOverlay.tsx", "utf8");
 const css = readFileSync("src/components/calls/calls.module.css", "utf8");
@@ -14,11 +14,9 @@ test("#50 phones/tablets always cover edge to edge (375/412/820)", () => {
     for (const [vw, vh] of [[720, 1280], [1280, 720], [480, 640], [640, 480]]) assert.equal(videoFit(vw, vh, sw, sh), "cover", `${vw}x${vh} on ${sw}`);
   }
 });
-test("#50 desktop: cover unless that over-zooms a portrait phone feed", () => {
-  assert.equal(videoFit(1280, 720, 1280, 800), "cover");
-  assert.equal(videoFit(720, 1280, 1280, 800), "contain");
-  assert.ok(MAX_COVER_ZOOM >= 2);
-  assert.equal(videoFit(0, 0, 1280, 800), "cover");
+test("#50 desktop also always covers (no exception for portrait feeds)", () => {
+  for (const [vw, vh] of [[1280, 720], [720, 1280], [480, 640]]) assert.equal(videoFit(vw, vh, 1280, 800), "cover");
+  assert.doesNotMatch(css + overlay, /object-contain[^"]*" style=\{\{ objectFit|data-fit=\{fit\}.*contain/);
 });
 test("#50 no blurred / gradient filler video behind the call picture", () => {
   assert.doesNotMatch(overlay, /-fill`|ref=\{fill\}|blur-3xl|blur-xl" style/);

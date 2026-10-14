@@ -164,16 +164,9 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
   };
 }
 
-/** #46/#50 fit: phones and tablets always cover edge to edge (no bars, like Telegram). Only on a wide desktop
- *  window (>= 1024 px) where cover would zoom more than this (a portrait phone feed on a landscape monitor) is the
- *  whole frame shown on a flat black stage instead of over-cropping a face. Never a blurred or gradient filler. */
-export const MAX_COVER_ZOOM = 2.5;
-export const DESKTOP_MIN_WIDTH = 1024;
-export function videoFit(vw: number, vh: number, sw: number, sh: number): "cover" | "contain" {
-  if (!vw || !vh || !sw || !sh || sw < DESKTOP_MIN_WIDTH) return "cover";
-  const cover = Math.max(sw / vw, sh / vh);
-  const contain = Math.min(sw / vw, sh / vh);
-  return cover / contain > MAX_COVER_ZOOM ? "contain" : "cover";
+/** #46/#50 fit: always cover edge to edge on every size (no bars, like Telegram), never a filler. */
+export function videoFit(_vw: number, _vh: number, _sw: number, _sh: number): "cover" {
+  return "cover";
 }
 
 /**
