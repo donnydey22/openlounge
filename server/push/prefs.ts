@@ -1,4 +1,4 @@
-export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "recentRoom", "newFollower", "contactJoined", "hallwayPresence"] as const;
+export const NOTIF_TYPES = ["dm", "roomInvite", "followedRoom", "trendingRoom", "scheduledRoom", "roomMemberActivity", "recentRoom", "newFollower", "contactJoined", "hallwayPresence"] as const;
 export type NotifType = (typeof NOTIF_TYPES)[number];
 
 export interface QuietHours {
@@ -16,6 +16,9 @@ export const DEFAULT_PREFS: NotifPrefs = {
   followedRoom: true,
   trendingRoom: true,
   scheduledRoom: true,
+  /** Clubhouse-style activity for public rooms you have explicitly joined. */
+  roomMemberActivity: true,
+  /** Optional follow-up when a host whose room you joined recently starts another public room. */
   recentRoom: false,
   newFollower: true,
   contactJoined: true,
