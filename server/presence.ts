@@ -33,6 +33,11 @@ export const AWAY_GRACE_MS = envMs("PRESENCE_AWAY_GRACE_MS", 1_500);
 /** generic ws interaction while away/offline: at most one persist+broadcast per user per this window */
 export const ACTIVITY_THROTTLE_MS = envMs("PRESENCE_ACTIVITY_THROTTLE_MS", 10_000);
 export const SWEEP_MS = envMs("PRESENCE_SWEEP_MS", 2_000);
+/** hallway: user must stay online (foreground) this long before followers are told — a backgrounded app's silent
+ *  reconnect attaches as visible and only reports hidden a moment later; that must not announce them */
+export const HALLWAY_CONFIRM_MS = envMs("PRESENCE_HALLWAY_CONFIRM_MS", 15_000);
+/** hallway: only announce after a real absence, not a socket blip / deploy reconnect / app switch */
+export const HALLWAY_MIN_ABSENCE_MS = envMs("PRESENCE_HALLWAY_MIN_ABSENCE_MS", 10 * 60_000);
 
 interface ConnState {
   userId: string;
@@ -60,6 +65,7 @@ export class Presence {
   private status = new Map<string, Exclude<PresenceStatus, "offline">>();
   private departed = new Map<string, { at: number; token: string }>();
   private timers = new Map<string, { t: NodeJS.Timeout; at: number; to: PresenceStatus }>();
+  private hallwayTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private io: WsHub,
@@ -83,6 +89,8 @@ export class Presence {
     clearInterval(this.sweep);
     for (const p of this.timers.values()) clearTimeout(p.t);
     this.timers.clear();
+    for (const t of this.hallwayTimers.values()) clearTimeout(t);
+    this.hallwayTimers.clear();
   }
 
   isOnline(userId: string) {
@@ -241,12 +249,25 @@ export class Presence {
     }
     if (to === "offline") this.departed.delete(userId);
     this.broadcast({ userId, online: to === "online", status: to, lastSeenAt, now: Date.now() });
-    // Hallway presence: only when newly online (was offline). away→online is "came back to tab" — skip to avoid noise.
-    if (to === "online" && was === "offline") {
-      try {
-        this.onBecameOnline?.(userId);
-      } catch (e) {
-        console.warn("[presence] onBecameOnline failed:", (e as Error).message);
+    // Hallway presence: only when newly online after a real absence, and only once they are still online
+    // (foreground) after HALLWAY_CONFIRM_MS. Leaving online cancels a pending announcement.
+    if (to !== "online") {
+      const h = this.hallwayTimers.get(userId);
+      if (h) (clearTimeout(h), this.hallwayTimers.delete(userId));
+    } else if (was === "offline" && this.onBecameOnline && !this.hallwayTimers.has(userId)) {
+      const prevSeen = this.lastSeen.get(userId);
+      if (prevSeen === undefined || Date.now() - prevSeen >= HALLWAY_MIN_ABSENCE_MS) {
+        const t = setTimeout(() => {
+          this.hallwayTimers.delete(userId);
+          if (!this.isOnline(userId)) return;
+          try {
+            this.onBecameOnline?.(userId);
+          } catch (e) {
+            console.warn("[presence] onBecameOnline failed:", (e as Error).message);
+          }
+        }, HALLWAY_CONFIRM_MS);
+        t.unref();
+        this.hallwayTimers.set(userId, t);
       }
     }
   }
