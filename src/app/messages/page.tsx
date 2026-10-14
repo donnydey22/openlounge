@@ -7,9 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, PenSquare, Phone, Pin, Search, Users } from "lucide-react";
-import type { ChatStateEvent, ConversationSummary, DirectMessage, PublicUser } from "@/lib/types";
+import type { ChatStateEvent, ConversationSummary, DirectMessage, DmReadStateEvent, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
+import { applyOwnDirectReadState } from "@/lib/chat/readState";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -59,11 +60,16 @@ export default function MessagesPage() {
         if (st.hidden) return list.filter((c) => c.peer.id !== st.peerId);
         return list.map((c) => (c.peer.id !== st.peerId || !!c.pinnedAt === st.pinned ? c : { ...c, pinnedAt: st.pinned ? Date.now() : undefined }));
       });
+    // A different session opened this direct thread. The server includes the exact remaining
+    // row count, so a new message racing with the read acknowledgement cannot be hidden.
+    const onRead = (state: DmReadStateEvent) => setConversations((list) => applyOwnDirectReadState(list, meId, state));
     socket.on("dm:chat-state", onState);
+    socket.on("dm:read-state", onRead);
     return () => {
       socket.off("dm:chat-state", onState);
+      socket.off("dm:read-state", onRead);
     };
-  }, [socket]);
+  }, [socket, meId]);
 
   // live: a DM to/from me moves that conversation to the top in place (no refetch, no flash)
   useEffect(() => {
@@ -198,7 +204,7 @@ export default function MessagesPage() {
                           )}
                         </p>
                         {c.unread > 0 && (
-                          <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-sky-500 px-1.5 text-[11px] font-bold text-on-color">
+                          <span data-testid="dm-row-unread" className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-sky-500 px-1.5 text-[11px] font-bold text-on-color">
                             {c.unread > 99 ? "99+" : c.unread}
                           </span>
                         )}

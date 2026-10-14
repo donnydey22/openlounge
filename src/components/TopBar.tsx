@@ -31,7 +31,7 @@ export function TopBar() {
           <Link href="/messages" className="relative rounded-full p-2.5 text-zinc-300 hover:bg-white/5 hover:text-white max-[389px]:p-2 max-[339px]:p-1.5" aria-label="Messages">
             <MessageCircle className="h-5 w-5" />
             {unreadDms > 0 && (
-              <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-500 px-1 text-[10px] font-bold text-on-color">
+              <span data-testid="header-unread-badge" className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-500 px-1 text-[10px] font-bold text-on-color">
                 {unreadDms > 9 ? "9+" : unreadDms}
               </span>
             )}

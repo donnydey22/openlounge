@@ -229,8 +229,20 @@ export function registerRealtime(io: WsHub) {
       }
     },
     dmRead(receipt) {
-      // the sender's devices flip ✓ → ✓✓; the reader's other devices clear their unread state
+      // The sender's devices flip ✓ → ✓✓. Every reader session also gets the exact row and total
+      // rather than inferring that a receipt means the whole thread is clear: a newer DM can race
+      // with the read acknowledgement and legitimately leave an unread count behind.
       io.to(`user:${receipt.peerId}`).to(`user:${receipt.readerId}`).emit("dm:read-receipt", receipt);
+      if (!isGroupId(receipt.readerId)) {
+        const row = store.conversations(receipt.readerId).find((conversation) => conversation.peer.id === receipt.peerId);
+        io.to(`user:${receipt.readerId}`).emit("dm:read-state", {
+          peerId: receipt.peerId,
+          unread: row?.unread ?? 0,
+          total: store.unreadDmCount(receipt.readerId),
+        });
+      }
+      // This is a collapsed clear plus a badge-bearing data/silent push: Android receives it as
+      // high-priority data and iOS as an APNs background notification, so closed apps reconcile too.
       bg(push()?.dmRead(receipt.readerId, receipt.peerId));
     },
     dmMessage(msg) {
