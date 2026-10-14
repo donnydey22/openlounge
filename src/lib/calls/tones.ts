@@ -12,6 +12,11 @@
 //  - Ring cycles were re-armed with setTimeout, which background tabs throttle (≥1 s, then 1/min). Now the whole ring
 //    (up to the 45 s deadline) is scheduled on the audio clock in one go.
 //  - Volumes were very low (≈ -27 dBFS) and iOS routes WebRTC-era audio to the quiet earpiece. Louder now.
+//  - It could still stop early: (1) the deadline compared the server's expiresAt with the phone clock (skew → short
+//    ring, see ringUntil in engine.ts); (2) the <audio> fallback was only considered once, 400 ms in, so when iOS /
+//    Android audio focus later suspended the context mid-ring (mic prompt, another app) the ring went silent. Now a
+//    1 s watchdog re-resumes the context and switches to the looped element whenever Web Audio isn't running, and
+//    the element is re-played if the OS pauses it, for as long as the ring state lasts.
 //  - Fallback: if Web Audio still isn't running 400 ms after a ring starts, the same tone (rendered to a WAV) plays on
 //    the <audio> element primed during an earlier tap.
 import { audioContext, onAudioState, primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
@@ -120,6 +125,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   let alive = true;
   let master: GainNode | null = null;
   let elTimer: ReturnType<typeof setTimeout> | null = null;
+  let watchTimer: ReturnType<typeof setInterval> | null = null;
   let vibTimer: ReturnType<typeof setInterval> | null = null;
   let offState: (() => void) | null = null;
   const p = PATTERNS[kind];
@@ -142,11 +148,18 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       expose();
     });
   }
-  // fallback: Web Audio still blocked shortly after starting → the primed <audio> element (looped WAV)
-  elTimer = setTimeout(() => {
-    if (!alive || audioContext()?.state === "running") return;
+  // fallback: Web Audio not running (blocked at start, or suspended later by the OS) → the primed <audio> element
+  // (looped WAV). Checked at 400 ms and then every second for the whole ring.
+  const fallback = () => {
+    if (!alive) return;
+    if (audioContext()?.state === "running") return;
+    resumeAudio();
     const e = primedAudioElement();
     if (!e) return;
+    if (state.path === "element") {
+      if (e.paused) void e.play().catch(() => {}); // OS paused the looped ring: keep it going
+      return;
+    }
     try {
       e.src = wavCache[kind] ??= renderWav(kind);
       e.loop = true;
@@ -163,7 +176,9 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     } catch {
       /* ignore */
     }
-  }, 400);
+  };
+  elTimer = setTimeout(fallback, 400);
+  watchTimer = setInterval(fallback, 1000);
   if (kind === "incoming" && typeof navigator !== "undefined" && "vibrate" in navigator) {
     const buzz = () => {
       try {
@@ -178,6 +193,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   const stop = () => {
     alive = false;
     if (elTimer) clearTimeout(elTimer);
+    if (watchTimer) clearInterval(watchTimer);
     if (vibTimer) clearInterval(vibTimer);
     offState?.();
     try {
