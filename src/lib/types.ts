@@ -415,7 +415,7 @@ export interface NotifPrefsClient {
   newFollower: boolean;
   contactJoined: boolean;
   /** someone you follow is online in the hallway */
-  hallwayPresence?: boolean;
+  hallwayPresence: boolean;
   contactsOptIn: boolean;
   /** "Tell me when contacts join": keep codes of contacts who aren't members yet (no 24 h purge) */
   contactsKeep?: boolean;
