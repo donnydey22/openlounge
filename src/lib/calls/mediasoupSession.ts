@@ -1,5 +1,8 @@
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
+import { audioContext } from "@/lib/audioUnlock";
+import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
+import { CALL_AUDIO_CONSTRAINTS, OPUS_VOICE_CODEC_OPTIONS } from "./audioPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
 
@@ -7,7 +10,6 @@ type DeviceLike = InstanceType<typeof import("mediasoup-client").Device>;
 type TransportLike = ReturnType<DeviceLike["createSendTransport"]>;
 type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 
-const MIC: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 const CONNECT_TIMEOUT_MS = 4_000;
 
 /** Resolves when a mediasoup-client transport reaches "connected"; rejects on "failed"/"closed". */
@@ -36,9 +38,19 @@ export class MediasoupCallSession {
   private send: TransportLike | null = null;
   private recv: RecvTransportLike | null = null;
   private mic: MediaStreamTrack | null = null;
+  /** Keeps the raw capture alive while its bounded Web Audio output is sent; null means the raw mic is sent safely. */
+  private micProcessor: CallVoiceProcessor | null = null;
+  private micProcessorContext: AudioContext | null = null;
+  private micOutbound: MediaStreamTrack | null = null;
+  private micProcessorSync: Promise<void> = Promise.resolve();
   private camera: MediaStreamTrack | null = null;
   private consumers = new Map<string, { close(): void; track: MediaStreamTrack }>();
-  private producers = new Map<"audio" | "video", { close(): void; pause(): void | Promise<void>; resume(): void | Promise<void> }>();
+  private producers = new Map<"audio" | "video", {
+    close(): void;
+    pause(): void | Promise<void>;
+    resume(): void | Promise<void>;
+    replaceTrack?(input: { track: MediaStreamTrack }): Promise<void>;
+  }>();
   private closed = false;
   private syncing = false;
   /** A consumer:available notice arrived while a sync was in flight; run another pass so late producers are never dropped. */
@@ -48,6 +60,7 @@ export class MediasoupCallSession {
   private joined = false;
   private generation = 0;
   private readonly onAvailable = () => void this.syncConsumers().catch(() => {});
+  private readonly onMicAudioState = () => void this.queueMicProcessorSync();
 
   constructor(
     private socket: RealtimeClient,
@@ -142,20 +155,105 @@ export class MediasoupCallSession {
 
   private async publishAudio(generation?: number) {
     if (!this.send || this.mic) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS });
     const track = stream.getAudioTracks()[0];
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return;
     }
     this.mic = track;
-    const producer = await this.send.produce({ track, appData: { source: "microphone" } });
+    let outbound = track;
+    // A suspended destination track is silent on iOS 15 and older Android WebViews. Match the LiveKit path: only
+    // build the bounded gain/compressor graph after a user gesture has the shared context running; otherwise retain
+    // the browser's raw AEC/NS/AGC microphone with no interruption.
+    const context = audioContext();
+    if (context && isAudioContextRunning(context)) {
+      const processor = await this.createMicProcessor(context);
+      if (processor?.processedTrack) {
+        outbound = processor.processedTrack;
+        this.micProcessor = processor;
+      }
+    }
+    this.micOutbound = outbound;
+    this.micProcessorContext = context;
+    const producer = await this.send.produce({ track: outbound, codecOptions: OPUS_VOICE_CODEC_OPTIONS, appData: { source: "microphone" } });
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
+      this.micProcessorContext = null;
+      await this.micProcessor?.destroy();
+      this.micProcessor = null;
+      this.micOutbound = null;
       track.stop();
       return;
     }
     this.producers.set("audio", producer);
+    // The raw track is published again on interruption, then the processed track is restored only after the shared
+    // context is actually running. This prevents the UDP-first path from ever retaining a silent destination track.
+    context?.addEventListener("statechange", this.onMicAudioState);
+    void this.queueMicProcessorSync();
+  }
+
+  private async createMicProcessor(context: AudioContext): Promise<CallVoiceProcessor | null> {
+    const raw = this.mic;
+    if (!raw || this.closed || !isAudioContextRunning(context)) return null;
+    const processor = new CallVoiceProcessor();
+    try {
+      await processor.init({ track: raw, audioContext: context });
+      if (processor.processedTrack && isAudioContextRunning(context) && !this.closed) return processor;
+    } catch {
+      // The raw AEC/NS/AGC mic remains healthy if Web Audio cannot be created on this engine.
+    }
+    await processor.destroy();
+    return null;
+  }
+
+  private queueMicProcessorSync(): Promise<void> {
+    this.micProcessorSync = this.micProcessorSync.then(() => this.syncMicProcessor()).catch(() => {});
+    return this.micProcessorSync;
+  }
+
+  private async syncMicProcessor() {
+    const raw = this.mic;
+    const producer = this.producers.get("audio");
+    const context = this.micProcessorContext;
+    if (this.closed || !raw || !producer?.replaceTrack || !context) return;
+    if (!isAudioContextRunning(context)) {
+      const previous = this.micProcessor;
+      if (!previous || this.micOutbound === raw) return;
+      try {
+        await producer.replaceTrack({ track: raw });
+      } catch {
+        return; // keep the current track rather than risking a broken sender
+      }
+      if (this.closed) return;
+      this.micProcessor = null;
+      this.micOutbound = raw;
+      await previous.destroy();
+      return;
+    }
+    if (this.micProcessor || this.micOutbound !== raw) return;
+    const next = await this.createMicProcessor(context);
+    if (!next?.processedTrack) return;
+    try {
+      await producer.replaceTrack({ track: next.processedTrack });
+    } catch {
+      await next.destroy();
+      return;
+    }
+    if (this.closed) {
+      await next.destroy();
+      return;
+    }
+    if (!isAudioContextRunning(context)) {
+      // The context changed state between graph creation and sender replacement. Put the known-good raw capture
+      // back before releasing the processor; never leave a suspended destination published.
+      await producer.replaceTrack({ track: raw }).catch(() => {});
+      await next.destroy();
+      this.micOutbound = raw;
+      return;
+    }
+    this.micProcessor = next;
+    this.micOutbound = next.processedTrack;
   }
 
   async enableCamera(facing: "user" | "environment", generation?: number) {
@@ -295,6 +393,11 @@ export class MediasoupCallSession {
     this.producers.clear();
     this.send?.close();
     this.recv?.close();
+    this.micProcessorContext?.removeEventListener("statechange", this.onMicAudioState);
+    this.micProcessorContext = null;
+    void this.micProcessor?.destroy();
+    this.micProcessor = null;
+    this.micOutbound = null;
     this.mic?.stop();
     this.camera?.stop();
     this.mic = null;
