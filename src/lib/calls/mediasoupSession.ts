@@ -4,6 +4,7 @@ import { nativePlatform } from "@/lib/native";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
 import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, micNeedsRecovery, shouldRestartIce, useRawDirectCallMicrophone } from "./audioPolicy";
+import { inputKeys, shouldReacquireMic } from "../audioDevices";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
@@ -67,6 +68,7 @@ export class MediasoupCallSession {
   private iceRestarted = new Set<string>();
   private micRecovering: Promise<void> | null = null;
   private readonly onMicEnded = () => void this.recoverMic();
+  private inputSnapshot: string[] | null = null;
   private readonly onDeviceChange = () => void this.checkMicDevice();
 
   constructor(
@@ -230,6 +232,7 @@ export class MediasoupCallSession {
     context?.addEventListener("statechange", this.onMicAudioState);
     track.addEventListener("ended", this.onMicEnded);
     navigator.mediaDevices.addEventListener?.("devicechange", this.onDeviceChange);
+    void navigator.mediaDevices.enumerateDevices?.().then((d) => { this.inputSnapshot ??= inputKeys(d); }).catch(() => {});
     void this.queueMicProcessorSync();
   }
 
@@ -237,7 +240,10 @@ export class MediasoupCallSession {
     if (this.closed || !this.mic) return;
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
     const ids = devices.filter((d) => d.kind === "audioinput" && d.deviceId).map((d) => d.deviceId);
-    if (micNeedsRecovery(this.mic, ids)) await this.recoverMic();
+    // Headset follow: a newly connected wired/USB-C/Bluetooth headset also re-acquires so its mic is used.
+    const keys = inputKeys(devices), prev = this.inputSnapshot;
+    this.inputSnapshot = keys;
+    if (micNeedsRecovery(this.mic, ids) || shouldReacquireMic(prev, keys, this.mic.getSettings?.().deviceId).reacquire) await this.recoverMic();
   }
 
   /**
