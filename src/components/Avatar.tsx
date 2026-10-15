@@ -156,7 +156,7 @@ export function Avatar({
       </div>
 
       {showMuted && muted && (
-        <span className="absolute -right-1 -bottom-1 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 ring-2 ring-zinc-950">
+        <span className="absolute -left-1 -bottom-1 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 ring-2 ring-zinc-950">
           <MicOff className="h-3.5 w-3.5 text-red-400" />
         </span>
       )}

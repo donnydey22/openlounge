@@ -77,7 +77,7 @@ export function ParticipantTile({
               onToggleMute?.();
             }}
             className={cn(
-              "absolute -right-1 -bottom-1 z-[3] flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-zinc-900 transition active:scale-90",
+              "absolute -left-1 -bottom-1 z-[3] flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-zinc-900 transition active:scale-90",
               p.muted ? "bg-zinc-800 text-red-400" : "bg-emerald-500 text-on-accent",
             )}
             aria-label={p.muted ? "Unmute" : "Mute"}
@@ -88,7 +88,7 @@ export function ParticipantTile({
           </button>
         )}
         {p.handRaised && (
-          <span className="absolute -right-1 -bottom-1 z-[3] flex h-6 w-6 items-center justify-center rounded-full bg-amber-400 ring-2 ring-zinc-900">
+          <span className="absolute -left-1 -top-1 z-[3] flex h-6 w-6 items-center justify-center rounded-full bg-amber-400 ring-2 ring-zinc-900">
             <Hand className="h-3.5 w-3.5 text-ink" />
           </span>
         )}
