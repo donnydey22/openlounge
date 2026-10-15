@@ -296,6 +296,10 @@ function Shell() {
     let sub: { remove: () => void } = { remove: () => {} };
     try {
     sub = Network.addNetworkStateListener((s) => {
+      // Wi-Fi ⇄ cellular handoff → the page restarts ICE in place (native-only call adaptation, netAdapt.ts)
+      if (s.isConnected !== false && s.type) {
+        webRef.current?.injectJavaScript(`try{window.__olNetworkChanged&&window.__olNetworkChanged(${JSON.stringify(String(s.type).toLowerCase())})}catch(e){};true;`);
+      }
       if (!offlineRef.current || s.isConnected === false || s.isInternetReachable === false) return;
       if (Date.now() - lastRetryAt.current < 1500) return; // path updates arrive in bursts
       retryNow();

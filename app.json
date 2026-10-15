@@ -3,7 +3,7 @@
     "name": "Open Lounge",
     "slug": "openlounge",
     "scheme": "openlounge",
-    "version": "0.3.9",
+    "version": "0.3.10",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

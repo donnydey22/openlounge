@@ -613,6 +613,10 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     } catch {
       NSLog("[OLCalls] setCategory failed: %@", error.localizedDescription)
     }
+    // FaceTime-style low latency: 10 ms IO buffer and the 48 kHz Opus clock (no resample in the voice path).
+    // Preferences only — iOS clamps to what the route supports and never throws the call off the session.
+    try? s.setPreferredSampleRate(48_000)
+    try? s.setPreferredIOBufferDuration(0.01)
     do {
       try s.overrideOutputAudioPort(speaker && !headset ? .speaker : .none)
     } catch {
