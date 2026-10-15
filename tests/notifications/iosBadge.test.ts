@@ -14,3 +14,8 @@ test("resume re-asserts the native badge and reconnects a dead iOS socket before
   assert.match(s, /native\(\)\?\.setBadge\?\.\(unreadRef\.current\);[\s\S]{0,80}refreshUnread\(\)/);
   assert.match(s, /if \(!s\.connected\) return void s\.wake\(\);[\s\S]{0,40}s\.request<[^>]+>\("conv:list"/);
 });
+
+test("FCM pruning: only registration-token-not-registered deletes a token (never invalid-argument)", () => {
+  const s = readFileSync("server/push/sender.ts", "utf8");
+  assert.match(s, /const INVALID = new Set\(\["messaging\/registration-token-not-registered"\]\);/);
+});

@@ -32,7 +32,9 @@ export interface PushSender {
   send(tokens: DeviceToken[], msg: PushMessage): Promise<SendResult>;
 }
 
-const INVALID = new Set(["messaging/registration-token-not-registered", "messaging/invalid-registration-token", "messaging/invalid-argument", "messaging/mismatched-credential"]);
+// Only a token FCM says is gone is pruned. invalid-argument / mismatched-credential describe the MESSAGE or our project,
+// not the device: deleting on them silently removed good tokens whenever a payload was malformed.
+const INVALID = new Set(["messaging/registration-token-not-registered"]);
 
 export class FcmSender implements PushSender {
   readonly name = "fcm";
