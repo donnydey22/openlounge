@@ -24,7 +24,7 @@ import { audioContext, onAudioState, resumeAudio } from "@/lib/audioUnlock";
 import { ringAudioElement as primedAudioElement, releaseRingAudio } from "@/lib/calls/ringAudio";
 
 export type RingKind = "incoming" | "outgoing";
-type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none"; ctx: string };
+type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none" | "native"; ctx: string };
 
 const RING_MAX_MS = 60_000;
 /** how long a re-arm watches the ring element clock before treating it as stalled-but-"playing" */
@@ -128,8 +128,19 @@ function expose() {
 }
 
 /** Start the ring for either call type. Same controller for audio and video; replaces whatever was ringing. */
+/** The native wrapper plays the outgoing ringback itself (iOS 0.3.12+ AVAudioPlayer on CallKit activation, Android
+ *  0.3.12+ ToneGenerator); it advertises that with window.__olNativeRingback. Older app builds and every browser keep
+ *  the web ringback below. */
+export const nativeRingback = () => typeof window !== "undefined" && !!(window as unknown as { __olNativeRingback?: unknown }).__olNativeRingback;
+
 export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: number } = {}) {
   stopTones();
+  if (kind === "outgoing" && nativeRingback()) {
+    const state: RingState = { kind, video: !!opts.video, since: Date.now(), path: "native", ctx: "native" };
+    cur = { stop: () => {}, rearm: () => {}, state };
+    expose();
+    return;
+  }
   const c = resumeAudio() ?? audioContext();
   const state: RingState = { kind, video: !!opts.video, since: Date.now(), path: c ? "webaudio" : "none", ctx: c?.state ?? "none" };
   let alive = true;
