@@ -459,7 +459,12 @@ function Shell() {
       if (a.type === 'answer') {
         unlockForCall();
         setIncomingCard(null);
-        navigate(acceptUrl(appOrigin(), a.callId)); // /call/<id>?accept=1: the web layer joins instantly
+        const url = acceptUrl(appOrigin(), a.callId);
+        // Page already loaded (push-woken ring): accept in place — no reload, keeps the warm socket/session (~7 s
+        // faster accept→audio). The page falls back to the /call/<id>?accept=1 navigation itself if it can't.
+        if (!coldStart && everLoaded.current) {
+          inject(`(function(){try{if(window.__olAcceptCall&&window.__olAcceptCall(${JSON.stringify(a.callId)}))return;}catch(e){}location.assign(${JSON.stringify(url)});})();true;`);
+        } else navigate(url); // /call/<id>?accept=1: the web layer joins instantly
         return;
       }
       if (a.type === 'decline' || a.type === 'hangup') setIncomingCard(null);
