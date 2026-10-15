@@ -942,3 +942,10 @@ html[data-nowhere] .ol-word-wave > span, html[data-nowhere] .ol-splash-word > sp
   backface-visibility: hidden;
   will-change: opacity;
 }
+
+/* Hallway tray auto-tuck: edge tab slides in; reopened tray slides up. */
+@keyframes ol-tray-tab-in { from { transform: translateX(120%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ol-tray-open-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ol-tray-tab { animation: ol-tray-tab-in 220ms ease-out; }
+.ol-tray-open { animation: ol-tray-open-in 200ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .ol-tray-tab, .ol-tray-open { animation: none; } }
