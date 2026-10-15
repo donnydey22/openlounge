@@ -19,6 +19,7 @@
 //    the element is re-played if the OS pauses it, for as long as the ring state lasts.
 //  - Fallback: if Web Audio still isn't running 400 ms after a ring starts, the same tone (rendered to a WAV) plays on
 //    the <audio> element primed during an earlier tap.
+import { nativePlatform } from "@/lib/native";
 import { audioContext, onAudioState, ringAudioElement as primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
 
 export type RingKind = "incoming" | "outgoing";
@@ -38,7 +39,7 @@ const PATTERNS: Record<RingKind, { period: number; render: (add: (freqs: number[
   outgoing: { period: 4.5, render: (add) => add([440, 480], 0, 1.5, 0.11) },
 };
 
-let cur: { stop: () => void; state: RingState } | null = null;
+let cur: { stop: () => void; rearm: () => void; state: RingState } | null = null;
 let level: AnalyserNode | null = null;
 
 function tone(c: BaseAudioContext, out: AudioNode, freqs: number[], at: number, dur: number, vol: number, type: OscillatorType = "sine") {
@@ -150,9 +151,13 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   }
   // fallback: Web Audio not running (blocked at start, or suspended later by the OS) → the primed <audio> element
   // (looped WAV). Checked at 400 ms and then every second for the whole ring.
-  const fallback = () => {
+  // iOS app: CallKit activates/reconfigures the AVAudioSession ~0.5–1 s after the ring starts; WKWebView's AudioContext
+  // then often reports "running" while producing silence (ring "plays briefly then stops"). There the looped <audio>
+  // element — a normal media-session player that survives the handoff — is the primary path, not a fallback.
+  const elementFirst = nativePlatform() === "ios";
+  const fallback = (force = false) => {
     if (!alive) return;
-    if (audioContext()?.state === "running") return;
+    if (!force && !elementFirst && audioContext()?.state === "running") return;
     resumeAudio();
     const e = primedAudioElement();
     if (!e) return;
@@ -177,8 +182,8 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       /* ignore */
     }
   };
-  elTimer = setTimeout(fallback, 400);
-  watchTimer = setInterval(fallback, 1000);
+  elTimer = setTimeout(() => fallback(), elementFirst ? 0 : 400);
+  watchTimer = setInterval(() => fallback(), 1000);
   if (kind === "incoming" && typeof navigator !== "undefined" && "vibrate" in navigator) {
     const buzz = () => {
       try {
@@ -213,7 +218,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     }
     level = null;
   };
-  cur = { stop, state };
+  cur = { stop, rearm: () => fallback(true), state };
   expose();
 }
 
@@ -223,8 +228,8 @@ if (typeof window !== "undefined")
   (window as unknown as { __olRingResume?: () => void }).__olRingResume = () => {
     if (!cur) return;
     resumeAudio();
-    const e = primedAudioElement();
-    if (cur.state.path === "element" && e?.paused) void e.play().catch(() => {});
+    // the context may claim "running" yet be silent after the session swap: always (re)start the element loop
+    cur.rearm();
   };
 
 export function stopTones() {

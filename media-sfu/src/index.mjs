@@ -143,7 +143,7 @@ async function routeRpc(input) {
     const transport = await router.createWebRtcTransport({
       webRtcServer,
       enableUdp: true,
-      enableTcp: false,
+      enableTcp: cfg.tcpPort !== null,
       preferUdp: true,
       iceConsentTimeout: 15,
       initialAvailableOutgoingBitrate: 600_000,
@@ -293,7 +293,10 @@ async function main() {
   });
   webRtcServer = await worker.createWebRtcServer({
     // Direct UDP only: allowing an SFU TCP candidate would defeat the required LiveKit/TCP fallback selection.
-    listenInfos: [{ protocol: "udp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, portRange: { min: cfg.minPort, max: cfg.maxPort } }],
+    listenInfos: [
+      { protocol: "udp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, portRange: { min: cfg.minPort, max: cfg.maxPort } },
+      ...(cfg.tcpPort !== null ? [{ protocol: "tcp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, port: cfg.tcpPort }] : []),
+    ],
   });
   router = await worker.createRouter({ mediaCodecs: ROUTER_CODECS });
   const health = http.createServer((req, res) => {

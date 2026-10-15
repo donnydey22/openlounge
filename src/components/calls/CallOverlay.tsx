@@ -222,20 +222,36 @@ function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: bo
 function Incoming({ s }: { s: CallSnapshot }) {
   const [replies, setReplies] = useState(false);
   const [dragY, setDragY] = useState(0);
+  // Optimistic + idempotent: the first press wins, both buttons lock instantly (no double accept / accept+decline race).
+  const [pending, setPending] = useState<"accept" | "decline" | null>(null);
+  const acted = useRef(false);
   const startY = useRef<number | null>(null);
   const c = s.call!;
+  // a failed accept returns the card to "incoming" (engine): unlock so the user can retry
+  useEffect(() => {
+    acted.current = false;
+    setPending(null);
+  }, [c.id, s.error]);
+  const act = (kind: "accept" | "decline") => {
+    if (acted.current) return;
+    acted.current = true;
+    setPending(kind);
+    void (kind === "accept" ? callEngine.accept(c.video) : callEngine.decline());
+  };
+  const tap = { touchAction: "manipulation" as const };
   return (
     <>
-      <div className="flex w-full items-end justify-around px-6 pb-2">
+      {s.error && <p role="alert" data-testid="call-incoming-error" className="mb-2 px-6 text-center text-[13px] text-red-300">{s.error}</p>}
+      <div className="flex w-full items-end justify-around px-6 pb-2" aria-busy={pending ? true : undefined}>
         <div className="flex flex-col items-center gap-2">
-          <button type="button" data-testid="call-decline" aria-label="Decline" onClick={() => void callEngine.decline()} className={cn("grid h-[72px] w-[72px] place-items-center rounded-full bg-red-500 text-white shadow-lg shadow-red-900/40", css.btn)}>
+          <button type="button" data-testid="call-decline" aria-label="Decline" disabled={!!pending} onClick={() => act("decline")} style={tap} className={cn("grid h-[72px] w-[72px] place-items-center rounded-full bg-red-500 text-white shadow-lg shadow-red-900/40 disabled:opacity-60", css.btn, pending === "decline" && css.pressed)}>
             <PhoneOff className="h-8 w-8" />
           </button>
-          <span className="text-[13px] font-medium text-white/85">Decline</span>
+          <span className="text-[13px] font-medium text-white/85">{pending === "decline" ? "Declining…" : "Decline"}</span>
         </div>
         <div className="flex flex-col items-center gap-2">
-          <button type="button" data-testid="call-message" aria-label="Message" onClick={() => setReplies(true)} className={cn("grid h-12 w-12 place-items-center rounded-full bg-white/15 text-white backdrop-blur-md", css.btn)}>
-            <MessageCircle className="h-5 w-5" />
+          <button type="button" data-testid="call-message" aria-label="Message" disabled={!!pending} onClick={() => setReplies(true)} style={tap} className={cn("grid h-16 w-16 place-items-center rounded-full bg-white/15 text-white backdrop-blur-md disabled:opacity-60", css.btn)}>
+            <MessageCircle className="h-6 w-6" />
           </button>
           <span className="text-[12px] font-medium text-white/70">Message</span>
         </div>
@@ -247,21 +263,23 @@ function Incoming({ s }: { s: CallSnapshot }) {
             type="button"
             data-testid="call-accept"
             aria-label={c.video ? "Accept video call" : "Accept"}
-            onClick={() => void callEngine.accept(c.video)}
+            disabled={!!pending}
+            onClick={() => act("accept")}
             onPointerDown={(e) => (startY.current = e.clientY)}
             onPointerMove={(e) => startY.current !== null && setDragY(Math.min(0, e.clientY - startY.current))}
             onPointerUp={() => {
-              if (dragY < -60) void callEngine.accept(c.video);
+              // a swipe accepts on release; a plain tap is handled once by onClick (act() is idempotent either way)
+              if (dragY < -60) act("accept");
               startY.current = null;
               setDragY(0);
             }}
             onPointerCancel={() => ((startY.current = null), setDragY(0))}
             style={{ transform: dragY ? `translateY(${Math.max(-120, dragY)}px)` : undefined, touchAction: "none" }}
-            className={cn("isolate grid h-[72px] w-[72px] place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-900/40", !dragY && css.accept)}
+            className={cn("isolate grid h-[72px] w-[72px] place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-900/40 disabled:opacity-90", !dragY && !pending && css.accept, pending === "accept" && css.pressed)}
           >
             {c.video ? <Video className="h-8 w-8" /> : <Phone className="h-8 w-8" />}
           </button>
-          <span className="text-[13px] font-medium text-white/85">Accept</span>
+          <span className="text-[13px] font-medium text-white/85" data-testid="call-accept-label">{pending === "accept" ? "Connecting…" : "Accept"}</span>
         </div>
       </div>
       {replies && (

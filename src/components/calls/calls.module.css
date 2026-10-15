@@ -92,6 +92,7 @@
 
 .btn { transition: transform 140ms ease-out, background-color 160ms ease-out, opacity 160ms; }
 .btn:active { transform: scale(0.92); }
+.pressed { transform: scale(0.92); filter: brightness(0.9); }
 
 .fadeUp { animation: fadeUp 280ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
 @keyframes fadeUp {
