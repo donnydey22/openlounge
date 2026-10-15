@@ -264,6 +264,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       else document.documentElement.dataset.hidden = "";
       if (!tokenRef.current && !loadToken()) return;
       s.emit("presence:visible", { visible: appVisible() });
+      // header chat badge: coming back to the foreground re-reads the authoritative total, so a dm:unread
+      // missed while the WebView/tab was suspended (socket looked connected but events were dropped) can't stick
+      if (appVisible()) refreshUnread();
+    };
+    // conv:list acks the combined DM + group unread total (same source as dm:unread)
+    const refreshUnread = () => {
+      if (!s.connected) return;
+      s.request<{ ok?: boolean; unread?: number }>("conv:list", {}, 5000)
+        .then((r) => {
+          if (r?.ok && typeof r.unread === "number") setUnreadDms(r.unread);
+        })
+        .catch(() => {});
     };
     // ---- DM catch-up: nothing is lost across a reconnect, nothing is shown twice ----
     // syncedAt = server time up to which we know we received every pushed DM (last DM / heartbeat).
@@ -366,6 +378,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // store compliance: a member deleted their account → names/avatars flip to "Deleted Account" everywhere, live
     s.on("user:deleted", ({ userId }: { userId: string }) => markDeleted(userId));
     s.on("dm:unread", ({ count }: { count: number }) => setUnreadDms(count));
+    // read on another device / thread opened: the read-state event carries the exact new total too
+    s.on("dm:read-state", ({ total }: { total?: number }) => {
+      if (typeof total === "number") setUnreadDms(total);
+    });
     s.on("presence:snapshot", ({ onlineIds: ids, awayIds: away, lastSeen: seen }: { onlineIds: string[]; awayIds?: string[]; lastSeen?: Record<string, number> }) => {
       setOnlineIds(new Set(ids));
       setAwayIds(new Set(away ?? []));
