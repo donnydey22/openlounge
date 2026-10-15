@@ -110,6 +110,8 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   /// AVAudioPlayer, and nothing ever restarted it) and reports {playing} to the page so the web ring can take over.
   private var ringbackTimer: Timer?
   private var ringbackReported: Bool?
+  /// CallKit owns activation while it has the session; activating it ourselves mid-call re-routes WebKit's capture
+  private var callKitAudioActive = false
   /// the page's web ringback owns the tone for this call (call:ringbackStop) → native stays silent
   private var webOwnsRingback = false
   private var pageMuted: Bool?
@@ -450,6 +452,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   }
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    callKitAudioActive = true
     configureAudio()
     // outgoing call still waiting for the callee: ring back natively on the CallKit session (survives the session swap
     // that left WKWebView's <audio>/AudioContext "playing" but silent)
@@ -469,7 +472,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     }
   }
 
-  public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {}
+  public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) { callKitAudioActive = false }
 
   // MARK: - page → native (src/calls.ts forwards {type:"call:*"} bridge messages)
 
@@ -564,6 +567,9 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
           provider?.reportOutgoingCall(with: c.uuid, connectedAt: Date())
         }
       }
+      // ringback player released the session's output: have the page re-check its mic (captured at dial time, before
+      // CallKit activated the session — WebKit can leave it muted → the callee hears nothing) and remote audio
+      emit(["type": "audio", "reason": "connected"])
       // session was configured once at CallKit activation; adjusting it again after connect re-ran the voice
       // processing unit mid-call (volume pumping). Only a real device change or a speaker tap touches it now.
 
@@ -718,7 +724,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   private func playRingback() {
     if ringback?.isPlaying == true { return reportRingback(true) }
-    try? AVAudioSession.sharedInstance().setActive(true)
+    if !callKitAudioActive { try? AVAudioSession.sharedInstance().setActive(true) }
     if let p = ringback, p.play() { NSLog("[OLCalls] native ringback resumed"); return reportRingback(true) }
     do {
       let p = try AVAudioPlayer(data: Self.ringbackWav(), fileTypeHint: AVFileType.wav.rawValue)
