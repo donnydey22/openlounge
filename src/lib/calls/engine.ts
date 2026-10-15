@@ -7,6 +7,7 @@
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
 import { watchVideoResilience } from "./videoResilience";
+import { ensureCallReady } from "./permissions";
 import { swapVideoTrack } from "./frameHold";
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -596,7 +597,11 @@ export class CallEngine {
       return t;
     } catch (e) {
       const msg = String((e as Error)?.name ?? "") + String((e as Error)?.message ?? "");
-      this.set({ error: /NotAllowed|denied|Permission/i.test(msg) ? "Allow microphone access to make calls" : "Couldn't use the microphone" });
+      const denied = /NotAllowed|denied|Permission/i.test(msg);
+      this.set({ error: denied ? "Allow microphone access to make calls" : "Couldn't use the microphone" });
+      // Platform-specific fix (iOS / Android / web modules). Runs only AFTER the capture failed, so it never delays
+      // getUserMedia out of the user's tap (Safari/WKWebView require the gesture).
+      if (denied) void ensureCallReady({ video: false }).then((r) => { if (!r.ok && r.hint && this.busy) this.set({ error: r.hint }); }).catch(() => {});
       return null;
     }
   }
