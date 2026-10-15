@@ -102,6 +102,9 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   private var savedAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
   private var speaker = true
   private var callVideo = false
+  /// media is up (answered / connected). Until then the session stays in .default mode so voiceChat's AGC +
+  /// ducking never act on the ringback; .voiceChat/.videoChat only once there is a live voice path.
+  private var mediaUp = false
   private var pageMuted: Bool?
 
   // MARK: - lifecycle / JS
@@ -392,6 +395,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     c.answered = true
     stopTimers(c)
     callVideo = c.video
+    mediaUp = true
     configureAudio()
     action.fulfill()
     if !c.answeredInPage { emit(["type": "answer", "callId": c.callId, "video": c.video]) }
@@ -502,6 +506,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       let video = (m["video"] as? Bool) ?? false
       callVideo = video
       speaker = true
+      mediaUp = false // ringback: .default mode until the page reports call:connected
       guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { configureAudio(); return }
       var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty { name = "Open Lounge" }
@@ -532,6 +537,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       }
 
     case "call:connected":
+      mediaUp = true
       if let c = call(callId) {
         stopTimers(c)
         callVideo = c.video
@@ -590,13 +596,25 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     try? s.setCategory(.playAndRecord, mode: .default, options: opts)
   }
 
+  /// Route changes we cause ourselves (setCategory → .categoryChange, overrideOutputAudioPort → .override) and
+  /// WebKit's own re-configs must NOT reconfigure the session again: that fed back into itself during every ring and
+  /// call (each pass reset the voice-processing unit → audible volume pumping). Only real device changes count.
+  static func isDeviceRouteChange(_ reason: AVAudioSession.RouteChangeReason) -> Bool {
+    switch reason {
+    case .newDeviceAvailable, .oldDeviceUnavailable, .wakeFromSleep, .noSuitableRouteForCategory: return true
+    default: return false // .categoryChange, .override, .routeConfigurationChange, .unknown
+    }
+  }
+
   @objc private func onRouteChange(_ n: Notification) {
     DispatchQueue.main.async {
       let headset = Self.headsetAttached()
-      if self.savedAudio != nil { self.configureAudio() } else { self.prepareHeadsetSession() }
-      let out = AVAudioSession.sharedInstance().currentRoute.outputs.first
       var reason = 0
       if let v = n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt { reason = Int(v) }
+      let why = AVAudioSession.RouteChangeReason(rawValue: UInt(reason)) ?? .unknown
+      guard Self.isDeviceRouteChange(why) else { return }
+      if self.savedAudio != nil { self.configureAudio() } else { self.prepareHeadsetSession() }
+      let out = AVAudioSession.sharedInstance().currentRoute.outputs.first
       self.emit(["type": "audioRoute", "headset": headset, "port": out?.portType.rawValue ?? "", "name": out?.portName ?? "", "reason": reason])
     }
   }
@@ -608,19 +626,27 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     let headset = Self.headsetAttached()
     // never force the loudspeaker while a headset is attached; it falls back to speaker when removed
     if speaker && !headset { opts.insert(.defaultToSpeaker) }
-    do {
-      try s.setCategory(.playAndRecord, mode: callVideo ? .videoChat : .voiceChat, options: opts)
-    } catch {
-      NSLog("[OLCalls] setCategory failed: %@", error.localizedDescription)
+    let mode: AVAudioSession.Mode = mediaUp ? (callVideo ? .videoChat : .voiceChat) : .default
+    // idempotent: every redundant setCategory / override is itself a route change + voice-processing reset
+    if s.category != .playAndRecord || s.mode != mode || s.categoryOptions != opts {
+      do {
+        try s.setCategory(.playAndRecord, mode: mode, options: opts)
+      } catch {
+        NSLog("[OLCalls] setCategory failed: %@", error.localizedDescription)
+      }
     }
     // FaceTime-style low latency: 10 ms IO buffer and the 48 kHz Opus clock (no resample in the voice path).
     // Preferences only — iOS clamps to what the route supports and never throws the call off the session.
-    try? s.setPreferredSampleRate(48_000)
-    try? s.setPreferredIOBufferDuration(0.01)
-    do {
-      try s.overrideOutputAudioPort(speaker && !headset ? .speaker : .none)
-    } catch {
-      // fails while the session is inactive; defaultToSpeaker covers that case
+    if s.preferredSampleRate != 48_000 { try? s.setPreferredSampleRate(48_000) }
+    if abs(s.preferredIOBufferDuration - 0.01) > 0.0005 { try? s.setPreferredIOBufferDuration(0.01) }
+    let wantSpeaker = speaker && !headset
+    let onSpeaker = s.currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+    if wantSpeaker != onSpeaker {
+      do {
+        try s.overrideOutputAudioPort(wantSpeaker ? .speaker : .none)
+      } catch {
+        // fails while the session is inactive; defaultToSpeaker covers that case
+      }
     }
   }
 
@@ -629,6 +655,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     savedAudio = nil
     speaker = true
     callVideo = false
+    mediaUp = false
     pageMuted = nil
     let s = AVAudioSession.sharedInstance()
     try? s.overrideOutputAudioPort(.none)
