@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, Volume2, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
 import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
@@ -461,7 +462,7 @@ export function CallOverlay() {
                   <span className={css.ring} />
                 </>
               )}
-              <Avatar name={p.name} color={p.color} photo={p.photoUrl} size="xl" />
+              <PresenceAvatar p={p} />
             </div>
           )}
           <div className={cn("min-w-0 max-w-full", css.fadeUp)}>
@@ -515,4 +516,11 @@ function ElsewherePill({ e }: { e: NonNullable<CallSnapshot["elsewhere"]> }) {
       {e.video ? "Video call" : "On a call"} with {e.peerName} on another device · {fmt(sec)}
     </div>
   );
+}
+
+/** Call screen avatar with the same live presence dot as everywhere else (green online / amber idle). */
+function PresenceAvatar({ p }: { p: { id?: string; name: string; color: string; photoUrl: string | null } }) {
+  const { presenceOf } = useApp();
+  const st = p.id ? presenceOf(p.id) : "offline";
+  return <Avatar name={p.name} color={p.color} photo={p.photoUrl} size="xl" presence={st === "offline" ? null : (st as "online" | "away")} />;
 }

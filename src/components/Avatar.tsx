@@ -16,7 +16,7 @@ const SIZES = {
   profile: "h-[min(22.5vw,115px)] w-[min(22.5vw,115px)] text-3xl",
 } as const;
 
-/** In-room presence dot: sits on the squircle edge at the bottom-left diagonal (13% in from each side). */
+/** Presence dot (Telegram-style): sits on the squircle edge at the bottom-RIGHT diagonal (13% in from each side). */
 const ROOM_DOT = {
   xs: { size: 8, ring: 1.5 },
   banner: { size: 8, ring: 1.5 },
@@ -70,7 +70,7 @@ export function Avatar({
   away?: boolean;
   /** green = online, gray = offline; omit to hide the dot */
   online?: boolean;
-  /** In-room live presence (bottom-left): green = here, amber = backgrounded / reconnecting; omit to hide */
+  /** Live presence (bottom-right): green = here, amber = backgrounded / reconnecting; omit to hide */
   presence?: "online" | "away" | null;
   onPodium?: boolean;
   /** deleted account: grey ghost avatar (also inferred from the name "Deleted Account" with no photo) */
@@ -172,7 +172,7 @@ export function Avatar({
           style={{
             width: ROOM_DOT[size].size,
             height: ROOM_DOT[size].size,
-            left: `calc(13% - ${ROOM_DOT[size].size / 2}px)`,
+            right: `calc(13% - ${ROOM_DOT[size].size / 2}px)`,
             bottom: `calc(13% - ${ROOM_DOT[size].size / 2}px)`,
             boxShadow: `0 0 0 ${ROOM_DOT[size].ring}px var(--color-app)`,
           }}
