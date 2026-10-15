@@ -17,7 +17,8 @@ import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringin
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
-import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio } from "./audioPolicy";
+import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
+import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats } from "./qualityGuard";
 import { followAudioDevices } from "../audioDevices";
 
 type LK = typeof import("livekit-client");
@@ -124,6 +125,8 @@ export class CallEngine {
   private mediasoupLocalVideo: MediaStreamTrack | null = null;
   private mediasoupRemoteVideo: MediaStreamTrack | null = null;
   private mediasoupDegradeTimer: ReturnType<typeof setTimeout> | null = null;
+  private qualityTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly qualityGuard = new QualityGuard();
   private fallbackInFlight = false;
   private micTrack: LocalAudioTrack | null = null;
   /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
@@ -382,7 +385,7 @@ export class CallEngine {
     this.acceptT0 = performance.now();
     mark("accept");
     this.acceptedHere = true;
-    this.set({ ui: "connecting", camOn: withVideo });
+    this.set({ ui: "connecting", camOn: withVideo, error: null });
     if (this.media?.provider === "livekit") {
       if (!this.preMic) this.preMic = this.acquireMic();
       if (withVideo) void this.ensureCamPreview();
@@ -391,7 +394,7 @@ export class CallEngine {
     const accepted = this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:accept", { callId: call.id }).catch(() => ({ ok: false, error: "No connection" }) as const);
     if (!this.media) {
       const r = await accepted;
-      if (!r.ok) return this.endWith(call, r.error === "Call ended" ? "Call ended" : (r.error ?? "Couldn't answer"), false);
+      if (!r.ok) return this.acceptFailed(call, r.error);
       this.media = ("media" in r ? r.media : null) ?? null;
       if (!this.media) {
         this.set({ error: "Calls aren't available right now" });
@@ -402,8 +405,19 @@ export class CallEngine {
     const r = await accepted;
     if (!r.ok) {
       this.teardownMedia();
-      this.endWith(call, r.error === "Call ended" ? "Call ended" : (r.error ?? "Couldn't answer"), false);
+      this.acceptFailed(call, r.error);
     } else if (r.call) this.set({ call: r.call, connectedAt: this.s.connectedAt ?? Date.now() });
+  }
+
+  /** Transient accept failure (socket blip) while the call still rings → back to the incoming card with a retry. */
+  private acceptFailed(call: CallInfo, error?: string) {
+    const stillRinging = error === "No connection" && this.s.call?.id === call.id && ringUntil(call) > Date.now() + 1_000;
+    if (stillRinging) {
+      this.acceptedHere = false;
+      this.set({ ui: "incoming", error: "Couldn't answer — tap Accept to try again" });
+      return;
+    }
+    this.endWith(call, error === "Call ended" ? "Call ended" : (error ?? "Couldn't answer"), false);
   }
 
   async decline(message?: string) {
@@ -550,7 +564,11 @@ export class CallEngine {
       // clipping peaks. A suspended Web Audio destination is silent on iOS 15 / older Android WebViews, so attach it
       // only while the gesture-unlocked context is running (raw mic before that and during interruptions, swapped in place).
       this.clearMicVoiceProcessing();
-      const context = audioContext();
+      // Phones (iOS app / WKWebView, Android WebView, mobile Safari/Chrome) publish the raw AEC/NS/AGC mic, exactly like
+      // the direct UDP path: after a CallKit / audio-focus interruption WebKit can report the context "running" while its
+      // MediaStreamAudioDestinationNode emits silence, so the other side heard nothing on audio-only calls.
+      // Desktop keeps the +3.5 dB gain + compressor (CALL_MIC_GAIN) from the loudness change.
+      const context = useRawDirectCallMicrophone({ ua: typeof navigator !== "undefined" ? navigator.userAgent : "", nativePlatform: nativePlatform() }) ? null : audioContext();
       try {
         this.micVoiceProcessing = await enableVoiceProcessing(t, context);
         if (!this.micVoiceProcessing) this.netLog("mic-headroom-bypassed");
@@ -679,6 +697,7 @@ export class CallEngine {
       }
       this.mediasoupConnected = true;
       this.clearMediasoupDegrade();
+      this.startQualityGuard(session);
       if (answer || this.s.call?.phase === "active") {
         if (this.s.ui === "connecting") {
           this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
@@ -781,6 +800,28 @@ export class CallEngine {
     this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 4_000);
   }
 
+  /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */
+  private startQualityGuard(session: MediasoupCallSession) {
+    this.stopQualityGuard();
+    this.qualityGuard.reset();
+    this.qualityTimer = setInterval(() => {
+      if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
+      void session.getTransportStats().then((reports) => {
+        if (this.mediasoup !== session) return;
+        const v = this.qualityGuard.push(countersFromStats(reports), { remoteMuted: this.s.remoteMuted });
+        if (!v) return;
+        this.stopQualityGuard();
+        this.netLog("ms-quality-fallback", { reasons: v.reasons.join(","), loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps });
+        void this.requestTcpFallback();
+      }).catch(() => {});
+    }, QUALITY_SAMPLE_MS);
+  }
+
+  private stopQualityGuard() {
+    if (this.qualityTimer) clearInterval(this.qualityTimer);
+    this.qualityTimer = null;
+  }
+
   private clearMediasoupDegrade() {
     if (this.mediasoupDegradeTimer) clearTimeout(this.mediasoupDegradeTimer);
     this.mediasoupDegradeTimer = null;
@@ -843,7 +884,11 @@ export class CallEngine {
           if (this.s.speaker && this.sinkIds[1]) void (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(this.sinkIds[1]).catch(() => {});
           const onPlay = () => this.firstAudio();
           el.addEventListener("playing", onPlay, { once: true });
-          if (!el.paused) this.firstAudio();
+          document.addEventListener("visibilitychange", this.onVisibleCallAudio);
+          // Explicit play(): WKWebView after a CallKit answer (no page gesture) can leave an autoplay <audio> paused
+          // on audio-only calls (a video call has a playing <video> that unblocks the page's media).
+          if (el.paused) void el.play().catch(() => this.set({ needsGesture: true }));
+          else this.firstAudio();
         } else if (track.kind === Track.Kind.Video) {
           this.remoteVideo = track;
           for (const el of this.videoEls.remote) track.attach(el);
@@ -944,6 +989,7 @@ export class CallEngine {
     }
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
+    this.stopQualityGuard();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;
@@ -1081,6 +1127,10 @@ export class CallEngine {
   private watchNetwork() {
     if (this.netWatched || typeof window === "undefined") return;
     this.netWatched = true;
+    // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
+    window.addEventListener("openlounge:native-audio-resume", () => {
+      if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
+    });
     const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
     this.lastNetType = conn?.type ?? null;
     this.lastNetworkTier = browserNetworkTier();
@@ -1182,6 +1232,7 @@ export class CallEngine {
     }
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
+    this.stopQualityGuard();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;

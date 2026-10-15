@@ -421,6 +421,16 @@ export class MediasoupCallSession {
     else await producer.resume();
   }
 
+  /** Raw transport stats for the engine's quality guard (UDP → TCP on sustained degradation). */
+  async getTransportStats(): Promise<RTCStatsReport[]> {
+    const out: RTCStatsReport[] = [];
+    for (const t of [this.send, this.recv]) {
+      const g = (t as unknown as { getStats?: () => Promise<RTCStatsReport> } | null)?.getStats;
+      if (g) out.push(await g.call(t).catch(() => new Map() as unknown as RTCStatsReport));
+    }
+    return out;
+  }
+
   async startAudio() {
     const els = [...document.querySelectorAll<HTMLAudioElement>("[data-ol-call-audio]")];
     await Promise.all(els.map((el) => el.play().catch(() => {})));

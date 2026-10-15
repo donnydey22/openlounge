@@ -51,7 +51,7 @@ test("ring: deadline uses the server ring window, not the skewed device clock", 
   assert.doesNotMatch(engine, /untilMs: \w+(\.\w+)*\.expiresAt \+ 2000/);
 });
 test("ring: fallback watchdog runs for the whole ring and is cleared on stop", () => {
-  assert.match(tones, /watchTimer = setInterval\(fallback, 1000\)/);
+  assert.match(tones, /watchTimer = setInterval\(\(\) => fallback\(\), 1000\)/);
   assert.match(tones, /clearInterval\(watchTimer\)/);
 });
 test("call bar: symmetric insets and pushes content instead of covering it", () => {

@@ -26,5 +26,5 @@ test("ring window is never already expired (missing / bad server fields → 45 s
     assert.ok(ringUntil(c, now) - now >= 45_000, JSON.stringify(c));
 });
 test("iOS wrapper resume hook re-arms the ring", () => {
-  assert.match(readFileSync("src/lib/calls/tones.ts", "utf8"), /__olRingResume = \(\) =>[\s\S]{0,200}resumeAudio\(\)[\s\S]{0,200}e\.play\(\)/);
+  assert.match(readFileSync("src/lib/calls/tones.ts", "utf8"), /__olRingResume = \(\) =>[\s\S]{0,200}resumeAudio\(\)[\s\S]{0,200}cur\.rearm\(\)/);
 });
