@@ -112,6 +112,9 @@ export interface StoreEvents {
   dmTyping(fromId: string, toId: string): void;
   /** someone saw messages in a DM conversation (read receipt for the sender) */
   dmRead?(receipt: DmReadReceipt): void;
+  /** the reader's unread pointer moved but no receipt is owed (only pre-read call entries were passed): every
+   *  session and device still needs the authoritative per-thread count + badge */
+  dmReadState?(readerId: string, peerId: string): void;
   /** a message was edited: push message_edited to everyone in the chat (audience = user ids) */
   messageEdited?(ev: Omit<MessageEditedEvent, "conversationId">, chat: { key: string; fromId: string; toId: string }): void;
   /** a reaction was added (on) or removed (!on) on a DM: push to both participants */
@@ -1994,6 +1997,7 @@ export class Store {
     if (changed) reads.set(peerId, cursor);
     if (changed || receipt) this.scheduleSave();
     if (receipt) this.events?.dmRead?.(receipt);
+    else if (changed) this.events?.dmReadState?.(userId, peerId);
     return { changed, receipt };
   }
 
@@ -2087,7 +2091,9 @@ export class Store {
       if (!mine.length || mine[mine.length - 1].createdAt <= hiddenAt) continue;
       const read = Math.max(this.lastRead(userId, peerId), hiddenAt);
       // deleted accounts never count as unread (inbox counters, tab badge, push badge all come from here)
-      const unread = peer.deleted ? 0 : mine.filter((m) => m.toId === userId && m.createdAt > read).length;
+      // a message carrying readAt was seen (or born read: answered / declined call entries) and never counts,
+      // so the server total, the inbox row and every push badge agree on call entries too
+      const unread = peer.deleted ? 0 : mine.filter((m) => m.toId === userId && m.createdAt > read && !m.readAt).length;
       out.push({ peer, lastMessage: mine[mine.length - 1], unread, ...(pref?.pinnedAt ? { pinnedAt: pref.pinnedAt } : {}) });
     }
     // pinned chats first (most recently pinned on top), then by last message
