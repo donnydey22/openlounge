@@ -14,6 +14,8 @@ type TransportLike = ReturnType<DeviceLike["createSendTransport"]>;
 type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 
 const CONNECT_TIMEOUT_MS = 8_000;
+/** Absolute ceiling for a connect including paused local work (mic permission prompt, chunk load). */
+const CONNECT_HARD_CAP_MS = 30_000;
 
 /** Resolves when a mediasoup-client transport reaches "connected"; rejects on "failed"/"closed". */
 export function waitTransportConnected(t: { connectionState?: string; on(ev: "connectionstatechange", fn: (s: string) => void): unknown; off?(ev: "connectionstatechange", fn: (s: string) => void): unknown }) {
@@ -83,13 +85,45 @@ export class MediasoupCallSession {
     if (media.provider !== "mediasoup") throw new Error("Expected Mediasoup media");
   }
 
+  /**
+   * The 8 s UDP budget measures the network (signaling + ICE/DTLS) only. Local work that can block on the user or a
+   * cold WebView, i.e. the first-run microphone permission prompt after an install and the mediasoup-client chunk
+   * load, pauses it. Otherwise a fresh install (Keiko, 2026-10-15 04:30 PT: accept→fallback 8.06 s while the
+   * callee's app had cold-started 8 s earlier) is misread as "UDP blocked" and the call drops to LiveKit TCP.
+   * A hard cap still bounds the whole connect.
+   */
+  private budget: { pause(): void; resume(): void } | null = null;
+
   async connect(withVideo: boolean) {
     const generation = ++this.generation;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let cap: ReturnType<typeof setTimeout> | null = null;
+    let remaining = CONNECT_TIMEOUT_MS;
+    let startedAt = Date.now();
+    let fail: (e: Error) => void = () => {};
+    const arm = () => {
+      startedAt = Date.now();
+      timer = setTimeout(() => fail(new Error("UDP media connection timed out")), remaining);
+    };
+    this.budget = {
+      pause: () => {
+        if (!timer) return;
+        clearTimeout(timer);
+        timer = null;
+        remaining = Math.max(0, remaining - (Date.now() - startedAt));
+      },
+      resume: () => {
+        if (!timer) arm();
+      },
+    };
     try {
       await Promise.race([
         this.connectInner(withVideo, generation),
-        new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("UDP media connection timed out")), CONNECT_TIMEOUT_MS))),
+        new Promise<never>((_, reject) => {
+          fail = reject;
+          arm();
+          cap = setTimeout(() => reject(new Error("UDP media connection timed out")), CONNECT_HARD_CAP_MS);
+        }),
       ]);
     } catch (err) {
       // Close the browser and broker session before the caller asks the server to switch both participants to TCP.
@@ -98,6 +132,18 @@ export class MediasoupCallSession {
       throw err;
     } finally {
       if (timer) clearTimeout(timer);
+      if (cap) clearTimeout(cap);
+      this.budget = null;
+    }
+  }
+
+  /** Run local (non-network) work without spending the UDP connect budget. */
+  private async local<T>(work: () => Promise<T>): Promise<T> {
+    this.budget?.pause();
+    try {
+      return await work();
+    } finally {
+      this.budget?.resume();
     }
   }
 
@@ -106,7 +152,7 @@ export class MediasoupCallSession {
   }
 
   private async connectInner(withVideo: boolean, generation: number) {
-    const { Device } = await import("mediasoup-client");
+    const { Device } = await this.local(() => import("mediasoup-client"));
     this.assertActive(generation);
     const joined = await this.req<{ ok: boolean; routerRtpCapabilities?: unknown }>("ms:join", {});
     if (!joined.ok || !joined.routerRtpCapabilities) throw new Error("Mediasoup admission failed");
@@ -189,7 +235,7 @@ export class MediasoupCallSession {
 
   private async publishAudio(generation?: number) {
     if (!this.send || this.mic) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS });
+    const stream = await this.local(() => navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }));
     const track = stream.getAudioTracks()[0];
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
