@@ -83,8 +83,27 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       else if (d.type === "call:mute" && typeof d.muted === "boolean" && d.muted !== st.muted) void e_.toggleMute();
     };
     window.addEventListener("openlounge:native-call", onNative);
-    return () => window.removeEventListener("openlounge:native-call", onNative);
-  }, []);
+    // Native Accept on an already-loaded page (CallKit / Android call screen): accept IN PLACE instead of the wrapper
+    // reloading /call/<id>?accept=1 — the reload re-booted the whole app (auth, socket, media libs) and cost ~7 s of
+    // accept→audio on push-woken calls. Returns false when this page can't take it, so the wrapper navigates as before.
+    const w = window as unknown as { __olAcceptCall?: (id: string) => boolean };
+    w.__olAcceptCall = (callId: string) => {
+      const e_ = callEngine;
+      if (!e_ || typeof callId !== "string" || !callId) return false;
+      const st = e_.snapshot();
+      if (st.call?.id === callId) {
+        if (st.ui === "incoming") void e_.accept(st.call.video ?? false);
+        return st.ui === "incoming" || st.ui === "connecting" || st.ui === "active";
+      }
+      if (!socket?.connected) return false;
+      void e_.openFromLink(callId, true);
+      return true;
+    };
+    return () => {
+      window.removeEventListener("openlounge:native-call", onNative);
+      if (w.__olAcceptCall) delete w.__olAcceptCall;
+    };
+  }, [socket]);
 
   // Service-worker Accept / Decline (background ring notification)
   useEffect(() => {

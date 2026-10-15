@@ -1295,10 +1295,21 @@ export class CallEngine {
     }, 1000);
   }
 
+  static PEER_OFFLINE_GRACE_MS = 15_000;
+  private peerOfflineTimer: ReturnType<typeof setTimeout> | null = null;
   private onPeer = (d: { callId: string; userId: string; online: boolean }) => {
     if (!d || d.callId !== this.s.call?.id || d.userId === this.meId) return;
-    this.set({ peerReconnecting: !d.online });
     this.netLog(d.online ? "peer-online" : "peer-offline");
+    if (this.peerOfflineTimer) clearTimeout(this.peerOfflineTimer);
+    this.peerOfflineTimer = null;
+    if (d.online) return this.set({ peerReconnecting: false });
+    // The peer's SIGNALLING socket dropped (iOS suspends a backgrounded/locked WebView's socket during a CallKit call)
+    // but media is a separate path: while it still flows, don't flash "reconnecting" — re-check after a grace.
+    if (!this.mediaConnected()) return this.set({ peerReconnecting: true });
+    this.peerOfflineTimer = setTimeout(() => {
+      this.peerOfflineTimer = null;
+      if (this.busy && !this.mediaConnected()) this.set({ peerReconnecting: true });
+    }, CallEngine.PEER_OFFLINE_GRACE_MS);
   };
 
   private netWatched = false;
