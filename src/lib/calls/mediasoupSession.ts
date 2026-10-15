@@ -7,7 +7,7 @@ import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, m
 import { inputKeys, shouldReacquireMic } from "../audioDevices";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
-export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void };
+export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void; receiver?: RTCRtpReceiver };
 
 type DeviceLike = InstanceType<typeof import("mediasoup-client").Device>;
 type TransportLike = ReturnType<DeviceLike["createSendTransport"]>;
@@ -479,7 +479,7 @@ export class MediasoupCallSession {
           continue;
         }
         this.consumers.set(consumer.id, consumer);
-        this.opts.onRemoteTrack({ kind: consumer.kind, track: consumer.track, close: () => consumer.close() });
+        this.opts.onRemoteTrack({ kind: consumer.kind, track: consumer.track, close: () => consumer.close(), receiver: (consumer as { rtpReceiver?: RTCRtpReceiver }).rtpReceiver });
         await this.req<{ ok: boolean }>("ms:consumer:resume", { consumerId: consumer.id });
       }
     }

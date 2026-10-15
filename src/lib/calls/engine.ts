@@ -6,6 +6,7 @@
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
+import { watchVideoResilience } from "./videoResilience";
 import { swapVideoTrack } from "./frameHold";
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -755,7 +756,15 @@ export class CallEngine {
     void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
   };
 
-  private onMediasoupTrack({ kind, track, close }: MediasoupRemoteTrack) {
+  /** receive-side video sturdiness (never touches senders/encoders) */
+  private stopVideoResilience: (() => void) | null = null;
+  private startVideoResilience(receiver: RTCRtpReceiver | null | undefined) {
+    this.stopVideoResilience?.();
+    this.stopVideoResilience = watchVideoResilience(receiver, (ev, x) => this.netLog(ev, x));
+  }
+
+  private onMediasoupTrack({ kind, track, close, receiver }: MediasoupRemoteTrack) {
+    if (kind === "video") this.startVideoResilience(receiver);
     if (kind === "audio") {
       // One element per remote track: a repeated consumer notice or SFU re-consume must never play the voice twice.
       if (this.audioEls.some((x) => (x.srcObject as MediaStream | null)?.getAudioTracks?.().some((t) => t.id === track.id))) return;
@@ -970,6 +979,7 @@ export class CallEngine {
           else this.firstAudio();
         } else if (track.kind === Track.Kind.Video) {
           this.remoteVideo = track;
+          this.startVideoResilience((track as unknown as { receiver?: RTCRtpReceiver }).receiver);
           for (const el of this.videoEls.remote) track.attach(el);
           this.set({ remoteCam: !track.isMuted, videoInvite: !this.s.camOn });
         }
@@ -1336,6 +1346,8 @@ export class CallEngine {
     this.metricSent = false;
     this.fallbackInFlight = false;
     this.stopUdpRecovery();
+    this.stopVideoResilience?.();
+    this.stopVideoResilience = null;
     if (this.weakTimer) clearTimeout(this.weakTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     this.stallTimer = null;
