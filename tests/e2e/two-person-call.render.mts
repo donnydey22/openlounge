@@ -11,7 +11,7 @@ const ENGS = (process.env.ENGS || "chromium,firefox").split(",") as ("chromium" 
 const SIZES: [number, number][] = process.env.DBG ? [[1280, 800]] : [[375, 812], [1280, 800]];
 const launch = (e: string) => pw[e].launch(e === "chromium" ? { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"] } : { firefoxUserPrefs: { "media.navigator.streams.fake": true, "media.navigator.permission.disabled": true, "media.autoplay.default": 0, "media.autoplay.block-webaudio": false, "media.peerconnection.ice.loopback": true, "media.peerconnection.ice.obfuscate_host_addresses": false } });
 async function open(br: any, eng: string, u: any, w: number, h: number) {
-  const ctx = await br.newContext({ viewport: { width: w, height: h }, ...(eng === "chromium" ? { permissions: ["camera", "microphone"] } : {}) });
+  const ctx = await br.newContext({ viewport: { width: w, height: h }, ...(process.env.UA ? { userAgent: process.env.UA } : {}), ...(eng === "chromium" ? { permissions: ["camera", "microphone"] } : {}) });
   await ctx.addInitScript((u: any) => { if (localStorage.getItem("openlounge:uid")) return; localStorage.setItem("openlounge:session", u.refresh); localStorage.setItem("openlounge:access", JSON.stringify({ t: u.access, exp: Date.now() + 3e6 })); localStorage.setItem("openlounge:uid", u.uid); }, u);
   const p = await ctx.newPage(); const errs: string[] = []; p.on("pageerror", (e: Error) => errs.push(e.message)); return { ctx, p, errs };
 }
