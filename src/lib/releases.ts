@@ -9,12 +9,12 @@ export const ANDROID_RELEASE = {
 } as const;
 
 export const IOS_RELEASE = {
-  version: "0.3.12",
-  build: 31,
+  version: "0.3.13",
+  build: 32,
   bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.3.12-b31.ipa",
+  file: "/downloads/openlounge-ios-0.3.13-b32.ipa",
   size: "8.9 MB",
-  sha256: "c74a3db8c629a8699ebd7439a57f557268d26b56aa7eb7da3f8e8c3aec2b2719",
+  sha256: "ebf52c26e57618f5d67e9ffd7c83c87b49ad4782cefb86a6d600bcb246939452",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
