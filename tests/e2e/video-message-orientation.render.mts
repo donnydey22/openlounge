@@ -44,7 +44,7 @@ async function recordAndSend(page: pw.Page, facing: "user" | "environment", engi
   const review = page.locator("[data-testid=video-recorder-review]");
   await review.waitFor({ timeout: 12_000 });
   const reviewTransform = await review.evaluate((node) => getComputedStyle(node).transform);
-  report(engine, viewport, `${facing} saved preview is unmirrored`, reviewTransform === "none", reviewTransform);
+  report(engine, viewport, `${facing} saved preview has no CSS transform (flip is in the pixels)`, reviewTransform === "none", reviewTransform);
   await page.screenshot({ path: path.join(OUT, `${engine}-${viewport}-${facing}-review.png`) });
 
   await page.locator("[data-testid=video-recorder-use]").click();

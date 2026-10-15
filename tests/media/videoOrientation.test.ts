@@ -7,7 +7,7 @@ import {
   shouldNormalizeVideoMessageRecording,
 } from "../../src/lib/media/videoOrientation";
 
-test("front-camera video notes use a normalized, unmirrored recorder stream while back-camera notes stay raw", async () => {
+test("front-camera video notes are saved flipped to match the selfie preview while back-camera notes stay raw", async () => {
   const sourceTrack = { getSettings: () => ({ width: 640, height: 480, frameRate: 29.7 }) } as unknown as MediaStreamTrack;
   const audioTrack = {} as MediaStreamTrack;
   const source = {
@@ -16,6 +16,7 @@ test("front-camera video notes use a normalized, unmirrored recorder stream whil
   } as unknown as MediaStream;
 
   let drawCount = 0;
+  const transforms: number[][] = [];
   let played = 0;
   let paused = 0;
   let cancelled = -1;
@@ -42,7 +43,7 @@ test("front-camera video notes use a normalized, unmirrored recorder stream whil
   const canvas = {
     width: 0,
     height: 0,
-    getContext: () => ({ drawImage: () => drawCount++ }),
+    getContext: () => ({ drawImage: () => drawCount++, setTransform: (...m: number[]) => transforms.push(m) }),
     captureStream: (rate: number) => {
       capturedRate = rate;
       return output;
@@ -74,7 +75,8 @@ test("front-camera video notes use a normalized, unmirrored recorder stream whil
     assert.deepEqual(added, [audioTrack], "the camera microphone remains in the normalized recording");
     assert.equal(drawCount, 1, "first unstyled camera frame is painted before recording starts");
     (requested as unknown as FrameRequestCallback)(0);
-    assert.equal(drawCount, 2, "subsequent frames are painted without a horizontal transform");
+    assert.equal(drawCount, 2, "subsequent frames keep painting through the same transform");
+    assert.deepEqual(transforms, [[-1, 0, 0, 1, 640, 0]], "front camera pixels are flipped once, matching the live preview");
 
     normalized.release();
     assert.equal(cancelled, 19);

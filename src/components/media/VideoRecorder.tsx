@@ -119,8 +119,8 @@ export function VideoRecorderSheet({ open, onClose, onRecorded }: { open: boolea
     if (!s || rec.current || recorderStarting.current) return;
     recorderStarting.current = true;
     setPhase("starting");
-    // The selfie mirror belongs only to the live preview. The recording stream normalizes
-    // the front camera before MediaRecorder sees it, so recipients never see a mirrored clip.
+    // The front-camera recording is flipped in the pixels to match the selfie preview, so
+    // review, bubble and player show exactly what the sender saw, with no playback CSS.
     const recording = await createVideoMessageRecordingStream(s, facing).catch(() => null);
     // The sheet may have closed or switched lenses while the helper awaited its first frame.
     if (!recording || stream.current !== s || rec.current) {

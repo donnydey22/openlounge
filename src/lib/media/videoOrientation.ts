@@ -4,6 +4,13 @@
 
 export type VideoMessageFacing = "user" | "environment";
 
+/**
+ * Front-camera video messages are saved exactly as the sender saw them in the live selfie preview
+ * (horizontally flipped, Telegram-style), so the review, the bubble and the full-screen player match the
+ * preview on every client without any playback CSS. Back-camera notes are never flipped.
+ */
+export const FRONT_CAMERA_VIDEO_MESSAGE_MATCHES_PREVIEW = true;
+
 export function shouldNormalizeVideoMessageRecording(facing: VideoMessageFacing) {
   return facing === "user";
 }
@@ -104,7 +111,9 @@ export async function createVideoMessageRecordingStream(
     const context = canvas.getContext("2d", { alpha: false });
     if (!context || typeof canvas.captureStream !== "function") throw new Error("Canvas recording unavailable");
 
-    // Deliberately no scale(-1, 1): the saved movie uses the raw camera orientation.
+    // Bake the selfie flip into the pixels so every player (web, iOS WKWebView, Android WebView, and
+    // the server poster/HLS transcode) shows what the preview showed. No playback transform is needed.
+    if (FRONT_CAMERA_VIDEO_MESSAGE_MATCHES_PREVIEW) context.setTransform(-1, 0, 0, 1, canvas.width, 0);
     const paint = () => context.drawImage(video, 0, 0, canvas.width, canvas.height);
     paint();
     const output = canvas.captureStream(recordingFrameRate(sourceTrack));
