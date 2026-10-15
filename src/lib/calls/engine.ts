@@ -5,6 +5,7 @@
 // loads the LiveKit client, pre-opens the signalling connection (prepareConnection) and, if mic permission is
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
+import { UdpRecoveryPolicy } from "./udpRecovery";
 import { swapVideoTrack } from "./frameHold";
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -128,6 +129,11 @@ export class CallEngine {
   private qualityTimer: ReturnType<typeof setInterval> | null = null;
   private readonly qualityGuard = new QualityGuard();
   private fallbackInFlight = false;
+  /** persistent UDP recovery: TCP is only a bridge; return to UDP with backoff + hysteresis until hang-up */
+  private udpRecovery = new UdpRecoveryPolicy();
+  private udpRecoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private fallbackRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private restoreInFlight = false;
   private micTrack: LocalAudioTrack | null = null;
   /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
   private stopDeviceFollow: (() => void) | null = null;
@@ -190,6 +196,7 @@ export class CallEngine {
       this.socket.off("call:video", this.onVideo);
       this.socket.off("call:peer", this.onPeer);
       this.socket.off("call:mediaFallback", this.onMediaFallback);
+      this.socket.off("call:mediaRestore", this.onMediaRestore);
     }
     this.socket = socket;
     if (!socket) return;
@@ -198,6 +205,7 @@ export class CallEngine {
     socket.on("call:video", this.onVideo);
     socket.on("call:peer", this.onPeer);
     socket.on("call:mediaFallback", this.onMediaFallback);
+    socket.on("call:mediaRestore", this.onMediaRestore);
     this.watchNetwork();
   }
 
@@ -839,6 +847,8 @@ export class CallEngine {
     const callId = this.s.call?.id;
     if (!callId || this.fallbackInFlight || this.media?.provider !== "mediasoup") return;
     this.fallbackInFlight = true;
+    this.udpRecovery.onUdpDrop(Date.now());
+    this.startUdpRecovery();
     try {
       const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000);
       if (!r.ok || !r.media || r.media.provider !== "livekit") throw new Error(r.error ?? "TCP fallback unavailable");
@@ -847,6 +857,13 @@ export class CallEngine {
       // The server keeps the call's normal reconnect grace; displaying the failure is preferable to a falsely active
       // call if both direct UDP and the durable TCP path are unavailable.
       this.set({ error: "Couldn't reconnect the call" });
+      // Persistent: keep retrying the bridge with backoff for as long as the call is up.
+      if (this.busy && !this.fallbackRetryTimer) {
+        this.fallbackRetryTimer = setTimeout(() => {
+          this.fallbackRetryTimer = null;
+          void this.requestTcpFallback();
+        }, this.udpRecovery.backoffMs());
+      }
     } finally {
       this.fallbackInFlight = false;
     }
@@ -861,8 +878,62 @@ export class CallEngine {
       this.clearMediasoupDegrade();
       return;
     }
+    if (this.media?.provider === "mediasoup") this.udpRecovery.onUdpDrop(Date.now());
+    this.startUdpRecovery();
     void this.switchMedia(d.media, d.call);
   };
+
+  /** Server moved both participants back to direct UDP (call:mediaRestore). */
+  private onMediaRestore = (d: { call?: CallInfo; media?: CallMedia | null }) => {
+    if (!d?.call || d.call.id !== this.s.call?.id || d.media?.provider !== "mediasoup" || this.s.ui !== "active") return;
+    this.udpRecovery.onTrialStart(Date.now());
+    void this.switchMedia(d.media, d.call);
+  };
+
+  private startUdpRecovery() {
+    if (this.udpRecoveryTimer) return;
+    this.udpRecoveryTimer = setInterval(() => this.udpRecoveryTick(), 2_000);
+  }
+
+  private stopUdpRecovery() {
+    if (this.udpRecoveryTimer) clearInterval(this.udpRecoveryTimer);
+    this.udpRecoveryTimer = null;
+    if (this.fallbackRetryTimer) clearTimeout(this.fallbackRetryTimer);
+    this.fallbackRetryTimer = null;
+    this.udpRecovery.end();
+    this.udpRecovery = new UdpRecoveryPolicy();
+    this.restoreInFlight = false;
+  }
+
+  private udpRecoveryTick() {
+    if (!this.busy || this.s.ui !== "active") return;
+    const now = Date.now();
+    const p = this.media?.provider;
+    if (p === "livekit") {
+      if (this.room?.state === "connected" && !this.s.reconnecting) this.udpRecovery.onTcpConnected(now);
+      else this.udpRecovery.onTcpUnstable();
+      if (this.udpRecovery.shouldTryUdp(now)) void this.requestUdpRestore();
+    } else if (p === "mediasoup" && this.mediasoupConnected) {
+      this.udpRecovery.tick(now);
+    }
+  }
+
+  private async requestUdpRestore() {
+    const callId = this.s.call?.id;
+    if (!callId || this.restoreInFlight || this.media?.provider !== "livekit") return;
+    this.restoreInFlight = true;
+    try {
+      const r = await this.req<{ ok: boolean; media?: CallMedia | null; call?: CallInfo; retryInMs?: number }>("call:mediaRestore", { callId }, 6_000);
+      if (!r.ok || r.media?.provider !== "mediasoup") return void this.udpRecovery.onTrialRefused(Date.now(), r.retryInMs);
+      this.udpRecovery.onTrialStart(Date.now());
+      this.netLog("media-restore-udp", { failures: this.udpRecovery.failures });
+      await this.switchMedia(r.media, r.call);
+    } catch {
+      this.udpRecovery.onTrialRefused(Date.now());
+    } finally {
+      this.restoreInFlight = false;
+    }
+  }
 
   private async switchMedia(media: CallMedia, call?: CallInfo) {
     if (!this.busy || this.media?.provider === media.provider && this.media.token === media.token) return;
@@ -871,7 +942,7 @@ export class CallEngine {
     this.media = media;
     this.roomPromise = null;
     if (call) this.set({ call });
-    this.netLog("media-fallback-livekit");
+    this.netLog(media.provider === "livekit" ? "media-fallback-livekit" : "media-restore-mediasoup");
     await this.connect(true);
   }
 
@@ -1264,6 +1335,7 @@ export class CallEngine {
     this.acceptT0 = 0;
     this.metricSent = false;
     this.fallbackInFlight = false;
+    this.stopUdpRecovery();
     if (this.weakTimer) clearTimeout(this.weakTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     this.stallTimer = null;

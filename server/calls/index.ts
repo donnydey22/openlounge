@@ -185,6 +185,9 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:mediaFallback", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void s().fallbackMedia(callId, uid).then(ack, () => ack({ ok: false, error: "TCP fallback failed" }))),
   );
+  socket.on("call:mediaRestore", ({ callId }: { callId: string }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void s().restoreMedia(callId, uid).then(ack, () => ack({ ok: false, error: "UDP restore failed" }))),
+  );
   const relay = (method: string) => (input: { callId?: string; [key: string]: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
       const { callId, ...payload } = input ?? {};

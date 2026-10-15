@@ -92,6 +92,10 @@ interface CallRec {
   tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
   /** Captured once at call start; only `fallbackMedia()` may replace it, and only Mediasoup → LiveKit. */
   backend: CallMediaBackend;
+  /** The original direct-UDP backend, retained after a TCP fallback so `restoreMedia()` can return to it. */
+  primary?: CallMediaBackend | null;
+  /** last backend switch (fallback or restore): server-side hysteresis against flapping */
+  switchedAt?: number;
   timer: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
@@ -414,6 +418,8 @@ export class CallService {
     if (c.backend.provider === "livekit") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyFallback: true };
     const fallback = this.d.liveKitFallback?.() ?? this.legacyLiveKit();
     if (!fallback) return { ok: false as const, error: "TCP fallback isn't available" };
+    c.primary = c.backend;
+    c.switchedAt = this.now();
     c.backend.close(c.id);
     c.backend = fallback;
     c.tokens.clear();
@@ -422,6 +428,38 @@ export class CallService {
     const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
     for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaFallback", { call: info, media, from: "mediasoup", to: "livekit" });
     this.d.log?.("call media fallback", { callId: c.id, from: "mediasoup", to: "livekit" });
+    return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
+  }
+
+  /**
+   * Return to direct UDP after a TCP fallback. Only an active call that started on Mediasoup may go back, and never
+   * sooner than CALL_RESTORE_MIN_MS after the last switch (hysteresis). If UDP fails again the client simply calls
+   * `fallbackMedia()`, which is unchanged.
+   */
+  async restoreMedia(callId: unknown, userId: string) {
+    const c = this.get(callId, userId);
+    if (!c || c.phase !== "active") return { ok: false as const, error: "This call isn't active" };
+    if (c.backend.provider === "mediasoup") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyUdp: true };
+    if (!c.primary || c.primary.provider !== "mediasoup") return { ok: false as const, error: "UDP media isn't available" };
+    const minGap = num("CALL_RESTORE_MIN_MS", 10_000);
+    if (c.switchedAt && this.now() - c.switchedAt < minGap) return { ok: false as const, error: "Too soon", retryInMs: minGap - (this.now() - c.switchedAt) };
+    const tcp = c.backend;
+    c.backend = c.primary;
+    c.switchedAt = this.now();
+    c.tokens.clear();
+    for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
+    const info = this.info(c);
+    const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
+    if (all.some(([, m]) => !m || m.provider !== "mediasoup")) {
+      // UDP credential couldn't be issued: stay on the working TCP path.
+      c.backend = tcp;
+      c.tokens.clear();
+      for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
+      return { ok: false as const, error: "UDP media isn't available" };
+    }
+    tcp.close(c.id);
+    for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaRestore", { call: info, media, from: "livekit", to: "mediasoup" });
+    this.d.log?.("call media restore", { callId: c.id, from: "livekit", to: "mediasoup" });
     return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
   }
 

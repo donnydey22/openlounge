@@ -81,6 +81,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:history": { before: "number?" },
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },
   "call:mediaFallback": { callId: "id" },
+  "call:mediaRestore": { callId: "id" },
   // Server-brokered Mediasoup signaling. Extra structured fields (DTLS/RTP parameters) are validated by the SFU
   // adapter rather than serialized into this intentionally tiny generic schema layer.
   "ms:gateway:hello": { secret: "string" },
