@@ -22,7 +22,8 @@ import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
-import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats } from "./qualityGuard";
+import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
+import { ADAPT, NetLadder, nativeAdaptiveEnabled } from "./netAdapt";
 import { followAudioDevices } from "../audioDevices";
 
 type LK = typeof import("livekit-client");
@@ -716,9 +717,10 @@ export class CallEngine {
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
       this.releaseLiveKitPrewarm();
       const session = new MediasoupCallSession(this.socket!, media, {
-        onRemoteTrack: (track) => this.onMediasoupTrack(track),
-        onState: (state) => this.onMediasoupState(state),
-        onLocalVideo: (track) => this.setMediasoupLocalVideo(track),
+        // a session parked for make-before-break (or superseded) must never drive this call's state
+        onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
+        onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
+        onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
       });
       this.mediasoup = session;
       await session.connect(this.s.camOn);
@@ -790,7 +792,10 @@ export class CallEngine {
       document.body.appendChild(el);
       this.audioEls.push(el);
       document.addEventListener("visibilitychange", this.onVisibleCallAudio);
-      const onPlay = () => this.firstAudio();
+      const onPlay = () => {
+        this.releaseParked();
+        this.firstAudio();
+      };
       el.addEventListener("playing", onPlay, { once: true });
       void el.play().catch(() => this.set({ needsGesture: true }));
       track.addEventListener("ended", () => {
@@ -843,6 +848,7 @@ export class CallEngine {
   private startQualityGuard(session: MediasoupCallSession) {
     this.stopQualityGuard();
     this.qualityGuard.reset();
+    if (nativeAdaptiveEnabled()) return this.startNetLadder(session);
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
@@ -854,6 +860,76 @@ export class CallEngine {
         void this.requestTcpFallback();
       }).catch(() => {});
     }, QUALITY_SAMPLE_MS);
+  }
+
+  /** Native apps only: coordinated audio+video ladder first, TCP only when the floor still can't hold (netAdapt.ts). */
+  private readonly netLadder = new NetLadder();
+  private startNetLadder(session: MediasoupCallSession) {
+    this.netLadder.reset();
+    let prev: QualityCounters | null = null;
+    const w = window as unknown as { __olNetLadder?: { level: number; changes: { t: number; level: number; dir: string }[] } };
+    w.__olNetLadder = { level: 0, changes: [] };
+    this.qualityTimer = setInterval(() => {
+      if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
+      void session.getTransportStats().then((reports) => {
+        if (this.mediasoup !== session) return;
+        const cur = countersFromStats(reports);
+        const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
+        prev = cur;
+        const a = this.netLadder.push(v);
+        if (a.type === "step") {
+          this.netLog("ladder", { level: a.level, dir: a.dir, audio: a.step.audioBps, loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps });
+          w.__olNetLadder = { level: a.level, changes: [...(w.__olNetLadder?.changes ?? []), { t: Date.now(), level: a.level, dir: a.dir }] };
+          void session.applyLadderStep(a.step);
+        } else if (a.type === "tcp") {
+          this.stopQualityGuard();
+          this.netLog("ms-quality-fallback", { reasons: a.reasons.join(","), loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps, ladder: "floor" });
+          void this.requestTcpFallback();
+        }
+      }).catch(() => {});
+    }, ADAPT.sampleMs);
+  }
+
+  /** Native apps only: Wi-Fi ⇄ cellular / new IP → fresh ICE in place on the UDP path (LiveKit restarts its own ICE). */
+  private onNetworkChange = () => {
+    if (!nativeAdaptiveEnabled() || !this.busy) return;
+    this.netLog("net-change", { type: (navigator as unknown as { connection?: { type?: string } }).connection?.type ?? "" });
+    if (this.media?.provider === "mediasoup") void this.mediasoup?.restartIceAll();
+  };
+
+  /**
+   * Native apps only: make-before-break. Park the live path (room / UDP session, mic, remote audio) instead of tearing
+   * it down; the new path connects alongside, and the parked one is released once the new path plays remote audio
+   * (or after MBB_MAX_MS). Both sides switch together, so the old path keeps carrying audio during the handover.
+   */
+  static MBB_MAX_MS = 10_000;
+  private parked: { release: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
+  private parkMediaForSwitch() {
+    this.releaseParked();
+    const room = this.room, ms = this.mediasoup, mic = this.micTrack, cam = this.camTrack, els = this.audioEls, vp = this.micVoiceProcessing;
+    if (!room && !ms) return;
+    room?.removeAllListeners();
+    this.room = null;
+    this.mediasoup = null;
+    this.micTrack = null;
+    this.camTrack = null;
+    this.audioEls = [];
+    this.micVoiceProcessing = null;
+    const release = () => {
+      if (this.parked?.release !== release) return;
+      clearTimeout(this.parked.timer);
+      this.parked = null;
+      if (room) void room.disconnect(true).catch(() => {});
+      ms?.close();
+      vp?.dispose();
+      mic?.stop();
+      cam?.stop();
+      for (const el of els) el.remove();
+    };
+    this.parked = { release, timer: setTimeout(release, CallEngine.MBB_MAX_MS) };
+  }
+  private releaseParked() {
+    this.parked?.release();
   }
 
   private stopQualityGuard() {
@@ -961,6 +1037,7 @@ export class CallEngine {
   private async switchMedia(media: CallMedia, call?: CallInfo) {
     if (!this.busy || this.media?.provider === media.provider && this.media.token === media.token) return;
     this.clearMediasoupDegrade();
+    if (nativeAdaptiveEnabled()) this.parkMediaForSwitch();
     this.dropMediaForRejoin();
     this.media = media;
     this.roomPromise = null;
@@ -984,7 +1061,10 @@ export class CallEngine {
           document.body.appendChild(el);
           this.audioEls.push(el);
           if (this.s.speaker && this.sinkIds[1]) void (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(this.sinkIds[1]).catch(() => {});
-          const onPlay = () => this.firstAudio();
+          const onPlay = () => {
+        this.releaseParked();
+        this.firstAudio();
+      };
           el.addEventListener("playing", onPlay, { once: true });
           document.addEventListener("visibilitychange", this.onVisibleCallAudio);
           // Explicit play(): WKWebView after a CallKit answer (no page gesture) can leave an autoplay <audio> paused
@@ -1243,7 +1323,11 @@ export class CallEngine {
         if (!this.busy || (this.s.ui !== "active" && this.s.ui !== "connecting")) return;
         this.netLog("net-change", { why });
         const room = this.room;
-        if (this.mediasoup) {
+        if (this.mediasoup && nativeAdaptiveEnabled()) {
+          // Native apps: UDP stays persistent across Wi-Fi ⇄ cellular — fresh ICE in place on the new interface.
+          // If it doesn't reconnect, the existing disconnected-grace timer still moves the call to TCP.
+          this.onNetworkChange();
+        } else if (this.mediasoup) {
           // Direct UDP cannot safely migrate itself after an interface change. Select the proven TCP backend instead.
           void this.requestTcpFallback();
         } else if (!room) {
@@ -1255,6 +1339,14 @@ export class CallEngine {
         }
         // reconnecting: LiveKit's own 'online' handler retries immediately
       }, 800);
+    };
+    // Wrappers call this from their OS path monitor (iOS NWPathMonitor via expo-network, Android ConnectivityManager)
+    // because WebViews don't fire navigator.connection "change" reliably on an interface handoff.
+    (window as unknown as { __olNetworkChanged?: (type?: string) => void }).__olNetworkChanged = (type?: string) => {
+      if (!nativeAdaptiveEnabled()) return;
+      if (type && type === this.lastNetType) return;
+      this.lastNetType = type ?? null;
+      refresh(`native:${type ?? "?"}`);
     };
     window.addEventListener("offline", () => {
       if (this.busy && this.s.ui === "active") this.set({ reconnecting: true });
@@ -1326,6 +1418,7 @@ export class CallEngine {
 
   private teardownMedia() {
     stopTones();
+    this.releaseParked();
     const room = this.room;
     this.room = null;
     this.roomPromise = null;

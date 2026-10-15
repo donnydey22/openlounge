@@ -57,6 +57,7 @@ export class MediasoupCallSession {
     pause(): void | Promise<void>;
     resume(): void | Promise<void>;
     replaceTrack?(input: { track: MediaStreamTrack }): Promise<void>;
+    rtpSender?: RTCRtpSender;
   }>();
   private closed = false;
   private syncing = false;
@@ -478,6 +479,41 @@ export class MediasoupCallSession {
     if (!producer) return;
     if (muted) await producer.pause();
     else await producer.resume();
+  }
+
+  /**
+   * Native-app ladder (netAdapt.ts): cap Opus and, if a camera producer exists, video resolution/fps/bitrate together.
+   * setParameters on the existing senders: no renegotiation, no track swap, no audible gap.
+   */
+  async applyLadderStep(step: { audioBps: number; videoScale: number; videoFps: number; videoBps: number }): Promise<boolean> {
+    if (this.closed) return false;
+    const set = async (kind: "audio" | "video", patch: (e: RTCRtpEncodingParameters) => void) => {
+      const sender = this.producers.get(kind)?.rtpSender;
+      if (!sender?.getParameters || !sender.setParameters) return false;
+      try {
+        const p = sender.getParameters();
+        if (!p.encodings?.length) p.encodings = [{}];
+        p.encodings.forEach(patch);
+        await sender.setParameters(p);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const a = await set("audio", (e) => { e.maxBitrate = step.audioBps; });
+    await set("video", (e) => {
+      e.maxBitrate = step.videoBps;
+      e.maxFramerate = step.videoFps;
+      e.scaleResolutionDownBy = step.videoScale;
+    });
+    return a;
+  }
+
+  /** Network changed (Wi-Fi ⇄ cellular, new IP): fresh ICE on both transports in place, producers/consumers kept. */
+  async restartIceAll(): Promise<void> {
+    if (this.closed) return;
+    const pairs: [TransportLike | RecvTransportLike | null, "send" | "recv"][] = [[this.send, "send"], [this.recv, "recv"]];
+    await Promise.all(pairs.map(([t, d]) => (t ? this.restartIce(t, d).catch(() => {}) : Promise.resolve())));
   }
 
   /** Raw transport stats for the engine's quality guard (UDP → TCP on sustained degradation). */
