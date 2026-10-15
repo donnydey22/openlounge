@@ -40,7 +40,7 @@ export default function ConversationPage() {
   const router = useRouter();
   const vv = useVisualViewport();
   return (
-    <div className="fixed inset-x-0 top-0 z-10 bg-app" style={{ height: vv ? vv.h : "100dvh", transform: vv?.top ? `translateY(${vv.top}px)` : undefined }}>
+    <div data-ol-screen className="fixed inset-x-0 top-0 z-10 bg-app" style={{ height: vv ? vv.h : "100dvh", transform: vv?.top ? `translateY(${vv.top}px)` : undefined }}>
       <DmThread peerId={peerId} onBack={() => router.push("/messages")} className="mx-auto h-full max-w-2xl" />
     </div>
   );

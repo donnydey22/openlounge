@@ -27,6 +27,7 @@ export function GroupScreen({
   const vv = useVisualViewport();
   return (
     <div
+      data-ol-screen
       className="fixed inset-x-0 top-0 bottom-0 z-10 bg-app"
       style={vv ? { height: vv.h, bottom: "auto", transform: vv.top ? `translateY(${vv.top}px)` : undefined } : undefined}
       data-testid={testId}
@@ -40,7 +41,7 @@ export function GroupScreen({
           {right && <div className="flex shrink-0 items-center">{right}</div>}
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
-        {footer && <div className="shrink-0 border-t border-white/5 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">{footer}</div>}
+        {footer && <div data-ol-bottom-pad className="shrink-0 border-t border-white/5 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">{footer}</div>}
       </div>
     </div>
   );

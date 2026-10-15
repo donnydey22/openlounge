@@ -322,18 +322,59 @@ function LiveRoomMiniBar() {
   const { roomId, room, joined, gone, audio, leave, sendReaction, reactionTrayOpen, setReactionTrayOpen } = useLiveRoom();
   const pathname = usePathname() ?? "/";
   const router = useRouter();
+  const barRef = useRef<HTMLDivElement>(null);
   const visible = !!roomId && !!room && joined && !gone && pathname !== `/room/${roomId}`;
 
+  // Publish the bar's real height as --ol-liveroom-bar-h and pin it to the visual viewport
+  // (above the on-screen keyboard). Pages reserve that space via globals.css so the tray
+  // never covers composers, docks, sheets, or other controls.
   useEffect(() => {
     const root = document.documentElement;
-    if (visible) root.setAttribute("data-live-room-bar", "");
-    else root.removeAttribute("data-live-room-bar");
-    return () => root.removeAttribute("data-live-room-bar");
-  }, [visible]);
+    if (!visible) {
+      root.removeAttribute("data-live-room-bar");
+      root.style.removeProperty("--ol-liveroom-bar-h");
+      return;
+    }
+    root.setAttribute("data-live-room-bar", "");
+    const el = barRef.current;
+    if (!el) {
+      return () => {
+        root.removeAttribute("data-live-room-bar");
+        root.style.removeProperty("--ol-liveroom-bar-h");
+      };
+    }
+    const sync = () => {
+      const height = Math.ceil(el.getBoundingClientRect().height);
+      root.style.setProperty("--ol-liveroom-bar-h", `${height}px`);
+      const vv = window.visualViewport;
+      // Distance from the layout viewport bottom to the visual viewport bottom (= keyboard cover).
+      const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+      el.style.bottom = `${keyboard}px`;
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", sync, { passive: true });
+    vv?.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync, { passive: true });
+    return () => {
+      ro.disconnect();
+      vv?.removeEventListener("resize", sync);
+      vv?.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+      root.removeAttribute("data-live-room-bar");
+      root.style.removeProperty("--ol-liveroom-bar-h");
+    };
+  }, [visible, reactionTrayOpen]);
 
   if (!visible || !room || !roomId) return null;
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[70] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4" data-testid="live-room-bar">
+    <div
+      ref={barRef}
+      className="fixed inset-x-0 bottom-0 z-[70] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4"
+      data-testid="live-room-bar"
+    >
       <div className="mx-auto max-w-2xl">
         <ReactionBar open={reactionTrayOpen} onPick={sendReaction} />
         <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-emerald-400/30 bg-zinc-950/95 p-2 shadow-2xl backdrop-blur-xl">

@@ -1446,7 +1446,7 @@ export function DmThread({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div data-ol-bottom-pad className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         {isGroup && gone ? (
           <div className="flex items-center justify-center gap-2 py-3 text-center text-sm text-zinc-400" data-testid="group-gone">
             {gone === "left" ? "You left this group." : gone === "removed" ? "You were removed from this group." : "This group is no longer available."}

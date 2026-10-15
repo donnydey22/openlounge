@@ -103,10 +103,43 @@ body {
   /* vertical pans only: no horizontal drag/drift, no double-tap zoom delay */
   touch-action: pan-y pinch-zoom;
 }
-/* A joined drop-in room is intentionally route-persistent. Reserve space for its return/leave bar
-   whenever the user browses elsewhere, so page controls and composers stay tappable above it. */
+/* A joined drop-in room is intentionally route-persistent. --ol-liveroom-bar-h is measured by
+   LiveRoomMiniBar (ResizeObserver); the fallback matches the closed reaction-tray height so the
+   first paint already clears composers/docks before JS runs. Nothing under the tray is tappable. */
+html {
+  --ol-liveroom-bar-h: 0px;
+}
+html[data-live-room-bar] {
+  --ol-liveroom-bar-h: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
 html[data-live-room-bar] .app-shell {
-  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  padding-bottom: var(--ol-liveroom-bar-h);
+  scroll-padding-bottom: var(--ol-liveroom-bar-h);
+}
+/* Full-screen fixed pages (DM thread, group screens): shrink from the bottom so the composer/footer
+   sits above the tray. The tray already owns the home-indicator inset, so drop duplicate safe-area
+   padding on composers/footers inside those screens. */
+html[data-live-room-bar] [data-ol-screen] {
+  padding-bottom: var(--ol-liveroom-bar-h);
+  box-sizing: border-box;
+}
+html[data-live-room-bar] [data-ol-screen] [data-ol-bottom-pad] {
+  padding-bottom: 0.5rem !important;
+}
+/* Fixed bottom docks (hallway "Start a room", call control strips): lift above the tray. */
+html[data-live-room-bar] [data-ol-bottom-dock] {
+  bottom: var(--ol-liveroom-bar-h) !important;
+  padding-bottom: 1.25rem !important;
+}
+/* Bottom sheets sit on top of the reserved strip so their primary actions stay clear. */
+html[data-live-room-bar] [data-ol-sheet] {
+  padding-bottom: var(--ol-liveroom-bar-h);
+  box-sizing: border-box;
+}
+/* Notifications prompt (z-45) lifts with the tray the same way. */
+html[data-live-room-bar] [data-ol-notif] {
+  bottom: var(--ol-liveroom-bar-h) !important;
+  padding-bottom: 1rem !important;
 }
 /* full-screen overlays (room drawers): exactly the visible area, above the keyboard */
 .ol-vv-fixed {
