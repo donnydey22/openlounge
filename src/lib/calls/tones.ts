@@ -19,7 +19,7 @@
 //    the element is re-played if the OS pauses it, for as long as the ring state lasts.
 //  - Fallback: if Web Audio still isn't running 400 ms after a ring starts, the same tone (rendered to a WAV) plays on
 //    the <audio> element primed during an earlier tap.
-import { audioContext, onAudioState, primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
+import { audioContext, onAudioState, ringAudioElement as primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
 
 export type RingKind = "incoming" | "outgoing";
 type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none"; ctx: string };
@@ -216,6 +216,16 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   cur = { stop, state };
   expose();
 }
+
+// iOS wrapper: CallKit activating the AVAudioSession interrupts WebKit audio; the wrapper's audioResumeScript calls
+// this to resume the context and re-play the ring <audio> loop (it only kicks srcObject elements on its own).
+if (typeof window !== "undefined")
+  (window as unknown as { __olRingResume?: () => void }).__olRingResume = () => {
+    if (!cur) return;
+    resumeAudio();
+    const e = primedAudioElement();
+    if (cur.state.path === "element" && e?.paused) void e.play().catch(() => {});
+  };
 
 export function stopTones() {
   const c = cur;

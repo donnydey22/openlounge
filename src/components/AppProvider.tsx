@@ -7,7 +7,7 @@ import { native } from "@/lib/native";
 import { NATIVE_NOTIFICATION_EVENT, parseNativePushNotice } from "@/lib/nativeNotification";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { bumpClock } from "@/lib/time";
-import { NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
+import { NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
 import type { DirectMessage, Me, PresenceStatus, RoomSummary } from "@/lib/types";
 import { clearToken, hydrateFromNative, loadCreds, loadToken, parkSession, saveCreds } from "@/lib/session";
 import { biometricsBridge, quickSignInReady } from "@/lib/biometrics";
@@ -394,6 +394,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     document.addEventListener("visibilitychange", reportVisibility);
     window.addEventListener(NATIVE_VISIBILITY_EVENT, reportVisibility);
+    window.addEventListener(NATIVE_LOCK_EVENT, reportVisibility);
     // dm:message notifications (banner / OS notification) live in <Notifier/>
     s.connect();
     setSocket(s);
@@ -428,6 +429,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (offlineTimer) clearTimeout(offlineTimer);
       document.removeEventListener("visibilitychange", reportVisibility);
       window.removeEventListener(NATIVE_VISIBILITY_EVENT, reportVisibility);
+      window.removeEventListener(NATIVE_LOCK_EVENT, reportVisibility);
       s.removeAllListeners();
       s.close();
     };
