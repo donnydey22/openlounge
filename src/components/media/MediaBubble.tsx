@@ -756,7 +756,10 @@ export function inlineVideoSrc(a: Pick<MediaAttachment, "gif" | "status">, urls:
 }
 
 function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof useMediaUrls> }) {
-  const [ref, visible] = useInView<HTMLVideoElement>("0px", true);
+  // the observer watches an always-mounted wrapper: the <video> itself only mounts once the signed URL arrives,
+  // and an observer bound to the earlier placeholder never fired again (the video sat at readyState 0 forever)
+  const [ref, visible] = useInView<HTMLSpanElement>("0px", true);
+  const vref = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const src = inlineVideoSrc(a, urls);
@@ -769,32 +772,31 @@ function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof 
   }, []);
   const mediaEl = !!src && allowed && !(a.gif && (a.mime === "image/gif" || src.includes("/original")));
   useEffect(() => {
-    const v = ref.current;
-    // (the ref sits on a placeholder <span> while there's nothing to play)
-    if (!(v instanceof HTMLMediaElement)) return;
+    const v = vref.current;
+    if (!v) return;
     if (visible && src && allowed && !blocked) {
       v.muted = true;
       v.defaultMuted = true;
       const p = v.play();
       if (p) p.catch(() => setPlaying(false)); // Low Power Mode / autoplay refused: the first frame stays
     } else v.pause();
-  }, [visible, src, allowed, blocked, ref, mediaEl]);
+  }, [visible, src, allowed, blocked, mediaEl]);
   // no play badge, ever: the first decoded frame shows while it buffers; a refused autoplay keeps that frame
   const [frame, setFrame] = useState(false);
   if (!src || !allowed)
-    return (
-      <>
-        <span ref={ref as never} className="hidden" />
-      </>
-    );
+    return <span ref={ref} className="pointer-events-none absolute inset-0" aria-hidden />;
   if (a.gif && (a.mime === "image/gif" || src.includes("/original"))) {
     // GIF still converting: retain the existing thumbnail until the original GIF has decoded.
-    return <DecodeGatedImage src={src} className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none" testId="media-gif-inline" />;
+    return (
+      <span ref={ref} className="pointer-events-none absolute inset-0">
+        <DecodeGatedImage src={src} className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none" testId="media-gif-inline" />
+      </span>
+    );
   }
   return (
-    <>
+    <span ref={ref} className="pointer-events-none absolute inset-0">
       <video
-        ref={ref}
+        ref={vref}
         src={visible ? `${src}${src.includes("#") ? "" : "#t=0.001"}` : undefined}
         poster={BLANK_POSTER}
         muted
@@ -813,7 +815,7 @@ function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof 
         // eslint-disable-next-line react/no-unknown-property
         {...{ "webkit-playsinline": "true", "x5-playsinline": "true" }}
       />
-    </>
+    </span>
   );
 }
 

@@ -23,3 +23,9 @@ test("no play badge anywhere: first frame shows while buffering", () => {
   assert.match(inline, /onPlaying=\{\(\) => setPlaying\(true\)\}/);
   assert.doesNotMatch(tile, /<Play /);
 });
+
+test("visibility observer is bound to an always-mounted wrapper, not the late-mounting <video>", () => {
+  assert.match(inline, /useInView<HTMLSpanElement>/);
+  assert.match(inline, /ref=\{vref\}/);
+  assert.doesNotMatch(inline, /<video\s+ref=\{ref\}/);
+});
