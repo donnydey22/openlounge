@@ -303,6 +303,8 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   const rearm = () => {
     if (!alive) return;
     const e = primedAudioElement();
+    // browsers: a running Web Audio ring is left alone (no switch to the element just because the mic was granted)
+    if (state.path !== "element" && !elementFirst && audioContext()?.state === "running") return;
     if (state.path !== "element" || !e || e.paused) return fallback(true);
     const before = e.currentTime;
     setTimeout(() => {
