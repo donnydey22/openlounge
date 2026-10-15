@@ -24,6 +24,7 @@ import { useTick } from "./hooks";
 export const VIDEO_START_PLACEHOLDER: "blur" | "frozen" = "blur";
 export const VIDEO_START_BLUR_DELAY_MS = 250;
 export const VIDEO_START_FADE_MS = 150;
+const VIEWER_BLANK_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 type Urls = { full?: string; thumb?: string; poster?: string; original?: string; hls?: string; hlsLow?: string };
 
@@ -595,10 +596,38 @@ function VideoStage({
     setReady(false);
     setBlur(false);
     let done = false;
+    // no audio pop at the poster → first-frame swap: start silent and ramp to full volume over ~120 ms once the
+    // first frame is shown. iOS ignores element.volume (read-only) — harmless there. Every exit path restores 1.
+    let ramp: ReturnType<typeof setInterval> | undefined;
+    const fullVolume = () => {
+      if (ramp) clearInterval(ramp);
+      ramp = undefined;
+      try {
+        el.volume = 1;
+      } catch {
+        /* ignore */
+      }
+    };
+    try {
+      el.volume = 0;
+    } catch {
+      /* ignore */
+    }
+    const safety = setTimeout(fullVolume, 2000);
     const show = () => {
       if (done) return;
       done = true;
       setReady(true);
+      let k = 0;
+      ramp = setInterval(() => {
+        k++;
+        if (k >= 6) return fullVolume();
+        try {
+          el.volume = k / 6;
+        } catch {
+          fullVolume();
+        }
+      }, 20);
     };
     // only blur when the first frame is actually slow: fast loads never flash a blur
     const bt = VIDEO_START_PLACEHOLDER === "blur" ? setTimeout(() => !done && setBlur(true), VIDEO_START_BLUR_DELAY_MS) : undefined;
@@ -621,6 +650,8 @@ function VideoStage({
     return () => {
       done = true;
       if (bt) clearTimeout(bt);
+      clearTimeout(safety);
+      fullVolume();
       el.removeEventListener("playing", onPlaying);
       el.removeEventListener("timeupdate", onTime);
       detach();
@@ -655,7 +686,9 @@ function VideoStage({
       {src && !failed && (
         <video
           ref={v}
-          poster={urls?.poster}
+          // the real poster is the <img> overlay below (crossfades out on the first decoded frame); the element's own
+          // poster stays a transparent pixel so Android WebView never paints its gray play placeholder / swap flash
+          poster={VIEWER_BLANK_POSTER}
           playsInline
           loop={!!a.gif}
           preload="auto"
