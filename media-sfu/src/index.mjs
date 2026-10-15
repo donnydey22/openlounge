@@ -283,7 +283,7 @@ function connectGateway() {
 }
 
 async function main() {
-  worker = await createWorker({ logLevel: "warn", logTags: ["ice", "dtls", "rtp", "bwe", "score"] });
+  worker = await createWorker({ logLevel: "warn", logTags: ["ice", "dtls", "rtp", "bwe", "score"], rtcMinPort: cfg.minPort, rtcMaxPort: cfg.maxPort });
   worker.on("died", () => {
     safeLog("worker_died");
     process.exitCode = 1;

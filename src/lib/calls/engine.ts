@@ -401,12 +401,17 @@ export class CallEngine {
         return void this.hangup();
       }
     }
-    void this.connect(true);
+    // Same account on several devices: join the media room only once the server confirms THIS device won the accept.
+    // LiveKit identities are per user (the ring-time token is shared by every device), so a losing device that joined
+    // early would knock the winner out of the room. Mic/camera are already warming above; this costs one round trip.
     const r = await accepted;
     if (!r.ok) {
       this.teardownMedia();
       this.acceptFailed(call, r.error);
-    } else if (r.call) this.set({ call: r.call, connectedAt: this.s.connectedAt ?? Date.now() });
+      return;
+    }
+    void this.connect(true);
+    if (r.call) this.set({ call: r.call, connectedAt: this.s.connectedAt ?? Date.now() });
   }
 
   /** Transient accept failure (socket blip) while the call still rings → back to the incoming card with a retry. */
@@ -800,7 +805,7 @@ export class CallEngine {
     this.netLog(`ms-${state}`);
     if (state === "failed") return void this.requestTcpFallback();
     this.clearMediasoupDegrade();
-    this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 4_000);
+    this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 8_000);
   }
 
   /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */

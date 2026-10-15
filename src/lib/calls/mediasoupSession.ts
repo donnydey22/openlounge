@@ -13,7 +13,7 @@ type DeviceLike = InstanceType<typeof import("mediasoup-client").Device>;
 type TransportLike = ReturnType<DeviceLike["createSendTransport"]>;
 type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 
-const CONNECT_TIMEOUT_MS = 4_000;
+const CONNECT_TIMEOUT_MS = 8_000;
 
 /** Resolves when a mediasoup-client transport reaches "connected"; rejects on "failed"/"closed". */
 export function waitTransportConnected(t: { connectionState?: string; on(ev: "connectionstatechange", fn: (s: string) => void): unknown; off?(ev: "connectionstatechange", fn: (s: string) => void): unknown }) {
@@ -134,7 +134,7 @@ export class MediasoupCallSession {
     await this.syncConsumers(generation);
     this.assertActive(generation);
     // Signaling alone succeeds even when UDP is blocked; only report "connected" once ICE/DTLS on the send transport
-    // is really up, so a blocked network trips the 4 s connect timeout (→ LiveKit TCP) instead of waiting ~15 s for ICE failure.
+    // is really up, so a blocked network trips the 8 s connect timeout (→ LiveKit TCP) instead of waiting ~15 s for ICE failure.
     await waitTransportConnected(send);
     this.assertActive(generation);
     this.connected = true;
@@ -486,7 +486,7 @@ export class MediasoupCallSession {
   }
 
   private req<T>(event: string, data: Record<string, unknown>) {
-    return this.socket.request<T>(event, { callId: this.media.callId, ...data }, 4_000);
+    return this.socket.request<T>(event, { callId: this.media.callId, ...data }, 8_000);
   }
 
   close() {
