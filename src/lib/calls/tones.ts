@@ -27,6 +27,8 @@ export type RingKind = "incoming" | "outgoing";
 type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none"; ctx: string };
 
 const RING_MAX_MS = 60_000;
+/** how long a re-arm watches the ring element clock before treating it as stalled-but-"playing" */
+export const RING_PROBE_MS = 300;
 const PATTERNS: Record<RingKind, { period: number; render: (add: (freqs: number[], at: number, dur: number, vol: number, type?: OscillatorType) => void) => void }> = {
   // incoming: a bright three-note phrase twice, then a pause (2.6 s cycle) — Telegram-like, clearly audible
   incoming: {
@@ -163,6 +165,29 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   // then often reports "running" while producing silence (ring "plays briefly then stops"). There the looped <audio>
   // element — a normal media-session player that survives the handoff — is the primary path, not a fallback.
   const elementFirst = nativePlatform() === "ios";
+  let lastPos: number | null = null;
+  let stalls = 0;
+  let revived = false;
+  const restartElement = (e: HTMLAudioElement, align: () => void) => {
+    try {
+      e.pause();
+    } catch {
+      /* ignore */
+    }
+    align(); // resume in step with the original cadence, not mid-gap
+    lastPos = null;
+    void e.play().catch(() => {});
+  };
+  const reviveWebAudio = () => {
+    if (revived || !master || !c || !alive) return;
+    revived = true;
+    resumeAudio();
+    master.gain.cancelScheduledValues(c.currentTime);
+    master.gain.setValueAtTime(master.gain.value, c.currentTime);
+    master.gain.linearRampToValueAtTime(1, c.currentTime + 0.01);
+    state.ctx = c.state;
+    expose();
+  };
   const fallback = (force = false) => {
     if (!alive) return;
     if (!force && !elementFirst && audioContext()?.state === "running") return;
@@ -180,9 +205,16 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       }
     };
     if (state.path === "element") {
-      if (e.paused) {
-        align(); // OS paused it (CallKit handoff): resume in step with the original cadence, not mid-gap
-        void e.play().catch(() => {});
+      // WKWebView can leave the element "playing" yet silent after getUserMedia / a CallKit session swap, so
+      // `paused` alone is not trusted: a clock that has not advanced since the last check is treated as stalled.
+      const pos = e.currentTime;
+      const stalled = !e.paused && lastPos !== null && Math.abs(pos - lastPos) < 0.05;
+      lastPos = pos;
+      if (e.paused || stalled || force) {
+        if (stalled) stalls++;
+        restartElement(e, align);
+        // still stuck after a restart → bring the Web Audio copy (same cadence timeline) back as a safety net
+        if (stalls >= 2) reviveWebAudio();
       }
       return;
     }
@@ -251,7 +283,18 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     releaseRingAudio();
     level = null;
   };
-  cur = { stop, rearm: () => fallback(true), state };
+  // re-arm (CallKit activate, mic granted): restart only if the element is paused or its clock stops advancing,
+  // so the idempotent "settle" re-kicks never cut an audibly playing ring
+  const rearm = () => {
+    if (!alive) return;
+    const e = primedAudioElement();
+    if (state.path !== "element" || !e || e.paused) return fallback(true);
+    const before = e.currentTime;
+    setTimeout(() => {
+      if (alive && state.path === "element" && (e.paused || Math.abs(e.currentTime - before) < 0.05)) fallback(true);
+    }, RING_PROBE_MS);
+  };
+  cur = { stop, rearm, state };
   expose();
 }
 
@@ -273,6 +316,11 @@ export function stopTones() {
 }
 
 export const ringing = () => cur?.state.kind ?? null;
+
+/** Re-check the ring after an audio-session change the page caused itself (mic permission granted on iOS). */
+export function rearmRing() {
+  cur?.rearm();
+}
 
 /** call inside a tap so later (non-gesture) tones are allowed to play */
 export { unlockAudio as unlockTones } from "@/lib/audioUnlock";

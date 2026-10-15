@@ -14,6 +14,8 @@ const num = (k: string, d: number) => {
   return Number.isFinite(v) && v > 0 ? v : d;
 };
 export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
+/** No callee device acked call:incoming within this window → send the push anyway (unacked "foreground" socket). */
+export const CALL_ACK_FALLBACK_MS = num("CALL_ACK_FALLBACK_MS", 4_000);
 /** a call whose participants both lost every WebSocket for this long is over (LiveKit webhook usually ends it sooner) */
 export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", 60_000);
 /** caller lost their socket while it was still ringing → cancel after this */
@@ -314,6 +316,16 @@ export class CallService {
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
       this.d.push.incoming(calleeId, info);
+    } else if (this.d.push) {
+      // A "foreground" socket that never acks (frozen/unattended tab, stale WebView) used to mean no ring anywhere
+      // for the full 45 s. If no callee device acks in time, fall back to push so their phone still rings.
+      const t = setTimeout(() => {
+        if (c.phase !== "calling" || c.pushed || !this.d.push) return;
+        c.pushed = true;
+        this.d.log?.("call ack fallback push", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null });
+        this.d.push.incoming(calleeId, info);
+      }, CALL_ACK_FALLBACK_MS);
+      t.unref?.();
     }
     this.d.log?.("call start", { callId: c.id, video: c.video });
     return { ok: true, call: info, media: await this.media(c, callerId) };

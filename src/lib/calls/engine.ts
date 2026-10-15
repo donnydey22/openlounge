@@ -17,7 +17,7 @@ import { native, nativePlatform } from "@/lib/native";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, browserUsesNativeMobileCameraFrame, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults, type NetworkTier } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
-import { playBusy, playConnected, playHangup, playRingback, playRingtone, ringing, stopTones } from "./tones";
+import { playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { flipCameraTrack } from "./cameraFlip";
@@ -332,6 +332,8 @@ export class CallEngine {
     void loadLK().catch(() => {});
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip
     this.preMic = this.acquireMic();
+    // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
+    void this.preMic.then(() => this.s.ui === "outgoing" && rearmRing(), () => this.s.ui === "outgoing" && rearmRing());
     if (video) void this.ensureCamPreview();
     let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string };
     r = await this.startWhenConnected(peer.id, video);
