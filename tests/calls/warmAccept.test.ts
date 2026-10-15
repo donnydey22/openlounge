@@ -6,7 +6,9 @@ const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
 test("warm native Accept: page exposes __olAcceptCall and falls back (false) when it can't accept in place", () => {
   const src = read("../../src/components/calls/CallProvider.tsx");
   assert.match(src, /__olAcceptCall = \(callId: string\) =>/);
-  assert.match(src, /if \(!socket\?\.connected\) return false;/);
+  assert.match(src, /if \(!socket\) return false;/);
+  // a cold page whose socket is still connecting queues the accept (no wrapper reload mid-answer)
+  assert.match(src, /if \(!socket\.connected\) \{[\s\S]{0,300}socket\.on\("connect", onConnect\);\s*return true;/);
   assert.match(src, /e_\.openFromLink\(callId, true\)/);
 });
 

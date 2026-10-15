@@ -105,3 +105,37 @@ test("server: UDP drop → TCP fallback → restore back to UDP for both partici
     svc.dispose?.();
   }
 });
+
+test("anti-flap: UDP that drops every ~80 s keeps backing off (Keiko call 2026-10-15)", () => {
+  const p = new UdpRecoveryPolicy({ random: () => 0.5 });
+  let now = 0;
+  const gaps: number[] = [];
+  p.onUdpDrop(now);
+  for (let i = 0; i < 5; i++) {
+    const dropAt = now;
+    p.onTcpConnected(now);
+    while (!p.shouldTryUdp(now)) now += 1_000;
+    gaps.push(now - dropAt);
+    p.onTrialStart(now);
+    now += 80_000;
+    p.tick(now);
+    p.onUdpDrop(now);
+  }
+  for (let i = 1; i < gaps.length; i++) assert.ok(gaps[i] >= gaps[i - 1], `gap ${i} grows: ${gaps}`);
+  assert.ok(gaps[3] >= 100_000, `backed off to ≥100 s: ${gaps}`);
+});
+
+test("anti-flap: failures reset only after UDP held resetAfterMs", () => {
+  const p = new UdpRecoveryPolicy({ random: () => 0.5 });
+  p.onUdpDrop(0);
+  p.onTcpConnected(0);
+  p.onTrialStart(30_000);
+  p.onUdpDrop(100_000);
+  assert.equal(p.failures, 1);
+  p.onTcpConnected(100_000);
+  p.onTrialStart(200_000);
+  p.tick(260_000);
+  assert.equal(p.failures, 1, "60 s hold is not enough");
+  p.tick(200_000 + 300_000);
+  assert.equal(p.failures, 0);
+});

@@ -73,6 +73,22 @@ export class MediasoupCallSession {
   private iceRestarted = new Set<string>();
   private micRecovering: Promise<void> | null = null;
   private readonly onMicEnded = () => void this.recoverMic();
+  private micMuteTimer: ReturnType<typeof setTimeout> | null = null;
+  /** iOS: CallKit activating the audio session (outgoing call: after the mic was captured at dial time) interrupts
+   *  WebKit's capture — the track stays "live" but muted and sends silence (callee hears nothing). Recapture when the
+   *  source stays muted. A user mute pauses the producer and never mutes the track, so it is unaffected. */
+  private readonly onMicMuted = () => {
+    if (this.micMuteTimer) clearTimeout(this.micMuteTimer);
+    this.micMuteTimer = setTimeout(() => {
+      this.micMuteTimer = null;
+      if (!this.closed && this.mic?.muted) void this.recoverMic();
+    }, 1_200);
+  };
+  /** Native audio-session handover (CallKit activate / connect): recapture a mic that is muted or ended. */
+  checkMicAlive() {
+    if (this.closed || !this.mic) return;
+    if (this.mic.readyState === "ended" || this.mic.muted) void this.recoverMic();
+  }
   private inputSnapshot: string[] | null = null;
   private readonly onDeviceChange = () => void this.checkMicDevice();
 
@@ -293,6 +309,7 @@ export class MediasoupCallSession {
     // microphone throughout, so a stale MediaStreamAudioDestinationNode can never silence a later call.
     context?.addEventListener("statechange", this.onMicAudioState);
     track.addEventListener("ended", this.onMicEnded);
+    track.addEventListener("mute", this.onMicMuted);
     navigator.mediaDevices.addEventListener?.("devicechange", this.onDeviceChange);
     void navigator.mediaDevices.enumerateDevices?.().then((d) => { this.inputSnapshot ??= inputKeys(d); }).catch(() => {});
     void this.queueMicProcessorSync();
@@ -330,12 +347,14 @@ export class MediasoupCallSession {
         return;
       }
       old.removeEventListener("ended", this.onMicEnded);
+      old.removeEventListener("mute", this.onMicMuted);
       old.stop();
       const processor = this.micProcessor;
       this.micProcessor = null;
       this.mic = next;
       this.micOutbound = next;
       next.addEventListener("ended", this.onMicEnded);
+      next.addEventListener("mute", this.onMicMuted);
       await processor?.destroy();
       void this.queueMicProcessorSync();
     })().finally(() => {
@@ -602,6 +621,8 @@ export class MediasoupCallSession {
     this.recv?.close();
     this.micProcessorContext?.removeEventListener("statechange", this.onMicAudioState);
     this.mic?.removeEventListener("ended", this.onMicEnded);
+    this.mic?.removeEventListener("mute", this.onMicMuted);
+    if (this.micMuteTimer) clearTimeout(this.micMuteTimer);
     if (typeof navigator !== "undefined") navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
     this.micProcessorContext = null;
     void this.micProcessor?.destroy();

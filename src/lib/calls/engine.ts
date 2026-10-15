@@ -97,6 +97,19 @@ const mark = (n: string) => {
   }
 };
 
+/** Survives a WebView reload (unlock / lock-screen answer): the call this device accepted, so the new page rejoins it
+ *  instead of treating it as "answered elsewhere". sessionStorage is per-tab, so other devices never see it. */
+const ACCEPTED_KEY = "ol:acceptedCall";
+export function rememberAccepted(callId: string | null) {
+  try {
+    if (callId) sessionStorage.setItem(ACCEPTED_KEY, callId);
+    else sessionStorage.removeItem(ACCEPTED_KEY);
+  } catch { /* storage blocked */ }
+}
+export function acceptedBefore(callId: string): boolean {
+  try { return !!callId && sessionStorage.getItem(ACCEPTED_KEY) === callId; } catch { return false; }
+}
+
 /** Native wrappers (build 18 / 0.3.1) opt in with window.__olNativeCalls = 1; older apps never get these messages. */
 function postNative(msg: Record<string, unknown>) {
   if (typeof window === "undefined" || !(window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls) return;
@@ -270,7 +283,8 @@ export class CallEngine {
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
       if (!g.ok || !g.call) return;
       const role = g.call.callerId === this.meId ? "caller" : "callee";
-      if (g.call.phase === "active" && (role === "caller" || this.acceptedHere || this.s.call?.id === call.id)) {
+      if (g.call.phase === "active" && (role === "caller" || this.acceptedHere || this.s.call?.id === call.id || acceptedBefore(g.call.id))) {
+        if (role === "callee") this.acceptedHere = true; // this device answered before a WebView reload / unlock
         this.media = g.media ?? null;
         this.set({ call: g.call, role, ui: "connecting", connectedAt: this.s.connectedAt ?? Date.now() });
         await this.connect(true);
@@ -402,6 +416,7 @@ export class CallEngine {
     this.acceptT0 = performance.now();
     mark("accept");
     this.acceptedHere = true;
+    rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     if (this.media?.provider === "livekit") {
       if (!this.preMic) this.preMic = this.acquireMic();
@@ -1371,6 +1386,8 @@ export class CallEngine {
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
     window.addEventListener("openlounge:native-audio-resume", () => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
+      // ...and the outbound mic: an outgoing call captured it before CallKit took the session (muted → silence)
+      this.mediasoup?.checkMicAlive();
     });
     const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
     this.lastNetType = conn?.type ?? null;

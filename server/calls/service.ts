@@ -542,7 +542,7 @@ export class CallService {
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
     c.backend.close(c.id);
     this.d.appendCallMessage({ id: c.id, callerId: c.callerId, video: c.everVideo, outcome, durationSec }, c.calleeId);
-    this.d.log?.("call end", { callId: c.id, outcome, durationSec });
+    this.d.log?.("call end", { callId: c.id, outcome, durationSec, by: opts.by === c.callerId ? "caller" : opts.by === c.calleeId ? "callee" : (opts.by ?? null), reason: opts.reason ?? null });
   }
 
   private sweep() {

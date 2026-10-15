@@ -60,6 +60,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const onHide = (e: PageTransitionEvent) => {
       if (e.persisted) return; // back/forward cache: the page may come right back
+      // Native wrappers (CallKit / Android call screen) reload or re-navigate the WebView on unlock / lock-screen
+      // answer; the call itself lives on natively and the server's reconnect grace rejoins the new page. A hangup here
+      // dropped answered calls ~10 s after the callee unlocked. Real hangups come from the native end action.
+      if ((window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls) return;
       const st = callEngine?.snapshot();
       if (st?.call?.id && (st.ui === "outgoing" || st.ui === "active" || st.ui === "connecting")) socket?.emit("call:hangup", { callId: st.call.id });
     };
@@ -95,7 +99,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         if (st.ui === "incoming") void e_.accept(st.call.video ?? false);
         return st.ui === "incoming" || st.ui === "connecting" || st.ui === "active";
       }
-      if (!socket?.connected) return false;
+      if (!socket) return false;
+      // cold page still connecting (lock-screen answer right after unlock): queue the accept for the socket instead of
+      // letting the wrapper reload the page mid-answer
+      if (!socket.connected) {
+        const onConnect = () => {
+          socket.off("connect", onConnect);
+          void e_.openFromLink(callId, true);
+        };
+        socket.on("connect", onConnect);
+        return true;
+      }
       void e_.openFromLink(callId, true);
       return true;
     };

@@ -14,6 +14,8 @@ export interface UdpRecoveryOptions {
   baseBackoffMs: number;
   maxBackoffMs: number;
   udpHoldMs: number;
+  /** failures only reset after UDP has held this long: a path that drops every ~1.5 min must keep backing off */
+  resetAfterMs: number;
   /** 0..1 fraction of jitter applied to each backoff */
   jitter: number;
   random: () => number;
@@ -24,6 +26,7 @@ export const UDP_RECOVERY_DEFAULTS: UdpRecoveryOptions = {
   baseBackoffMs: 15_000,
   maxBackoffMs: 120_000,
   udpHoldMs: 30_000,
+  resetAfterMs: 300_000,
   jitter: 0.2,
   random: Math.random,
 };
@@ -53,7 +56,7 @@ export class UdpRecoveryPolicy {
   /** UDP failed/degraded (initial drop or a failed trial): the engine bridges over TCP. */
   onUdpDrop(now: number) {
     if (this.path === "ended") return;
-    if (this.path === "udp-trial" || (this.path === "udp" && this.everDropped && now - this.trialStartedAt < this.o.udpHoldMs)) this.failures++;
+    if (this.path === "udp-trial" || (this.path === "udp" && this.everDropped && now - this.trialStartedAt < this.o.resetAfterMs)) this.failures++;
     this.everDropped = true;
     this.path = "tcp";
     this.tcpStableSince = null;
@@ -92,10 +95,8 @@ export class UdpRecoveryPolicy {
 
   /** UDP transport connected during a trial; call `tick` to promote after udpHoldMs. */
   tick(now: number) {
-    if (this.path === "udp-trial" && now - this.trialStartedAt >= this.o.udpHoldMs) {
-      this.path = "udp";
-      this.failures = 0;
-    }
+    if (this.path === "udp-trial" && now - this.trialStartedAt >= this.o.udpHoldMs) this.path = "udp";
+    if (this.path === "udp" && this.everDropped && now - this.trialStartedAt >= this.o.resetAfterMs) this.failures = 0;
   }
 
   end() {
