@@ -94,7 +94,8 @@ export type PageCallMessage =
   | { type: 'call:connected'; callId: string }
   | { type: 'call:ended'; callId: string }
   | { type: 'call:muted'; muted: boolean }
-  | { type: 'call:audioRoute'; speaker: boolean };
+  | { type: 'call:audioRoute'; speaker: boolean }
+  | { type: 'call:ringbackStop' };
 
 const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -123,6 +124,9 @@ function parseCallMessage(m: Record<string, unknown>): BridgeRequest | null {
       return typeof m.muted === 'boolean' ? wrap({ type: 'call:muted', muted: m.muted }) : null;
     case 'call:audioRoute':
       return typeof m.speaker === 'boolean' ? wrap({ type: 'call:audioRoute', speaker: m.speaker }) : null;
+    case 'call:ringbackStop':
+      // the page's web ringback took over (native did not confirm playing): native must stay silent
+      return wrap({ type: 'call:ringbackStop' });
   }
   return null;
 }
@@ -317,7 +321,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       }
     };
     // build 18+: the page posts call:* messages and CallKit drives openlounge:native-call (engine.ts postNative)
-    if (${nativeCalls ? 'true' : 'false'}) { try { window.__olNativeCalls = 1; window.__olNativeRingback = 1; } catch (e) {} }
+    if (${nativeCalls ? 'true' : 'false'}) { try { window.__olNativeCalls = 1; window.__olNativeRingback = 2; } catch (e) {} }
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
     // Remember AudioContexts so audio can be resumed after an interruption (see audioResumeScript).

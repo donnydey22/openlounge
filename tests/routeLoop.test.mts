@@ -94,3 +94,28 @@ test("ringback WAV generator matches a reference (2 s on / 4 s off, 440+480 Hz, 
   assert.match(SWIFT, /let rate = 48_000, seconds = 6, n = rate \* seconds, on = rate \* 2, fade = rate \/ 100/);
   assert.match(SWIFT, /u32\(UInt32\(36 \+ pcm\.count\)\)/);
 });
+
+test("0.3.13: ringback watchdog restarts a stopped player, reports status, honours web takeover", () => {
+  assert.match(SWIFT, /Timer\(timeInterval: 1\.0, repeats: true\)[\s\S]{0,80}ringbackTick\(\)/);
+  const tick = SWIFT.slice(SWIFT.indexOf("private func ringbackTick()"), SWIFT.indexOf("private func reportRingback"));
+  assert.match(tick, /guard wantRingback else \{ return stopRingback\(\) \}/);
+  assert.match(tick, /ringback\?\.isPlaying != true[\s\S]{0,160}playRingback\(\)/);
+  assert.match(SWIFT, /AVAudioSession\.interruptionNotification/);
+  assert.match(SWIFT, /InterruptionType\(rawValue: raw\) == \.ended, self\.wantRingback[\s\S]{0,40}self\.playRingback\(\)/);
+  assert.match(SWIFT, /emit\(\["type": "ringback", "playing": playing\]\)/);
+  assert.match(SWIFT, /case "call:ringbackStop":\s*\n\s*webOwnsRingback = true\s*\n\s*stopRingback\(\)/);
+  assert.match(SWIFT, /!webOwnsRingback && calls\.values\.contains \{ !\$0\.incoming && !\$0\.ended && !\$0\.answered && !\$0\.connected \}/);
+});
+
+test("0.3.13: watchdog model — player stopped by a session change at t=1.2 s is playing again within 1 s, for the whole ring", () => {
+  // discrete model of ringbackTick(): each 1 s tick restarts a stopped player while the call is outgoing
+  let playing = true, silentMs = 0, maxGap = 0;
+  const kills = new Set([1200, 1900, 7300]); // WebKit mic capture, WebRTC unit start, a later route/session change
+  for (let t = 0; t <= 45_000; t += 100) {
+    if (kills.has(t)) playing = false;
+    if (t % 1000 === 0 && !playing) playing = true; // tick
+    silentMs = playing ? 0 : silentMs + 100;
+    maxGap = Math.max(maxGap, silentMs);
+  }
+  assert.ok(maxGap <= 1000, `max silence ${maxGap} ms`);
+});

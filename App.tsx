@@ -445,6 +445,13 @@ function Shell() {
   );
   const onCallAction = useCallback(
     (a: CallAction, coldStart: boolean) => {
+      if ((a as { type: string }).type === 'ringback') {
+        // native ringback status → page (0.3.13+): the web ring takes over if native is not actually playing
+        const playing = !!(a as unknown as { playing?: boolean }).playing;
+        if (!coldStart && everLoaded.current)
+          inject(`(function(){try{window.dispatchEvent(new CustomEvent('openlounge:native-ringback',{detail:{playing:${playing}}}))}catch(e){}})();true;`);
+        return;
+      }
       if ((a as { type: string }).type === 'audioRoute') {
         const r = a as unknown as { headset?: boolean; port?: string; name?: string; reason?: number };
         const detail = JSON.stringify({ headset: !!r.headset, port: String(r.port || ''), name: String(r.name || ''), reason: Number(r.reason || 0) });

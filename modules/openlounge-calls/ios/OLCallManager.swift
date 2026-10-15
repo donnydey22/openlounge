@@ -105,6 +105,13 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   private var callVideo = false
   /// native outgoing ringback (the page skips its own when window.__olNativeRingback is set)
   private var ringback: AVAudioPlayer?
+  /// 1 s watchdog while an outgoing call rings: restarts the player whenever it is not playing (b31 root cause: WebKit's
+  /// mic capture / WebRTC audio unit re-activating the shared AVAudioSession right after CallKit activation stopped the
+  /// AVAudioPlayer, and nothing ever restarted it) and reports {playing} to the page so the web ring can take over.
+  private var ringbackTimer: Timer?
+  private var ringbackReported: Bool?
+  /// the page's web ringback owns the tone for this call (call:ringbackStop) → native stays silent
+  private var webOwnsRingback = false
   private var pageMuted: Bool?
 
   // MARK: - lifecycle / JS
@@ -125,6 +132,9 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     NotificationCenter.default.addObserver(
       self, selector: #selector(onRouteChange(_:)),
       name: AVAudioSession.routeChangeNotification, object: nil)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(onInterruption(_:)),
+      name: AVAudioSession.interruptionNotification, object: nil)
     prepareHeadsetSession()
 
     let r = PKPushRegistry(queue: DispatchQueue.main)
@@ -508,6 +518,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       let video = (m["video"] as? Bool) ?? false
       callVideo = video
       speaker = true
+      webOwnsRingback = false
       guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { configureAudio(); return }
       var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty { name = "Open Lounge" }
@@ -574,6 +585,10 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       if let c = calls.values.first(where: { !$0.ended && ($0.answered || !$0.incoming) }) {
         controller.request(CXTransaction(action: CXSetMutedCallAction(call: c.uuid, muted: muted))) { _ in }
       }
+
+    case "call:ringbackStop":
+      webOwnsRingback = true
+      stopRingback()
 
     case "call:audioRoute":
       guard let sp = m["speaker"] as? Bool else { return }
@@ -686,24 +701,72 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     return d
   }
 
+  /// an outgoing call is still waiting for the callee and the web has not taken the ring over
+  private var wantRingback: Bool {
+    !webOwnsRingback && calls.values.contains { !$0.incoming && !$0.ended && !$0.answered && !$0.connected }
+  }
+
   private func startRingback() {
-    if ringback?.isPlaying == true { return }
+    guard wantRingback else { return }
+    if ringbackTimer == nil {
+      let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in self?.ringbackTick() }
+      RunLoop.main.add(t, forMode: .common)
+      ringbackTimer = t
+    }
+    playRingback()
+  }
+
+  private func playRingback() {
+    if ringback?.isPlaying == true { return reportRingback(true) }
+    try? AVAudioSession.sharedInstance().setActive(true)
+    if let p = ringback, p.play() { NSLog("[OLCalls] native ringback resumed"); return reportRingback(true) }
     do {
       let p = try AVAudioPlayer(data: Self.ringbackWav(), fileTypeHint: AVFileType.wav.rawValue)
       p.numberOfLoops = -1
       p.volume = 1
       p.prepareToPlay()
-      p.play()
-      ringback = p
-      NSLog("[OLCalls] native ringback started")
+      let ok = p.play()
+      ringback = p // retained for the whole ring
+      NSLog("[OLCalls] native ringback started ok=%d", ok ? 1 : 0)
+      reportRingback(ok && p.isPlaying)
     } catch {
       NSLog("[OLCalls] native ringback failed: %@", error.localizedDescription)
+      reportRingback(false)
+    }
+  }
+
+  private func ringbackTick() {
+    guard wantRingback else { return stopRingback() }
+    if ringback?.isPlaying != true {
+      NSLog("[OLCalls] ringback watchdog: not playing, restarting")
+      reportRingback(false)
+      playRingback()
+    } else {
+      reportRingback(true)
+    }
+  }
+
+  private func reportRingback(_ playing: Bool) {
+    if ringbackReported == playing && playing == false { return }
+    ringbackReported = playing
+    emit(["type": "ringback", "playing": playing])
+  }
+
+  @objc private func onInterruption(_ n: Notification) {
+    DispatchQueue.main.async {
+      guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            AVAudioSession.InterruptionType(rawValue: raw) == .ended, self.wantRingback else { return }
+      self.playRingback()
     }
   }
 
   private func stopRingback() {
+    ringbackTimer?.invalidate()
+    ringbackTimer = nil
     ringback?.stop()
     ringback = nil
+    if ringbackReported == true { emit(["type": "ringback", "playing": false]) }
+    ringbackReported = nil
   }
 
   private func restoreAudioIfIdle(force: Bool = false) {
