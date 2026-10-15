@@ -112,6 +112,8 @@ function expose() {
   if (typeof window === "undefined") return;
   const w = window as unknown as { __olRing?: RingState; __olRingLevel?: () => number };
   w.__olRing = cur ? { ...cur.state, ctx: audioContext()?.state ?? "none" } : { kind: null, video: false, since: 0, path: "none", ctx: audioContext()?.state ?? "none" };
+  // test/diagnostic hook: the ring element's playback clock (advancing = audibly playing, not just "not paused")
+  (w as unknown as { __olRingPos?: () => number }).__olRingPos = () => primedAudioElement()?.currentTime ?? -1;
   // test/diagnostic hook: RMS of what the ring is sending to the speakers right now (0 = silent)
   w.__olRingLevel = () => {
     if (cur?.state.path === "element") {
