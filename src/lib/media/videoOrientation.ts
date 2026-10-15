@@ -50,8 +50,9 @@ const browserEnvironment = (): NormalizerEnvironment | null => {
   return {
     createVideo: () => document.createElement("video"),
     createCanvas: () => document.createElement("canvas"),
-    requestFrame: requestAnimationFrame,
-    cancelFrame: cancelAnimationFrame,
+    // Bound: calling the bare global as a method throws "Illegal invocation", which silently fell back to the raw stream.
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
   };
 };
 
