@@ -23,7 +23,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "session:resume": { token: "string" },
   "session:logout": { all: "bool?" },
   ping: {},
-  "presence:visible": { visible: "bool?" },
+  "presence:visible": { visible: "bool?", hallway: "bool?" },
   "onboarding:suggestions": {},
   "rooms:list": {},
   "room:create": { title: "string?", topic: "string?", description: "string?" },

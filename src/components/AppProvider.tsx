@@ -5,6 +5,7 @@ import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
 import { native } from "@/lib/native";
 import { NATIVE_NOTIFICATION_EVENT, parseNativePushNotice } from "@/lib/nativeNotification";
+import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { bumpClock } from "@/lib/time";
 import { NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT, RealtimeClient, appVisible } from "@/lib/realtime";
@@ -133,6 +134,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [booted, setBooted] = useState(false);
   const [socket, setSocket] = useState<RealtimeClient | null>(null);
+  // Hallway presence follows the actual view: re-report whenever the route changes so leaving "/" ends the hallway state.
+  const pathname = usePathname();
+  useEffect(() => {
+    if (!socket?.connected || !(tokenRef.current || loadToken())) return;
+    socket.emit("presence:visible", { visible: appVisible(), hallway: appVisible() && pathname === "/" });
+  }, [socket, pathname]);
   const [connected, setConnected] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
@@ -265,7 +272,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (appVisible()) delete document.documentElement.dataset.hidden;
       else document.documentElement.dataset.hidden = "";
       if (!tokenRef.current && !loadToken()) return;
-      s.emit("presence:visible", { visible: appVisible() });
+      s.emit("presence:visible", { visible: appVisible(), hallway: appVisible() && window.location.pathname === "/" });
       // header chat badge: coming back to the foreground re-reads the authoritative total, so a dm:unread
       // missed while the WebView/tab was suspended (socket looked connected but events were dropped) can't stick
       if (appVisible()) {

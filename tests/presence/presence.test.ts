@@ -58,12 +58,12 @@ test("backgrounded reconnect stays offline until visibility is confirmed and ann
   assert.equal(p.statusOf("u1"), "away", "an explicitly backgrounded app is away, not online");
   assert.deepEqual(announced, []);
 
-  p.setVisible("c1", true);
+  p.setVisible("c1", true, true);
   assert.equal(p.statusOf("u1"), "online");
   assert.deepEqual(announced, [], "the stability window must elapse before the hallway callback");
   await sleep(70);
   assert.deepEqual(announced, ["u1"], "only a confirmed foreground state announces hallway presence");
-  p.setVisible("c1", true);
+  p.setVisible("c1", true, true);
   assert.deepEqual(announced, ["u1"], "duplicate foreground reports do not re-announce");
   p.stop();
 });
@@ -72,7 +72,7 @@ test("brief reconnect foreground confirmation is cancelled before it can announc
   const announced: string[] = [];
   const { p } = make(new Map(), (userId) => announced.push(userId));
   p.attach("c1", "u1", "tok");
-  p.setVisible("c1", true);
+  p.setVisible("c1", true, true);
   await sleep(20);
   p.setVisible("c1", false);
   await sleep(120);
@@ -84,7 +84,7 @@ test("brief reconnect foreground confirmation is cancelled before it can announc
 test("backgrounded socket that dies goes offline in seconds (no 120 s amber)", async () => {
   const { p } = make();
   p.attach("c1", "u1", "tok");
-  p.setVisible("c1", true);
+  p.setVisible("c1", true, true);
   p.setVisible("c1", false);
   await sleep(150);
   assert.equal(p.statusOf("u1"), "away");
@@ -161,5 +161,16 @@ test("generic interaction bump is throttled to one persist+broadcast per window;
   p.activity("u1", base + 10_001, 10_000);
   assert.equal(p.lastSeenAt("u1"), base + 10_001);
   assert.equal(persisted.length, n1 + 1);
+  p.stop();
+});
+
+test("connected + foreground but not on the hallway view is online, never announced as in the hallway", async () => {
+  const announced: string[] = [];
+  const { p } = make(new Map(), (userId) => announced.push(userId));
+  p.attach("c1", "u1", "tok");
+  p.setVisible("c1", true); // keep-alive script / DM screen / old client: no hallway flag
+  assert.equal(p.statusOf("u1"), "online", "green dot still shows");
+  await sleep(70);
+  assert.deepEqual(announced, [], "online alone is not a hallway visit");
   p.stop();
 });

@@ -487,8 +487,10 @@ export function registerRealtime(io: WsHub) {
     socket.on("ping", (_: unknown, ack: AckFn = noop) => ack({ ok: true, now: Date.now() }));
 
     // foreground/background from document.visibilitychange (Android WebView backgrounding, hidden tabs)
-    socket.on("presence:visible", ({ visible }: { visible?: boolean }, ack: AckFn = noop) => {
-      presence.setVisible(socket.id, visible !== false);
+    socket.on("presence:visible", ({ visible, hallway }: { visible?: boolean; hallway?: boolean }, ack: AckFn = noop) => {
+      // `hallway` is true only while the client is actually on the hallway view; a bare connected/visible
+      // socket (old clients, background keep-alive scripts, other pages) is online but never "in the hallway".
+      presence.setVisible(socket.id, visible !== false, hallway === true);
       socket.hidden = visible === false;
       store.setSocketVisible(socket.id, visible !== false);
       ack({ ok: true });

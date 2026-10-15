@@ -42,6 +42,8 @@ interface ConnState {
   /** false until the browser/native shell explicitly reports document/app visibility after auth */
   visibilityConfirmed: boolean;
   visible: boolean;
+  /** client reported it is currently showing the hallway view (not merely connected / foreground) */
+  inHallway: boolean;
 }
 
 export type PresenceStatus = "online" | "away" | "offline";
@@ -129,7 +131,7 @@ export class Presence {
       // A new socket must not be assumed foreground. Native WebViews can reconnect while the app is
       // backgrounded, and a server-side default of `visible: true` produced false green hallway dots.
       // The client confirms its real state immediately after session resume via presence:visible.
-      this.conns.set(connId, { userId, token, visible: false, visibilityConfirmed: false });
+      this.conns.set(connId, { userId, token, visible: false, visibilityConfirmed: false, inHallway: false });
       let set = this.byUser.get(userId);
       if (!set) this.byUser.set(userId, (set = new Set()));
       set.add(connId);
@@ -153,9 +155,12 @@ export class Presence {
   }
 
   /** Client reported foreground/background (document.visibilityState). */
-  setVisible(connId: string, visible: boolean) {
+  setVisible(connId: string, visible: boolean, inHallway = false) {
     const c = this.conns.get(connId);
     if (!c) return;
+    const wasInHallway = this.hasConfirmedForeground(c.userId);
+    c.inHallway = visible && inHallway;
+    if (wasInHallway && !this.hasConfirmedForeground(c.userId)) this.cancelHallwayPresence(c.userId);
     const changed = c.visible !== visible || !c.visibilityConfirmed;
     c.visibilityConfirmed = true;
     if (!changed) return;
@@ -203,7 +208,7 @@ export class Presence {
   private hasConfirmedForeground(userId: string) {
     for (const connId of this.byUser.get(userId) ?? []) {
       const c = this.conns.get(connId);
-      if (c?.visibilityConfirmed && c.visible) return true;
+      if (c?.visibilityConfirmed && c.visible && c.inHallway) return true;
     }
     return false;
   }
