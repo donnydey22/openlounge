@@ -130,16 +130,68 @@ function expose() {
 }
 
 /** Start the ring for either call type. Same controller for audio and video; replaces whatever was ringing. */
-/** The native wrapper plays the outgoing ringback itself (iOS 0.3.12+ AVAudioPlayer on CallKit activation, Android
- *  0.3.12+ ToneGenerator); it advertises that with window.__olNativeRingback. Older app builds and every browser keep
- *  the web ringback below. */
-export const nativeRingback = () => typeof window !== "undefined" && !!(window as unknown as { __olNativeRingback?: unknown }).__olNativeRingback;
+/** The native wrapper can play the outgoing ringback itself; it advertises that with window.__olNativeRingback.
+ *  1 = iOS/Android 0.3.12 (no status reports). iOS 0.3.12's player dies right after CallKit activation (Oct 15
+ *  13:24 PT, bc2ef950/d307ed56), so on iOS a "1" is NOT trusted: the web ringback plays. 2 = 0.3.13+: the wrapper
+ *  reports {playing} via 'openlounge:native-ringback'; the web ring takes over (and tells native to stop) whenever
+ *  native has not confirmed playing within NATIVE_CONFIRM_MS or reports it stopped for NATIVE_GAP_MS. */
+export const NATIVE_CONFIRM_MS = 4000;
+export const NATIVE_GAP_MS = 1500;
+export function nativeRingbackMode(): "off" | "trust" | "verified" {
+  if (typeof window === "undefined") return "off";
+  const v = Number((window as unknown as { __olNativeRingback?: unknown }).__olNativeRingback ?? 0);
+  if (!v) return "off";
+  if (v >= 2) return "verified";
+  return nativePlatform() === "ios" ? "off" : "trust";
+}
+export const nativeRingback = () => nativeRingbackMode() !== "off";
 
-export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: number } = {}) {
+let nativePlaying = false;
+let nativeChangedAt = 0;
+if (typeof window !== "undefined")
+  window.addEventListener("openlounge:native-ringback", (e) => {
+    const playing = !!(e as CustomEvent<{ playing?: boolean }>).detail?.playing;
+    if (playing !== nativePlaying) nativeChangedAt = Date.now();
+    nativePlaying = playing;
+  });
+
+function postNativeRingbackStop() {
+  try {
+    const w = window as unknown as { __olNativeCalls?: unknown; ReactNativeWebView?: { postMessage(s: string): void }; OpenLoungeNative?: { postMessage?(s: string): void } };
+    if (!w.__olNativeCalls) return;
+    const m = JSON.stringify({ type: "call:ringbackStop" });
+    if (w.ReactNativeWebView) w.ReactNativeWebView.postMessage(m);
+    else w.OpenLoungeNative?.postMessage?.(m);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: number; webOnly?: boolean } = {}) {
   stopTones();
-  if (kind === "outgoing" && nativeRingback()) {
+  const mode = kind === "outgoing" && !opts.webOnly ? nativeRingbackMode() : "off";
+  if (mode !== "off") {
     const state: RingState = { kind, video: !!opts.video, since: Date.now(), path: "native", ctx: "native" };
-    cur = { stop: () => {}, rearm: () => {}, state };
+    const t0 = Date.now();
+    let watch: ReturnType<typeof setInterval> | null = null;
+    if (mode === "verified") {
+      nativePlaying = false;
+      nativeChangedAt = t0;
+      watch = setInterval(() => {
+        if (cur?.state !== state) return void (watch && clearInterval(watch));
+        const now = Date.now();
+        const neverStarted = !nativePlaying && nativeChangedAt === t0 && now - t0 > NATIVE_CONFIRM_MS;
+        const stopped = !nativePlaying && nativeChangedAt !== t0 && now - nativeChangedAt > NATIVE_GAP_MS;
+        if (neverStarted || stopped) {
+          if (watch) clearInterval(watch);
+          postNativeRingbackStop(); // one owner from here on: no double tone if native recovers later
+          startRing(kind, { ...opts, webOnly: true });
+          (window as unknown as { __olRingTakeover?: string }).__olRingTakeover = neverStarted ? "never-started" : "stopped";
+          expose();
+        }
+      }, 500);
+    }
+    cur = { stop: () => { if (watch) clearInterval(watch); }, rearm: () => {}, state };
     expose();
     return;
   }

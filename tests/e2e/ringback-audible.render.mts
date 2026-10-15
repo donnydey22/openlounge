@@ -9,7 +9,7 @@ const BASE = process.env.BASE || "http://127.0.0.1:3361", WS = BASE.replace("htt
 const ph = () => `+1555${Math.floor(Math.random() * 9e6 + 1e6)}`, r = () => Math.random().toString(36).slice(2, 7);
 const sleep = (m: number) => new Promise((x) => setTimeout(x, m));
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, x = "") => { ok ? pass++ : fail++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : x); };
-type Sc = { name: string; eng: "webkit" | "chromium" | "firefox"; device?: string; bridge?: "ios" | "android"; nativeRing?: boolean; stall?: boolean };
+type Sc = { name: string; eng: "webkit" | "chromium" | "firefox"; device?: string; bridge?: "ios" | "android"; nativeRing?: boolean | number; stall?: boolean; nativeReports?: "playing" | "silent" | "dies" };
 const ALL: Sc[] = [
   { name: "iPhone Safari", eng: "webkit", device: "iPhone 13" },
   { name: "Android Chrome", eng: "chromium", device: "Pixel 7" },
@@ -17,7 +17,10 @@ const ALL: Sc[] = [
   { name: "desktop Firefox", eng: "firefox" },
   { name: "iOS app b30 (element path)", eng: "webkit", device: "iPhone 13", bridge: "ios" },
   { name: "iOS app b30 stalled element (playing but silent)", eng: "webkit", device: "iPhone 13", bridge: "ios", stall: true } as Sc,
-  { name: "iOS app 0.3.12 (native ringback)", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: true },
+  { name: "iOS app 0.3.12 (flag 1 untrusted → web ringback)", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: 1, stall: false } as Sc,
+  { name: "iOS app 0.3.13 native confirmed playing", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: 2, nativeReports: "playing" } as Sc,
+  { name: "iOS app 0.3.13 native never starts → web takeover", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: 2, nativeReports: "silent" } as Sc,
+  { name: "iOS app 0.3.13 native starts then dies → web takeover", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: 2, nativeReports: "dies" } as Sc,
   { name: "Android app 0.3.12 (native ringback)", eng: "chromium", device: "Pixel 7", bridge: "android", nativeRing: true },
 ];
 const ONLY = process.env.ONLY ? new RegExp(process.env.ONLY) : null;
@@ -46,11 +49,16 @@ for (const sc of ALL.filter((s) => !ONLY || ONLY.test(s.name))) {
     // app wrapper emulation (after sign-in, so the web session is used): platform bridge + native call messages
     if (sc.bridge) await A.p.evaluate(`(function(){var w=window,msgs=w.__olNativeMsgs=[];
       w.OpenLoungeNative={getPlatform:function(){return ${JSON.stringify(sc.bridge)}},postMessage:function(m){msgs.push(m)}};
-      w.ReactNativeWebView={postMessage:function(m){msgs.push(m)}};w.__olNativeCalls=1;${sc.nativeRing ? "w.__olNativeRingback=1;" : ""}})()`);
+      w.ReactNativeWebView={postMessage:function(m){msgs.push(m)}};w.__olNativeCalls=1;${sc.nativeRing ? `w.__olNativeRingback=${Number(sc.nativeRing)};` : ""}})()`);
     for (const P of [A.p, B.p]) { const nn = P.getByRole("button", { name: "Not now" }); if (await nn.isVisible().catch(() => false)) await nn.click(); }
     await B.p.mouse.click(5, 5); // callee had a gesture earlier in the session (audio unlock), like a real open app
     await A.p.locator("[data-testid=dm-call]:visible").first().click();
     await B.p.locator("[data-testid=call-accept]").waitFor({ timeout: 15000 });
+    const fire = (playing: boolean) => A.p.evaluate(`window.dispatchEvent(new CustomEvent('openlounge:native-ringback',{detail:{playing:${playing}}}))`);
+    if (sc.nativeReports === "playing" || sc.nativeReports === "dies") await fire(true);
+    if (sc.nativeReports === "dies") { await sleep(500); await fire(false); }
+    if (sc.nativeReports === "playing") { (async () => { for (let i = 0; i < 12; i++) { await sleep(500); await fire(true).catch(() => {}); } })(); }
+    if (sc.nativeReports === "silent" || sc.nativeReports === "dies") await sleep(4500); // takeover window
     const samples: any[] = [];
     for (let i = 0; i < 6; i++) { await sleep(800); samples.push(await ring(A.p)); }
     if (sc.stall) {
@@ -66,7 +74,11 @@ for (const sc of ALL.filter((s) => !ONLY || ONLY.test(s.name))) {
     const rbs: any[] = [];
     for (let i = 0; i < 5; i++) { rbs.push(await ring(B.p)); await sleep(300); }
     const rb = rbs.find((x) => x.level > 0 || x.path === "element") ?? rbs[0];
-    if (sc.nativeRing) {
+    if (sc.nativeReports === "silent" || sc.nativeReports === "dies") {
+      check(`${t}: web took over (ringback audible, native told to stop)`, samples.every((s) => s.kind === "outgoing" && s.path !== "native" && s.path !== "none"), JSON.stringify(samples));
+      const msgs: string[] = await A.p.evaluate(() => (window as any).__olNativeMsgs ?? []);
+      check(`${t}: call:ringbackStop posted`, msgs.some((m) => String(m).includes("call:ringbackStop")), JSON.stringify(msgs).slice(0, 300));
+    } else if (sc.nativeRing && (sc.nativeRing !== 1 || sc.bridge === "android")) {
       check(`${t}: web ringback defers to native (path=native, silent)`, samples.every((s) => s.kind === "outgoing" && s.path === "native" && s.level === 0), JSON.stringify(samples));
       const msgs: string[] = await A.p.evaluate(() => (window as any).__olNativeMsgs ?? []);
       check(`${t}: call:outgoing posted to native (starts native ringback)`, msgs.some((m) => String(m).includes("call:outgoing")), JSON.stringify(msgs).slice(0, 300));
@@ -84,7 +96,7 @@ for (const sc of ALL.filter((s) => !ONLY || ONLY.test(s.name))) {
     check(`${t}: answer connects both`, ok, st);
     const after = await ring(A.p);
     check(`${t}: ringback stopped on connect`, after.kind === null && after.level === 0, JSON.stringify(after));
-    if (sc.nativeRing) { const msgs: string[] = await A.p.evaluate(() => (window as any).__olNativeMsgs ?? []); check(`${t}: call:connected posted (stops native ringback)`, msgs.some((m) => String(m).includes("call:connected")), ""); }
+    if (sc.nativeRing && (sc.nativeRing !== 1 || sc.bridge === "android") && !sc.nativeReports?.match(/silent|dies/)) { const msgs: string[] = await A.p.evaluate(() => (window as any).__olNativeMsgs ?? []); check(`${t}: call:connected posted (stops native ringback)`, msgs.some((m) => String(m).includes("call:connected")), ""); }
     await A.p.locator("[data-testid=call-end]").first().click({ force: true }).catch(() => {});
     await sleep(2000);
     check(`${t}: no page errors`, A.errs.length + B.errs.length === 0, [...A.errs, ...B.errs].join(" | ").slice(0, 300));
