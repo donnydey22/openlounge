@@ -68,7 +68,7 @@ export function DownloadHub() {
         aria-label="Get the app"
         aria-hidden={!open}
         inert={!open}
-        className={`fixed top-0 right-0 z-50 flex h-full w-[min(24rem,88vw)] flex-col overflow-y-auto bg-zinc-950 px-5 py-8 text-sm leading-relaxed text-zinc-300 shadow-2xl transition-transform duration-300 ${open ? "translate-x-0" : "translate-x-full"}`}
+        className={`fixed top-0 right-0 z-50 flex h-full w-[min(24rem,88vw)] flex-col overflow-y-auto bg-zinc-950 px-5 pt-[calc(2rem+env(safe-area-inset-top,0px))] pb-8 text-sm leading-relaxed text-zinc-300 shadow-2xl transition-transform duration-300 ${open ? "translate-x-0" : "translate-x-full"}`}
       >
         <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="absolute top-4 right-4 rounded-full p-2 text-xl leading-none text-zinc-400 hover:text-white">
           ×

@@ -32,7 +32,7 @@ export function GroupScreen({
       data-testid={testId}
     >
       <div className="mx-auto flex h-full max-w-2xl flex-col">
-        <header data-app-header className="flex h-14 shrink-0 items-center gap-1 border-b border-white/5 px-1.5">
+        <header data-app-header className="flex h-[calc(3.5rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] shrink-0 items-center gap-1 border-b border-white/5 px-1.5">
           <button onClick={onBack} className="shrink-0 rounded-full p-2 text-zinc-300 hover:bg-white/5" aria-label="Back">
             <ChevronLeft className="h-6 w-6" />
           </button>

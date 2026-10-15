@@ -1148,7 +1148,7 @@ export function DmThread({
 
   return (
     <div className={cn("flex flex-col", className)} data-testid="dm-thread">
-      <header data-app-header className="relative flex h-16 shrink-0 items-center gap-1 border-b border-white/5 px-2">
+      <header data-app-header className="relative flex h-[calc(4rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] shrink-0 items-center gap-1 border-b border-white/5 px-2">
         {selected && (
           <div className="fade-in absolute inset-0 z-20 flex items-center bg-zinc-950 px-2" data-testid="select-bar">
             <button type="button" onClick={() => setSelected(null)} aria-label="Cancel selection" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-300 hover:bg-white/5">

@@ -139,6 +139,7 @@
 :global(html[data-call-bar]) :global(body) { padding-top: var(--ol-callbar-h); }
 :global(html[data-call-bar]) :global([data-app-header]) { padding-top: 0 !important; }
 :global(html[data-call-bar]) :global([data-app-header][class*="h-[calc(4rem"]) { height: 4rem; }
+:global(html[data-call-bar]) :global([data-app-header][class*="h-[calc(3.5rem"]) { height: 3.5rem; }
 :global(html[data-call-bar]) :global([data-app-header].sticky) { top: var(--ol-callbar-h); }
 
 .banner { animation: fadeUp 220ms ease-out both; }
