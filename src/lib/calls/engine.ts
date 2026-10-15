@@ -8,6 +8,7 @@
 import { UdpRecoveryPolicy } from "./udpRecovery";
 import { watchVideoResilience } from "./videoResilience";
 import { ensureCallReady } from "./permissions";
+import { nextElsewhere, type ElsewhereCall } from "./elsewhere";
 import { swapVideoTrack } from "./frameHold";
 import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -55,6 +56,8 @@ export interface CallSnapshot {
   needsGesture: boolean;
   /** "Bea turned on video" prompt (offer to turn on mine) */
   videoInvite: boolean;
+  /** the same account is in a call on ANOTHER device (display-only pill; never rings or takes audio here) */
+  elsewhere: ElsewhereCall | null;
   v: number;
 }
 
@@ -81,6 +84,7 @@ const initial = (): CallSnapshot => ({
   error: null,
   needsGesture: false,
   videoInvite: false,
+  elsewhere: null,
   v: 0,
 });
 
@@ -460,6 +464,11 @@ export class CallEngine {
   // ---------- server state ----------
   private onState = (d: { call: CallInfo; by?: string | null }) => {
     const call = d?.call;
+    if (call) {
+      const local = this.s.call?.id === call.id && (this.acceptedHere || this.s.role === "caller");
+      const e = nextElsewhere(this.s.elsewhere, call, this.meId, local);
+      if (e !== this.s.elsewhere) this.set({ elsewhere: e });
+    }
     if (!call || !this.s.call) return;
     if (this.s.call.id && this.s.call.id !== call.id) return;
     if (!this.s.call.id && call.callerId !== this.meId) return;
@@ -477,7 +486,7 @@ export class CallEngine {
         stopTones();
         postNative({ type: "call:ended", callId: call.id, reason: "answered_elsewhere" });
         this.teardownMedia();
-        this.set({ ...initial(), v: this.s.v + 1 });
+        this.set({ ...initial(), elsewhere: nextElsewhere(this.s.elsewhere, call, this.meId, false), v: this.s.v + 1 });
         return;
       }
       if (role === "caller" && this.s.ui === "outgoing") {

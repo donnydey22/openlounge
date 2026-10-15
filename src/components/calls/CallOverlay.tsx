@@ -374,6 +374,7 @@ export function CallOverlay() {
     return () => window.removeEventListener("keydown", k);
   }, [active]);
 
+  if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
   if (!s.ui || !s.call) return null;
   if (s.minimized && s.ui !== "incoming" && s.ui !== "ended") return <MiniBar s={s} />;
   const p = peerOf(s);
@@ -496,6 +497,22 @@ export function CallOverlay() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Same account, call running on another device: quiet pill, no ring, no audio, no controls that grab media. */
+function ElsewherePill({ e }: { e: NonNullable<CallSnapshot["elsewhere"]> }) {
+  useTicker(true);
+  const sec = Math.max(0, Math.floor((Date.now() - e.since) / 1000));
+  return (
+    <div
+      data-testid="call-elsewhere"
+      role="status"
+      aria-live="polite"
+      style={{ position: "fixed", top: "calc(env(safe-area-inset-top, 0px) + 8px)", left: "50%", transform: "translateX(-50%)", zIndex: 60, background: "#10B981", color: "#fff", borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600, boxShadow: "0 2px 10px rgba(0,0,0,.25)", pointerEvents: "none", whiteSpace: "nowrap" }}
+    >
+      {e.video ? "Video call" : "On a call"} with {e.peerName} on another device · {fmt(sec)}
     </div>
   );
 }
