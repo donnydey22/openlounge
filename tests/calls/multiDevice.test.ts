@@ -119,3 +119,42 @@ test("MD push: 3 tokens per user all receive; a failing token removes only itsel
   await n.unregisterToken("u_b", toks.web);
   assert.deepEqual((await repo.tokensFor("u_b")).map((t) => t.token), [toks.ios]);
 });
+
+test("MD-1 / in-call indicator: the caller's OTHER device and the callee's non-answering device both get call:state active (pill), then ended", async () => {
+  const a2 = await device(A);
+  const b2 = await device(B);
+  const r = await A.client.req("call:start", { peerId: id(B) });
+  assert.ok(r.ok);
+  await waitFor(() => b2.box.find((e) => e.ev === "call:incoming" && e.data.call.id === r.call.id));
+  assert.ok((await B.client.req("call:accept", { callId: r.call.id })).ok);
+  await waitFor(() => stateOf(a2.box, r.call.id, "active"), 1000);
+  await waitFor(() => stateOf(b2.box, r.call.id, "active"), 1000);
+  assert.ok((await A.client.req("call:hangup", { callId: r.call.id })).ok);
+  await waitFor(() => stateOf(a2.box, r.call.id, "ended"));
+  await waitFor(() => stateOf(b2.box, r.call.id, "ended"));
+  a2.c.close();
+  b2.c.close();
+});
+
+test("MD-6: a 4th device signing in kicks no one: all 4 get the next DM live; closing one leaves the others", async () => {
+  const devs = [{ c: B.client, box: inbox(B.client.ws) }, await device(B), await device(B), await device(B)];
+  const text = "md6 " + uniq();
+  assert.ok((await A.client.req("dm:send", { to: id(B), text })).ok);
+  for (const d of devs) await waitFor(() => d.box.find((e) => JSON.stringify(e.data ?? "").includes(text)));
+  devs[3].c.close();
+  await sleep(200);
+  const text2 = "md6b " + uniq();
+  assert.ok((await A.client.req("dm:send", { to: id(B), text: text2 })).ok);
+  for (const d of devs.slice(0, 3)) await waitFor(() => d.box.find((e) => JSON.stringify(e.data ?? "").includes(text2)));
+  devs[1].c.close();
+  devs[2].c.close();
+});
+
+test("MD-8: headset follow / mic routing starts only on the device that connects media, never while ringing", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const incoming = src.slice(src.indexOf("private onIncoming"), src.indexOf("async accept("));
+  assert.ok(!incoming.includes("followAudioDevices"), "ring path must not start headset follow");
+  const elsewhere = src.slice(src.indexOf("answered on another device"), src.indexOf("answered on another device") + 800);
+  assert.ok(elsewhere.includes("teardownMedia()"), "answered elsewhere releases any pre-acquired mic");
+});
