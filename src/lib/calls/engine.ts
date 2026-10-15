@@ -713,7 +713,10 @@ export class CallEngine {
     return this.roomPromise;
   }
 
-  private async connectMediasoup(media: CallMedia, answer: boolean): Promise<MediasoupCallSession | null> {
+  /** true while this device's direct media runs over the same SFU's ICE-TCP port (explicit fallback) */
+  private msTcp = false;
+
+  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<MediasoupCallSession | null> {
     try {
       // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
@@ -723,6 +726,7 @@ export class CallEngine {
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
         onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
+        tcpOnly,
       });
       this.mediasoup = session;
       await session.connect(this.s.camOn);
@@ -742,12 +746,27 @@ export class CallEngine {
       }
       return session;
     } catch (e) {
-      if (this.busy) {
+      if (this.busy && !tcpOnly) {
         this.netLog("ms-connect-failed");
         await this.requestTcpFallback();
       }
       return null;
     }
+  }
+
+  /** Same-SFU ICE-TCP (UDP-hostile network / ladder floor). False when the SFU has no TCP port or it can't connect. */
+  private async switchToMediasoupTcp(): Promise<boolean> {
+    if (!this.media || this.media.provider !== "mediasoup" || this.msTcp) return false;
+    const media = this.media;
+    this.clearMediasoupDegrade();
+    this.parkMediaForSwitch();
+    this.dropMediaForRejoin();
+    this.media = media;
+    const session = await this.connectMediasoup(media, true, true);
+    if (!session) return false;
+    this.msTcp = true;
+    this.netLog("ms-tcp-fallback");
+    return true;
   }
 
   private releaseLiveKitPrewarm() {
@@ -951,6 +970,8 @@ export class CallEngine {
     this.udpRecovery.onUdpDrop(Date.now());
     this.startUdpRecovery();
     try {
+      // 1) same SFU over ICE-TCP (no provider switch, peer unaffected); 2) only if that is unavailable, LiveKit
+      if (await this.switchToMediasoupTcp().catch(() => false)) return;
       const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000);
       if (!r.ok || !r.media || r.media.provider !== "livekit") throw new Error(r.error ?? "TCP fallback unavailable");
       await this.switchMedia(r.media);
@@ -1014,8 +1035,30 @@ export class CallEngine {
       if (this.room?.state === "connected" && !this.s.reconnecting) this.udpRecovery.onTcpConnected(now);
       else this.udpRecovery.onTcpUnstable();
       if (this.udpRecovery.shouldTryUdp(now)) void this.requestUdpRestore();
+    } else if (p === "mediasoup" && this.msTcp) {
+      if (this.mediasoupConnected && !this.s.reconnecting) this.udpRecovery.onTcpConnected(now);
+      else this.udpRecovery.onTcpUnstable();
+      if (this.udpRecovery.shouldTryUdp(now) && !this.restoreInFlight) void this.restoreMediasoupUdp();
     } else if (p === "mediasoup" && this.mediasoupConnected) {
       this.udpRecovery.tick(now);
+    }
+  }
+
+  /** back from same-SFU TCP to UDP (make-before-break); a failed trial stays on TCP with backoff */
+  private async restoreMediasoupUdp() {
+    if (!this.media || this.media.provider !== "mediasoup") return;
+    this.restoreInFlight = true;
+    const media = this.media;
+    try {
+      this.udpRecovery.onTrialStart(Date.now());
+      this.parkMediaForSwitch();
+      this.dropMediaForRejoin();
+      this.media = media;
+      this.msTcp = false;
+      this.netLog("media-restore-udp", { failures: this.udpRecovery.failures, from: "ms-tcp" });
+      if (!(await this.connectMediasoup(media, true))) this.udpRecovery.onTrialRefused(Date.now());
+    } finally {
+      this.restoreInFlight = false;
     }
   }
 
@@ -1431,6 +1474,7 @@ export class CallEngine {
 
   private teardownMedia() {
     stopTones();
+    this.msTcp = false;
     this.releaseParked();
     const room = this.room;
     this.room = null;

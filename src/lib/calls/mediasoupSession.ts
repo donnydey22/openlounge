@@ -83,6 +83,8 @@ export class MediasoupCallSession {
       onRemoteTrack(track: MediasoupRemoteTrack): void;
       onState(state: "connected" | "disconnected" | "failed"): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
+      /** explicit fallback: TCP-only transports on the same SFU (requires MEDIASOUP_ENABLE_TCP on the server) */
+      tcpOnly?: boolean;
     },
   ) {
     if (media.provider !== "mediasoup") throw new Error("Expected Mediasoup media");
@@ -177,8 +179,8 @@ export class MediasoupCallSession {
     this.assertActive(generation);
     this.device = device;
     const [sendOpts, recvOpts] = await Promise.all([
-      this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createSendTransport"]>[0] }>("ms:transport:create", { direction: "send" }),
-      this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createRecvTransport"]>[0] }>("ms:transport:create", { direction: "recv" }),
+      this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createSendTransport"]>[0] }>("ms:transport:create", { direction: "send", ...(this.opts.tcpOnly ? { tcpOnly: true } : {}) }),
+      this.req<{ ok: boolean; transport?: Parameters<DeviceLike["createRecvTransport"]>[0] }>("ms:transport:create", { direction: "recv", ...(this.opts.tcpOnly ? { tcpOnly: true } : {}) }),
     ]);
     if (!sendOpts.ok || !sendOpts.transport || !recvOpts.ok || !recvOpts.transport) throw new Error("Mediasoup transport setup failed");
     this.assertActive(generation);

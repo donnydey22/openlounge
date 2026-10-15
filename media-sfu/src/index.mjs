@@ -140,11 +140,16 @@ async function routeRpc(input) {
     if (direction !== "send" && direction !== "recv") throw new Error("Invalid transport direction");
     const old = s.transports.get(direction);
     old?.close();
+    // UDP-first: every transport offers UDP (preferred) plus, when MEDIASOUP_ENABLE_TCP=1, one ICE-TCP candidate on the
+    // same server, so ICE itself lands on TCP only if UDP cannot be established. tcpOnly = the app's explicit TCP
+    // fallback (netAdapt floor / repeated UDP failure) on this same SFU instead of a different provider.
+    const tcpOnly = payload.tcpOnly === true;
+    if (tcpOnly && cfg.tcpPort === null) throw new Error("TCP transport not enabled");
     const transport = await router.createWebRtcTransport({
       webRtcServer,
-      enableUdp: true,
+      enableUdp: !tcpOnly,
       enableTcp: cfg.tcpPort !== null,
-      preferUdp: true,
+      preferUdp: !tcpOnly,
       iceConsentTimeout: 15,
       initialAvailableOutgoingBitrate: 600_000,
       appData: { direction, callId, userId, connectionId },
@@ -292,7 +297,7 @@ async function main() {
     setTimeout(() => process.exit(1), 500).unref();
   });
   webRtcServer = await worker.createWebRtcServer({
-    // Direct UDP only: allowing an SFU TCP candidate would defeat the required LiveKit/TCP fallback selection.
+    // UDP range + (opt-in) one ICE-TCP port on the same public address.
     listenInfos: [
       { protocol: "udp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, portRange: { min: cfg.minPort, max: cfg.maxPort } },
       ...(cfg.tcpPort !== null ? [{ protocol: "tcp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, port: cfg.tcpPort }] : []),
