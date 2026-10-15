@@ -442,6 +442,15 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     // pauses the page's ring <audio>: the web ringback went silent the moment the call was mirrored into CallKit.
     // Tell JS so it re-runs the page's audio resume (AudioContext + ring element) on the new session.
     emit(["type": "audio", "reason": "callkit-activate"])
+    // WebKit re-binds its audio units a few hundred ms after CallKit hands over the session; a single kick can land
+    // before that and the ring <audio> / remote voice stays paused (ring "plays briefly then stops", silent audio-only
+    // call). Re-kick twice more — the page side is idempotent.
+    for delay in [0.35, 1.2] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        guard let self = self, self.hasLiveCall else { return }
+        self.emit(["type": "audio", "reason": "callkit-activate-settle"])
+      }
+    }
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {}
