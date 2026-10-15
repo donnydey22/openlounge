@@ -68,7 +68,11 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       provider: "mediasoup",
       issue: async ({ callId, userId, ttlSec }) => {
         const token = mintMediasoupAdmission({ callId, userId, nonce: randomUUID(), ttlSec });
-        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec } : null;
+        // TLS fallback path: TURN-over-TLS on 443 (turns:) relaying to this same SFU. ICE ranks relay candidates
+        // last, so direct UDP stays first, then direct ICE-TCP 40443, then TURNS/443 only on networks that allow
+        // nothing but TLS:443. Only the turns: URL is offered here to avoid extra UDP/TCP TURN allocations.
+        const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
+        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}) } : null;
       },
       relay: (input) => gw.request(input),
       close: (callId) => gw.closeCall(callId),

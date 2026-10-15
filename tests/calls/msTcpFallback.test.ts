@@ -25,3 +25,8 @@ test("engine: on same-SFU TCP, udpRecovery returns to UDP; state cleared on tear
   assert.match(eng, /p === "mediasoup" && this\.msTcp[\s\S]{0,300}restoreMediasoupUdp\(\)/);
   assert.match(eng, /private teardownMedia\(\) \{\s*\n\s*stopTones\(\);\s*\n\s*this\.msTcp = false;/);
 });
+test("server: mediasoup media carries only the TURNS/443 (TLS) relay, never plain TURN", () => {
+  const idx = readFileSync("server/calls/index.ts", "utf8");
+  assert.match(idx, /u\.startsWith\("turns:"\)/);
+  assert.match(idx, /provider: "mediasoup"[\s\S]{0,200}iceServers: turns/);
+});
