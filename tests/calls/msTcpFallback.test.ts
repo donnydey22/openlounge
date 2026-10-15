@@ -17,7 +17,7 @@ test("client asks for TCP-only transports only on the explicit fallback", () => 
   assert.equal((ses.match(/this\.opts\.tcpOnly \? \{ tcpOnly: true \} : \{\}/g) ?? []).length, 2);
 });
 test("engine: fallback tries same-SFU TCP before LiveKit; netAdapt floor uses the same requestTcpFallback", () => {
-  const fb = eng.slice(eng.indexOf("private async requestTcpFallback()"), eng.indexOf("private onMediaFallback"));
+  const fb = eng.slice(eng.indexOf("private async requestTcpFallback("), eng.indexOf("private onMediaFallback"));
   assert.ok(fb.indexOf("switchToMediasoupTcp") > 0 && fb.indexOf("switchToMediasoupTcp") < fb.indexOf("call:mediaFallback"));
   assert.match(eng, /a\.type === "tcp"[\s\S]{0,300}requestTcpFallback\(\)/);
 });
@@ -29,4 +29,8 @@ test("server: mediasoup media carries only the TURNS/443 (TLS) relay, never plai
   const idx = readFileSync("server/calls/index.ts", "utf8");
   assert.match(idx, /u\.startsWith\("turns:"\)/);
   assert.match(idx, /provider: "mediasoup"[\s\S]{0,200}iceServers: turns/);
+});
+test("engine: failed first connect (UDP + ICE-TCP both offered) skips the redundant tcpOnly retry", () => {
+  assert.match(eng, /this\.netLog\("ms-connect-failed"\);[\s\S]{0,300}requestTcpFallback\(true\)/);
+  assert.match(eng, /if \(!skipSameSfu && \(await this\.switchToMediasoupTcp\(\)/);
 });

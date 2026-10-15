@@ -748,7 +748,9 @@ export class CallEngine {
     } catch (e) {
       if (this.busy && !tcpOnly) {
         this.netLog("ms-connect-failed");
-        await this.requestTcpFallback();
+        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed first connect
+        // means that port is unreachable too: go straight to LiveKit instead of a second ~30 s tcpOnly attempt.
+        await this.requestTcpFallback(true);
       }
       return null;
     }
@@ -963,7 +965,7 @@ export class CallEngine {
     this.mediasoupDegradeTimer = null;
   }
 
-  private async requestTcpFallback() {
+  private async requestTcpFallback(skipSameSfu = false) {
     const callId = this.s.call?.id;
     if (!callId || this.fallbackInFlight || this.media?.provider !== "mediasoup") return;
     this.fallbackInFlight = true;
@@ -971,7 +973,7 @@ export class CallEngine {
     this.startUdpRecovery();
     try {
       // 1) same SFU over ICE-TCP (no provider switch, peer unaffected); 2) only if that is unavailable, LiveKit
-      if (await this.switchToMediasoupTcp().catch(() => false)) return;
+      if (!skipSameSfu && (await this.switchToMediasoupTcp().catch(() => false))) return;
       const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000);
       if (!r.ok || !r.media || r.media.provider !== "livekit") throw new Error(r.error ?? "TCP fallback unavailable");
       await this.switchMedia(r.media);
