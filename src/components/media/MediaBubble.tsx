@@ -245,7 +245,7 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
       {!viewOnceLocked && src && (
         <ThumbImage a={a} urls={urls} src={src} local={local} width={box.width} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")} />
       )}
-      {isVideo && !viewOnceLocked && !uploading && <InlineVideo a={a} urls={urls} />}
+      {isVideo && !viewOnceLocked && !uploading && !failed && a.status !== "processing" && <InlineVideo a={a} urls={urls} />}
       {viewOnceLocked && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/25 text-white">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 backdrop-blur-sm">
@@ -298,11 +298,7 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
           <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />
         </span>
       )}
-      {!uploading && !failed && isVideo && !a.gif && a.status !== "processing" && !viewOnceLocked && (
-        <span className="pointer-events-none absolute inset-0 m-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/40 text-white opacity-90">
-          <Play className="ml-0.5 h-5 w-5 fill-current" />
-        </span>
-      )}
+      {/* no play badge: <InlineVideo> autoplays muted inline from the first frame */}
       {failed && outbox?.error && <span className="absolute right-2 bottom-2 left-2 truncate rounded-md bg-black/60 px-2 py-1 text-[11px] text-white">{outbox.error}</span>}
     </div>
   );
@@ -748,58 +744,76 @@ function LocalPreviewVideo({ local, className, onLoaded }: { local: string; clas
 }
 
 /**
- * Inline playback in the chat: only GIF loops (silent, small) autoplay while on screen, and they pause whenever a real
- * video is playing (one video at a time) or data saver is on. Videos show their poster + play button and load nothing
- * until tapped (the viewer streams them adaptively).
+ * Inline playback in the chat. GIF loops and real videos both play muted + inline (playsInline / webkit-playsinline,
+ * so Android WebView, iOS WKWebView/Safari and desktop all allow autoplay) while on screen, one at a time, and pause
+ * off screen, under the full-screen viewer (exclusive playback) and on data saver. There is no play badge: the first
+ * decoded frame shows while it buffers (and stays if autoplay is refused, e.g. iOS Low Power Mode); a tap opens the
+ * viewer with sound.
  */
+export function inlineVideoSrc(a: Pick<MediaAttachment, "gif" | "status">, urls: { full?: string } | null | undefined): string | undefined {
+  if (a.status === "processing") return undefined;
+  return urls?.full;
+}
+
 function InlineVideo({ a, urls }: { a: MediaAttachment; urls: ReturnType<typeof useMediaUrls> }) {
   const [ref, visible] = useInView<HTMLVideoElement>("0px", true);
   const [playing, setPlaying] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const src = a.gif ? urls?.full : undefined;
-  const allowed = !!a.gif && !saveData();
+  const src = inlineVideoSrc(a, urls);
+  const allowed = !saveData();
   useEffect(() => {
     const on = (e: Event) => setBlocked(!!(e as CustomEvent<{ active: boolean }>).detail?.active);
     window.addEventListener(PLAYBACK_EVENT, on);
     setBlocked(exclusivePlaying());
     return () => window.removeEventListener(PLAYBACK_EVENT, on);
   }, []);
+  const mediaEl = !!src && allowed && !(a.gif && (a.mime === "image/gif" || src.includes("/original")));
   useEffect(() => {
     const v = ref.current;
     // (the ref sits on a placeholder <span> while there's nothing to play)
     if (!(v instanceof HTMLMediaElement)) return;
     if (visible && src && allowed && !blocked) {
       v.muted = true;
+      v.defaultMuted = true;
       const p = v.play();
-      if (p) p.catch(() => setPlaying(false)); // Low Power Mode / autoplay blocked: the poster stays
+      if (p) p.catch(() => setPlaying(false)); // Low Power Mode / autoplay refused: the first frame stays
     } else v.pause();
-  }, [visible, src, allowed, blocked, ref]);
-  if (!a.gif)
+  }, [visible, src, allowed, blocked, ref, mediaEl]);
+  // no play badge, ever: the first decoded frame shows while it buffers; a refused autoplay keeps that frame
+  const [frame, setFrame] = useState(false);
+  if (!src || !allowed)
     return (
-      <span className="pointer-events-none absolute inset-0 m-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm" data-testid="video-play">
-        <Play className="ml-0.5 h-6 w-6 fill-current" />
-      </span>
+      <>
+        <span ref={ref as never} className="hidden" />
+      </>
     );
-  if (!src || !allowed) return <span ref={ref as never} className="hidden" />;
-  if (a.mime === "image/gif" || src.includes("/original")) {
+  if (a.gif && (a.mime === "image/gif" || src.includes("/original"))) {
     // GIF still converting: retain the existing thumbnail until the original GIF has decoded.
     return <DecodeGatedImage src={src} className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none" testId="media-gif-inline" />;
   }
   return (
-    <video
-      ref={ref}
-      src={visible ? src : undefined}
-      muted
-      playsInline
-      loop
-      preload="none"
-      disablePictureInPicture
-      onPlaying={() => setPlaying(true)}
-      onPause={() => setPlaying(false)}
-      className={cn("pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-200", playing ? "opacity-100" : "opacity-0")}
-      // eslint-disable-next-line react/no-unknown-property
-      {...{ "webkit-playsinline": "true", "x5-playsinline": "true" }}
-    />
+    <>
+      <video
+        ref={ref}
+        src={visible ? `${src}${src.includes("#") ? "" : "#t=0.001"}` : undefined}
+        poster={BLANK_POSTER}
+        muted
+        autoPlay={visible && !blocked}
+        playsInline
+        loop
+        preload={visible ? "auto" : "none"}
+        disablePictureInPicture
+        disableRemotePlayback
+        onLoadedData={() => setFrame(true)}
+        onPlaying={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        data-testid={a.gif ? "media-gif-video" : "media-inline-video"}
+        data-playing={playing ? "1" : "0"}
+        className={cn("ol-chat-video pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-200", playing || frame ? "opacity-100" : "opacity-0")}
+        // eslint-disable-next-line react/no-unknown-property
+        {...{ "webkit-playsinline": "true", "x5-playsinline": "true" }}
+      />
+    </>
   );
 }
 
