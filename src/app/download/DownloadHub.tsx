@@ -11,10 +11,10 @@ const ANDROID = {
 };
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
-  file: "/downloads/openlounge-ios-0.3.5-b27.ipa",
-  version: "0.3.5 (build 27)",
+  file: "/downloads/openlounge-ios-0.3.9-b28.ipa",
+  version: "0.3.9 (build 28)",
   size: "8.9 MB",
-  sha256: "253fbff3578871c0c9dd0e4c0a5e88635514e7a06a4e5a54134cd9da462a0ee3",
+  sha256: "064edebbdfe95df02251d15041a4137027cea8cf1b9be42d662c2527c793f0ca",
 };
 
 function Sha({ value }: { value: string }) {
@@ -112,7 +112,7 @@ export function DownloadHub() {
             <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
           </ul>
           <p className="mt-3 text-xs text-zinc-500">
-            Direct file: <a className="underline" href={IOS.file}>openlounge-ios-0.3.5-b27.ipa</a>
+            Direct file: <a className="underline" href={IOS.file}>openlounge-ios-0.3.9-b28.ipa</a>
           </p>
           <Sha value={IOS.sha256} />
         </section>
