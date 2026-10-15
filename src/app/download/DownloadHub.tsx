@@ -105,7 +105,7 @@ export function DownloadHub() {
           >
             Install on iPhone
           </a>
-          <p className="mt-3 text-zinc-500">Latest: version 0.3.4 (build 24)</p>
+          <p className="mt-3 text-zinc-500">Latest: version {IOS.version}</p>
           <ul className="mt-3 list-disc space-y-1 pl-5 text-zinc-400">
             <li>Only iPhones registered for this test build can install it.</li>
             <li>Open this page in Safari, tap Install, then check your home screen.</li>
