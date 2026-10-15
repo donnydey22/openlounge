@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
 
 const ANDROID = {
-  file: "/downloads/openlounge-0.3.7.apk",
-  version: "0.3.7 (build 19)",
+  file: "/downloads/openlounge-0.3.9.apk",
+  version: "0.3.9 (build 21)",
   size: "6.8 MB",
-  sha256: "6fa1992216f5913322a2c749c45e200d6a7cd5fddb9c25f405840d7763b4f89c",
+  sha256: "f41fcfb3978226e8a50b5885159bdef00c3b5dec3a8e29cadef5373bdd3908a6",
 };
 const IOS = {
   install: "itms-services://?action=download-manifest&url=https://openlounge.app/downloads/openlounge-ios.plist",
