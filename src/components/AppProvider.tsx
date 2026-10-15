@@ -140,6 +140,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [unreadDms, setUnreadDms] = useState(0);
+  const unreadRef = useRef(0);
+  unreadRef.current = unreadDms;
   // app-icon badge in the native shells (Android ShortcutBadger / iOS setBadgeCount): total unread = unread DMs
   // (+ unread notifications once there is a notification inbox). Opening a DM lowers dm:unread → badge updates/clears.
   useEffect(() => {
@@ -266,11 +268,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       s.emit("presence:visible", { visible: appVisible() });
       // header chat badge: coming back to the foreground re-reads the authoritative total, so a dm:unread
       // missed while the WebView/tab was suspended (socket looked connected but events were dropped) can't stick
-      if (appVisible()) refreshUnread();
+      if (appVisible()) {
+        // iOS: the app-icon badge may have been changed by APNs (aps.badge) while suspended without the web state
+        // changing, so the effect above never re-fires. Re-assert the current total, then fetch the authoritative one.
+        try {
+          native()?.setBadge?.(unreadRef.current);
+        } catch {
+          /* older shells */
+        }
+        refreshUnread();
+      }
     };
     // conv:list acks the combined DM + group unread total (same source as dm:unread)
     const refreshUnread = () => {
-      if (!s.connected) return;
+      // iOS WKWebView: after a suspend the socket is usually dead (or half-open). Kick a reconnect now; the
+      // connect → session:resume → reportVisibility path calls back in here once it is up.
+      if (!s.connected) return void s.wake();
       s.request<{ ok?: boolean; unread?: number }>("conv:list", {}, 5000)
         .then((r) => {
           if (r?.ok && typeof r.unread === "number") setUnreadDms(r.unread);

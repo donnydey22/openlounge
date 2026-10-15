@@ -84,6 +84,8 @@ interface CallRec {
   createdAt: number;
   ackAt: number | null;
   answeredAt: number | null;
+  /** socket that answered (multi-device first-accept-wins) */
+  answeredConn?: string | null;
   endedAt: number | null;
   outcome: CallOutcome | null;
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
@@ -344,9 +346,15 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.calleeId !== userId) return { ok: false as const, error: "No such call", reason: "unknown" };
     if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
+    // Same account on several devices: the FIRST accept wins. A different, still-connected socket of the callee that
+    // accepts afterwards (simultaneous tap) is told it was answered elsewhere and gets no media credential. The same
+    // device re-accepting after a reconnect is allowed (its old socket is gone from the call's connection set).
+    if (c.phase === "active" && connId && c.answeredConn && c.answeredConn !== connId && c.conns.get(userId)?.has(c.answeredConn))
+      return { ok: false as const, error: "Answered on another device", reason: "answered_elsewhere", call: this.info(c) };
     this.bind(c, userId, connId);
     if (c.phase !== "active") {
       c.phase = "active";
+      c.answeredConn = connId ?? null;
       c.answeredAt = this.now();
       if (c.timer) clearTimeout(c.timer);
       c.timer = null;

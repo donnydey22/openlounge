@@ -20,7 +20,8 @@
 //  - Fallback: if Web Audio still isn't running 400 ms after a ring starts, the same tone (rendered to a WAV) plays on
 //    the <audio> element primed during an earlier tap.
 import { nativePlatform } from "@/lib/native";
-import { audioContext, onAudioState, ringAudioElement as primedAudioElement, resumeAudio } from "@/lib/audioUnlock";
+import { audioContext, onAudioState, resumeAudio } from "@/lib/audioUnlock";
+import { ringAudioElement as primedAudioElement, releaseRingAudio } from "@/lib/calls/ringAudio";
 
 export type RingKind = "incoming" | "outgoing";
 type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none"; ctx: string };
@@ -216,6 +217,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       e.pause();
       e.loop = false;
     }
+    releaseRingAudio();
     level = null;
   };
   cur = { stop, rearm: () => fallback(true), state };

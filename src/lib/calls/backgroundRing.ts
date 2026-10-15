@@ -7,7 +7,8 @@
 //     vibrate, Accept / Decline) and re-show it every few seconds until stop.
 //  3. presence:visible is already false for a hidden tab (realtime.appVisible), so the server also
 //     sends the push — the SW turns that into the same insistent notification.
-import { resumeAudio, primedAudioElement, audioContext } from "@/lib/audioUnlock";
+import { resumeAudio, audioContext } from "@/lib/audioUnlock";
+import { ringAudioElement } from "@/lib/calls/ringAudio";
 import { appVisible } from "@/lib/realtime";
 
 export type BackgroundRingInfo = {
@@ -39,7 +40,7 @@ function keepAudioAlive() {
   resumeAudio();
   const c = audioContext();
   if (c && c.state !== "running") void c.resume().catch(() => {});
-  const e = primedAudioElement();
+  const e = ringAudioElement();
   if (e && e.paused && e.loop) void e.play().catch(() => {});
 }
 

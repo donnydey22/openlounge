@@ -59,7 +59,12 @@ export class FcmSender implements PushSender {
             token: t.token,
             data,
             apns: msg.clear
-              ? { headers: { "apns-push-type": "background", "apns-priority": "5" }, payload: { aps: { contentAvailable: true, ...(msg.badge !== undefined ? { badge: msg.badge } : {}) } } }
+              ? // iOS ignores/throttles aps.badge on background (content-available) pushes and drops them entirely for a
+                // force-quit app, so a read on web/Android never cleared the iPhone icon. A badge-only ALERT push (no
+                // alert/sound → nothing is displayed) is applied by iOS itself, even when the app is killed.
+                msg.badge !== undefined
+                ? { headers: { "apns-push-type": "alert", "apns-priority": "5" }, payload: { aps: { badge: msg.badge } } }
+                : { headers: { "apns-push-type": "background", "apns-priority": "5" }, payload: { aps: { contentAvailable: true } } }
               : {
                   headers: { "apns-collapse-id": msg.tag.slice(0, 64), "apns-priority": "10" },
                   payload: { aps: { alert: { title: msg.title, body: msg.body }, sound: "default", threadId: msg.tag, mutableContent: true, ...(msg.badge !== undefined ? { badge: msg.badge } : {}) } },

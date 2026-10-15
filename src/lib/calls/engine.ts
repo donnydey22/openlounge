@@ -456,8 +456,11 @@ export class CallEngine {
     }
     if (call.phase === "active") {
       if (role === "callee" && !this.acceptedHere) {
-        // answered on another device
+        // answered on another device (same account): stop EVERY local ring surface within one event —
+        // in-page tone + ring element (stopTones → releaseRingAudio), the SW notification (CallProvider sync →
+        // stopBackgroundRing on ui change) and the native ring UI (CallKit / full-screen notification) here.
         stopTones();
+        postNative({ type: "call:ended", callId: call.id, reason: "answered_elsewhere" });
         this.teardownMedia();
         this.set({ ...initial(), v: this.s.v + 1 });
         return;
