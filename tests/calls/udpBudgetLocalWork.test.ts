@@ -10,3 +10,9 @@ test("mic permission prompt and mediasoup-client load do not spend the 8 s UDP c
   assert.match(src, /this\.local\(\(\) => import\("mediasoup-client"\)\)/);
   assert.match(src, /CONNECT_HARD_CAP_MS = 30_000/);
 });
+
+test("no TCP fallback while UDP ICE is still progressing (bounded by the hard cap)", () => {
+  const src = fs.readFileSync("src/lib/calls/mediasoupSession.ts", "utf8");
+  assert.match(src, /st === "connecting" \|\| st === "new"/);
+  assert.match(src, /ICE_PROGRESS_GRACE_MS = 2_000/);
+});

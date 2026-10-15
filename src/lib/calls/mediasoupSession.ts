@@ -16,6 +16,8 @@ type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 const CONNECT_TIMEOUT_MS = 8_000;
 /** Absolute ceiling for a connect including paused local work (mic permission prompt, chunk load). */
 const CONNECT_HARD_CAP_MS = 30_000;
+/** Re-check interval while UDP ICE is still progressing past the 8 s budget (no TCP while UDP is mid-handshake). */
+const ICE_PROGRESS_GRACE_MS = 2_000;
 
 /** Resolves when a mediasoup-client transport reaches "connected"; rejects on "failed"/"closed". */
 export function waitTransportConnected(t: { connectionState?: string; on(ev: "connectionstatechange", fn: (s: string) => void): unknown; off?(ev: "connectionstatechange", fn: (s: string) => void): unknown }) {
@@ -103,7 +105,18 @@ export class MediasoupCallSession {
     let fail: (e: Error) => void = () => {};
     const arm = () => {
       startedAt = Date.now();
-      timer = setTimeout(() => fail(new Error("UDP media connection timed out")), remaining);
+      timer = setTimeout(() => {
+        // UDP ICE/DTLS still progressing (candidates exchanged, checks in flight): keep waiting on UDP instead of
+        // opening a TCP window; the hard cap still bounds it, and "failed" still falls back immediately.
+        const st = (this.send as { connectionState?: string } | null)?.connectionState;
+        if (st === "connecting" || st === "new") {
+          timer = null;
+          remaining = ICE_PROGRESS_GRACE_MS;
+          arm();
+          return;
+        }
+        fail(new Error("UDP media connection timed out"));
+      }, remaining);
     };
     this.budget = {
       pause: () => {
