@@ -26,6 +26,7 @@ final class OLCall {
   var video: Bool
   var answered = false
   var answeredInPage = false
+  var connected = false
   var ended = false
   var expiresAt: Date?
   var declineToken: String?
@@ -102,9 +103,8 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   private var savedAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
   private var speaker = true
   private var callVideo = false
-  /// media is up (answered / connected). Until then the session stays in .default mode so voiceChat's AGC +
-  /// ducking never act on the ringback; .voiceChat/.videoChat only once there is a live voice path.
-  private var mediaUp = false
+  /// native outgoing ringback (the page skips its own when window.__olNativeRingback is set)
+  private var ringback: AVAudioPlayer?
   private var pageMuted: Bool?
 
   // MARK: - lifecycle / JS
@@ -395,7 +395,6 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     c.answered = true
     stopTimers(c)
     callVideo = c.video
-    mediaUp = true
     configureAudio()
     action.fulfill()
     if !c.answeredInPage { emit(["type": "answer", "callId": c.callId, "video": c.video]) }
@@ -442,6 +441,9 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
     configureAudio()
+    // outgoing call still waiting for the callee: ring back natively on the CallKit session (survives the session swap
+    // that left WKWebView's <audio>/AudioContext "playing" but silent)
+    if calls.values.contains(where: { !$0.incoming && !$0.ended && !$0.answered && !$0.connected }) { startRingback() }
     // CallKit activating the session (outgoing CXStartCallAction, or answer) interrupts WebKit's AudioContext and
     // pauses the page's ring <audio>: the web ringback went silent the moment the call was mirrored into CallKit.
     // Tell JS so it re-runs the page's audio resume (AudioContext + ring element) on the new session.
@@ -506,7 +508,6 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       let video = (m["video"] as? Bool) ?? false
       callVideo = video
       speaker = true
-      mediaUp = false // ringback: .default mode until the page reports call:connected
       guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { configureAudio(); return }
       var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty { name = "Open Lounge" }
@@ -522,6 +523,8 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
             NSLog("[OLCalls] outgoing CallKit call refused: %@", err.localizedDescription)
             self.calls[c.uuid] = nil
             self.configureAudio() // still route ringback to the speaker
+            // the page skips its ringback inside the app: without CallKit activation, ring back here directly
+            if (try? AVAudioSession.sharedInstance().setActive(true)) != nil { self.startRingback() }
             return
           }
           let u = CXCallUpdate()
@@ -537,8 +540,9 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       }
 
     case "call:connected":
-      mediaUp = true
+      stopRingback()
       if let c = call(callId) {
+        c.connected = true
         stopTimers(c)
         callVideo = c.video
         if c.incoming && !c.answered {
@@ -549,7 +553,8 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
           provider?.reportOutgoingCall(with: c.uuid, connectedAt: Date())
         }
       }
-      configureAudio()
+      // session was configured once at CallKit activation; adjusting it again after connect re-ran the voice
+      // processing unit mid-call (volume pumping). Only a real device change or a speaker tap touches it now.
 
     case "call:ended":
       let targets = calls.values.filter { !$0.ended && (callId.isEmpty || $0.callId == callId) }
@@ -560,6 +565,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
         provider?.reportCall(with: c.uuid, endedAt: Date(), reason: .remoteEnded)
       }
       pageMuted = nil
+      stopRingback()
       restoreAudioIfIdle(force: true)
 
     case "call:muted":
@@ -572,7 +578,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     case "call:audioRoute":
       guard let sp = m["speaker"] as? Bool else { return }
       speaker = sp
-      configureAudio()
+      applySpeakerOverride()
 
     default:
       return
@@ -626,7 +632,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     let headset = Self.headsetAttached()
     // never force the loudspeaker while a headset is attached; it falls back to speaker when removed
     if speaker && !headset { opts.insert(.defaultToSpeaker) }
-    let mode: AVAudioSession.Mode = mediaUp ? (callVideo ? .videoChat : .voiceChat) : .default
+    let mode: AVAudioSession.Mode = callVideo ? .videoChat : .voiceChat
     // idempotent: every redundant setCategory / override is itself a route change + voice-processing reset
     if s.category != .playAndRecord || s.mode != mode || s.categoryOptions != opts {
       do {
@@ -650,12 +656,62 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     }
   }
 
+  private func applySpeakerOverride() {
+    let s = AVAudioSession.sharedInstance()
+    let wantSpeaker = speaker && !Self.headsetAttached()
+    let onSpeaker = s.currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+    if wantSpeaker != onSpeaker { try? s.overrideOutputAudioPort(wantSpeaker ? .speaker : .none) }
+  }
+
+  /// North-American ringback (440 + 480 Hz, 2 s on / 4 s off), synthesized once as 16-bit 48 kHz mono PCM WAV.
+  static func ringbackWav() -> Data {
+    let rate = 48_000, seconds = 6, n = rate * seconds, on = rate * 2, fade = rate / 100
+    var pcm = Data(capacity: n * 2)
+    for i in 0..<n {
+      var v = 0.0
+      if i < on {
+        let t = Double(i) / Double(rate)
+        let env = min(1.0, Double(min(i, on - i)) / Double(fade))
+        v = 0.22 * env * (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t))
+      }
+      var x = Int16(max(-1, min(1, v)) * 32767).littleEndian
+      withUnsafeBytes(of: &x) { pcm.append(contentsOf: $0) }
+    }
+    var d = Data()
+    func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+    func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+    d.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + pcm.count)); d.append(contentsOf: Array("WAVE".utf8))
+    d.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(1); u32(UInt32(rate)); u32(UInt32(rate * 2)); u16(2); u16(16)
+    d.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count)); d.append(pcm)
+    return d
+  }
+
+  private func startRingback() {
+    if ringback?.isPlaying == true { return }
+    do {
+      let p = try AVAudioPlayer(data: Self.ringbackWav(), fileTypeHint: AVFileType.wav.rawValue)
+      p.numberOfLoops = -1
+      p.volume = 1
+      p.prepareToPlay()
+      p.play()
+      ringback = p
+      NSLog("[OLCalls] native ringback started")
+    } catch {
+      NSLog("[OLCalls] native ringback failed: %@", error.localizedDescription)
+    }
+  }
+
+  private func stopRingback() {
+    ringback?.stop()
+    ringback = nil
+  }
+
   private func restoreAudioIfIdle(force: Bool = false) {
     guard !hasLiveCall, let saved = savedAudio else { return }
     savedAudio = nil
     speaker = true
     callVideo = false
-    mediaUp = false
+    stopRingback()
     pageMuted = nil
     let s = AVAudioSession.sharedInstance()
     try? s.overrideOutputAudioPort(.none)

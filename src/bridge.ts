@@ -317,7 +317,7 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       }
     };
     // build 18+: the page posts call:* messages and CallKit drives openlounge:native-call (engine.ts postNative)
-    if (${nativeCalls ? 'true' : 'false'}) { try { window.__olNativeCalls = 1; } catch (e) {} }
+    if (${nativeCalls ? 'true' : 'false'}) { try { window.__olNativeCalls = 1; window.__olNativeRingback = 1; } catch (e) {} }
     Object.defineProperty(window, 'OpenLoungeNative', { configurable: false, enumerable: true, writable: false, value: Object.freeze(api) });
 
     // Remember AudioContexts so audio can be resumed after an interruption (see audioResumeScript).
