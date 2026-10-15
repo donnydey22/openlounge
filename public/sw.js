@@ -20,6 +20,56 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+/* ======================================================================================
+ * SHARED HELPERS (no feature logic)
+ * ====================================================================================== */
+
+function resolveUrl(u) {
+  try {
+    return new URL(u || "/", self.location.origin).href;
+  } catch (e) {
+    return self.location.origin + "/";
+  }
+}
+
+async function pickWindow(data) {
+  const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const same = wins.filter((c) => {
+    try {
+      return new URL(c.url).origin === self.location.origin;
+    } catch (e) {
+      return false;
+    }
+  });
+  return (
+    same.find((c) => data.clientId && c.id === data.clientId) ||
+    same.find((c) => c.focused) ||
+    same.find((c) => c.visibilityState === "visible") ||
+    same[0]
+  );
+}
+
+async function focusAndNavigate(data, url, extra) {
+  const target = await pickWindow(data);
+  if (target) {
+    try {
+      await target.focus();
+    } catch (e) {
+      /* focus can be refused; still navigate */
+    }
+    target.postMessage({ type: "openlounge:navigate", url });
+    if (extra) target.postMessage(extra);
+    return;
+  }
+  if (self.clients.openWindow) await self.clients.openWindow(url);
+}
+
+/* ======================================================================================
+ * CALLS SECTION (calling isolation, REGRESSION_PATTERN_REPORT §5). Only call_ring
+ * notifications and openlounge:call-* messages are handled here. Nothing in this section
+ * reads or closes non-call (join / every-member / DM) notifications.
+ * ====================================================================================== */
+
 const CALL_TAG_PREFIX = "call:";
 const RING_TICK_MS = 3000;
 /** @type {Map<string, { title: string, body: string, url: string, acceptUrl: string, expiresAt: number, video: boolean, timer: number|null }>} */
@@ -102,8 +152,8 @@ async function stopRing(callId) {
   }
 }
 
-self.addEventListener("message", (event) => {
-  const msg = event.data || {};
+
+function onCallMessage(msg) {
   if (msg.type === "openlounge:call-ring-start" && typeof msg.callId === "string") {
     armRing({
       callId: msg.callId,
@@ -114,87 +164,63 @@ self.addEventListener("message", (event) => {
       expiresAt: typeof msg.expiresAt === "number" ? msg.expiresAt : Date.now() + 45_000,
       video: !!msg.video,
     });
-    return;
+    return true;
   }
   if (msg.type === "openlounge:call-ring-stop") {
     void stopRing(typeof msg.callId === "string" ? msg.callId : undefined);
+    return true;
   }
+  return false;
+}
+
+function onCallNotificationClick(event, data, action) {
+  if (data.callId) void stopRing(data.callId);
+  if (action === "decline" && data.callId) {
+    // Decline without focusing or opening a window: every open client gets one decline message.
+    event.waitUntil(
+      (async () => {
+        const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        for (const c of wins) {
+          try {
+            c.postMessage({ type: "openlounge:call-decline", callId: data.callId });
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      })(),
+    );
+    return;
+  }
+  if (action === "accept") {
+    const url = resolveUrl(data.acceptUrl || data.url);
+    event.waitUntil(focusAndNavigate(data, url, { type: "openlounge:call-accept", callId: data.callId }));
+    return;
+  }
+  event.waitUntil(focusAndNavigate(data, resolveUrl(data.url)));
+}
+
+/* ======================================================================================
+ * GENERAL NOTIFICATIONS SECTION (join notifications, every-member alerts, DMs, rooms).
+ * Unchanged behavior: focus an existing tab and navigate it, else open a window.
+ * ====================================================================================== */
+
+function onGeneralNotificationClick(event, data) {
+  event.waitUntil(focusAndNavigate(data, resolveUrl(data.url)));
+}
+
+/* ======================================================================================
+ * DISPATCH
+ * ====================================================================================== */
+
+self.addEventListener("message", (event) => {
+  const msg = event.data || {};
+  onCallMessage(msg);
 });
 
 self.addEventListener("notificationclick", (event) => {
   const data = event.notification.data || {};
   const action = event.action;
   event.notification.close();
-  if (data.kind === "call_ring" && data.callId) void stopRing(data.callId);
-
-  let url = "/";
-  try {
-    if (action === "accept" && data.acceptUrl) url = new URL(data.acceptUrl, self.location.origin).href;
-    else if (action === "decline" && data.callId) {
-      // Decline without focusing or opening a window: every open client gets one decline message.
-      event.waitUntil(
-        (async () => {
-          const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-          for (const c of wins) {
-            try {
-              c.postMessage({ type: "openlounge:call-decline", callId: data.callId });
-            } catch (e) {
-              /* ignore */
-            }
-          }
-        })(),
-      );
-      return;
-    } else {
-      url = new URL(data.url || "/", self.location.origin).href;
-    }
-  } catch (e) {
-    url = self.location.origin + "/";
-  }
-
-  event.waitUntil(
-    (async () => {
-      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const same = wins.filter((c) => {
-        try {
-          return new URL(c.url).origin === self.location.origin;
-        } catch (e) {
-          return false;
-        }
-      });
-      const target =
-        same.find((c) => data.clientId && c.id === data.clientId) ||
-        same.find((c) => c.focused) ||
-        same.find((c) => c.visibilityState === "visible") ||
-        same[0];
-      if (action === "accept" || action === "" || action === undefined) {
-        if (target) {
-          try {
-            await target.focus();
-          } catch (e) {
-            /* focus can be refused; still navigate */
-          }
-          if (action === "accept") {
-            target.postMessage({ type: "openlounge:navigate", url });
-            target.postMessage({ type: "openlounge:call-accept", callId: data.callId });
-          } else {
-            target.postMessage({ type: "openlounge:navigate", url });
-          }
-          return;
-        }
-        if (self.clients.openWindow) await self.clients.openWindow(url);
-        return;
-      }
-      if (target) {
-        try {
-          await target.focus();
-        } catch (e) {
-          /* ignore */
-        }
-        target.postMessage({ type: "openlounge:navigate", url });
-        return;
-      }
-      if (self.clients.openWindow) await self.clients.openWindow(url);
-    })(),
-  );
+  if (data.kind === "call_ring") return onCallNotificationClick(event, data, action);
+  return onGeneralNotificationClick(event, data);
 });

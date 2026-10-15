@@ -14,6 +14,24 @@ let activeRoom: StartableRoom | null = null;
 let el: HTMLAudioElement | null = null;
 let elPrimed = false;
 const listeners = new Set<() => void>();
+// Other modules that own their OWN media element (e.g. calls/ringAudio.ts) prime it inside the same gesture.
+// A hook returns true once its element is primed. This file never touches those elements itself.
+const unlockHooks = new Set<() => boolean>();
+export function registerUnlockHook(f: () => boolean) {
+  unlockHooks.add(f);
+  return () => unlockHooks.delete(f);
+}
+const hooksPrimed = () => {
+  let ok = true;
+  for (const f of unlockHooks) {
+    try {
+      if (!f()) ok = false;
+    } catch {
+      ok = false;
+    }
+  }
+  return ok;
+};
 
 /** The hook registers the connected LiveKit room so taps anywhere can unlock it. */
 export function setActiveAudioRoom(room: StartableRoom | null) {
@@ -54,24 +72,6 @@ export function onAudioState(f: () => void) {
 /** A media element that was played once inside a gesture: iOS/Android WebView then let it play other sources later. */
 export function primedAudioElement(): HTMLAudioElement | null {
   return elPrimed ? el : null;
-}
-
-/** The shared element even if priming never succeeded: with sticky user activation (Chrome / Firefox / Safari after
- *  any tap on the page) play() is still allowed, so the ring fallback must try it rather than give up silently. */
-export function ringAudioElement(): HTMLAudioElement | null {
-  if (elPrimed) return el;
-  if (typeof window === "undefined" || typeof Audio === "undefined") return null;
-  try {
-    if (!el) {
-      el = new Audio();
-      el.setAttribute("playsinline", "");
-      el.preload = "auto";
-    }
-    el.muted = false;
-    return el;
-  } catch {
-    return null;
-  }
 }
 
 // 0.1 s of real (zero) samples: the old header-only WAV had an EMPTY data chunk, which Firefox (and some WebKit builds)
@@ -128,6 +128,7 @@ export function unlockAudio(): void {
   } catch {
     /* no media element */
   }
+  hooksPrimed();
   void activeRoom?.startAudio().catch(() => {});
 }
 
@@ -139,7 +140,7 @@ export function installAudioUnlock() {
   const evs = ["pointerdown", "touchend", "keydown", "click"] as const;
   const onGesture = () => {
     unlockAudio();
-    if (audioRunning() && elPrimed) disarm();
+    if (audioRunning() && elPrimed && hooksPrimed()) disarm();
   };
   let armed = false;
   const arm = () => {
