@@ -9,13 +9,14 @@ const BASE = process.env.BASE || "http://127.0.0.1:3361", WS = BASE.replace("htt
 const ph = () => `+1555${Math.floor(Math.random() * 9e6 + 1e6)}`, r = () => Math.random().toString(36).slice(2, 7);
 const sleep = (m: number) => new Promise((x) => setTimeout(x, m));
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, x = "") => { ok ? pass++ : fail++; console.log(ok ? "PASS" : "FAIL", n, ok ? "" : x); };
-type Sc = { name: string; eng: "webkit" | "chromium" | "firefox"; device?: string; bridge?: "ios" | "android"; nativeRing?: boolean };
+type Sc = { name: string; eng: "webkit" | "chromium" | "firefox"; device?: string; bridge?: "ios" | "android"; nativeRing?: boolean; stall?: boolean };
 const ALL: Sc[] = [
   { name: "iPhone Safari", eng: "webkit", device: "iPhone 13" },
   { name: "Android Chrome", eng: "chromium", device: "Pixel 7" },
   { name: "desktop Chromium", eng: "chromium" },
   { name: "desktop Firefox", eng: "firefox" },
   { name: "iOS app b30 (element path)", eng: "webkit", device: "iPhone 13", bridge: "ios" },
+  { name: "iOS app b30 stalled element (playing but silent)", eng: "webkit", device: "iPhone 13", bridge: "ios", stall: true } as Sc,
   { name: "iOS app 0.3.12 (native ringback)", eng: "webkit", device: "iPhone 13", bridge: "ios", nativeRing: true },
   { name: "Android app 0.3.12 (native ringback)", eng: "chromium", device: "Pixel 7", bridge: "android", nativeRing: true },
 ];
@@ -27,8 +28,6 @@ async function open(br: any, sc: Sc, u: any) {
   const dev = sc.device ? pw.devices[sc.device] : { viewport: { width: 1280, height: 800 } };
   const ctx = await br.newContext({ ...dev, ...(sc.eng === "chromium" ? { permissions: ["camera", "microphone"] } : {}) });
   await ctx.addInitScript(([u, sc]: any) => {
-    if (sc.bridge) (window as any).OpenLoungeNative = { getPlatform: () => sc.bridge, postMessage: (m: string) => ((window as any).__olNativeMsgs ??= []).push(m) };
-    if (sc.nativeRing) (window as any).__olNativeRingback = 1;
     if (localStorage.getItem("openlounge:uid")) return;
     localStorage.setItem("openlounge:session", u.refresh); localStorage.setItem("openlounge:access", JSON.stringify({ t: u.access, exp: Date.now() + 3e6 })); localStorage.setItem("openlounge:uid", u.uid);
   }, [u, sc]);
@@ -44,12 +43,26 @@ for (const sc of ALL.filter((s) => !ONLY || ONLY.test(s.name))) {
     const U = (x: any) => ({ refresh: x.res.refresh ?? x.res.token, access: x.res.access, uid: x.res.user.id });
     const A = await open(brA, sc, U(a)), B = await open(brB, { name: "callee", eng: "chromium" }, U(b));
     await B.p.goto(`${BASE}/messages`); await A.p.goto(`${BASE}/messages/${b.res.user.id}`); await sleep(2500);
+    // app wrapper emulation (after sign-in, so the web session is used): platform bridge + native call messages
+    if (sc.bridge) await A.p.evaluate(`(function(){var w=window,msgs=w.__olNativeMsgs=[];
+      w.OpenLoungeNative={getPlatform:function(){return ${JSON.stringify(sc.bridge)}},postMessage:function(m){msgs.push(m)}};
+      w.ReactNativeWebView={postMessage:function(m){msgs.push(m)}};w.__olNativeCalls=1;${sc.nativeRing ? "w.__olNativeRingback=1;" : ""}})()`);
     for (const P of [A.p, B.p]) { const nn = P.getByRole("button", { name: "Not now" }); if (await nn.isVisible().catch(() => false)) await nn.click(); }
     await B.p.mouse.click(5, 5); // callee had a gesture earlier in the session (audio unlock), like a real open app
     await A.p.locator("[data-testid=dm-call]:visible").first().click();
     await B.p.locator("[data-testid=call-accept]").waitFor({ timeout: 15000 });
     const samples: any[] = [];
     for (let i = 0; i < 6; i++) { await sleep(800); samples.push(await ring(A.p)); }
+    if (sc.stall) {
+      // WKWebView after a CallKit/mic session swap: element not paused but its clock frozen (no sound)
+      await A.p.evaluate(`(function(){var a=[].slice.call(document.querySelectorAll('audio'));window.__stallT=Date.now();})()`);
+      await A.p.evaluate(`(function(){var P=HTMLMediaElement.prototype;var d=Object.getOwnPropertyDescriptor(P,'currentTime');var frozen=new WeakMap();
+        Object.defineProperty(P,'currentTime',{configurable:true,get:function(){if(window.__olFreeze){if(!frozen.has(this))frozen.set(this,d.get.call(this));return frozen.get(this)}return d.get.call(this)},set:function(v){d.set.call(this,v)}});window.__olFreeze=1;})()`);
+      await sleep(4500);
+      const st = await A.p.evaluate(`({stalls:(window.__olRing||{}).stalls||0,revived:!!(window.__olRing||{}).revived,path:(window.__olRing||{}).path,level:window.__olRingLevel?window.__olRingLevel():0})`) as any;
+      check(`${t}: stall detected and element restarted`, st.stalls >= 1, JSON.stringify(st));
+      check(`${t}: Web Audio ringback revived after repeated stall`, st.revived === true, JSON.stringify(st));
+    }
     const rbs: any[] = [];
     for (let i = 0; i < 5; i++) { rbs.push(await ring(B.p)); await sleep(300); }
     const rb = rbs.find((x) => x.level > 0 || x.path === "element") ?? rbs[0];
@@ -60,7 +73,8 @@ for (const sc of ALL.filter((s) => !ONLY || ONLY.test(s.name))) {
     } else {
       check(`${t}: caller ringback active whole window`, samples.every((s) => s.kind === "outgoing" && s.path !== "none"), JSON.stringify(samples));
       const el = samples.filter((s) => s.path === "element");
-      if (el.length) check(`${t}: ringback element clock advancing (${samples[samples.length - 1].pos.toFixed(2)}s)`, el[el.length - 1].pos - el[0].pos > 2, JSON.stringify(samples));
+      if (sc.stall) { /* clock frozen on purpose; covered by the stall checks above */ }
+      else if (el.length) check(`${t}: ringback element clock advancing (${samples[samples.length - 1].pos.toFixed(2)}s)`, el[el.length - 1].pos - el[0].pos > 2, JSON.stringify(samples));
       else check(`${t}: ringback Web Audio level > 0 in on-phase`, samples.some((s) => s.level > 0.01), JSON.stringify(samples));
     }
     check(`${t}: callee ringtone playing`, rb.kind === "incoming" && (rb.level > 0 || rb.path === "element"), JSON.stringify(rb));

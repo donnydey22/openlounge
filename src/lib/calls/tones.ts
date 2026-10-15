@@ -24,7 +24,7 @@ import { audioContext, onAudioState, resumeAudio } from "@/lib/audioUnlock";
 import { ringAudioElement as primedAudioElement, releaseRingAudio } from "@/lib/calls/ringAudio";
 
 export type RingKind = "incoming" | "outgoing";
-type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none" | "native"; ctx: string };
+type RingState = { kind: RingKind | null; video: boolean; since: number; path: "webaudio" | "element" | "none" | "native"; ctx: string; stalls?: number; revived?: boolean };
 
 const RING_MAX_MS = 60_000;
 /** how long a re-arm watches the ring element clock before treating it as stalled-but-"playing" */
@@ -194,6 +194,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   const reviveWebAudio = () => {
     if (revived || !master || !c || !alive) return;
     revived = true;
+    state.revived = true;
     resumeAudio();
     master.gain.cancelScheduledValues(c.currentTime);
     master.gain.setValueAtTime(master.gain.value, c.currentTime);
@@ -224,10 +225,11 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       const stalled = !e.paused && lastPos !== null && Math.abs(pos - lastPos) < 0.05;
       lastPos = pos;
       if (e.paused || stalled || force) {
-        if (stalled) stalls++;
+        if (stalled) state.stalls = ++stalls;
         restartElement(e, align);
         // still stuck after a restart → bring the Web Audio copy (same cadence timeline) back as a safety net
         if (stalls >= 2) reviveWebAudio();
+        expose();
       }
       return;
     }
