@@ -61,12 +61,18 @@ function tone(c: BaseAudioContext, out: AudioNode, freqs: number[], at: number, 
 }
 
 /** Render N cycles of a pattern to 16-bit WAV (for the <audio> fallback). Pure JS, no OfflineAudioContext needed. */
+// The WAV holds the WHOLE ring (RING_MAX_MS of cycles), not one looped cycle: WebKit's <audio loop> leaves a gap at
+// every seam, so a one-cycle loop drifted ~20–60 ms per cycle on iPhone vs the sample-accurate Web Audio schedule on
+// Android. One long buffer has no seams; its playback position is the cadence clock (seekable to stay aligned).
+const WAV_RATE = 16000;
 function renderWav(kind: RingKind): string {
-  const rate = 22050;
+  const rate = WAV_RATE;
   const p = PATTERNS[kind];
-  const n = Math.round(p.period * rate);
+  const cycles = Math.ceil(RING_MAX_MS / 1000 / p.period);
+  const n = Math.round(p.period * cycles * rate);
   const pcm = new Float32Array(n);
-  p.render((freqs, at, dur, vol, type = "sine") => {
+  for (let k = 0; k < cycles; k++) p.render((freqs, at0, dur, vol, type = "sine") => {
+    const at = at0 + k * p.period;
     const s0 = Math.round(at * rate);
     const len = Math.round(dur * rate);
     for (let i = 0; i < len && s0 + i < n; i++) {
@@ -131,6 +137,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
   let vibTimer: ReturnType<typeof setInterval> | null = null;
   let offState: (() => void) | null = null;
   const p = PATTERNS[kind];
+  const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
   const ringMs = Math.max(3000, Math.min(RING_MAX_MS, (opts.untilMs ?? Date.now() + RING_MAX_MS) - Date.now()));
 
   if (c) {
@@ -162,19 +169,40 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     resumeAudio();
     const e = primedAudioElement();
     if (!e) return;
+    // cadence position on the ring's own timeline (t0 = startRing), so the element is never a phase-shifted restart
+    const phase = () => Math.max(0, (performance.now() - startedAt) / 1000);
+    const align = () => {
+      try {
+        const want = Math.max(0, phase() - 0.03); // Web Audio schedule starts at t0 + 30 ms
+        if (Number.isFinite(e.duration) && want < e.duration && Math.abs(e.currentTime - want) > 0.03) e.currentTime = want;
+      } catch {
+        /* not seekable yet */
+      }
+    };
     if (state.path === "element") {
-      if (e.paused) void e.play().catch(() => {}); // OS paused the looped ring: keep it going
+      if (e.paused) {
+        align(); // OS paused it (CallKit handoff): resume in step with the original cadence, not mid-gap
+        void e.play().catch(() => {});
+      }
       return;
     }
     try {
-      e.src = wavCache[kind] ??= renderWav(kind);
-      e.loop = true;
+      const src = (wavCache[kind] ??= renderWav(kind));
+      if (e.src !== src) e.src = src;
+      e.loop = false; // the WAV already spans the whole ring: no seam gaps
       e.volume = 1;
+      align();
       void e.play().then(
         () => {
           if (!alive) return e.pause();
+          align();
           state.path = "element";
-          if (master) master.gain.value = 0; // never double up if the context resumes later
+          if (master && c) {
+            // hand over on the audio clock with a 10 ms fade (no click, no double tone)
+            master.gain.cancelScheduledValues(c.currentTime);
+            master.gain.setValueAtTime(master.gain.value, c.currentTime);
+            master.gain.linearRampToValueAtTime(0, c.currentTime + 0.01);
+          }
           expose();
         },
         () => {},
@@ -183,7 +211,10 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
       /* ignore */
     }
   };
-  elTimer = setTimeout(() => fallback(), elementFirst ? 0 : 400);
+  // iOS: start the element synchronously in the same task as the ring event (a 0 ms timer added a queue hop + the
+  // play() promise before audio; Web Audio covers the first few ms and is faded out on handover)
+  if (elementFirst) fallback();
+  else elTimer = setTimeout(() => fallback(), 400);
   watchTimer = setInterval(() => fallback(), 1000);
   if (kind === "incoming" && typeof navigator !== "undefined" && "vibrate" in navigator) {
     const buzz = () => {
