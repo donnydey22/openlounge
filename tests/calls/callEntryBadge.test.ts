@@ -98,3 +98,38 @@ test("older unread messages are NOT cleared by an answered call entry arriving a
   assert.equal(await rowUnread(B.client, id(A)), 2);
   assert.equal(await total(B.client), 2);
 });
+
+test("Donny's case: four stuck call badges (audio + video, missed) across two peers each clear when opened, and the clear reaches every other device", async () => {
+  const C = await phoneLogin(app.wsUrl, phone(), { firstName: "Sam", username: `sam_${uniq()}` });
+  assert.ok((await B.client.req("dm:send", { to: id(C), text: "hi sam" })).ok);
+  assert.ok((await C.client.req("dm:send", { to: id(B), text: "hey" })).ok);
+  await B.client.req("dm:read", { peerId: id(C) });
+  await B.client.req("dm:read", { peerId: id(A) });
+  const base = await total(B.client);
+  const other = await device(B); // e.g. the phone while B.client is the web tab
+  const missed = async (from: L, video: boolean) => {
+    const r = await from.client.req("call:start", { peerId: id(B), video });
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.ok((await from.client.req("call:hangup", { callId: r.call.id })).ok);
+    await sleep(150);
+  };
+  await missed(A, false); await missed(A, true); // Keiko: audio + video
+  await missed(C, false); await missed(C, true); // Sam: audio + video
+  assert.equal(await total(B.client), base + 4);
+  assert.equal(await rowUnread(other.c, id(A)), 2);
+  assert.equal(await rowUnread(other.c, id(C)), 2);
+  // open Keiko's thread on web → phone sees 0 for Keiko, Sam's two remain
+  let n = other.box.length;
+  await B.client.req("dm:read", { peerId: id(A) });
+  let st = await waitFor(() => other.box.slice(n).find((e) => e.ev === "dm:read-state" && e.data.peerId === id(A)));
+  assert.deepEqual([st.data.unread, st.data.total], [0, base + 2]);
+  // open Sam's thread on the phone → web sees 0
+  const web = inbox(B.client.ws);
+  await other.c.req("dm:read", { peerId: id(C) });
+  st = await waitFor(() => web.find((e) => e.ev === "dm:read-state" && e.data.peerId === id(C)));
+  assert.deepEqual([st.data.unread, st.data.total], [0, base]);
+  // reconnect / resume resync: a fresh session reads the server count, not a cached one
+  const fresh = await device(B);
+  assert.equal(await total(fresh.c), base);
+  fresh.c.close(); other.c.close(); C.client.close();
+});
