@@ -2266,7 +2266,7 @@ export class Store {
     if (!callee || !this.users.has(callerId) || callee.isBot) return { ok: false, reason: "unknown", error: "This account can't be called" };
     if (this.isBlockedEither(callerId, calleeId)) return { ok: false, reason: "blocked", error: "You can't call this account." };
     const follows = this.follows.get(calleeId)?.has(callerId) ?? false;
-    if (!follows && !this.hasMessaged(calleeId, callerId))
+    if (!follows && !this.hasMessaged(calleeId, callerId) && !isCallPolicyTestPair(callerId, calleeId))
       return { ok: false, reason: "not_allowed", error: `You can call ${callee.name.split(" ")[0] || callee.name} once they message you or follow you back.` };
     return { ok: true };
   }
@@ -2676,3 +2676,19 @@ export class Store {
 }
 
 export const store = new Store();
+
+/**
+ * Narrow callPolicy exception (approved by Donny 2026-10-15): the test accounts Sam Rivera and Jordan Ellis may call
+ * Donny without the message / follow-back requirement. Only these exact caller→callee pairs; blocks still apply.
+ * Override with CALL_POLICY_TEST_PAIRS="callerId>calleeId,..." (a caller ending in "*" matches that id prefix).
+ */
+const DONNY_ID = "u_05c86a26-3707-4c45-9147-bdbdd0189b58";
+const DEFAULT_CALL_POLICY_TEST_PAIRS = `u_d437878e-*>${DONNY_ID},u_71be5050-35bc-4a38-8436-0ec8ff9b5858>${DONNY_ID}`;
+export function isCallPolicyTestPair(callerId: string, calleeId: string): boolean {
+  const raw = process.env.CALL_POLICY_TEST_PAIRS ?? DEFAULT_CALL_POLICY_TEST_PAIRS;
+  return raw.split(",").some((pair) => {
+    const [c, e] = pair.trim().split(">");
+    if (!c || !e || e !== calleeId) return false;
+    return c.endsWith("*") ? c.length > 10 && callerId.startsWith(c.slice(0, -1)) : c === callerId;
+  });
+}
