@@ -410,6 +410,7 @@ function NotificationPrompt() {
   return (
     <div
       // z-45: above page content and the header (z-30) but under modal sheets (z-50+), so it never covers a sheet's actions
+      data-ol-notif
       className="pointer-events-none fixed inset-x-0 bottom-0 z-[45] flex justify-center px-3"
       style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
     >

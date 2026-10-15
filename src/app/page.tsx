@@ -64,7 +64,7 @@ export default function HallwayPage() {
         </div>
       </main>
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center bg-gradient-to-t from-app via-app/90 to-transparent pt-10 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+      <div data-ol-bottom-dock className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center bg-gradient-to-t from-app via-app/90 to-transparent pt-10 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
         <button
           onClick={() => setCreating(true)}
           className="pointer-events-auto flex items-center gap-2 rounded-full bg-emerald-500 px-6 py-3.5 font-semibold text-on-accent shadow-lg shadow-emerald-500/20 transition hover:scale-[1.02] hover:bg-emerald-400 active:scale-95"

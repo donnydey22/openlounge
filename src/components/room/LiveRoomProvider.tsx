@@ -6,7 +6,7 @@ import { friendlyMessage, isTransient } from "@/lib/errors";
 import { markAudio, useLiveKitAudio } from "@/hooks/useLiveKitAudio";
 import { ROOM_CHAT_HISTORY, type ChatMessage, type RoomReaction, type RoomState } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { ChevronUp, Radio, SmilePlus, X } from "lucide-react";
+import { ChevronLeft, ChevronUp, Radio, SmilePlus, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -318,23 +318,100 @@ export function useLiveRoom() {
   return context;
 }
 
+export const TRAY_IDLE_MS = 5000;
+
 function LiveRoomMiniBar() {
   const { roomId, room, joined, gone, audio, leave, sendReaction, reactionTrayOpen, setReactionTrayOpen } = useLiveRoom();
   const pathname = usePathname() ?? "/";
   const router = useRouter();
+  const barRef = useRef<HTMLDivElement>(null);
   const visible = !!roomId && !!room && joined && !gone && pathname !== `/room/${roomId}`;
 
+  // Auto-tuck: after TRAY_IDLE_MS with no interaction the bar collapses into a small edge tab
+  // (the tab is still measured/reserved, so it never covers UI). Never tucks while the reaction
+  // tray is open, audio is not connected, or audio needs a tap to start. Tapping the tab reopens it.
+  const [tucked, setTucked] = useState(false);
+  const [poke, setPoke] = useState(0);
+  const holdOpen = reactionTrayOpen || audio.status !== "connected" || !!audio.needsGesture;
+  const interact = useCallback(() => setPoke((n) => n + 1), []);
+  useEffect(() => {
+    if (!visible) { setTucked(false); return; }
+    if (tucked || holdOpen) return;
+    const t = window.setTimeout(() => setTucked(true), TRAY_IDLE_MS);
+    return () => window.clearTimeout(t);
+  }, [visible, tucked, holdOpen, poke, pathname]);
+  useEffect(() => { if (holdOpen) setTucked(false); }, [holdOpen]);
+
+  // Publish the bar's real height as --ol-liveroom-bar-h and pin it to the visual viewport
+  // (above the on-screen keyboard). Pages reserve that space via globals.css so the tray
+  // never covers composers, docks, sheets, or other controls.
   useEffect(() => {
     const root = document.documentElement;
-    if (visible) root.setAttribute("data-live-room-bar", "");
-    else root.removeAttribute("data-live-room-bar");
-    return () => root.removeAttribute("data-live-room-bar");
-  }, [visible]);
+    if (!visible) {
+      root.removeAttribute("data-live-room-bar");
+      root.style.removeProperty("--ol-liveroom-bar-h");
+      return;
+    }
+    root.setAttribute("data-live-room-bar", "");
+    const el = barRef.current;
+    if (!el) {
+      return () => {
+        root.removeAttribute("data-live-room-bar");
+        root.style.removeProperty("--ol-liveroom-bar-h");
+      };
+    }
+    const sync = () => {
+      const height = Math.ceil(el.getBoundingClientRect().height);
+      root.style.setProperty("--ol-liveroom-bar-h", `${height}px`);
+      const vv = window.visualViewport;
+      // Distance from the layout viewport bottom to the visual viewport bottom (= keyboard cover).
+      const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+      el.style.bottom = `${keyboard}px`;
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", sync, { passive: true });
+    vv?.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync, { passive: true });
+    return () => {
+      ro.disconnect();
+      vv?.removeEventListener("resize", sync);
+      vv?.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+      root.removeAttribute("data-live-room-bar");
+      root.style.removeProperty("--ol-liveroom-bar-h");
+    };
+  }, [visible, reactionTrayOpen, tucked]);
 
   if (!visible || !room || !roomId) return null;
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[70] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4" data-testid="live-room-bar">
-      <div className="mx-auto max-w-2xl">
+    <div
+      ref={barRef}
+      className="fixed inset-x-0 bottom-0 z-[70] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4"
+      data-testid="live-room-bar"
+      data-tucked={tucked ? "" : undefined}
+      onPointerDown={interact}
+      onKeyDown={interact}
+      onFocus={interact}
+    >
+      {tucked ? (
+        <div className="mx-auto flex max-w-2xl justify-end">
+          <button
+            type="button"
+            onClick={() => { setTucked(false); interact(); }}
+            aria-label={`Show live room tray: ${room.title}`}
+            data-testid="live-room-tab"
+            className="ol-tray-tab flex h-8 items-center gap-1.5 rounded-full border border-emerald-400/30 bg-zinc-950/95 pl-2 pr-3 text-xs font-semibold text-emerald-300 shadow-xl backdrop-blur-xl"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            <span className="live-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Live
+          </button>
+        </div>
+      ) : (
+      <div className="ol-tray-open mx-auto max-w-2xl">
         <ReactionBar open={reactionTrayOpen} onPick={sendReaction} />
         <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-emerald-400/30 bg-zinc-950/95 p-2 shadow-2xl backdrop-blur-xl">
           <button
@@ -367,6 +444,7 @@ function LiveRoomMiniBar() {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

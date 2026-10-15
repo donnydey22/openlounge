@@ -65,7 +65,7 @@ export function Sheet({
 
   if (!open) return null;
   return (
-    <div className="group fixed inset-x-0 top-0 z-50 flex h-[100dvh] items-end justify-center sm:items-center sm:p-6" role="dialog" aria-modal>
+    <div data-ol-sheet className="group fixed inset-x-0 top-0 z-50 flex h-[100dvh] items-end justify-center sm:items-center sm:p-6" role="dialog" aria-modal>
       <div className="fade-in absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         ref={panel}
