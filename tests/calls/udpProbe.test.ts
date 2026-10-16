@@ -44,3 +44,6 @@ test("SFU gateway: ping interval + dead timeout → terminate (close handler rec
   assert.match(sfu, /clearInterval\(pinger\)/);
   assert.match(sfu, /setTimeout\(connectGateway, delay\)/);
 });
+test("SFU gateway: a reconnect handshake that hangs is terminated too", () => {
+  assert.match(sfu, /ws\.readyState === WebSocket\.CONNECTING && Date\.now\(\) - lastSeen > GATEWAY_DEAD_MS[\s\S]{0,160}ws\.terminate\(\)/);
+});

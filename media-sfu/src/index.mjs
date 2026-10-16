@@ -251,6 +251,11 @@ function connectGateway() {
   let lastSeen = Date.now();
   const seen = () => { lastSeen = Date.now(); };
   const pinger = setInterval(() => {
+    // a handshake that never completes (redeploy behind the proxy) is just as silent as a half-open socket
+    if (ws.readyState === WebSocket.CONNECTING && Date.now() - lastSeen > GATEWAY_DEAD_MS) {
+      safeLog("gateway_stale", { phase: "connecting", silentMs: Date.now() - lastSeen });
+      return ws.terminate();
+    }
     if (ws.readyState !== WebSocket.OPEN) return;
     if (Date.now() - lastSeen > GATEWAY_DEAD_MS) {
       safeLog("gateway_stale", { silentMs: Date.now() - lastSeen });
