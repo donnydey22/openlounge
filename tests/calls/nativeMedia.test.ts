@@ -95,13 +95,13 @@ test("server: native SFU connection is stable across page sockets and survives a
   const id = m.nativeConnectionFor("sock1", "u1", "n_abc12345");
   assert.equal(id, "native:u1:n_abc12345");
   const expired: string[] = [];
-  m.nativeSocketClosed("sock1", (c) => expired.push(c), 30);
+  m.nativeSocketClosed("sock1", (c: string) => void expired.push(c), 30);
   // reloaded page relays again from a new socket before the window ends → no teardown
   assert.equal(m.nativeConnectionFor("sock2", "u1", "n_abc12345"), id);
   await new Promise((r) => setTimeout(r, 60));
-  assert.deepEqual(expired, []);
+  assert.equal(expired.length, 0);
   // app gone: the new socket closes and nobody re-attaches → torn down
-  m.nativeSocketClosed("sock2", (c) => expired.push(c), 20);
+  m.nativeSocketClosed("sock2", (c: string) => void expired.push(c), 20);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(expired, [id]);
   assert.equal(m.nativeConnectionFor("sockX", "u2", "n_abc12345"), "native:u2:n_abc12345", "scoped per authenticated user");
