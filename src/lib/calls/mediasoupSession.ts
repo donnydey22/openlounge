@@ -84,6 +84,27 @@ export class MediasoupCallSession {
       if (!this.closed && this.mic?.muted) void this.recoverMic();
     }, 1_200);
   };
+  private micHandoverPending = false;
+  private lastMicRebind = 0;
+  /**
+   * The OS audio session changed hands (iOS CallKit activation / connect, after the invite went out): bind a fresh
+   * capture to the EXISTING producer (replaceTrack — no transport, no renegotiation, no wait). If the producer is not
+   * built yet, the rebind runs the moment it is.
+   */
+  rebindMic() {
+    if (this.closed) return;
+    if (!this.producers.get("audio") || !this.mic) {
+      this.micHandoverPending = true;
+      return;
+    }
+    // Desktop publishes a processed (Web Audio) track; recapturing under it left the sender silent in testing.
+    // The handover problem is a phone one (raw AEC mic, useRawDirectCallMicrophone) — desktop only recovers a dead mic.
+    if (this.micProcessor || this.micOutbound !== this.mic) return this.checkMicAlive();
+    const now = Date.now();
+    if (now - this.lastMicRebind < 300) return;
+    this.lastMicRebind = now;
+    void this.recoverMic();
+  }
   /** Native audio-session handover (CallKit activate / connect): recapture a mic that is muted or ended. */
   checkMicAlive() {
     if (this.closed || !this.mic) return;
@@ -101,6 +122,10 @@ export class MediasoupCallSession {
       onLocalVideo(track: MediaStreamTrack | null): void;
       /** explicit fallback: TCP-only transports on the same SFU (requires MEDIASOUP_ENABLE_TCP on the server) */
       tcpOnly?: boolean;
+      /** native-media only (ignored here) */
+      rebuild?: boolean;
+      /** mic captured inside the user's Call/Answer tap (Safari/web: Daily-style pre-bind); used if still live */
+      preTrack?: Promise<MediaStreamTrack | null>;
     },
   ) {
     if (media.provider !== "mediasoup") throw new Error("Expected Mediasoup media");
@@ -267,8 +292,13 @@ export class MediasoupCallSession {
 
   private async publishAudio(generation?: number) {
     if (!this.send || this.mic) return;
-    const stream = await this.local(() => navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }));
-    const track = stream.getAudioTracks()[0];
+    const pre = this.opts.preTrack ? await this.opts.preTrack.catch(() => null) : null;
+    this.opts.preTrack = undefined;
+    const track =
+      pre && pre.readyState === "live"
+        ? pre
+        : (await this.local(() => navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }))).getAudioTracks()[0];
+    if (pre && track !== pre) pre.stop();
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return;
@@ -305,6 +335,10 @@ export class MediasoupCallSession {
       return;
     }
     this.producers.set("audio", producer);
+    if (this.micHandoverPending) {
+      this.micHandoverPending = false;
+      queueMicrotask(() => this.rebindMic());
+    }
     // Desktop can restore the processed track after an interruption. Native phone calls publish the raw AEC/NS/AGC
     // microphone throughout, so a stale MediaStreamAudioDestinationNode can never silence a later call.
     context?.addEventListener("statechange", this.onMicAudioState);

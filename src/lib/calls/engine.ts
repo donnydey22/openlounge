@@ -6,6 +6,7 @@
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
+import { anyOnTcp, udpProbeDelay } from "./udpProbe";
 import { watchVideoResilience } from "./videoResilience";
 import { ensureCallReady } from "./permissions";
 import { nextElsewhere, type ElsewhereCall } from "./elsewhere";
@@ -20,6 +21,10 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
+import { NativeMediaSession, nativeMediaCmd, useNativeMedia } from "./nativeMediaSession";
+
+/** WebView media session or the iOS app's native media proxy (same surface) */
+type CallMediaSession = MediasoupCallSession | NativeMediaSession;
 import { flipCameraTrack } from "./cameraFlip";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
@@ -97,6 +102,9 @@ const mark = (n: string) => {
   }
 };
 
+/** native audio-session handovers that require the caller's mic to be re-bound to its live producer */
+export const MIC_HANDOVER_REASONS = new Set(["callkit-activate", "callkit-activate-settle", "connected", "interruption-ended"]);
+
 /** Survives a WebView reload (unlock / lock-screen answer): the call this device accepted, so the new page rejoins it
  *  instead of treating it as "answered elsewhere". sessionStorage is per-tab, so other devices never see it. */
 const ACCEPTED_KEY = "ol:acceptedCall";
@@ -140,8 +148,8 @@ export class CallEngine {
   private meId: string | null = null;
   private media: CallMedia | null = null;
   private room: Room | null = null;
-  private roomPromise: Promise<Room | MediasoupCallSession | null> | null = null;
-  private mediasoup: MediasoupCallSession | null = null;
+  private roomPromise: Promise<Room | CallMediaSession | null> | null = null;
+  private mediasoup: CallMediaSession | null = null;
   private mediasoupConnected = false;
   private mediasoupLocalVideo: MediaStreamTrack | null = null;
   private mediasoupRemoteVideo: MediaStreamTrack | null = null;
@@ -149,6 +157,10 @@ export class CallEngine {
   private qualityTimer: ReturnType<typeof setInterval> | null = null;
   private readonly qualityGuard = new QualityGuard();
   private fallbackInFlight = false;
+  /** call id whose direct (SFU) media connected at least once: from then on an outage recovers on the SFU (ICE restart
+   *  → transport rebuild, UDP primary), never by dropping into emergency LiveKit */
+  private msEverConnected: string | null = null;
+  private msRecovering = false;
   /** persistent UDP recovery: TCP is only a bridge; return to UDP with backoff + hysteresis until hang-up */
   private udpRecovery = new UdpRecoveryPolicy();
   private udpRecoveryTimer: ReturnType<typeof setInterval> | null = null;
@@ -158,6 +170,10 @@ export class CallEngine {
   /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
   private stopDeviceFollow: (() => void) | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
+  /** web/Safari callee on the UDP path: raw mic captured inside the Answer tap (handed to the session) */
+  private tapMic: Promise<MediaStreamTrack | null> | null = null;
+  /** a native audio-session handover arrived before the mediasoup session existed */
+  private micHandoverPending = false;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
   private camTrack: LocalVideoTrack | null = null;
   /** Ignore repeated taps while a mobile camera capture / sender replacement is in flight. */
@@ -196,6 +212,7 @@ export class CallEngine {
     this.stuckTimer = setTimeout(() => {
       this.stuckTimer = null;
       if (!this.s.reconnecting || !this.busy || this.rejoining || this.s.ui !== "active") return;
+      if (this.msRecovering) return void this.armStuckGuard(); // the SFU recovery loop owns this outage
       if (typeof navigator !== "undefined" && navigator.onLine === false) return void this.armStuckGuard();
       this.netLog("stuck-rejoin");
       void this.rejoin("stuck");
@@ -261,9 +278,16 @@ export class CallEngine {
   }
 
   /** after (re)connect + auth: pick up a call that is still live (page reload, network switch) */
-  async resume() {
+  async resume(attempt = 0): Promise<void> {
     try {
       const r = await this.req<{ ok: boolean; call?: CallInfo | null }>("call:current", {});
+      if (!r.ok) {
+        // socket connected but not authed yet (fresh page after a WebView reload / unlock): an "ok:false" here is
+        // NOT "no call" — retry shortly, otherwise the reloaded callee never rejoins and the call drops.
+        this.netLog("resume-retry", { attempt });
+        if (attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
+        return;
+      }
       const call = r.call;
       if (!call) {
         // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
@@ -281,7 +305,10 @@ export class CallEngine {
         return;
       }
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
-      if (!g.ok || !g.call) return;
+      if (!g.ok || !g.call) {
+        if (!g.ok && attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
+        return;
+      }
       const role = g.call.callerId === this.meId ? "caller" : "callee";
       if (g.call.phase === "active" && (role === "caller" || this.acceptedHere || this.s.call?.id === call.id || acceptedBefore(g.call.id))) {
         if (role === "callee") this.acceptedHere = true; // this device answered before a WebView reload / unlock
@@ -330,6 +357,8 @@ export class CallEngine {
     buzz("light");
     this.clearEnd();
     this.lastPeer = { id: peer.id, video };
+    this.micHandoverPending = false;
+    this.watchNativeAudio(); // native audio-session events must be heard while ringing (network watch stays connect-time)
     const now = Date.now();
     const optimistic: CallInfo = {
       id: "",
@@ -349,8 +378,12 @@ export class CallEngine {
     // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
     playRingback({ video, untilMs: ringUntil(optimistic) });
     void loadLK().catch(() => {});
-    // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip
-    this.preMic = this.acquireMic();
+    // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
+    // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
+    if (useNativeMedia(video)) {
+      this.preMic = Promise.resolve(null);
+      void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
+    } else this.preMic = this.acquireMic();
     // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
     void this.preMic.then(() => this.s.ui === "outgoing" && rearmRing(), () => this.s.ui === "outgoing" && rearmRing());
     if (video) void this.ensureCamPreview();
@@ -413,7 +446,8 @@ export class CallEngine {
     mark("ring");
     // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
     // a UDP transport before the user consents to answer.
-    if (this.media?.provider === "livekit")
+    const nativeMedia = useNativeMedia(call.video);
+    if (this.media?.provider === "livekit" && !nativeMedia)
       void loadLK()
         .then((LK) => {
           if (!this.media || this.media.provider !== "livekit" || this.s.call?.id !== call.id) return;
@@ -422,7 +456,7 @@ export class CallEngine {
           void room.prepareConnection(this.media.url, this.media.token).catch(() => {});
         })
         .catch(() => {});
-    if (this.media?.provider === "livekit")
+    if (this.media?.provider === "livekit" && !nativeMedia)
       void micPermission().then((p) => {
         if (p === "granted" && this.s.call?.id === call.id && this.s.ui === "incoming") this.preMic = this.acquireMic();
       });
@@ -439,7 +473,15 @@ export class CallEngine {
     this.acceptedHere = true;
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
-    if (this.media?.provider === "livekit") {
+    if (useNativeMedia(withVideo || call.video)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
+    else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
+      this.tapMic = navigator.mediaDevices
+        .getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS })
+        .then((st) => st.getAudioTracks()[0] ?? null)
+        .catch(() => null);
+    }
+    if (this.media?.provider === "livekit" && !useNativeMedia(withVideo || call.video)) {
       if (!this.preMic) this.preMic = this.acquireMic();
       if (withVideo) void this.ensureCamPreview();
     }
@@ -684,11 +726,12 @@ export class CallEngine {
   }
 
   /** Join the selected backend. LiveKit remains byte-for-byte the normal path unless CALL_SFU=layered selects UDP. */
-  private connect(answer: boolean): Promise<Room | MediasoupCallSession | null> {
+  private connect(answer: boolean): Promise<Room | CallMediaSession | null> {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
-    if (media.provider === "mediasoup") {
+    // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
+    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -752,12 +795,24 @@ export class CallEngine {
   /** true while this device's direct media runs over the same SFU's ICE-TCP port (explicit fallback) */
   private msTcp = false;
 
-  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<MediasoupCallSession | null> {
+  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
+      // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
+      // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
+      // gesture) instead of releasing it and capturing again later outside the gesture.
+      const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
+      if (tapMic) {
+        this.preMic = null;
+        this.tapMic = null;
+      }
       // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
       this.releaseLiveKitPrewarm();
-      const session = new MediasoupCallSession(this.socket!, media, {
+      const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
+        callId: this.s.call?.id,
+        ...(this.msRecovering ? { rebuild: true } : {}),
+        ...(tapMic ? { preTrack: tapMic.catch(() => null) } : {}),
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
@@ -765,14 +820,20 @@ export class CallEngine {
         tcpOnly,
       });
       this.mediasoup = session;
+      if (this.micHandoverPending) {
+        this.micHandoverPending = false;
+        session.rebindMic(); // runs as soon as the producer exists
+      }
       await session.connect(this.s.camOn);
       if (this.mediasoup !== session || !this.busy) {
         session.close();
         return null;
       }
       this.mediasoupConnected = true;
+      this.msEverConnected = this.s.call?.id ?? null;
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
+      this.startUdpProbe(session);
       if (answer || this.s.call?.phase === "active") {
         if (this.s.ui === "connecting") {
           this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
@@ -783,10 +844,13 @@ export class CallEngine {
       return session;
     } catch (e) {
       if (this.busy && !tcpOnly) {
-        this.netLog("ms-connect-failed");
-        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed first connect
+        const recovering = this.msRecoveryOnly();
+        this.netLog("ms-connect-failed", { recovering });
+        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed FIRST connect
         // means that port is unreachable too: go straight to LiveKit instead of a second ~30 s tcpOnly attempt.
-        await this.requestTcpFallback(true);
+        // Once this call's SFU media has worked, a failed (re)connect is a transient outage: the recovery/rejoin loop
+        // retries the SFU with backoff — never emergency LiveKit.
+        if (!recovering) await this.requestTcpFallback(true);
       }
       return null;
     }
@@ -891,7 +955,19 @@ export class CallEngine {
   }
 
   private onMediasoupState(state: "connected" | "disconnected" | "failed") {
-    if (!this.busy || this.media?.provider !== "mediasoup") return;
+    if (!this.busy) return;
+    if (this.media?.provider !== "mediasoup") {
+      // native-media app on the emergency LiveKit path: its own reconnects failed → keep reconnecting via rejoin
+      if (!(this.mediasoup instanceof NativeMediaSession)) return;
+      if (state === "connected") {
+        this.mediasoupConnected = true;
+        return void this.set({ reconnecting: false });
+      }
+      this.mediasoupConnected = false;
+      this.set({ reconnecting: true });
+      if (state === "failed" && !this.rejoining) void this.rejoin("native-lk-failed");
+      return;
+    }
     if (state === "connected") {
       this.mediasoupConnected = true;
       this.clearMediasoupDegrade();
@@ -901,20 +977,28 @@ export class CallEngine {
     this.mediasoupConnected = false;
     this.set({ reconnecting: true });
     this.netLog(`ms-${state}`);
+    if (this.msRecoveryOnly()) {
+      // persistent reconnecting on the SFU: ICE restart in place, then rebuild the transports (UDP primary)
+      this.stopQualityGuard(); // a dead path reads as "black-holed": never let that pick emergency LiveKit
+      if (this.msRecovering) return;
+      this.clearMediasoupDegrade();
+      this.mediasoupDegradeTimer = setTimeout(() => void this.recoverMediasoup(state), state === "failed" ? 0 : CallEngine.MS_RECOVER_GRACE_MS);
+      return;
+    }
     if (state === "failed") return void this.requestTcpFallback();
     this.clearMediasoupDegrade();
     this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 8_000);
   }
 
   /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */
-  private startQualityGuard(session: MediasoupCallSession) {
+  private startQualityGuard(session: CallMediaSession) {
     this.stopQualityGuard();
     this.qualityGuard.reset();
     if (nativeAdaptiveEnabled()) return this.startNetLadder(session);
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
-        if (this.mediasoup !== session) return;
+        if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const v = this.qualityGuard.push(countersFromStats(reports), { remoteMuted: this.s.remoteMuted });
         if (!v) return;
         this.stopQualityGuard();
@@ -926,7 +1010,7 @@ export class CallEngine {
 
   /** Native apps only: coordinated audio+video ladder first, TCP only when the floor still can't hold (netAdapt.ts). */
   private readonly netLadder = new NetLadder();
-  private startNetLadder(session: MediasoupCallSession) {
+  private startNetLadder(session: CallMediaSession) {
     this.netLadder.reset();
     let prev: QualityCounters | null = null;
     const w = window as unknown as { __olNetLadder?: { level: number; changes: { t: number; level: number; dir: string }[] } };
@@ -934,7 +1018,7 @@ export class CallEngine {
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
-        if (this.mediasoup !== session) return;
+        if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const cur = countersFromStats(reports);
         const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
         prev = cur;
@@ -1007,6 +1091,23 @@ export class CallEngine {
   private async requestTcpFallback(skipSameSfu = false) {
     const callId = this.s.call?.id;
     if (!callId || this.fallbackInFlight || this.media?.provider !== "mediasoup") return;
+    if (this.msRecoveryOnly()) {
+      // this call's SFU media has worked: degrade on the SAME SFU (ICE-TCP), else keep recovering there — emergency
+      // LiveKit is only for a call whose SFU media never connected (UDP and TCP both unreachable from the start)
+      if (this.msRecovering) return;
+      this.fallbackInFlight = true;
+      let ok = false;
+      try {
+        ok = !skipSameSfu && (await this.switchToMediasoupTcp().catch(() => false));
+      } finally {
+        this.fallbackInFlight = false;
+      }
+      if (ok) {
+        this.udpRecovery.onUdpDrop(Date.now());
+        this.startUdpRecovery();
+      } else void this.recoverMediasoup("tcp-unavailable");
+      return;
+    }
     this.fallbackInFlight = true;
     this.udpRecovery.onUdpDrop(Date.now());
     this.startUdpRecovery();
@@ -1215,6 +1316,128 @@ export class CallEngine {
       });
   }
 
+  // ---------- SFU outage recovery ----------
+  static MS_RECOVER_GRACE_MS = 2_000;
+  static MS_ICE_RESTART_WAITS = [0, 1500, 3000];
+  static MS_REBUILD_DELAYS = [500, 1000, 2000, 3000, 5000, 8000];
+
+  /** true once this call's SFU media has connected (or while recovering): outages stay on the SFU */
+  private msRecoveryOnly() {
+    return this.msRecovering || (!!this.msEverConnected && this.msEverConnected === this.s.call?.id);
+  }
+
+  private waitMsConnected(session: CallMediaSession, ms: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (this.mediasoup === session && this.mediasoupConnected) return resolve(true);
+        if (this.mediasoup !== session || !this.busy || Date.now() >= until) return resolve(false);
+        setTimeout(tick, 250);
+      };
+      tick();
+    });
+  }
+
+  /**
+   * Total media loss after the call's SFU media had worked (all traffic blocked, tunnel, Wi-Fi drop): keep the call
+   * and recover on the SFU — 1) fresh ICE on the live transports (cheap, keeps producers/consumers), 2) then rebuild
+   * the transports with backoff + jitter for as long as the server keeps the call. UDP stays primary (the SFU offers
+   * its ICE-TCP candidate alongside). Never falls into emergency LiveKit; ends only on hangup / server end.
+   */
+  private async recoverMediasoup(reason: string) {
+    const callId = this.s.call?.id;
+    if (this.msRecovering || this.rejoining || !this.busy || !callId || this.media?.provider !== "mediasoup") return;
+    if (this.mediasoupConnected) return;
+    this.msRecovering = true;
+    const t0 = Date.now();
+    const live = () => this.busy && this.s.call?.id === callId && this.media?.provider === "mediasoup";
+    const done = (how: string, attempt: number) => {
+      this.set({ reconnecting: false, error: null });
+      if (this.mediasoup) {
+        this.startUdpProbe(this.mediasoup);
+        if (how === "ice") this.startQualityGuard(this.mediasoup);
+      }
+      this.netLog("ms-recovered", { how, attempt, ms: Date.now() - t0 });
+    };
+    this.stopQualityGuard();
+    this.clearMediasoupDegrade();
+    this.set({ reconnecting: true });
+    this.netLog("ms-recover", { reason });
+    try {
+      const first = this.mediasoup;
+      if (first) {
+        for (const wait of CallEngine.MS_ICE_RESTART_WAITS) {
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          if (!live() || this.mediasoup !== first) break;
+          if (this.mediasoupConnected) return done("ice", 0);
+          this.netLog("ms-ice-restart");
+          await first.restartIceAll().catch(() => {});
+          if (await this.waitMsConnected(first, 2500)) return done("ice", 0);
+        }
+      }
+      let attempt = 0;
+      while (live()) {
+        const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId }, 4000).catch(() => null);
+        if (!live()) return;
+        if (g && (!g.ok || g.call?.phase === "ended")) {
+          const call = g.call ?? this.s.call;
+          if (call) this.finishLocal(g.call?.outcome ?? "completed", false, { ...call, phase: "ended" }, "connection_lost");
+          return;
+        }
+        if (g?.ok && g.media && g.media.provider !== "mediasoup") {
+          // the server moved this call (the peer's emergency fallback): follow it
+          void this.switchMedia(g.media, g.call);
+          return;
+        }
+        if (g?.ok && g.media) this.media = g.media;
+        const media: CallMedia = this.media!;
+        this.netLog("ms-rebuild", { attempt });
+        this.dropMediaForRejoin();
+        this.media = media;
+        this.msTcp = false;
+        const session = await this.connectMediasoup(media, true);
+        if (session && this.mediasoup === session && this.mediasoupConnected) {
+          if (g?.ok && g.call) this.set({ call: g.call });
+          return done("rebuild", attempt);
+        }
+        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS && attempt % 10 === 0) this.netLog("still-reconnecting", { ms: Date.now() - t0, attempt });
+        const base = CallEngine.MS_REBUILD_DELAYS[Math.min(attempt, CallEngine.MS_REBUILD_DELAYS.length - 1)];
+        await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2))));
+        attempt++;
+      }
+    } finally {
+      this.msRecovering = false;
+    }
+  }
+
+  // ---------- back to UDP (Donny: switch back automatically once UDP works) ----------
+  private udpProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopUdpProbe() {
+    if (this.udpProbeTimer) clearTimeout(this.udpProbeTimer);
+    this.udpProbeTimer = null;
+  }
+  /** Landed on the SFU's ICE-TCP pair (UDP blocked at connect, or a recovery chose TCP): probe UDP with an in-place
+   *  ICE restart on a backoff, never giving up while on TCP. The TCP pair carries audio until ICE nominates UDP, so
+   *  the switch back has no teardown and no gap. Explicit tcpOnly transports (no UDP candidates) use udpRecovery. */
+  private startUdpProbe(session: CallMediaSession, attempt = 0) {
+    this.stopUdpProbe();
+    if (this.msTcp) return;
+    this.udpProbeTimer = setTimeout(async () => {
+      this.udpProbeTimer = null;
+      if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup" || this.msTcp) return;
+      if (!this.mediasoupConnected || this.msRecovering) return this.startUdpProbe(session, attempt);
+      const reports = await session.getTransportStats().catch(() => [] as RTCStatsReport[]);
+      if (this.mediasoup !== session) return;
+      if (!anyOnTcp(reports as unknown as Parameters<typeof anyOnTcp>[0])) {
+        if (attempt) this.netLog("udp-restored", { attempt });
+        return;
+      }
+      this.netLog("udp-probe", { attempt });
+      await session.restartIceAll().catch(() => {});
+      this.startUdpProbe(session, attempt + 1);
+    }, attempt === 0 ? 1_500 : udpProbeDelay(attempt - 1));
+  }
+
   // ---------- reconnect ----------
   private rejoining = false;
   private wake: (() => void) | null = null;
@@ -1259,6 +1482,7 @@ export class CallEngine {
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
     this.stopQualityGuard();
+    this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;
@@ -1267,6 +1491,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    void this.tapMic?.then((t) => t?.stop());
+    this.tapMic = null;
     this.stopDeviceFollow?.();
     this.stopDeviceFollow = null;
     this.micTrack?.stop();
@@ -1280,14 +1506,14 @@ export class CallEngine {
 
   /** Rejoin the call's LiveKit room: re-sync with the server (call:get → still on? fresh token), reconnect, republish. */
   private async rejoin(reason: string) {
-    if (this.rejoining) return;
+    if (this.rejoining || this.msRecovering) return; // one reconnect loop at a time: SFU recovery already retries
     const callId = this.s.call?.id;
     if (!callId) return;
     this.rejoining = true;
     const t0 = Date.now();
     this.set({ reconnecting: true });
     this.dropMediaForRejoin();
-    const delays = [300, 1000, 2000, 3000, 5000];
+    const delays = [300, 1000, 2000, 3000, 5000, 8000];
     let attempt = 0;
     try {
       while (this.busy && this.s.call?.id === callId) {
@@ -1312,16 +1538,13 @@ export class CallEngine {
             this.dropMediaForRejoin();
           }
         }
-        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS) {
-          const call = this.s.call;
-          if (call?.id) void this.req("call:hangup", { callId: call.id }, 3000).catch(() => {});
-          this.teardownMedia();
-          if (call) this.endWith(call, "Call ended · connection lost", true);
-          this.netLog("gave-up", { ms: Date.now() - t0 });
-          return;
-        }
+        // Persistent reconnecting: never end the call on our own while it is still live on the server. Each pass
+        // re-runs the ladder (connect → ICE/DTLS → same-SFU TCP → TURN-TLS/LiveKit on failure); the call ends only on a
+        // hangup or when the server ends it (peer gone past its grace) — seen by call:get above.
+        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS && attempt % 10 === 0) this.netLog("still-reconnecting", { ms: Date.now() - t0, attempt });
         await new Promise<void>((r) => {
-          const t = setTimeout(r, delays[Math.min(attempt, delays.length - 1)]);
+          const base = delays[Math.min(attempt, delays.length - 1)];
+          const t = setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2)));
           this.wake = () => (clearTimeout(t), r());
         });
         this.wake = null;
@@ -1404,15 +1627,30 @@ export class CallEngine {
   private netTimer: ReturnType<typeof setTimeout> | null = null;
   /** Network changes (Wi-Fi ↔ cellular, IP change, offline/online): refresh the media path right away instead of
    *  waiting for ICE consent to time out. LiveKit resumes with an ICE restart; if it has given up, we rejoin. */
-  private watchNetwork() {
-    if (this.netWatched || typeof window === "undefined") return;
-    this.netWatched = true;
+  private nativeAudioWatched = false;
+  private watchNativeAudio() {
+    if (this.nativeAudioWatched || typeof window === "undefined") return;
+    this.nativeAudioWatched = true;
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
-    window.addEventListener("openlounge:native-audio-resume", () => {
+    window.addEventListener("openlounge:native-audio-resume", (e) => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
+      const reason = String((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "");
+      if (this.busy && this.s.role === "caller" && MIC_HANDOVER_REASONS.has(reason)) {
+        // Caller: the mic + send transport + producer were built while ringing (before CallKit owned the session).
+        // The session just changed hands → flip a fresh capture onto the existing producer right away.
+        if (this.mediasoup) this.mediasoup.rebindMic();
+        else this.micHandoverPending = true;
+        return;
+      }
       // ...and the outbound mic: an outgoing call captured it before CallKit took the session (muted → silence)
       this.mediasoup?.checkMicAlive();
     });
+  }
+
+  private watchNetwork() {
+    if (this.netWatched || typeof window === "undefined") return;
+    this.netWatched = true;
+    this.watchNativeAudio();
     const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
     this.lastNetType = conn?.type ?? null;
     this.lastNetworkTier = browserNetworkTier();
@@ -1529,6 +1767,7 @@ export class CallEngine {
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
     this.stopQualityGuard();
+    this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;
@@ -1537,6 +1776,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    void this.tapMic?.then((t) => t?.stop());
+    this.tapMic = null;
     this.stopDeviceFollow?.();
     this.stopDeviceFollow = null;
     this.micTrack?.stop();

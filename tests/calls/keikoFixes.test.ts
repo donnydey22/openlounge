@@ -38,3 +38,20 @@ test("foreground return re-checks the mic", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.match(src, /onVisibleCallAudio = \(\) => \{[\s\S]{0,300}checkMicAlive\(\)/);
 });
+
+test("caller mic handover: CallKit/connected reasons rebind the existing producer; pending until it exists", () => {
+  const eng = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
+  for (const r of ["callkit-activate", "callkit-activate-settle", "connected", "interruption-ended"]) assert.ok(eng.includes(`"${r}"`));
+  assert.match(eng, /role === "caller" && MIC_HANDOVER_REASONS\.has\(reason\)[\s\S]{0,300}rebindMic\(\)[\s\S]{0,80}micHandoverPending = true/);
+  assert.match(eng, /this\.mediasoup = session;\s*if \(this\.micHandoverPending\)[\s\S]{0,120}session\.rebindMic\(\)/);
+  assert.match(ms, /rebindMic\(\) \{[\s\S]{0,400}replaceTrack|rebindMic\(\) \{[\s\S]{0,900}this\.recoverMic\(\)/);
+  assert.match(ms, /this\.producers\.set\("audio", producer\);\s*if \(this\.micHandoverPending\)/);
+});
+
+test("resume retries when call:current acks ok:false (socket not authed yet after a WebView reload)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const assert = (await import("node:assert/strict")).default;
+  assert.match(src, /async resume\(attempt = 0\)[\s\S]{0,300}if \(!r\.ok\)[\s\S]{0,400}this\.resume\(attempt \+ 1\)/);
+});

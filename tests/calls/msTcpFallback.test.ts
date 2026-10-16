@@ -31,6 +31,6 @@ test("server: mediasoup media carries only the TURNS/443 (TLS) relay, never plai
   assert.match(idx, /provider: "mediasoup"[\s\S]{0,200}iceServers: turns/);
 });
 test("engine: failed first connect (UDP + ICE-TCP both offered) skips the redundant tcpOnly retry", () => {
-  assert.match(eng, /this\.netLog\("ms-connect-failed"\);[\s\S]{0,300}requestTcpFallback\(true\)/);
+  assert.match(eng, /this\.netLog\("ms-connect-failed", \{ recovering \}\);[\s\S]{0,500}if \(!recovering\) await this\.requestTcpFallback\(true\)/);
   assert.match(eng, /if \(!skipSameSfu && \(await this\.switchToMediasoupTcp\(\)/);
 });

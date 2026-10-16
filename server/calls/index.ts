@@ -47,7 +47,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   svc?.dispose();
   if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
   const gw = mediaGateway();
-  gw.setNotifier(({ connectionId, event, data }) => io.get(connectionId)?.emit(event, data));
+  // native-media connections (iOS app owns the SFU peer) are delivered to whichever page socket currently relays them
+  gw.setNotifier(({ connectionId, event, data }) => io.get(nativeConns.get(connectionId)?.socketId ?? connectionId)?.emit(event, data));
   const liveKitBackend = (): CallMediaBackend | null => {
     if (!livekit.enabled) return null;
     return {
@@ -135,6 +136,47 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   return svc;
 }
 
+/**
+ * iOS native call media: the app's SFU peer outlives the WebView page that relays its signaling. Its connection id is
+ * `native:<userId>:<nativeConn>` (stable across page reloads) instead of the socket id. When the relaying socket closes
+ * the peer is kept for NATIVE_REATTACH_MS so a reloaded page re-attaches; otherwise it is torn down as before.
+ */
+export const NATIVE_REATTACH_MS = 45_000;
+const NATIVE_CONN = /^n_[A-Za-z0-9]{6,40}$/;
+const nativeConns = new Map<string, { userId: string; socketId: string; timer: NodeJS.Timeout | null }>();
+
+/** resolve the SFU connection id for a relayed ms:* request (exported for tests) */
+export function nativeConnectionFor(socketId: string, userId: string, nativeConn: unknown): string | null {
+  if (nativeConn === undefined) return socketId;
+  if (typeof nativeConn !== "string" || !NATIVE_CONN.test(nativeConn)) return null;
+  const id = `native:${userId}:${nativeConn}`;
+  const cur = nativeConns.get(id);
+  if (cur && cur.userId !== userId) return null;
+  if (cur?.timer) clearTimeout(cur.timer);
+  nativeConns.set(id, { userId, socketId, timer: null });
+  return id;
+}
+
+/** the relaying socket closed: keep native peers it carried for a re-attach window, then clean up */
+export function nativeSocketClosed(socketId: string, onExpire: (connectionId: string, userId: string) => void, ms = NATIVE_REATTACH_MS) {
+  for (const [id, e] of nativeConns) {
+    if (e.socketId !== socketId || e.timer) continue;
+    e.timer = setTimeout(() => {
+      const cur = nativeConns.get(id);
+      if (cur !== e || cur.socketId !== socketId) return; // re-attached from a new page meanwhile
+      nativeConns.delete(id);
+      onExpire(id, e.userId);
+    }, ms);
+    e.timer.unref?.();
+  }
+}
+
+export function nativeConnLeft(connectionId: string) {
+  const e = nativeConns.get(connectionId);
+  if (e?.timer) clearTimeout(e.timer);
+  nativeConns.delete(connectionId);
+}
+
 /** Per-connection handlers. `authed` is realtime.ts's guard (acks "Not signed in"). */
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void) {
   const s = () => svc!;
@@ -145,6 +187,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.onClose(() => {
     mediaGateway().closeConnection(socket.id);
     if (callUser) svc?.connClosed(socket.id, callUser);
+    nativeSocketClosed(socket.id, (connectionId, userId) => {
+      mediaGateway().closeConnection(connectionId);
+      svc?.connClosed(connectionId, userId);
+    });
   });
   // This is the sole gateway authentication route. It is intentionally outside `authed`: the SFU has no user session,
   // but must prove knowledge of a server-only secret before it can receive any brokered media command.
@@ -194,11 +240,14 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   );
   const relay = (method: string) => (input: { callId?: string; [key: string]: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
-      const { callId, ...payload } = input ?? {};
+      const { callId, nativeConn, ...payload } = input ?? {};
       if (typeof callId !== "string") return ack({ ok: false, error: "callId required" });
+      const connectionId = nativeConnectionFor(socket.id, uid, nativeConn);
+      if (!connectionId) return ack({ ok: false, error: "bad native connection" });
       callUser = uid;
+      if (method === "leave" && connectionId !== socket.id) nativeConnLeft(connectionId);
       void s()
-        .mediaRequest(callId, uid, socket.id, method, payload)
+        .mediaRequest(callId, uid, connectionId, method, payload)
         .then((r) => {
           if (!r.ok) return ack(r);
           const value = r.result;

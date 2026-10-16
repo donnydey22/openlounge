@@ -7,6 +7,11 @@ import { readConfig } from "./config.mjs";
 const cfg = readConfig();
 const MAX_FRAME = 256_000;
 const RECONNECT_DELAYS = [500, 1_000, 2_000, 5_000, 10_000];
+// Gateway liveness: a proxy/redeploy can leave the control socket half-open (no close event), and the app server
+// would then silently route every call to LiveKit. Ping on an interval; no pong/frame within the timeout → terminate
+// (the close handler reconnects with backoff).
+const GATEWAY_PING_MS = Number(process.env.MEDIASOUP_GATEWAY_PING_MS) || 10_000;
+const GATEWAY_DEAD_MS = Number(process.env.MEDIASOUP_GATEWAY_DEAD_MS) || 25_000;
 const ROUTER_CODECS = [
   { kind: "audio", mimeType: "audio/opus", clockRate: 48_000, channels: 2, parameters: { minptime: 10, useinbandfec: 1, usedtx: 1 } },
   { kind: "video", mimeType: "video/VP8", clockRate: 90_000, parameters: {} },
@@ -243,11 +248,31 @@ function connectGateway() {
   gateway = ws;
   let helloId = 1;
   let helloTimer;
+  let lastSeen = Date.now();
+  const seen = () => { lastSeen = Date.now(); };
+  const pinger = setInterval(() => {
+    // a handshake that never completes (redeploy behind the proxy) is just as silent as a half-open socket
+    if (ws.readyState === WebSocket.CONNECTING && Date.now() - lastSeen > GATEWAY_DEAD_MS) {
+      safeLog("gateway_stale", { phase: "connecting", silentMs: Date.now() - lastSeen });
+      return ws.terminate();
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastSeen > GATEWAY_DEAD_MS) {
+      safeLog("gateway_stale", { silentMs: Date.now() - lastSeen });
+      return ws.terminate();
+    }
+    try { ws.ping(); } catch { ws.terminate(); }
+  }, GATEWAY_PING_MS);
+  pinger.unref?.();
+  ws.on("pong", seen);
+  ws.on("ping", seen);
   ws.on("open", () => {
+    seen();
     ws.send(JSON.stringify({ t: "req", id: helloId, ev: "ms:gateway:hello", data: { secret: cfg.gatewaySecret } }));
     helloTimer = setTimeout(() => ws.close(), 5_000);
   });
   ws.on("message", async (raw) => {
+    seen();
     if (Buffer.byteLength(raw) > MAX_FRAME) return ws.close();
     let frame;
     try { frame = JSON.parse(String(raw)); } catch { return ws.close(); }
@@ -274,6 +299,7 @@ function connectGateway() {
   });
   ws.on("close", () => {
     clearTimeout(helloTimer);
+    clearInterval(pinger);
     if (gateway === ws) gateway = null;
     if (!gatewayOnline && shuttingDown) return;
     gatewayOnline = false;
