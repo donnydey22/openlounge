@@ -761,8 +761,11 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
   @objc private func onInterruption(_ n: Notification) {
     DispatchQueue.main.async {
       guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-            AVAudioSession.InterruptionType(rawValue: raw) == .ended, self.wantRingback else { return }
-      self.playRingback()
+            AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+      if self.wantRingback { self.playRingback() }
+      // GSM call / Siri / alarm over: WebKit leaves the remote <audio> paused and the mic muted. Kick the page so it
+      // resumes playback and recaptures the mic (checkMicAlive) — the call otherwise stays silent both ways.
+      if self.hasLiveCall { self.emit(["type": "audio", "reason": "interruption-ended"]) }
     }
   }
 
