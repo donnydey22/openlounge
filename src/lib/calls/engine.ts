@@ -363,6 +363,22 @@ export class CallEngine {
       return { ok: false, error: r.error };
     }
     if (this.s.ui !== "outgoing") return { ok: true }; // hung up while the request was in flight
+    // Glare: both people tapped Call at once. The server hands back the OTHER person's ringing call (we are its
+    // callee) — answer it instead of ringing back forever on a call nobody on this side can accept.
+    if (this.meId && r.call.callerId !== this.meId && r.call.calleeId === this.meId && r.call.phase !== "ended") {
+      stopTones();
+      this.media = r.media ?? this.media;
+      if (r.call.phase === "active") {
+        this.acceptedHere = true;
+        rememberAccepted(r.call.id);
+        this.set({ call: r.call, role: "callee", ui: "connecting" });
+        void this.connect(true);
+      } else {
+        this.set({ call: r.call, role: "callee", ui: "incoming" });
+        await this.accept(video);
+      }
+      return { ok: true };
+    }
     if (ringing() !== "outgoing") playRingback({ video, untilMs: ringUntil(r.call) });
     this.media = r.media ?? null;
     this.set({ call: r.call });
@@ -806,7 +822,10 @@ export class CallEngine {
 
   /** Foreground return on iOS/Android WebViews: replay any remote voice element the OS paused while hidden. */
   private onVisibleCallAudio = () => {
-    if (document.visibilityState !== "visible" || this.audioEls.length === 0) return;
+    if (document.visibilityState !== "visible") return;
+    // back from a GSM call / lock screen on Android & browsers: a mic the OS muted meanwhile is recaptured
+    this.mediasoup?.checkMicAlive();
+    if (this.audioEls.length === 0) return;
     void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
   };
 

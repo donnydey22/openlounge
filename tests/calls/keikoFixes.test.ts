@@ -28,3 +28,13 @@ test("mic muted by an OS session handover is recaptured; ended too", () => {
   assert.ok(src.includes('addEventListener("mute", this.onMicMuted)'));
   assert.ok(/checkMicAlive\(\)[\s\S]{0,200}this\.mic\.muted\) void this\.recoverMic\(\)/.test(src));
 });
+
+test("glare: a start() that returns the peer's ringing call answers it", () => {
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.match(src, /r\.call\.callerId !== this\.meId && r\.call\.calleeId === this\.meId[\s\S]{0,600}await this\.accept\(video\)/);
+});
+
+test("foreground return re-checks the mic", () => {
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.match(src, /onVisibleCallAudio = \(\) => \{[\s\S]{0,300}checkMicAlive\(\)/);
+});
