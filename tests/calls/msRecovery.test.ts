@@ -64,3 +64,17 @@ test("native (iOS bridge + Android shim): page nudges the app's ICE restart and 
   assert.match(eng, /\.\.\.\(this\.msRecovering \? \{ rebuild: true \} : \{\}\)/);
   assert.match(nat, /OpenLoungeNativeMedia \?\? w\.OpenLoungeNative/);
 });
+
+test("quality guard / ladder never judge a dead or recovering path (black-holed ≠ bad quality)", () => {
+  assert.equal((eng.match(/if \(this\.mediasoup !== session \|\| !this\.mediasoupConnected \|\| this\.msRecovering\) return;/g) ?? []).length, 2);
+  assert.match(onState, /this\.stopQualityGuard\(\); \/\/ a dead path/);
+});
+
+test("after SFU media worked, requestTcpFallback degrades on the same SFU or keeps recovering — never LiveKit", () => {
+  const fb = body("private async requestTcpFallback(", "private onMediaFallback");
+  const gate = fb.slice(fb.indexOf("if (this.msRecoveryOnly())"), fb.indexOf("return;\n    }\n    this.fallbackInFlight = true;"));
+  assert.match(gate, /switchToMediasoupTcp\(\)/);
+  assert.match(gate, /recoverMediasoup\("tcp-unavailable"\)/);
+  assert.doesNotMatch(gate, /call:mediaFallback/);
+  assert.ok(fb.indexOf("if (this.msRecoveryOnly())") < fb.indexOf("call:mediaFallback"));
+});

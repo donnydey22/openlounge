@@ -976,6 +976,7 @@ export class CallEngine {
     this.netLog(`ms-${state}`);
     if (this.msRecoveryOnly()) {
       // persistent reconnecting on the SFU: ICE restart in place, then rebuild the transports (UDP primary)
+      this.stopQualityGuard(); // a dead path reads as "black-holed": never let that pick emergency LiveKit
       if (this.msRecovering) return;
       this.clearMediasoupDegrade();
       this.mediasoupDegradeTimer = setTimeout(() => void this.recoverMediasoup(state), state === "failed" ? 0 : CallEngine.MS_RECOVER_GRACE_MS);
@@ -994,7 +995,7 @@ export class CallEngine {
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
-        if (this.mediasoup !== session) return;
+        if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const v = this.qualityGuard.push(countersFromStats(reports), { remoteMuted: this.s.remoteMuted });
         if (!v) return;
         this.stopQualityGuard();
@@ -1014,7 +1015,7 @@ export class CallEngine {
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
-        if (this.mediasoup !== session) return;
+        if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const cur = countersFromStats(reports);
         const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
         prev = cur;
@@ -1087,6 +1088,23 @@ export class CallEngine {
   private async requestTcpFallback(skipSameSfu = false) {
     const callId = this.s.call?.id;
     if (!callId || this.fallbackInFlight || this.media?.provider !== "mediasoup") return;
+    if (this.msRecoveryOnly()) {
+      // this call's SFU media has worked: degrade on the SAME SFU (ICE-TCP), else keep recovering there — emergency
+      // LiveKit is only for a call whose SFU media never connected (UDP and TCP both unreachable from the start)
+      if (this.msRecovering) return;
+      this.fallbackInFlight = true;
+      let ok = false;
+      try {
+        ok = !skipSameSfu && (await this.switchToMediasoupTcp().catch(() => false));
+      } finally {
+        this.fallbackInFlight = false;
+      }
+      if (ok) {
+        this.udpRecovery.onUdpDrop(Date.now());
+        this.startUdpRecovery();
+      } else void this.recoverMediasoup("tcp-unavailable");
+      return;
+    }
     this.fallbackInFlight = true;
     this.udpRecovery.onUdpDrop(Date.now());
     this.startUdpRecovery();
