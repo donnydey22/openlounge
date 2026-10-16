@@ -63,7 +63,7 @@ test("ring element: stalled-but-playing is restarted, Web Audio revived, re-arm 
   assert.match(src, /const stalled = !e\.paused && lastPos !== null/);
   assert.match(src, /if \(e\.paused \|\| stalled \|\| force\)/);
   assert.match(src, /if \(stalls >= 2\) reviveWebAudio\(\)/);
-  assert.match(src, /linearRampToValueAtTime\(1, c\.currentTime \+ 0\.01\)/);
+  assert.match(src, /linearRampToValueAtTime\(ringGain\(kind\), c\.currentTime \+ 0\.01\)/);
   assert.match(src, /setTimeout\(\(\) => \{[\s\S]{0,160}fallback\(true\)[\s\S]{0,20}RING_PROBE_MS\)/);
 });
 
