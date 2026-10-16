@@ -320,6 +320,11 @@ export class CallEngine {
 
   // ---------- outgoing ----------
   async start(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, video: boolean) {
+    // Glare, other order: their call reached us first. Tapping Call on the same person answers it.
+    if (this.s.ui === "incoming" && this.s.call?.callerId === peer.id) {
+      await this.accept(video || this.s.call.video);
+      return { ok: true };
+    }
     if (this.busy) return { ok: false, error: "You're already in a call" };
     unlockAudio();
     buzz("light");
