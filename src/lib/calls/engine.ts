@@ -20,6 +20,10 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
+import { NativeMediaSession, nativeMediaCmd, useNativeMedia } from "./nativeMediaSession";
+
+/** WebView media session or the iOS app's native media proxy (same surface) */
+type CallMediaSession = MediasoupCallSession | NativeMediaSession;
 import { flipCameraTrack } from "./cameraFlip";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
@@ -143,8 +147,8 @@ export class CallEngine {
   private meId: string | null = null;
   private media: CallMedia | null = null;
   private room: Room | null = null;
-  private roomPromise: Promise<Room | MediasoupCallSession | null> | null = null;
-  private mediasoup: MediasoupCallSession | null = null;
+  private roomPromise: Promise<Room | CallMediaSession | null> | null = null;
+  private mediasoup: CallMediaSession | null = null;
   private mediasoupConnected = false;
   private mediasoupLocalVideo: MediaStreamTrack | null = null;
   private mediasoupRemoteVideo: MediaStreamTrack | null = null;
@@ -366,8 +370,12 @@ export class CallEngine {
     // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
     playRingback({ video, untilMs: ringUntil(optimistic) });
     void loadLK().catch(() => {});
-    // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip
-    this.preMic = this.acquireMic();
+    // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
+    // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
+    if (useNativeMedia(video)) {
+      this.preMic = Promise.resolve(null);
+      void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
+    } else this.preMic = this.acquireMic();
     // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
     void this.preMic.then(() => this.s.ui === "outgoing" && rearmRing(), () => this.s.ui === "outgoing" && rearmRing());
     if (video) void this.ensureCamPreview();
@@ -456,6 +464,7 @@ export class CallEngine {
     this.acceptedHere = true;
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
+    if (useNativeMedia(withVideo || call.video)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     if (this.media?.provider === "livekit") {
       if (!this.preMic) this.preMic = this.acquireMic();
       if (withVideo) void this.ensureCamPreview();
@@ -701,7 +710,7 @@ export class CallEngine {
   }
 
   /** Join the selected backend. LiveKit remains byte-for-byte the normal path unless CALL_SFU=layered selects UDP. */
-  private connect(answer: boolean): Promise<Room | MediasoupCallSession | null> {
+  private connect(answer: boolean): Promise<Room | CallMediaSession | null> {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
@@ -769,12 +778,14 @@ export class CallEngine {
   /** true while this device's direct media runs over the same SFU's ICE-TCP port (explicit fallback) */
   private msTcp = false;
 
-  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<MediasoupCallSession | null> {
+  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
       // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
       this.releaseLiveKitPrewarm();
-      const session = new MediasoupCallSession(this.socket!, media, {
+      // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
+      const session: CallMediaSession = new Session(this.socket!, media, {
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
@@ -928,7 +939,7 @@ export class CallEngine {
   }
 
   /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */
-  private startQualityGuard(session: MediasoupCallSession) {
+  private startQualityGuard(session: CallMediaSession) {
     this.stopQualityGuard();
     this.qualityGuard.reset();
     if (nativeAdaptiveEnabled()) return this.startNetLadder(session);
@@ -947,7 +958,7 @@ export class CallEngine {
 
   /** Native apps only: coordinated audio+video ladder first, TCP only when the floor still can't hold (netAdapt.ts). */
   private readonly netLadder = new NetLadder();
-  private startNetLadder(session: MediasoupCallSession) {
+  private startNetLadder(session: CallMediaSession) {
     this.netLadder.reset();
     let prev: QualityCounters | null = null;
     const w = window as unknown as { __olNetLadder?: { level: number; changes: { t: number; level: number; dir: string }[] } };
