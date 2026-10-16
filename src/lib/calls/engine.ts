@@ -6,6 +6,7 @@
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
+import { anyOnTcp, udpProbeDelay } from "./udpProbe";
 import { watchVideoResilience } from "./videoResilience";
 import { ensureCallReady } from "./permissions";
 import { nextElsewhere, type ElsewhereCall } from "./elsewhere";
@@ -832,6 +833,7 @@ export class CallEngine {
       this.msEverConnected = this.s.call?.id ?? null;
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
+      this.startUdpProbe(session);
       if (answer || this.s.call?.phase === "active") {
         if (this.s.ui === "connecting") {
           this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
@@ -1351,6 +1353,10 @@ export class CallEngine {
     const live = () => this.busy && this.s.call?.id === callId && this.media?.provider === "mediasoup";
     const done = (how: string, attempt: number) => {
       this.set({ reconnecting: false, error: null });
+      if (this.mediasoup) {
+        this.startUdpProbe(this.mediasoup);
+        if (how === "ice") this.startQualityGuard(this.mediasoup);
+      }
       this.netLog("ms-recovered", { how, attempt, ms: Date.now() - t0 });
     };
     this.stopQualityGuard();
@@ -1404,6 +1410,34 @@ export class CallEngine {
     }
   }
 
+  // ---------- back to UDP (Donny: switch back automatically once UDP works) ----------
+  private udpProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopUdpProbe() {
+    if (this.udpProbeTimer) clearTimeout(this.udpProbeTimer);
+    this.udpProbeTimer = null;
+  }
+  /** Landed on the SFU's ICE-TCP pair (UDP blocked at connect, or a recovery chose TCP): probe UDP with an in-place
+   *  ICE restart on a backoff, never giving up while on TCP. The TCP pair carries audio until ICE nominates UDP, so
+   *  the switch back has no teardown and no gap. Explicit tcpOnly transports (no UDP candidates) use udpRecovery. */
+  private startUdpProbe(session: CallMediaSession, attempt = 0) {
+    this.stopUdpProbe();
+    if (this.msTcp) return;
+    this.udpProbeTimer = setTimeout(async () => {
+      this.udpProbeTimer = null;
+      if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup" || this.msTcp) return;
+      if (!this.mediasoupConnected || this.msRecovering) return this.startUdpProbe(session, attempt);
+      const reports = await session.getTransportStats().catch(() => [] as RTCStatsReport[]);
+      if (this.mediasoup !== session) return;
+      if (!anyOnTcp(reports as unknown as Parameters<typeof anyOnTcp>[0])) {
+        if (attempt) this.netLog("udp-restored", { attempt });
+        return;
+      }
+      this.netLog("udp-probe", { attempt });
+      await session.restartIceAll().catch(() => {});
+      this.startUdpProbe(session, attempt + 1);
+    }, attempt === 0 ? 1_500 : udpProbeDelay(attempt - 1));
+  }
+
   // ---------- reconnect ----------
   private rejoining = false;
   private wake: (() => void) | null = null;
@@ -1448,6 +1482,7 @@ export class CallEngine {
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
     this.stopQualityGuard();
+    this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;
@@ -1732,6 +1767,7 @@ export class CallEngine {
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
     this.stopQualityGuard();
+    this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
     this.mediasoupLocalVideo = null;
