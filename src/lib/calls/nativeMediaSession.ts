@@ -14,10 +14,13 @@ type NativeMediaBridge = {
 
 function bridge(): NativeMediaBridge | null {
   if (typeof window === "undefined") return null;
-  return (window as unknown as { OpenLoungeNative?: NativeMediaBridge }).OpenLoungeNative ?? null;
+  const w = window as unknown as { OpenLoungeNative?: NativeMediaBridge; OpenLoungeNativeMedia?: NativeMediaBridge };
+  // Android 0.3.16+: a Java JavascriptInterface can't return promises/arrays or take objects, so the app injects a
+  // document-start shim with the same contract as the iOS object (nativeMedia/msReply/capabilities).
+  return w.OpenLoungeNativeMedia ?? w.OpenLoungeNative ?? null;
 }
 
-/** iOS app build with native call media (capability flag injected before any page script). */
+/** iOS / Android app build with native call media (capability flag injected before any page script). */
 export function nativeMediaAvailable(): boolean {
   const b = bridge();
   return !!b && typeof b.nativeMedia === "function" && typeof b.msReply === "function" && !!b.capabilities?.includes("nativeMedia");

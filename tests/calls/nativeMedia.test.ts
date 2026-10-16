@@ -128,3 +128,29 @@ test("web/Safari: Answer tap binds the mic in the gesture and hands it to the UD
   const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
   assert.match(ms, /pre && pre\.readyState === "live"\s*\? pre/);
 });
+
+test("native media: Android app shim (OpenLoungeNativeMedia) is used; the Java interface alone is not", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  // Android Java bridge: capabilities() is a method returning a JSON string — must not count as native media
+  const w = installWindow({ capabilities: () => '["calls","nativeMedia"]', postMessage() {} });
+  assert.equal(m.useNativeMedia(false), false, "0.3.15 Android / no shim: WebView path");
+  const cmds: unknown[] = [];
+  const replies: unknown[] = [];
+  w.OpenLoungeNativeMedia = {
+    capabilities: ["nativeMedia"],
+    nativeMedia: async (c: unknown) => { cmds.push(c); return { attached: false }; },
+    msReply: (...a: unknown[]) => { replies.push(a); },
+  };
+  assert.equal(m.useNativeMedia(false), true, "Android 0.3.16 app: native audio");
+  assert.equal(m.useNativeMedia(true), false, "video calls keep the WebView path");
+  const sock = fakeSocket();
+  const s = new m.NativeMediaSession(sock as never, { provider: "mediasoup", callId: "c1", iceServers: [] } as never, {
+    onRemoteTrack() {}, onState() {}, onLocalVideo() {}, callId: "c1",
+  });
+  await s.connect(false);
+  assert.deepEqual(cmds[0], { op: "connect", callId: "c1", iceServers: [], tcpOnly: false });
+  await (w.__olNativeMsReq as (id: string, ev: string, d: unknown) => void)("m1", "ms:join", { callId: "c1", nativeConn: "n_x" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(replies[0], ["m1", true, { ok: true, echo: "ms:join" }]);
+  s.close();
+});
