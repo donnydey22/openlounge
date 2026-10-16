@@ -106,6 +106,14 @@ export function DownloadHub() {
           </p>
           <Sha value={IOS.sha256} />
         </section>
+
+        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-zinc-400" data-testid="download-test-builds">
+          <h2 className="text-base font-semibold text-zinc-100">Test builds (0.3.16)</h2>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            <li><a className="underline" href="/downloads/openlounge-0.3.16-test.apk">Android test build (0.3.16, test copy)</a></li>
+            <li><a className="underline" href="https://expo.dev/accounts/donnydey/projects/openlounge/builds/78398c53-0d03-4614-82ef-6059d647ea2c">iPhone test build (0.3.16, build 39)</a></li>
+          </ul>
+        </section>
       </div>
     </main>
   );
