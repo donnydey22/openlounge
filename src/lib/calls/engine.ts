@@ -211,6 +211,7 @@ export class CallEngine {
     this.stuckTimer = setTimeout(() => {
       this.stuckTimer = null;
       if (!this.s.reconnecting || !this.busy || this.rejoining || this.s.ui !== "active") return;
+      if (this.msRecovering) return void this.armStuckGuard(); // the SFU recovery loop owns this outage
       if (typeof navigator !== "undefined" && navigator.onLine === false) return void this.armStuckGuard();
       this.netLog("stuck-rejoin");
       void this.rejoin("stuck");
@@ -1470,7 +1471,7 @@ export class CallEngine {
 
   /** Rejoin the call's LiveKit room: re-sync with the server (call:get → still on? fresh token), reconnect, republish. */
   private async rejoin(reason: string) {
-    if (this.rejoining) return;
+    if (this.rejoining || this.msRecovering) return; // one reconnect loop at a time: SFU recovery already retries
     const callId = this.s.call?.id;
     if (!callId) return;
     this.rejoining = true;

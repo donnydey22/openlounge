@@ -78,3 +78,8 @@ test("after SFU media worked, requestTcpFallback degrades on the same SFU or kee
   assert.doesNotMatch(gate, /call:mediaFallback/);
   assert.ok(fb.indexOf("if (this.msRecoveryOnly())") < fb.indexOf("call:mediaFallback"));
 });
+
+test("one reconnect loop at a time: rejoin and the stuck guard defer to an active SFU recovery", () => {
+  assert.match(eng, /if \(this\.rejoining \|\| this\.msRecovering\) return; \/\/ one reconnect loop/);
+  assert.match(eng, /if \(this\.msRecovering\) return void this\.armStuckGuard\(\);/);
+});
