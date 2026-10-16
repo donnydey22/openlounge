@@ -122,6 +122,8 @@ export class MediasoupCallSession {
       onLocalVideo(track: MediaStreamTrack | null): void;
       /** explicit fallback: TCP-only transports on the same SFU (requires MEDIASOUP_ENABLE_TCP on the server) */
       tcpOnly?: boolean;
+      /** native-media only (ignored here) */
+      rebuild?: boolean;
       /** mic captured inside the user's Call/Answer tap (Safari/web: Daily-style pre-bind); used if still live */
       preTrack?: Promise<MediaStreamTrack | null>;
     },

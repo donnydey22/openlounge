@@ -156,6 +156,10 @@ export class CallEngine {
   private qualityTimer: ReturnType<typeof setInterval> | null = null;
   private readonly qualityGuard = new QualityGuard();
   private fallbackInFlight = false;
+  /** call id whose direct (SFU) media connected at least once: from then on an outage recovers on the SFU (ICE restart
+   *  → transport rebuild, UDP primary), never by dropping into emergency LiveKit */
+  private msEverConnected: string | null = null;
+  private msRecovering = false;
   /** persistent UDP recovery: TCP is only a bridge; return to UDP with backoff + hysteresis until hang-up */
   private udpRecovery = new UdpRecoveryPolicy();
   private udpRecoveryTimer: ReturnType<typeof setInterval> | null = null;
@@ -805,6 +809,7 @@ export class CallEngine {
       this.releaseLiveKitPrewarm();
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
+        ...(this.msRecovering ? { rebuild: true } : {}),
         ...(tapMic ? { preTrack: tapMic.catch(() => null) } : {}),
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
@@ -823,6 +828,7 @@ export class CallEngine {
         return null;
       }
       this.mediasoupConnected = true;
+      this.msEverConnected = this.s.call?.id ?? null;
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
       if (answer || this.s.call?.phase === "active") {
@@ -835,10 +841,13 @@ export class CallEngine {
       return session;
     } catch (e) {
       if (this.busy && !tcpOnly) {
-        this.netLog("ms-connect-failed");
-        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed first connect
+        const recovering = this.msRecoveryOnly();
+        this.netLog("ms-connect-failed", { recovering });
+        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed FIRST connect
         // means that port is unreachable too: go straight to LiveKit instead of a second ~30 s tcpOnly attempt.
-        await this.requestTcpFallback(true);
+        // Once this call's SFU media has worked, a failed (re)connect is a transient outage: the recovery/rejoin loop
+        // retries the SFU with backoff — never emergency LiveKit.
+        if (!recovering) await this.requestTcpFallback(true);
       }
       return null;
     }
@@ -965,6 +974,13 @@ export class CallEngine {
     this.mediasoupConnected = false;
     this.set({ reconnecting: true });
     this.netLog(`ms-${state}`);
+    if (this.msRecoveryOnly()) {
+      // persistent reconnecting on the SFU: ICE restart in place, then rebuild the transports (UDP primary)
+      if (this.msRecovering) return;
+      this.clearMediasoupDegrade();
+      this.mediasoupDegradeTimer = setTimeout(() => void this.recoverMediasoup(state), state === "failed" ? 0 : CallEngine.MS_RECOVER_GRACE_MS);
+      return;
+    }
     if (state === "failed") return void this.requestTcpFallback();
     this.clearMediasoupDegrade();
     this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 8_000);
@@ -1277,6 +1293,96 @@ export class CallEngine {
         this.netLog("lk-disconnected");
         void this.rejoin("lk-disconnected");
       });
+  }
+
+  // ---------- SFU outage recovery ----------
+  static MS_RECOVER_GRACE_MS = 2_000;
+  static MS_ICE_RESTART_WAITS = [0, 1500, 3000];
+  static MS_REBUILD_DELAYS = [500, 1000, 2000, 3000, 5000, 8000];
+
+  /** true once this call's SFU media has connected (or while recovering): outages stay on the SFU */
+  private msRecoveryOnly() {
+    return this.msRecovering || (!!this.msEverConnected && this.msEverConnected === this.s.call?.id);
+  }
+
+  private waitMsConnected(session: CallMediaSession, ms: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (this.mediasoup === session && this.mediasoupConnected) return resolve(true);
+        if (this.mediasoup !== session || !this.busy || Date.now() >= until) return resolve(false);
+        setTimeout(tick, 250);
+      };
+      tick();
+    });
+  }
+
+  /**
+   * Total media loss after the call's SFU media had worked (all traffic blocked, tunnel, Wi-Fi drop): keep the call
+   * and recover on the SFU — 1) fresh ICE on the live transports (cheap, keeps producers/consumers), 2) then rebuild
+   * the transports with backoff + jitter for as long as the server keeps the call. UDP stays primary (the SFU offers
+   * its ICE-TCP candidate alongside). Never falls into emergency LiveKit; ends only on hangup / server end.
+   */
+  private async recoverMediasoup(reason: string) {
+    const callId = this.s.call?.id;
+    if (this.msRecovering || this.rejoining || !this.busy || !callId || this.media?.provider !== "mediasoup") return;
+    if (this.mediasoupConnected) return;
+    this.msRecovering = true;
+    const t0 = Date.now();
+    const live = () => this.busy && this.s.call?.id === callId && this.media?.provider === "mediasoup";
+    const done = (how: string, attempt: number) => {
+      this.set({ reconnecting: false, error: null });
+      this.netLog("ms-recovered", { how, attempt, ms: Date.now() - t0 });
+    };
+    this.stopQualityGuard();
+    this.clearMediasoupDegrade();
+    this.set({ reconnecting: true });
+    this.netLog("ms-recover", { reason });
+    try {
+      const first = this.mediasoup;
+      if (first) {
+        for (const wait of CallEngine.MS_ICE_RESTART_WAITS) {
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          if (!live() || this.mediasoup !== first) break;
+          if (this.mediasoupConnected) return done("ice", 0);
+          this.netLog("ms-ice-restart");
+          await first.restartIceAll().catch(() => {});
+          if (await this.waitMsConnected(first, 2500)) return done("ice", 0);
+        }
+      }
+      let attempt = 0;
+      while (live()) {
+        const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId }, 4000).catch(() => null);
+        if (!live()) return;
+        if (g && (!g.ok || g.call?.phase === "ended")) {
+          const call = g.call ?? this.s.call;
+          if (call) this.finishLocal(g.call?.outcome ?? "completed", false, { ...call, phase: "ended" }, "connection_lost");
+          return;
+        }
+        if (g?.ok && g.media && g.media.provider !== "mediasoup") {
+          // the server moved this call (the peer's emergency fallback): follow it
+          void this.switchMedia(g.media, g.call);
+          return;
+        }
+        if (g?.ok && g.media) this.media = g.media;
+        const media: CallMedia = this.media!;
+        this.netLog("ms-rebuild", { attempt });
+        this.dropMediaForRejoin();
+        this.media = media;
+        this.msTcp = false;
+        const session = await this.connectMediasoup(media, true);
+        if (session && this.mediasoup === session && this.mediasoupConnected) {
+          if (g?.ok && g.call) this.set({ call: g.call });
+          return done("rebuild", attempt);
+        }
+        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS && attempt % 10 === 0) this.netLog("still-reconnecting", { ms: Date.now() - t0, attempt });
+        const base = CallEngine.MS_REBUILD_DELAYS[Math.min(attempt, CallEngine.MS_REBUILD_DELAYS.length - 1)];
+        await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2))));
+        attempt++;
+      }
+    } finally {
+      this.msRecovering = false;
+    }
   }
 
   // ---------- reconnect ----------

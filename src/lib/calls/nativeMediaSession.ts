@@ -51,6 +51,8 @@ export class NativeMediaSession {
       onState(state: "connected" | "disconnected" | "failed"): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
       tcpOnly?: boolean;
+      /** force fresh native transports (outage recovery) instead of re-attaching to the live session */
+      rebuild?: boolean;
       /** LiveKit credentials carry no callId */
       callId?: string;
     },
@@ -91,7 +93,7 @@ export class NativeMediaSession {
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
     if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [] });
-    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], tcpOnly: this.opts.tcpOnly === true });
+    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }
@@ -107,7 +109,8 @@ export class NativeMediaSession {
     return true; // remote audio plays natively, never through a WebView <audio>
   }
   async restartIceAll() {
-    /* the app restarts ICE itself on a network change (NWPathMonitor) — even while this page is reloading */
+    // the app also restarts ICE itself (network change / transport disconnected) — this is the page's nudge
+    await nativeMediaCmd({ op: "restartIce" }).catch(() => {});
   }
   async applyLadderStep(step: { audioBps: number }): Promise<boolean> {
     return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps }).catch(() => false)) === true;
