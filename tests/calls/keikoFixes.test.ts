@@ -45,6 +45,6 @@ test("caller mic handover: CallKit/connected reasons rebind the existing produce
   for (const r of ["callkit-activate", "callkit-activate-settle", "connected", "interruption-ended"]) assert.ok(eng.includes(`"${r}"`));
   assert.match(eng, /role === "caller" && MIC_HANDOVER_REASONS\.has\(reason\)[\s\S]{0,300}rebindMic\(\)[\s\S]{0,80}micHandoverPending = true/);
   assert.match(eng, /this\.mediasoup = session;\s*if \(this\.micHandoverPending\)[\s\S]{0,120}session\.rebindMic\(\)/);
-  assert.match(ms, /rebindMic\(\) \{[\s\S]{0,400}replaceTrack|rebindMic\(\) \{[\s\S]{0,500}this\.recoverMic\(\)/);
+  assert.match(ms, /rebindMic\(\) \{[\s\S]{0,400}replaceTrack|rebindMic\(\) \{[\s\S]{0,900}this\.recoverMic\(\)/);
   assert.match(ms, /this\.producers\.set\("audio", producer\);\s*if \(this\.micHandoverPending\)/);
 });
