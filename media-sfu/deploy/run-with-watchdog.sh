@@ -26,7 +26,10 @@ notify() {
 healthy() {
   local body
   body=$(curl --fail --silent --show-error --max-time 2 "$health_url") || return 1
-  [[ $body == *'"ok":true'* && $body == *'"worker":true'* && $body == *'"gateway":true'* ]]
+  # Liveness = the node process answers and the mediasoup worker is alive. A gateway (Railway WebSocket) outage is
+  # NOT a reason to SIGABRT the unit: index.mjs reconnects the gateway itself (10 s heartbeat), and killing the
+  # process tore down every live call's UDP transports (16 watchdog kills Oct 13-16, 4 on Oct 16 during web deploys).
+  [[ $body == *'"worker":true'* ]]
 }
 
 "$node_bin" src/index.mjs &

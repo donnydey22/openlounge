@@ -122,7 +122,8 @@ test("anti-flap: UDP that drops every ~80 s keeps backing off (Keiko call 2026-1
     p.onUdpDrop(now);
   }
   for (let i = 1; i < gaps.length; i++) assert.ok(gaps[i] >= gaps[i - 1], `gap ${i} grows: ${gaps}`);
-  assert.ok(gaps[3] >= 100_000, `backed off to ≥100 s: ${gaps}`);
+  assert.ok(gaps[4] >= 45_000, `still backs off to ≥45 s on a flapping path: ${gaps}`);
+  assert.ok(gaps[0] <= 15_000, `first return to UDP within 15 s: ${gaps}`);
 });
 
 test("anti-flap: failures reset only after UDP held resetAfterMs", () => {

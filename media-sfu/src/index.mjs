@@ -155,7 +155,7 @@ async function routeRpc(input) {
       enableUdp: !tcpOnly,
       enableTcp: cfg.tcpPort !== null,
       preferUdp: !tcpOnly,
-      iceConsentTimeout: 15,
+      iceConsentTimeout: 30, // hold the UDP pair through blips (was 15 s; client demotes on its own timers)
       initialAvailableOutgoingBitrate: 600_000,
       appData: { direction, callId, userId, connectionId },
     });

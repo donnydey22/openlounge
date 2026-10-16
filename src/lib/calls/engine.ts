@@ -914,6 +914,8 @@ export class CallEngine {
       el.dataset.olCallAudio = "1";
       el.autoplay = true;
       el.setAttribute("playsinline", "true");
+      el.volume = 1; // full element gain: never inherit a lowered volume from a reused/ring element
+      el.muted = false;
       el.srcObject = new MediaStream([track]);
       document.body.appendChild(el);
       this.audioEls.push(el);
@@ -987,7 +989,8 @@ export class CallEngine {
     }
     if (state === "failed") return void this.requestTcpFallback();
     this.clearMediasoupDegrade();
-    this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), 8_000);
+    // slower demotion: hold UDP through a short blip (ICE "disconnected" often self-heals in <10 s on Wi-Fi/cell)
+    this.mediasoupDegradeTimer = setTimeout(() => void this.requestTcpFallback(), CallEngine.MS_TCP_DEMOTE_MS);
   }
 
   /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */
@@ -1318,6 +1321,8 @@ export class CallEngine {
 
   // ---------- SFU outage recovery ----------
   static MS_RECOVER_GRACE_MS = 2_000;
+  /** UDP "disconnected" (not "failed") must last this long before the TCP path is requested */
+  static MS_TCP_DEMOTE_MS = 12_000;
   static MS_ICE_RESTART_WAITS = [0, 1500, 3000];
   static MS_REBUILD_DELAYS = [500, 1000, 2000, 3000, 5000, 8000];
 
@@ -1435,7 +1440,7 @@ export class CallEngine {
       this.netLog("udp-probe", { attempt });
       await session.restartIceAll().catch(() => {});
       this.startUdpProbe(session, attempt + 1);
-    }, attempt === 0 ? 1_500 : udpProbeDelay(attempt - 1));
+    }, attempt === 0 ? 1_000 : udpProbeDelay(attempt - 1));
   }
 
   // ---------- reconnect ----------

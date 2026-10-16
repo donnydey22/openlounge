@@ -25,7 +25,9 @@ export function anyOnTcp(reports: Array<{ forEach(cb: (v: StatLike) => void): vo
 }
 
 /** probe schedule after landing on TCP: soon first, then backing off (never gives up while on TCP) */
-export const UDP_PROBE_DELAYS_MS = [3_000, 5_000, 10_000, 15_000, 30_000, 60_000];
+// Donny (Oct 16): UDP back as fast as possible, never give up. Each probe is an in-place ICE restart (no gap), so a
+// tight schedule costs only a few STUN packets; steady state is one probe every 15 s while on TCP.
+export const UDP_PROBE_DELAYS_MS = [2_000, 3_000, 5_000, 8_000, 12_000, 15_000];
 export function udpProbeDelay(attempt: number) {
   return UDP_PROBE_DELAYS_MS[Math.min(attempt, UDP_PROBE_DELAYS_MS.length - 1)];
 }

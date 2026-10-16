@@ -17,7 +17,9 @@ export const CALL_AUDIO_CONSTRAINTS = {
  */
 export const OPUS_VOICE_CODEC_OPTIONS = {
   opusFec: true,
-  opusDtx: true,
+  // DTX off: it clipped word onsets and dropped to comfort noise between phrases, which read as "quiet/cutting out".
+  // Voice at 48 kbps is still tiny next to video; FEC stays on for loss.
+  opusDtx: false,
   opusStereo: false,
   opusMaxPlaybackRate: 48_000,
   opusMaxAverageBitrate: 48_000,

@@ -22,9 +22,10 @@ export interface UdpRecoveryOptions {
 }
 
 export const UDP_RECOVERY_DEFAULTS: UdpRecoveryOptions = {
-  tcpStableMs: 20_000,
-  baseBackoffMs: 15_000,
-  maxBackoffMs: 120_000,
+  // Donny (Oct 16): back to UDP sooner and keep trying more often while bridged
+  tcpStableMs: 8_000,
+  baseBackoffMs: 5_000,
+  maxBackoffMs: 60_000,
   udpHoldMs: 30_000,
   resetAfterMs: 300_000,
   jitter: 0.2,

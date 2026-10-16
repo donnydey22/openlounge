@@ -55,7 +55,7 @@ test("engine wires the quality guard to the LiveKit TCP fallback and keeps hard-
 
 test("phones publish the raw AEC/NS/AGC mic on the LiveKit path too; desktop keeps the loudness gain", () => {
   assert.match(src("src/lib/calls/engine.ts"), /useRawDirectCallMicrophone\(\{[^}]*\}\) \? null : audioContext\(\)/);
-  assert.match(src("src/lib/calls/voiceProcessing.ts"), /CALL_MIC_GAIN = 1\.5/);
+  assert.match(src("src/lib/calls/voiceProcessing.ts"), /CALL_MIC_GAIN = 2\.0/);
 });
 
 test("remote call audio is explicitly played and replayed after a native audio-session swap", () => {
