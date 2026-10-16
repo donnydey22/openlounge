@@ -943,7 +943,19 @@ export class CallEngine {
   }
 
   private onMediasoupState(state: "connected" | "disconnected" | "failed") {
-    if (!this.busy || this.media?.provider !== "mediasoup") return;
+    if (!this.busy) return;
+    if (this.media?.provider !== "mediasoup") {
+      // native-media app on the emergency LiveKit path: its own reconnects failed → keep reconnecting via rejoin
+      if (!(this.mediasoup instanceof NativeMediaSession)) return;
+      if (state === "connected") {
+        this.mediasoupConnected = true;
+        return void this.set({ reconnecting: false });
+      }
+      this.mediasoupConnected = false;
+      this.set({ reconnecting: true });
+      if (state === "failed" && !this.rejoining) void this.rejoin("native-lk-failed");
+      return;
+    }
     if (state === "connected") {
       this.mediasoupConnected = true;
       this.clearMediasoupDegrade();
@@ -1341,7 +1353,7 @@ export class CallEngine {
     const t0 = Date.now();
     this.set({ reconnecting: true });
     this.dropMediaForRejoin();
-    const delays = [300, 1000, 2000, 3000, 5000];
+    const delays = [300, 1000, 2000, 3000, 5000, 8000];
     let attempt = 0;
     try {
       while (this.busy && this.s.call?.id === callId) {
@@ -1366,16 +1378,13 @@ export class CallEngine {
             this.dropMediaForRejoin();
           }
         }
-        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS) {
-          const call = this.s.call;
-          if (call?.id) void this.req("call:hangup", { callId: call.id }, 3000).catch(() => {});
-          this.teardownMedia();
-          if (call) this.endWith(call, "Call ended · connection lost", true);
-          this.netLog("gave-up", { ms: Date.now() - t0 });
-          return;
-        }
+        // Persistent reconnecting: never end the call on our own while it is still live on the server. Each pass
+        // re-runs the ladder (connect → ICE/DTLS → same-SFU TCP → TURN-TLS/LiveKit on failure); the call ends only on a
+        // hangup or when the server ends it (peer gone past its grace) — seen by call:get above.
+        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS && attempt % 10 === 0) this.netLog("still-reconnecting", { ms: Date.now() - t0, attempt });
         await new Promise<void>((r) => {
-          const t = setTimeout(r, delays[Math.min(attempt, delays.length - 1)]);
+          const base = delays[Math.min(attempt, delays.length - 1)];
+          const t = setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2)));
           this.wake = () => (clearTimeout(t), r());
         });
         this.wake = null;
