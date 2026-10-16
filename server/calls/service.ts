@@ -28,6 +28,9 @@ export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
  * than by more silence. The heartbeat notices a dead socket within ~10–20 s, so the wall-clock budget is ~55–65 s.
  */
 export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", 45_000);
+/** Active call where one side is still online (other tab/device/socket) but no connection of theirs is in the call
+ *  any more (call page closed, app killed while a chat socket lingers): end it so it can't block every new call. */
+export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", 60_000);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 /**
  * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
@@ -103,6 +106,8 @@ interface CallRec {
   orphanSince: number | null;
   /** active call: when each participant lost their last socket (reconnect grace) */
   goneSince: Map<string, number>;
+  /** per participant: when their last in-call connection closed while they stayed online elsewhere */
+  detachedSince?: Map<string, number>;
   /** connections (socket ids) that are actually in this call per participant: bound by start/accept/get/media, dropped on close */
   conns: Map<string, Set<string>>;
 }
@@ -579,6 +584,19 @@ export class CallService {
       }
       if (lost) {
         this.d.log?.("call lost", { callId: c.id });
+        this.finish(c, "completed", { by: lost, reason: "connection_lost" });
+        continue;
+      }
+      for (const u of [c.callerId, c.calleeId]) {
+        const set = c.conns.get(u);
+        if (set && set.size === 0 && this.d.isConnected(u)) {
+          if (!c.detachedSince) c.detachedSince = new Map();
+          if (!c.detachedSince.has(u)) c.detachedSince.set(u, now);
+          else if (now - c.detachedSince.get(u)! > CALL_DETACHED_MS) lost ??= u;
+        } else c.detachedSince?.delete(u);
+      }
+      if (lost) {
+        this.d.log?.("call detached", { callId: c.id });
         this.finish(c, "completed", { by: lost, reason: "connection_lost" });
         continue;
       }
