@@ -336,7 +336,7 @@ export class CallEngine {
     this.clearEnd();
     this.lastPeer = { id: peer.id, video };
     this.micHandoverPending = false;
-    this.watchNetwork(); // native audio-session events must be heard while ringing, not only once connected
+    this.watchNativeAudio(); // native audio-session events must be heard while ringing (network watch stays connect-time)
     const now = Date.now();
     const optimistic: CallInfo = {
       id: "",
@@ -1415,9 +1415,10 @@ export class CallEngine {
   private netTimer: ReturnType<typeof setTimeout> | null = null;
   /** Network changes (Wi-Fi ↔ cellular, IP change, offline/online): refresh the media path right away instead of
    *  waiting for ICE consent to time out. LiveKit resumes with an ICE restart; if it has given up, we rejoin. */
-  private watchNetwork() {
-    if (this.netWatched || typeof window === "undefined") return;
-    this.netWatched = true;
+  private nativeAudioWatched = false;
+  private watchNativeAudio() {
+    if (this.nativeAudioWatched || typeof window === "undefined") return;
+    this.nativeAudioWatched = true;
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
     window.addEventListener("openlounge:native-audio-resume", (e) => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
@@ -1432,6 +1433,12 @@ export class CallEngine {
       // ...and the outbound mic: an outgoing call captured it before CallKit took the session (muted → silence)
       this.mediasoup?.checkMicAlive();
     });
+  }
+
+  private watchNetwork() {
+    if (this.netWatched || typeof window === "undefined") return;
+    this.netWatched = true;
+    this.watchNativeAudio();
     const conn = (navigator as unknown as { connection?: EventTarget & { type?: string; effectiveType?: string } }).connection;
     this.lastNetType = conn?.type ?? null;
     this.lastNetworkTier = browserNetworkTier();
