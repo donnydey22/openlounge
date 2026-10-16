@@ -48,3 +48,10 @@ test("caller mic handover: CallKit/connected reasons rebind the existing produce
   assert.match(ms, /rebindMic\(\) \{[\s\S]{0,400}replaceTrack|rebindMic\(\) \{[\s\S]{0,900}this\.recoverMic\(\)/);
   assert.match(ms, /this\.producers\.set\("audio", producer\);\s*if \(this\.micHandoverPending\)/);
 });
+
+test("resume retries when call:current acks ok:false (socket not authed yet after a WebView reload)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const assert = (await import("node:assert/strict")).default;
+  assert.match(src, /async resume\(attempt = 0\)[\s\S]{0,300}if \(!r\.ok\)[\s\S]{0,400}this\.resume\(attempt \+ 1\)/);
+});

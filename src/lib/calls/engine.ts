@@ -266,9 +266,16 @@ export class CallEngine {
   }
 
   /** after (re)connect + auth: pick up a call that is still live (page reload, network switch) */
-  async resume() {
+  async resume(attempt = 0): Promise<void> {
     try {
       const r = await this.req<{ ok: boolean; call?: CallInfo | null }>("call:current", {});
+      if (!r.ok) {
+        // socket connected but not authed yet (fresh page after a WebView reload / unlock): an "ok:false" here is
+        // NOT "no call" — retry shortly, otherwise the reloaded callee never rejoins and the call drops.
+        this.netLog("resume-retry", { attempt });
+        if (attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
+        return;
+      }
       const call = r.call;
       if (!call) {
         // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
@@ -286,7 +293,10 @@ export class CallEngine {
         return;
       }
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
-      if (!g.ok || !g.call) return;
+      if (!g.ok || !g.call) {
+        if (!g.ok && attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
+        return;
+      }
       const role = g.call.callerId === this.meId ? "caller" : "callee";
       if (g.call.phase === "active" && (role === "caller" || this.acceptedHere || this.s.call?.id === call.id || acceptedBefore(g.call.id))) {
         if (role === "callee") this.acceptedHere = true; // this device answered before a WebView reload / unlock
