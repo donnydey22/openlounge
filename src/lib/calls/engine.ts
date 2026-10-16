@@ -165,6 +165,8 @@ export class CallEngine {
   /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
   private stopDeviceFollow: (() => void) | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
+  /** web/Safari callee on the UDP path: raw mic captured inside the Answer tap (handed to the session) */
+  private tapMic: Promise<MediaStreamTrack | null> | null = null;
   /** a native audio-session handover arrived before the mediasoup session existed */
   private micHandoverPending = false;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
@@ -438,7 +440,8 @@ export class CallEngine {
     mark("ring");
     // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
     // a UDP transport before the user consents to answer.
-    if (this.media?.provider === "livekit")
+    const nativeMedia = useNativeMedia(call.video);
+    if (this.media?.provider === "livekit" && !nativeMedia)
       void loadLK()
         .then((LK) => {
           if (!this.media || this.media.provider !== "livekit" || this.s.call?.id !== call.id) return;
@@ -447,7 +450,7 @@ export class CallEngine {
           void room.prepareConnection(this.media.url, this.media.token).catch(() => {});
         })
         .catch(() => {});
-    if (this.media?.provider === "livekit")
+    if (this.media?.provider === "livekit" && !nativeMedia)
       void micPermission().then((p) => {
         if (p === "granted" && this.s.call?.id === call.id && this.s.ui === "incoming") this.preMic = this.acquireMic();
       });
@@ -465,7 +468,14 @@ export class CallEngine {
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     if (useNativeMedia(withVideo || call.video)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
-    if (this.media?.provider === "livekit") {
+    else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
+      this.tapMic = navigator.mediaDevices
+        .getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS })
+        .then((st) => st.getAudioTracks()[0] ?? null)
+        .catch(() => null);
+    }
+    if (this.media?.provider === "livekit" && !useNativeMedia(withVideo || call.video)) {
       if (!this.preMic) this.preMic = this.acquireMic();
       if (withVideo) void this.ensureCamPreview();
     }
@@ -714,7 +724,8 @@ export class CallEngine {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
-    if (media.provider === "mediasoup") {
+    // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
+    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -780,12 +791,21 @@ export class CallEngine {
 
   private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
+      // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
+      // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
+      // gesture) instead of releasing it and capturing again later outside the gesture.
+      const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
+      if (tapMic) {
+        this.preMic = null;
+        this.tapMic = null;
+      }
       // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
       this.releaseLiveKitPrewarm();
-      // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
-      const session: CallMediaSession = new Session(this.socket!, media, {
+      const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
+        callId: this.s.call?.id,
+        ...(tapMic ? { preTrack: tapMic.catch(() => null) } : {}),
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
@@ -1299,6 +1319,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    void this.tapMic?.then((t) => t?.stop());
+    this.tapMic = null;
     this.stopDeviceFollow?.();
     this.stopDeviceFollow = null;
     this.micTrack?.stop();
@@ -1584,6 +1606,8 @@ export class CallEngine {
     this.clearMicVoiceProcessing();
     void this.preMic?.then((t) => t?.stop());
     this.preMic = null;
+    void this.tapMic?.then((t) => t?.stop());
+    this.tapMic = null;
     this.stopDeviceFollow?.();
     this.stopDeviceFollow = null;
     this.micTrack?.stop();

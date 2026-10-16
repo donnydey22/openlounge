@@ -87,3 +87,44 @@ test("engine: native-media mode skips WebView getUserMedia on dial and prewarms 
   assert.match(src, /if \(useNativeMedia\(video\)\) \{\s*this\.preMic = Promise\.resolve\(null\);\s*void nativeMediaCmd\(\{ op: "prewarm" \}\)/);
   assert.match(src, /useNativeMedia\([^)]*\) \? NativeMediaSession : MediasoupCallSession/);
 });
+
+test("server: native SFU connection is stable across page sockets and survives a reload window", async () => {
+  const m = await import("../../server/calls/index");
+  assert.equal(m.nativeConnectionFor("sock1", "u1", undefined), "sock1", "web path unchanged");
+  assert.equal(m.nativeConnectionFor("sock1", "u1", "bad id!"), null);
+  const id = m.nativeConnectionFor("sock1", "u1", "n_abc12345");
+  assert.equal(id, "native:u1:n_abc12345");
+  const expired: string[] = [];
+  m.nativeSocketClosed("sock1", (c) => expired.push(c), 30);
+  // reloaded page relays again from a new socket before the window ends → no teardown
+  assert.equal(m.nativeConnectionFor("sock2", "u1", "n_abc12345"), id);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(expired, []);
+  // app gone: the new socket closes and nobody re-attaches → torn down
+  m.nativeSocketClosed("sock2", (c) => expired.push(c), 20);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(expired, [id]);
+  assert.equal(m.nativeConnectionFor("sockX", "u2", "n_abc12345"), "native:u2:n_abc12345", "scoped per authenticated user");
+});
+
+test("native media: emergency LiveKit is joined by the app; page never captures the mic in native mode", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  const cmds: Record<string, unknown>[] = [];
+  installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async (c: Record<string, unknown>) => { cmds.push(c); return true; }, msReply() {} });
+  const s = new m.NativeMediaSession(fakeSocket() as never, { provider: "livekit", url: "wss://lk", token: "t", iceServers: [] } as never, {
+    onRemoteTrack() {}, onState() {}, onLocalVideo() {}, callId: "c9",
+  });
+  await s.connect(false);
+  assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [] });
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.match(src, /media\.provider === "mediasoup" \|\| useNativeMedia\(/);
+  assert.match(src, /provider === "livekit" && !useNativeMedia\(withVideo \|\| call\.video\)/);
+});
+
+test("web/Safari: Answer tap binds the mic in the gesture and hands it to the UDP session", () => {
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.match(src, /this\.tapMic = navigator\.mediaDevices\s*\.getUserMedia/);
+  assert.match(src, /preTrack: tapMic/);
+  const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
+  assert.match(ms, /pre && pre\.readyState === "live"\s*\? pre/);
+});

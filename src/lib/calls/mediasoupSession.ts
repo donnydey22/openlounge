@@ -122,6 +122,8 @@ export class MediasoupCallSession {
       onLocalVideo(track: MediaStreamTrack | null): void;
       /** explicit fallback: TCP-only transports on the same SFU (requires MEDIASOUP_ENABLE_TCP on the server) */
       tcpOnly?: boolean;
+      /** mic captured inside the user's Call/Answer tap (Safari/web: Daily-style pre-bind); used if still live */
+      preTrack?: Promise<MediaStreamTrack | null>;
     },
   ) {
     if (media.provider !== "mediasoup") throw new Error("Expected Mediasoup media");
@@ -288,8 +290,13 @@ export class MediasoupCallSession {
 
   private async publishAudio(generation?: number) {
     if (!this.send || this.mic) return;
-    const stream = await this.local(() => navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }));
-    const track = stream.getAudioTracks()[0];
+    const pre = this.opts.preTrack ? await this.opts.preTrack.catch(() => null) : null;
+    this.opts.preTrack = undefined;
+    const track =
+      pre && pre.readyState === "live"
+        ? pre
+        : (await this.local(() => navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS }))).getAudioTracks()[0];
+    if (pre && track !== pre) pre.stop();
     if (!track || this.closed || (generation !== undefined && generation !== this.generation)) {
       track?.stop();
       return;

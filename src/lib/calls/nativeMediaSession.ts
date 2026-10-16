@@ -48,9 +48,10 @@ export class NativeMediaSession {
       onState(state: "connected" | "disconnected" | "failed"): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
       tcpOnly?: boolean;
+      /** LiveKit credentials carry no callId */
+      callId?: string;
     },
   ) {
-    if (media.provider !== "mediasoup") throw new Error("Expected Mediasoup media");
   }
 
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
@@ -66,7 +67,7 @@ export class NativeMediaSession {
   private readonly relay = (id: string, event: string, data: Record<string, unknown>) => {
     const b = bridge();
     if (!b?.msReply) return;
-    const callId = (this.media as { callId?: string }).callId;
+    const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
     if (this.closed || !MS_EVENT.test(event) || !data || data.callId !== callId) {
       b.msReply(id, false, null, "relay refused");
       return;
@@ -82,9 +83,12 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
-    const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[] };
-    // resolves once the app's send transport is ICE/DTLS-connected (rejects on failure/timeout → engine falls back)
-    await nativeMediaCmd({ op: "connect", callId: m.callId, iceServers: m.iceServers ?? [], tcpOnly: this.opts.tcpOnly === true });
+    const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
+    const callId = m.callId ?? this.opts.callId;
+    // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
+    // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
+    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [] });
+    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], tcpOnly: this.opts.tcpOnly === true });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }
@@ -100,7 +104,7 @@ export class NativeMediaSession {
     return true; // remote audio plays natively, never through a WebView <audio>
   }
   async restartIceAll() {
-    await nativeMediaCmd({ op: "restartIce" }).catch(() => {});
+    /* the app restarts ICE itself on a network change (NWPathMonitor) — even while this page is reloading */
   }
   async applyLadderStep(step: { audioBps: number }): Promise<boolean> {
     return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps }).catch(() => false)) === true;
