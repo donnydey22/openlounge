@@ -66,7 +66,17 @@ function tone(c: BaseAudioContext, out: AudioNode, freqs: number[], at: number, 
 // The WAV holds the WHOLE ring (RING_MAX_MS of cycles), not one looped cycle: WebKit's <audio loop> leaves a gap at
 // every seam, so a one-cycle loop drifted ~20–60 ms per cycle on iPhone vs the sample-accurate Web Audio schedule on
 // Android. One long buffer has no seams; its playback position is the cadence clock (seekable to stay aligned).
-const WAV_RATE = 16000;
+// 48 kHz: at 16 kHz the ringtone's upper harmonics (2.35 kHz partials of a triangle) folded/vanished → thin tone
+const WAV_RATE = 48000;
+/** incoming ringtone peak ≈ -3 dBFS (Donny: b39 ring "thin and quiet"); ringback keeps its classic level */
+export const RING_PEAK = Math.pow(10, -3 / 20);
+/** gain that puts a pattern's loudest instant at RING_PEAK (incoming only) */
+export function ringGain(kind: RingKind): number {
+  if (kind !== "incoming") return 1;
+  let peak = 0;
+  PATTERNS[kind].render((freqs, _at, _dur, vol) => { peak = Math.max(peak, freqs.length * vol); });
+  return peak > 0 ? RING_PEAK / peak : 1;
+}
 function renderWav(kind: RingKind): string {
   const rate = WAV_RATE;
   const p = PATTERNS[kind];
@@ -103,6 +113,11 @@ function renderWav(kind: RingKind): string {
   v.setUint16(34, 16, true);
   w(36, "data");
   v.setUint32(40, n * 2, true);
+  if (kind === "incoming") {
+    let pk = 0;
+    for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(pcm[i]));
+    if (pk > 0) for (let i = 0; i < n; i++) pcm[i] *= RING_PEAK / pk;
+  }
   for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
   return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
@@ -155,6 +170,20 @@ if (typeof window !== "undefined")
     nativePlaying = playing;
   });
 
+/** native apps: put the audio session back into ring/speaker shape before the incoming tone (a call-mode
+ *  session left over from a native call made the ring thin and quiet on iPhone) */
+function postNativeRingtonePrepare() {
+  try {
+    const w = window as unknown as { __olNativeCalls?: unknown; ReactNativeWebView?: { postMessage(s: string): void }; OpenLoungeNative?: { postMessage?(s: string): void } };
+    if (!w.__olNativeCalls) return;
+    const m = JSON.stringify({ type: "call:ringtonePrepare" });
+    if (w.ReactNativeWebView) w.ReactNativeWebView.postMessage(m);
+    else w.OpenLoungeNative?.postMessage?.(m);
+  } catch {
+    /* ignore */
+  }
+}
+
 function postNativeRingbackStop() {
   try {
     const w = window as unknown as { __olNativeCalls?: unknown; ReactNativeWebView?: { postMessage(s: string): void }; OpenLoungeNative?: { postMessage?(s: string): void } };
@@ -195,6 +224,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     expose();
     return;
   }
+  if (kind === "incoming") postNativeRingtonePrepare();
   const c = resumeAudio() ?? audioContext();
   const state: RingState = { kind, video: !!opts.video, since: Date.now(), path: c ? "webaudio" : "none", ctx: c?.state ?? "none" };
   let alive = true;
@@ -209,7 +239,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
 
   if (c) {
     master = c.createGain();
-    master.gain.value = 1;
+    master.gain.value = ringGain(kind);
     level = c.createAnalyser();
     level.fftSize = 1024;
     master.connect(level);
@@ -250,7 +280,7 @@ export function startRing(kind: RingKind, opts: { video?: boolean; untilMs?: num
     resumeAudio();
     master.gain.cancelScheduledValues(c.currentTime);
     master.gain.setValueAtTime(master.gain.value, c.currentTime);
-    master.gain.linearRampToValueAtTime(1, c.currentTime + 0.01);
+    master.gain.linearRampToValueAtTime(ringGain(kind), c.currentTime + 0.01);
     state.ctx = c.state;
     expose();
   };
