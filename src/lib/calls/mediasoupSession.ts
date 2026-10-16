@@ -97,6 +97,9 @@ export class MediasoupCallSession {
       this.micHandoverPending = true;
       return;
     }
+    // Desktop publishes a processed (Web Audio) track; recapturing under it left the sender silent in testing.
+    // The handover problem is a phone one (raw AEC mic, useRawDirectCallMicrophone) — desktop only recovers a dead mic.
+    if (this.micProcessor || this.micOutbound !== this.mic) return this.checkMicAlive();
     const now = Date.now();
     if (now - this.lastMicRebind < 300) return;
     this.lastMicRebind = now;
