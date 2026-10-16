@@ -523,6 +523,10 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       speaker = true
       webOwnsRingback = false
       guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { configureAudio(); return }
+      // pre-call prep (Android's audio-focus step): category/mode/options for the call are set BEFORE the CallKit
+      // transaction, so activation only flips the already-configured session live instead of reconfiguring it under
+      // WebKit's running capture. Not activated here — CallKit owns activation.
+      configureAudio()
       var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty { name = "Open Lounge" }
       let c = OLCall(callId: callId, uuid: UUID(), incoming: false, video: video)
