@@ -97,6 +97,9 @@ const mark = (n: string) => {
   }
 };
 
+/** native audio-session handovers that require the caller's mic to be re-bound to its live producer */
+export const MIC_HANDOVER_REASONS = new Set(["callkit-activate", "callkit-activate-settle", "connected", "interruption-ended"]);
+
 /** Survives a WebView reload (unlock / lock-screen answer): the call this device accepted, so the new page rejoins it
  *  instead of treating it as "answered elsewhere". sessionStorage is per-tab, so other devices never see it. */
 const ACCEPTED_KEY = "ol:acceptedCall";
@@ -158,6 +161,8 @@ export class CallEngine {
   /** Headset follow: re-acquire the mic when a wired/USB-C/Bluetooth headset is connected or removed. */
   private stopDeviceFollow: (() => void) | null = null;
   private preMic: Promise<LocalAudioTrack | null> | null = null;
+  /** a native audio-session handover arrived before the mediasoup session existed */
+  private micHandoverPending = false;
   private micVoiceProcessing: VoiceProcessingHandle | null = null;
   private camTrack: LocalVideoTrack | null = null;
   /** Ignore repeated taps while a mobile camera capture / sender replacement is in flight. */
@@ -330,6 +335,8 @@ export class CallEngine {
     buzz("light");
     this.clearEnd();
     this.lastPeer = { id: peer.id, video };
+    this.micHandoverPending = false;
+    this.watchNetwork(); // native audio-session events must be heard while ringing, not only once connected
     const now = Date.now();
     const optimistic: CallInfo = {
       id: "",
@@ -765,6 +772,10 @@ export class CallEngine {
         tcpOnly,
       });
       this.mediasoup = session;
+      if (this.micHandoverPending) {
+        this.micHandoverPending = false;
+        session.rebindMic(); // runs as soon as the producer exists
+      }
       await session.connect(this.s.camOn);
       if (this.mediasoup !== session || !this.busy) {
         session.close();
@@ -1408,8 +1419,16 @@ export class CallEngine {
     if (this.netWatched || typeof window === "undefined") return;
     this.netWatched = true;
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
-    window.addEventListener("openlounge:native-audio-resume", () => {
+    window.addEventListener("openlounge:native-audio-resume", (e) => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
+      const reason = String((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "");
+      if (this.busy && this.s.role === "caller" && MIC_HANDOVER_REASONS.has(reason)) {
+        // Caller: the mic + send transport + producer were built while ringing (before CallKit owned the session).
+        // The session just changed hands → flip a fresh capture onto the existing producer right away.
+        if (this.mediasoup) this.mediasoup.rebindMic();
+        else this.micHandoverPending = true;
+        return;
+      }
       // ...and the outbound mic: an outgoing call captured it before CallKit took the session (muted → silence)
       this.mediasoup?.checkMicAlive();
     });

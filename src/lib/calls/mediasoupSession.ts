@@ -84,6 +84,24 @@ export class MediasoupCallSession {
       if (!this.closed && this.mic?.muted) void this.recoverMic();
     }, 1_200);
   };
+  private micHandoverPending = false;
+  private lastMicRebind = 0;
+  /**
+   * The OS audio session changed hands (iOS CallKit activation / connect, after the invite went out): bind a fresh
+   * capture to the EXISTING producer (replaceTrack — no transport, no renegotiation, no wait). If the producer is not
+   * built yet, the rebind runs the moment it is.
+   */
+  rebindMic() {
+    if (this.closed) return;
+    if (!this.producers.get("audio") || !this.mic) {
+      this.micHandoverPending = true;
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastMicRebind < 300) return;
+    this.lastMicRebind = now;
+    void this.recoverMic();
+  }
   /** Native audio-session handover (CallKit activate / connect): recapture a mic that is muted or ended. */
   checkMicAlive() {
     if (this.closed || !this.mic) return;
@@ -305,6 +323,10 @@ export class MediasoupCallSession {
       return;
     }
     this.producers.set("audio", producer);
+    if (this.micHandoverPending) {
+      this.micHandoverPending = false;
+      queueMicrotask(() => this.rebindMic());
+    }
     // Desktop can restore the processed track after an interruption. Native phone calls publish the raw AEC/NS/AGC
     // microphone throughout, so a stale MediaStreamAudioDestinationNode can never silence a later call.
     context?.addEventListener("statechange", this.onMicAudioState);
