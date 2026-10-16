@@ -77,6 +77,9 @@ export class NativeMediaSession {
   private syncing: Promise<void> | null = null;
   private syncAgain = false;
   private iceRestarted = new Set<string>();
+  /** rejects the moment close() runs, so a superseded connect never sits on a dead transport until the timeout */
+  private abortRej: ((e: Error) => void) | null = null;
+  private aborted = new Promise<never>((_, rej) => { this.abortRej = rej; });
 
   /** stable server-side connection id for this media session: a page reload (new socket) re-attaches to it instead
    *  of the server tearing the SFU peer down with the old socket */
@@ -100,6 +103,7 @@ export class NativeMediaSession {
     try {
       await Promise.race([
         this.connectInner(),
+        this.aborted,
         new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('native media connect timed out')), CONNECT_TIMEOUT_MS); }),
       ]);
     } finally {
@@ -274,6 +278,8 @@ export class NativeMediaSession {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.aborted.catch(() => {});
+    this.abortRej?.(new Error('native media closed'));
     if (this.joined) void this.r('ms:leave').catch(() => {});
     this.joined = false;
     this.consumers.forEach((c) => c.close());
@@ -343,6 +349,9 @@ const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 export class NativeMediaController {
   private session: NativeMediaSession | null = null;
   private lk: NativeLiveKitSession | null = null;
+  /** the one fresh build in flight: a second connect for the same call/path joins it instead of tearing it down
+   *  (the 60 s block hang: recovery + the page's own rejoin both issued connect, each closing the other's session) */
+  private building: { callId: string; tcpOnly: boolean; p: Promise<{ attached: boolean }>; tok: object } | null = null;
   constructor(private req: Req, private emit: Emit) {}
 
   /** live call media the app is holding (for a reloaded page to re-attach) */
@@ -371,6 +380,8 @@ export class NativeMediaController {
             return { attached: true };
           }
         }
+        const b = this.building;
+        if (b && b.callId === callId && b.tcpOnly === tcpOnly) return b.p;
         this.lk?.close();
         this.lk = null;
         cur?.close();
@@ -378,13 +389,20 @@ export class NativeMediaController {
           if (this.session === s) this.emit(d);
         });
         this.session = s;
-        try {
-          await s.connect();
-        } catch (e) {
-          if (this.session === s) { s.close(); this.session = null; }
-          throw e;
-        }
-        return { attached: false };
+        const tok = {};
+        const p = (async () => {
+          try {
+            await s.connect();
+            return { attached: false };
+          } catch (e) {
+            if (this.session === s) { s.close(); this.session = null; }
+            throw e;
+          } finally {
+            if (this.building?.tok === tok) this.building = null;
+          }
+        })();
+        this.building = { callId, tcpOnly, p, tok };
+        return p;
       }
       case 'connectLiveKit': {
         if (!CALL_ID.test(callId) || typeof cmd.url !== 'string' || typeof cmd.token !== 'string') throw new Error('bad livekit media');
@@ -431,6 +449,7 @@ export class NativeMediaController {
   }
 
   closeAll(dropPrewarm = true) {
+    this.building = null;
     this.session?.close();
     this.session = null;
     this.lk?.close();
