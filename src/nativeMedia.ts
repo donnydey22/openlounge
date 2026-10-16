@@ -6,10 +6,13 @@
 // Page → app  (bridge method 'nativeMedia', request/reply):
 //   {op:'prewarm'}                          dial tapped: grab the mic + load the WebRTC stack before the invite
 //   {op:'connect', callId, iceServers, tcpOnly?}   join + send/recv transports + audio producer + consume
+//   {op:'connectLiveKit', callId, url, token, iceServers}   emergency LiveKit path, still native
+//   {op:'status'}  → {callId, kind, connected} | null    (a reloaded page re-attaches; connect on the same call = attach)
 //   {op:'mute', muted} | {op:'close'} | {op:'restartIce'} | {op:'stats'} | {op:'ladder', audioBps}
 //   {op:'consumerAvailable'}                ms:consumer:available arrived on the page socket
 // App → page events (CustomEvent 'openlounge:native-media'): {state:'connected'|'disconnected'|'failed'|'remote-audio'}
-import { mediaDevices, registerGlobals, type MediaStream } from 'react-native-webrtc';
+import { mediaDevices, type MediaStream } from '@livekit/react-native-webrtc';
+import { registerGlobals } from '@livekit/react-native';
 
 type Req = <T>(event: string, data: Record<string, unknown>) => Promise<T>;
 type Emit = (detail: Record<string, unknown>) => void;
@@ -75,10 +78,21 @@ export class NativeMediaSession {
   private syncAgain = false;
   private iceRestarted = new Set<string>();
 
-  constructor(private callId: string, private iceServers: unknown[], private tcpOnly: boolean, private req: Req, private emit: Emit) {}
+  /** stable server-side connection id for this media session: a page reload (new socket) re-attaches to it instead
+   *  of the server tearing the SFU peer down with the old socket */
+  readonly nativeConn = `n_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+  constructor(readonly callId: string, private iceServers: unknown[], readonly tcpOnly: boolean, private req: Req, private emit: Emit) {}
+
+  get alive() {
+    return !this.closed;
+  }
+  get isConnected() {
+    return this.connected && !this.closed;
+  }
 
   private r<T>(event: string, data: Record<string, unknown> = {}) {
-    return this.req<T>(event, { callId: this.callId, ...data });
+    return this.req<T>(event, { callId: this.callId, nativeConn: this.nativeConn, ...data });
   }
 
   async connect(): Promise<void> {
@@ -93,20 +107,20 @@ export class NativeMediaSession {
     }
   }
 
-  private alive() {
+  private check() {
     if (this.closed) throw new Error('native media closed');
   }
 
   private async connectInner() {
     ensureGlobals();
     const [{ Device }, stream] = await Promise.all([import('mediasoup-client'), takeMic()]);
-    this.alive();
+    this.check();
     if (!stream) throw new Error('microphone unavailable');
     this.stream = stream;
     const joined = await this.r<{ ok: boolean; routerRtpCapabilities?: unknown }>('ms:join');
     if (!joined.ok || !joined.routerRtpCapabilities) throw new Error('Mediasoup admission failed');
     this.joined = true;
-    this.alive();
+    this.check();
     const device = new Device({ handlerName: 'ReactNative106' }) as unknown as NonNullable<NativeMediaSession['device']>;
     await device.load({ routerRtpCapabilities: joined.routerRtpCapabilities });
     this.device = device;
@@ -116,7 +130,7 @@ export class NativeMediaSession {
       this.r<{ ok: boolean; transport?: Record<string, unknown> }>('ms:transport:create', { direction: 'recv', ...extra }),
     ]);
     if (!so.ok || !so.transport || !ro.ok || !ro.transport) throw new Error('Mediasoup transport setup failed');
-    this.alive();
+    this.check();
     this.send = device.createSendTransport({ ...so.transport, iceServers: this.iceServers, iceTransportPolicy: 'all' });
     this.recv = device.createRecvTransport({ ...ro.transport, iceServers: this.iceServers, iceTransportPolicy: 'all' });
     this.wire(this.send, 'send');
@@ -128,10 +142,10 @@ export class NativeMediaSession {
       encodings: [{ maxBitrate: 48_000, priority: 'high', networkPriority: 'high' } as never],
       appData: { source: 'mic', native: true },
     });
-    this.alive();
+    this.check();
     await this.syncConsumers();
     await waitConnected(this.send);
-    this.alive();
+    this.check();
     this.connected = true;
     this.emit({ state: 'connected' });
   }
@@ -269,21 +283,82 @@ function waitConnected(t: Transport): Promise<void> {
   });
 }
 
-/** One live session at a time; owned by App.tsx. */
+/** Emergency LiveKit (TCP/TURN-443) path, also native: the page never captures the mic in native-media mode. */
+class NativeLiveKitSession {
+  private room: any = null;
+  private stream: MediaStream | null = null;
+  private closed = false;
+  constructor(readonly callId: string, private emit: Emit) {}
+  get alive() {
+    return !this.closed;
+  }
+  async connect(url: string, token: string, iceServers: unknown[]) {
+    ensureGlobals();
+    const LK = await import('livekit-client');
+    const stream = await takeMic();
+    if (!stream) throw new Error('microphone unavailable');
+    this.stream = stream;
+    const room = new LK.Room({ adaptiveStream: false, dynacast: false });
+    this.room = room;
+    room.on(LK.RoomEvent.Reconnecting, () => this.emit({ state: 'disconnected' }));
+    room.on(LK.RoomEvent.Reconnected, () => this.emit({ state: 'connected' }));
+    room.on(LK.RoomEvent.Disconnected, () => { if (!this.closed) this.emit({ state: 'failed' }); });
+    room.on(LK.RoomEvent.TrackSubscribed, (t: { kind: string }) => { if (t.kind === 'audio') this.emit({ state: 'remote-audio' }); });
+    await room.connect(url, token, { autoSubscribe: true, rtcConfig: iceServers.length ? { iceServers: iceServers as RTCIceServer[] } : undefined });
+    if (this.closed) throw new Error('native media closed');
+    await room.localParticipant.publishTrack(stream.getAudioTracks()[0] as never, { source: LK.Track.Source.Microphone, dtx: true, red: true });
+    this.emit({ state: 'connected' });
+  }
+  setMuted(muted: boolean) {
+    this.stream?.getAudioTracks().forEach((t) => { t.enabled = !muted; });
+    void this.room?.localParticipant?.setMicrophoneEnabled?.(!muted).catch?.(() => {});
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    void this.room?.disconnect?.();
+    this.room = null;
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+  }
+}
+
+const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** One live session at a time; owned by App.tsx. Survives WebView reloads (the page re-attaches as UI). */
 export class NativeMediaController {
   private session: NativeMediaSession | null = null;
+  private lk: NativeLiveKitSession | null = null;
   constructor(private req: Req, private emit: Emit) {}
 
+  /** live call media the app is holding (for a reloaded page to re-attach) */
+  current(): { callId: string; kind: 'mediasoup' | 'livekit'; connected: boolean } | null {
+    if (this.session?.alive) return { callId: this.session.callId, kind: 'mediasoup', connected: this.session.isConnected };
+    if (this.lk?.alive) return { callId: this.lk.callId, kind: 'livekit', connected: true };
+    return null;
+  }
+
   async handle(cmd: Record<string, unknown>): Promise<unknown> {
+    const callId = typeof cmd.callId === 'string' ? cmd.callId : '';
     switch (cmd.op) {
       case 'prewarm':
         prewarmNativeMedia();
         return true;
       case 'connect': {
-        this.session?.close();
-        const callId = typeof cmd.callId === 'string' ? cmd.callId : '';
-        if (!/^[A-Za-z0-9_-]{1,64}$/.test(callId)) throw new Error('bad callId');
-        const s = new NativeMediaSession(callId, Array.isArray(cmd.iceServers) ? cmd.iceServers : [], cmd.tcpOnly === true, this.req, (d) => {
+        if (!CALL_ID.test(callId)) throw new Error('bad callId');
+        const tcpOnly = cmd.tcpOnly === true;
+        const cur = this.session;
+        // page reload mid-call: same call, same path, still alive → re-attach, never rebuild native media
+        if (cur?.alive && cur.callId === callId && cur.tcpOnly === tcpOnly) {
+          if (cur.isConnected) {
+            void cur.syncConsumers().catch(() => {});
+            return { attached: true };
+          }
+        }
+        this.lk?.close();
+        this.lk = null;
+        cur?.close();
+        const s = new NativeMediaSession(callId, Array.isArray(cmd.iceServers) ? cmd.iceServers : [], tcpOnly, this.req, (d) => {
           if (this.session === s) this.emit(d);
         });
         this.session = s;
@@ -293,33 +368,60 @@ export class NativeMediaController {
           if (this.session === s) { s.close(); this.session = null; }
           throw e;
         }
-        return true;
+        return { attached: false };
       }
+      case 'connectLiveKit': {
+        if (!CALL_ID.test(callId) || typeof cmd.url !== 'string' || typeof cmd.token !== 'string') throw new Error('bad livekit media');
+        if (this.lk?.alive && this.lk.callId === callId) return { attached: true };
+        this.session?.close();
+        this.session = null;
+        this.lk?.close();
+        const l = new NativeLiveKitSession(callId, (d) => { if (this.lk === l) this.emit(d); });
+        this.lk = l;
+        try {
+          await l.connect(cmd.url, cmd.token, Array.isArray(cmd.iceServers) ? cmd.iceServers : []);
+        } catch (e) {
+          if (this.lk === l) { l.close(); this.lk = null; }
+          throw e;
+        }
+        return { attached: false };
+      }
+      case 'status':
+        return this.current();
       case 'consumerAvailable':
         await this.session?.syncConsumers().catch(() => {});
         return true;
       case 'mute':
         this.session?.setMuted(cmd.muted === true);
+        this.lk?.setMuted(cmd.muted === true);
         return true;
       case 'restartIce':
         await this.session?.restartIceAll();
         return true;
       case 'ladder':
-        return (await this.session?.ladder(Number(cmd.audioBps) || 32_000)) ?? false;
+        return (await this.session?.ladder(Number(cmd.audioBps) || 48_000)) ?? false;
       case 'stats':
         return (await this.session?.stats()) ?? [];
       case 'close':
-        this.session?.close();
-        this.session = null;
+        this.closeAll(false);
         return true;
     }
     throw new Error('unknown op');
   }
 
-  closeAll() {
+  /** Network path changed (Wi-Fi ⇄ cellular): fresh ICE in place, natively — no page involvement needed. */
+  onNetworkChange() {
+    void this.session?.restartIceAll().catch(() => {});
+  }
+
+  closeAll(dropPrewarm = true) {
     this.session?.close();
     this.session = null;
-    preStream?.then((s) => s?.getTracks().forEach((t) => t.stop()));
-    preStream = null;
+    this.lk?.close();
+    this.lk = null;
+    if (dropPrewarm) {
+      preStream?.then((st) => st?.getTracks().forEach((t) => t.stop()));
+      preStream = null;
+    }
   }
 }

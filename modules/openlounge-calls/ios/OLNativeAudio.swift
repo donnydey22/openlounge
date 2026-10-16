@@ -1,6 +1,8 @@
 import AVFoundation
-#if canImport(WebRTC)
-import WebRTC
+#if canImport(LiveKitWebRTC)
+import LiveKitWebRTC
+private typealias RTCAudioSession = LKRTCAudioSession
+private typealias RTCAudioSessionConfiguration = LKRTCAudioSessionConfiguration
 #endif
 
 /// Native call media (src/nativeMedia.ts): CallKit owns the AVAudioSession; WebRTC's audio unit only runs while
@@ -9,7 +11,7 @@ import WebRTC
 /// no fresh capture: the "Keiko can't hear the iPhone caller" race is gone by construction).
 enum OLNativeAudio {
   static func setUp() {
-    #if canImport(WebRTC)
+    #if canImport(LiveKitWebRTC)
     let rtc = RTCAudioSession.sharedInstance()
     rtc.useManualAudio = true
     rtc.isAudioEnabled = false
@@ -24,7 +26,7 @@ enum OLNativeAudio {
   }
 
   static func didActivate(_ session: AVAudioSession) {
-    #if canImport(WebRTC)
+    #if canImport(LiveKitWebRTC)
     let rtc = RTCAudioSession.sharedInstance()
     rtc.audioSessionDidActivate(session)
     rtc.isAudioEnabled = true
@@ -32,7 +34,7 @@ enum OLNativeAudio {
   }
 
   static func didDeactivate(_ session: AVAudioSession) {
-    #if canImport(WebRTC)
+    #if canImport(LiveKitWebRTC)
     let rtc = RTCAudioSession.sharedInstance()
     rtc.isAudioEnabled = false
     rtc.audioSessionDidDeactivate(session)
