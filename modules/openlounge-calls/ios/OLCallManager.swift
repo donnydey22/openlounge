@@ -81,7 +81,12 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     return URL(string: "https://openlounge.app")!
   }
   #else
-  private static let base = URL(string: "https://openlounge.app")!
+  // Staging test builds set OLBaseURL (app.config.ts, OL_START_URL); production builds don't → https://openlounge.app
+  private static let base: URL = {
+    if let s = Bundle.main.object(forInfoDictionaryKey: "OLBaseURL") as? String, let u = URL(string: s), u.scheme == "https",
+       let h = u.host, h == "openlounge.app" || h.hasSuffix(".up.railway.app") { return u }
+    return URL(string: "https://openlounge.app")!
+  }()
   #endif
   private static let idPattern = "^[A-Za-z0-9_-]{1,64}$"
   private static let declineTokenPattern = "^v1\\.[A-Za-z0-9_-]{8,500}\\.[A-Za-z0-9_-]{20,100}$"
