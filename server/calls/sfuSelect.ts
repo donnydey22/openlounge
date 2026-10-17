@@ -10,8 +10,3 @@ export function sfuSelected(participants?: { callerId: string; calleeId: string 
   return allow.has(participants.callerId) && allow.has(participants.calleeId);
 }
 
-
-/** CALL_LIVEKIT=off: primary mediasoup SFU only. No LiveKit at call start or as an in-call fallback (reconnects retry the SFU). */
-export function liveKitAllowed(env: Record<string, string | undefined> = process.env): boolean {
-  return env.CALL_LIVEKIT !== "off";
-}
