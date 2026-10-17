@@ -3,7 +3,7 @@ import type { RealtimeClient } from "@/lib/realtime";
 import { nativePlatform } from "@/lib/native";
 import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
-import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, micNeedsRecovery, shouldRestartIce, useRawDirectCallMicrophone } from "./audioPolicy";
+import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, micNeedsRecovery, shouldRestartIce, useRawDirectCallMicrophone, voiceLadderBps } from "./audioPolicy";
 import { inputKeys, shouldReacquireMic } from "../audioDevices";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
@@ -555,7 +555,8 @@ export class MediasoupCallSession {
         return false;
       }
     };
-    const a = await set("audio", (e) => { e.maxBitrate = step.audioBps; });
+    const audioBps = voiceLadderBps(step.audioBps, typeof navigator === "undefined" ? "" : navigator.userAgent);
+    const a = await set("audio", (e) => { e.maxBitrate = audioBps; });
     await set("video", (e) => {
       e.maxBitrate = step.videoBps;
       e.maxFramerate = step.videoFps;

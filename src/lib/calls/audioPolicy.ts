@@ -80,3 +80,12 @@ export async function resumePausedCallAudio(els: readonly Pick<HTMLMediaElement,
   await Promise.all(els.filter((el) => el.paused).map((el) => el.play().catch(() => { blocked = true; })));
   return blocked;
 }
+
+/**
+ * Voice floor for the audio ladder on Android (85a16932: three loss steps took Keiko's Opus to 16 kbps). 24 kbps is
+ * still a normal wideband voice rate and keeps Opus FEC effective; the ladder's upper steps are unchanged.
+ */
+export const ANDROID_VOICE_FLOOR_BPS = 24_000;
+export function voiceLadderBps(stepBps: number, ua = ""): number {
+  return /Android/i.test(ua) ? Math.max(stepBps, ANDROID_VOICE_FLOOR_BPS) : stepBps;
+}

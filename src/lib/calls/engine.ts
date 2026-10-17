@@ -2002,7 +2002,9 @@ export class CallEngine {
         muted: el ? String(el.muted) : "",
         paused: el ? String(el.paused) : "",
         plat: /Android/i.test(navigator.userAgent) ? "android" : /iPhone|iPad/i.test(navigator.userAgent) ? "ios" : "web",
-        native: String(!!w.__olNativeCalls),
+        // app = running inside the iOS/Android wrapper; the top-level native flag (set by diag) is whether the app
+        // owns call media (nativeAudio). This key used to be "native" and overwrote it (85a16932: WebView path read native=true).
+        app: String(!!w.__olNativeCalls),
         nativeAudio: String(!!this.s.nativeAudio),
       });
     })(), 5_000);
