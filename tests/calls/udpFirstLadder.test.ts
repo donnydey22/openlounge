@@ -48,10 +48,15 @@ test("path order: SFU ICE-TCP candidates stripped (UDP direct first), our TURNS 
   assert.match(srv, /mintTurnIceServers\(callId, userId\)\?\.map[\s\S]{0,200}startsWith\("turns:"\)/);
 });
 
-test("no <0.5 s jump: first-connect failure retries mediasoup (1/2/4 s) before last-resort LiveKit; message only if LiveKit fails", () => {
+test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting UI, transient states ignored, then silent LiveKit", () => {
   assert.match(eng, /if \(!recovering && !this\.inFirstRetry\) void this\.retryFirstConnect\(/);
-  assert.match(eng, /FIRST_RETRY_WAITS = \[1_000, 2_000, 4_000\]/);
-  assert.match(eng, /retryFirstConnect[\s\S]{0,1400}await this\.lastResortLiveKit\("first-connect"/);
+  assert.match(eng, /FIRST_CONNECT_BUDGET_MS = 5_000;/);
+  const rf = eng.slice(eng.indexOf("private async retryFirstConnect("), eng.indexOf("private async lastResortLiveKit("));
+  assert.doesNotMatch(rf, /reconnecting: true/);
+  assert.match(rf, /await this\.lastResortLiveKit\("first-connect"/);
+  assert.match(eng, /if \(!this\.msRecoveryOnly\(\)\) \{\s*this\.netLog\(`ms-\$\{state\}-first`\);\s*return;/);
+  const lk = eng.slice(eng.indexOf("private async lastResortLiveKit("), eng.indexOf("private failUdpUnreachable("));
+  assert.doesNotMatch(lk, /reconnecting: true/);
   assert.match(eng, /lastResortLiveKit[\s\S]{0,900}"call:mediaFallback"[\s\S]{0,500}this\.failUdpUnreachable\(stage/);
   assert.match(eng, /MS_RECOVER_MAX_MS\) \{[\s\S]{0,120}lastResortLiveKit\("recover-timeout"/);
   assert.match(eng, /Can't connect the call on this network\. Try another Wi-Fi or mobile data\./);

@@ -829,8 +829,11 @@ export class CallEngine {
       }
       if (this.s.nativeAudio !== session instanceof NativeMediaSession) this.set({ nativeAudio: session instanceof NativeMediaSession });
       const first = !this.msRecoveryOnly();
+      if (first && !this.inFirstRetry) this.firstConnectT0 = Date.now();
+      // first connect: one ~5 s budget across all silent attempts (ICE races direct UDP and the TURNS relay)
+      const budget = Math.max(500, CallEngine.FIRST_CONNECT_BUDGET_MS - (Date.now() - this.firstConnectT0));
       await (first
-        ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("udp ice timeout")), CallEngine.FIRST_CONNECT_MS))])
+        ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("first connect budget")), budget))])
         : session.connect(this.s.camOn));
       if (this.mediasoup !== session || !this.busy) {
         session.close();
@@ -856,7 +859,7 @@ export class CallEngine {
         // Main SFU only (no LiveKit): a failed FIRST connect enters the same recovery as a mid-call outage — rebuild
         // the transports with backoff (each offers UDP, ICE-TCP 40443 and TURNS 443), keep the call, show
         // "Reconnecting…", end only on hangup / server end. Inside recovery the loop itself retries.
-        // UDP-only (Donny, Oct 17): a FIRST connect that fails (ICE never succeeds within FIRST_CONNECT_MS, or the SFU
+        // UDP-only (Donny, Oct 17): a FIRST connect that fails (ICE never succeeds within FIRST_CONNECT_BUDGET_MS, or the SFU
         // refuses) ends the attempt cleanly with a clear message — no endless "Reconnecting…". Persistent recovery is
         // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
         if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
@@ -983,6 +986,12 @@ export class CallEngine {
       this.mediasoupConnected = true;
       this.clearMediasoupDegrade();
       this.set({ reconnecting: false });
+      return;
+    }
+    // first connect (never connected on the SFU in this call): a transient disconnected/failed is not fatal and shows
+    // no "Reconnecting…"; the connect budget + silent retries (retryFirstConnect) own this phase
+    if (!this.msRecoveryOnly()) {
+      this.netLog(`ms-${state}-first`);
       return;
     }
     this.mediasoupConnected = false;
@@ -1479,24 +1488,25 @@ export class CallEngine {
   private wake: (() => void) | null = null;
   /** give up locally only when we can't even reach our server for this long (it ends the call after 45 s) */
   static LOCAL_GIVEUP_MS = 60_000;
-  /** first UDP connect: ICE must succeed within this (UDP-only; no TCP/TLS relay exists to wait for) */
-  static FIRST_CONNECT_MS = 10_000;
   /** a call that was connected and dropped keeps recovering over UDP at most this long, then ends cleanly */
   static MS_RECOVER_MAX_MS = 45_000;
   static UDP_UNREACHABLE_MSG = "Can't connect the call on this network. Try another Wi-Fi or mobile data.";
   /** first-connect UDP retries before the last-resort LiveKit fallback (no more <0.5 s jumps) */
-  static FIRST_RETRY_WAITS = [1_000, 2_000, 4_000];
+  /** WhatsApp-style first connect (Oct 17, 5:44): an instant early failure is not fatal; silent retries (no
+   *  "Reconnecting…", the UI stays Calling/Connecting) within one ~5 s budget, then a silent LiveKit handover. */
+  static FIRST_CONNECT_BUDGET_MS = 5_000;
+  static FIRST_RETRY_GAP_MS = 400;
+  private firstConnectT0 = 0;
   private inFirstRetry = false;
   private async retryFirstConnect(reason: string) {
     if (this.inFirstRetry) return;
     const callId = this.s.call?.id;
     const live = () => this.busy && this.s.call?.id === callId && this.media?.provider === "mediasoup";
     this.inFirstRetry = true;
-    this.set({ reconnecting: true });
     try {
       let attempt = 0;
-      for (const wait of CallEngine.FIRST_RETRY_WAITS) {
-        await new Promise((r) => setTimeout(r, wait));
+      while (Date.now() - this.firstConnectT0 < CallEngine.FIRST_CONNECT_BUDGET_MS - CallEngine.FIRST_RETRY_GAP_MS) {
+        await new Promise((r) => setTimeout(r, CallEngine.FIRST_RETRY_GAP_MS));
         if (!live()) return;
         attempt++;
         this.netLog("ms-first-retry", { attempt, reason });
@@ -1504,10 +1514,7 @@ export class CallEngine {
         this.dropMediaForRejoin();
         this.media = media;
         const session = await this.connectMediasoup(media, true);
-        if (session && this.mediasoup === session && this.mediasoupConnected) {
-          this.set({ reconnecting: false, error: null });
-          return;
-        }
+        if (session && this.mediasoup === session && this.mediasoupConnected) return;
       }
       if (live()) await this.lastResortLiveKit("first-connect", reason);
     } finally {
