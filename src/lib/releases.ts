@@ -3,7 +3,7 @@
 export const ANDROID_RELEASE = {
   version: "0.3.16",
   build: 32,
-  file: "/downloads/openlounge-0.3.15.apk",
+  file: "/downloads/openlounge-0.3.16-32.apk",
   size: "98.1 MB",
   sha256: "d46e12d4eec907a9967539f8021c397dcd162383566f8bf92e8db0b8deba3eda",
 } as const;
