@@ -182,3 +182,17 @@ test("native media: Android 0.3.17 'wants LiveKit' signal hands over now; iOS/we
   assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS keep the silent retry budget");
   assert.ok(src.includes('await this.lastResortLiveKit("native-ms-failed", reason);'));
 });
+
+test("Android app: WebView media path, caller budget from answer, LiveKit pinned; iOS native unchanged", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
+  assert.equal(m.useNativeMedia(false), false, "Android app audio calls use the WebView path");
+  installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
+  assert.equal(m.useNativeMedia(false), true, "iOS app keeps native media");
+  installWindow(null);
+  assert.equal(m.useNativeMedia(false), false, "web unchanged");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.ok(src.includes("Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])"));
+  assert.ok(/while \(ringing\(\)\) await[\s\S]{0,80}this\.firstConnectT0 = Date\.now\(\)/.test(src), "caller budget starts at answer");
+  assert.ok(!/shouldTryUdp\(now\)\) void this\.requestUdpRestore\(\)/.test(src), "no LiveKit → SFU flap-back");
+});

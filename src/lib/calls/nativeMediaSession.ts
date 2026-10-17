@@ -29,7 +29,9 @@ export function nativeMediaAvailable(): boolean {
 
 /** Audio-only calls in the native-media iOS app use app-owned media. */
 export function useNativeMedia(video: boolean): boolean {
-  return !video && nativeMediaAvailable();
+  // Android app (Oct 17): native mediasoup (device-load type_error) and native LiveKit both failed on real phones, so
+  // Android calls use the WebView media path (as video calls and pre-0.3.16 builds do) until the native fix is proven.
+  return !video && nativeMediaAvailable() && !nativeMediaIsAndroid();
 }
 
 /** Android app (0.3.16+ shim sets platform:'android'); the iOS bridge carries no platform */

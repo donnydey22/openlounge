@@ -871,9 +871,8 @@ export class CallEngine {
       const first = !this.msRecoveryOnly();
       if (first && !this.inFirstRetry) this.firstConnectT0 = Date.now();
       // first connect: one ~5 s budget across all silent attempts (ICE races direct UDP and the TURNS relay)
-      const budget = Math.max(500, CallEngine.FIRST_CONNECT_BUDGET_MS - (Date.now() - this.firstConnectT0));
       await (first
-        ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("first connect budget")), budget))])
+        ? Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])
         : session.connect(this.s.camOn));
       if (this.mediasoup !== session || !this.busy) {
         session.close();
@@ -1266,7 +1265,7 @@ export class CallEngine {
     if (p === "livekit") {
       if (this.room?.state === "connected" && !this.s.reconnecting) this.udpRecovery.onTcpConnected(now);
       else this.udpRecovery.onTcpUnstable();
-      if (this.udpRecovery.shouldTryUdp(now)) void this.requestUdpRestore();
+      // pinned (Oct 17): once a call is on LiveKit it stays there — no flapping back to the SFU mid-call
     } else if (p === "mediasoup" && this.msTcp) {
       if (this.mediasoupConnected && !this.s.reconnecting) this.udpRecovery.onTcpConnected(now);
       else this.udpRecovery.onTcpUnstable();
@@ -1549,6 +1548,22 @@ export class CallEngine {
   static FIRST_RETRY_GAP_MS = 400;
   private firstConnectT0 = 0;
   private inFirstRetry = false;
+  /**
+   * Rejects when the first-connect budget runs out. A caller that connects while the call still rings starts the
+   * clock at answer, not at dial (calls 2f8a9a3e / e5c02f6f: 5 s of ringing used the whole budget → instant fallback).
+   */
+  private async firstConnectBudget(): Promise<never> {
+    const callId = this.s.call?.id;
+    const ringing = () => this.busy && this.s.call?.id === callId && (this.s.call?.phase === "calling" || this.s.call?.phase === "ringing");
+    if (ringing()) {
+      while (ringing()) await new Promise((r) => setTimeout(r, 200));
+      this.firstConnectT0 = Date.now();
+    }
+    const budget = Math.max(500, CallEngine.FIRST_CONNECT_BUDGET_MS - (Date.now() - this.firstConnectT0));
+    await new Promise((r) => setTimeout(r, budget));
+    throw new Error("first connect budget");
+  }
+
   private async retryFirstConnect(reason: string) {
     if (this.inFirstRetry) return;
     const callId = this.s.call?.id;
