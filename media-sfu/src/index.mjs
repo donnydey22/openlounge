@@ -213,7 +213,7 @@ async function routeRpc(input) {
           emitGateway("ms:gateway:notice", { connectionId, event: "ms:consumer:closed", data: { callId, consumerId: consumer.id } });
         });
         s.consumers.set(producer.id, consumer);
-        consumers.push({ id: consumer.id, producerId: producer.id, kind: consumer.kind, rtpParameters: consumer.rtpParameters, type: consumer.type });
+        consumers.push({ id: consumer.id, producerId: producer.id, kind: consumer.kind, rtpParameters: consumer.rtpParameters });
       }
     }
     return { consumers };
@@ -231,18 +231,6 @@ async function routeRpc(input) {
     for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
       await consumer.resume();
       return {};
-    }
-    throw new Error("Unknown consumer");
-  }
-  if (method === "consumer:layers") {
-    // Simulcast: the viewer's tile size / link picks the spatial layer it wants; the SFU still drops lower on its own
-    // bandwidth estimate. Top temporal layer unless the client asks otherwise.
-    const spatialLayer = payload.spatialLayer;
-    if (!Number.isInteger(spatialLayer) || spatialLayer < 0 || spatialLayer > 2) throw new Error("Invalid layer");
-    const temporalLayer = Number.isInteger(payload.temporalLayer) && payload.temporalLayer >= 0 && payload.temporalLayer <= 2 ? payload.temporalLayer : 2;
-    for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
-      if (consumer.type === "simulcast" || consumer.type === "svc") await consumer.setPreferredLayers({ spatialLayer, temporalLayer });
-      return { type: consumer.type, preferredLayers: consumer.preferredLayers ?? null, currentLayers: consumer.currentLayers ?? null };
     }
     throw new Error("Unknown consumer");
   }

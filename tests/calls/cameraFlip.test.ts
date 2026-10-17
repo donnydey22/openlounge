@@ -181,8 +181,6 @@ test("Mediasoup camera enable and flip use the shared orientation-aware capture 
 });
 
 test("Mediasoup leaves a healthy video producer uncapped so congestion control can recover quality", async () => {
-  // Simulcast (3 layers): the top layer has no maxBitrate, so no fixed ceiling pins the call; a rejected simulcast
-  // produce falls back to the single uncapped layer.
   const camera = videoTrack("front");
   const calls: unknown[] = [];
   const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
@@ -195,17 +193,9 @@ test("Mediasoup leaves a healthy video producer uncapped so congestion control c
       onRemoteTrack() {}, onState() {}, onLocalVideo() {},
     });
     const internal = session as any;
-    let reject = true;
-    internal.send = { produce: async (options: any) => { calls.push(options); if (options.encodings && reject) throw new Error("no simulcast"); return { close() {}, replaceTrack: async () => {} }; } };
+    internal.send = { produce: async (options: unknown) => { calls.push(options); return { close() {}, replaceTrack: async () => {} }; } };
     await session.enableCamera("user");
-    assert.equal((calls[0] as any).encodings.length, 3);
-    assert.equal((calls[0] as any).encodings[2].maxBitrate, undefined, "no fixed ceiling on the top layer");
-    assert.deepEqual(calls[1], { track: camera, appData: { source: "camera" } }, "single-layer fallback is the proven uncapped path");
-    await session.disableCamera();
-    calls.length = 0; reject = false;
-    await session.enableCamera("user");
-    assert.equal(calls.length, 1);
-    assert.equal(session.getVideoLayerState().producerEncodings, 3);
+    assert.deepEqual(calls, [{ track: camera, appData: { source: "camera" } }], "no fixed simulcast ceiling pins the direct call below its available bandwidth");
   } finally {
     if (priorNavigator) Object.defineProperty(globalThis, "navigator", priorNavigator);
     else Reflect.deleteProperty(globalThis, "navigator");
