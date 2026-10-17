@@ -1,11 +1,11 @@
 // Bounded microphone headroom for calls. This runs after the browser's echo cancellation / noise suppression / AGC,
 // then applies a gentle compressor so a quiet speaker is clearer without clipping louder speech.
 
-export const CALL_MIC_GAIN = 2.0; // +6 dB before the safety compressor (was 1.5 / +3.5 dB: "not loud enough")
+export const CALL_MIC_GAIN = 1.5; // +3.5 dB before the safety compressor
 export const CALL_MIC_COMPRESSOR = {
-  threshold: -20,
-  knee: 12,
-  ratio: 4,
+  threshold: -18,
+  knee: 14,
+  ratio: 3.5,
   attack: 0.003,
   release: 0.16,
 } as const;

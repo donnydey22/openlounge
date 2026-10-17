@@ -10,10 +10,10 @@ test("call capture asks for browser AEC, noise suppression, AGC, and efficient f
   assert.deepEqual(CALL_AUDIO_CONSTRAINTS.sampleRate, { ideal: 48_000 });
 });
 
-test("UDP Mediasoup voice producer requests Opus FEC (DTX off) without stereo overhead", () => {
+test("UDP Mediasoup voice producer requests Opus FEC and DTX without stereo overhead", () => {
   assert.deepEqual(OPUS_VOICE_CODEC_OPTIONS, {
     opusFec: true,
-    opusDtx: false,
+    opusDtx: true,
     opusStereo: false,
     opusMaxPlaybackRate: 48_000,
     opusMaxAverageBitrate: 48_000,

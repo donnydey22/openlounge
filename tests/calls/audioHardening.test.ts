@@ -9,11 +9,11 @@ import { MediasoupCallSession } from "../../src/lib/calls/mediasoupSession";
 
 const media = { provider: "mediasoup", callId: "call1" } as any;
 
-test("Opus voice: mono, no DTX (onset clipping), inband FEC, 48 kbps average, 20 ms ptime", () => {
+test("Opus voice: mono, DTX, inband FEC, 48 kbps average, 20 ms ptime", () => {
   assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusStereo, false);
-  assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusDtx, false);
+  assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusDtx, true);
   assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusFec, true);
-  assert.ok(OPUS_VOICE_CODEC_OPTIONS.opusMaxAverageBitrate >= 32_000 && OPUS_VOICE_CODEC_OPTIONS.opusMaxAverageBitrate <= 64_000);
+  assert.ok(OPUS_VOICE_CODEC_OPTIONS.opusMaxAverageBitrate >= 32_000 && OPUS_VOICE_CODEC_OPTIONS.opusMaxAverageBitrate <= 48_000);
   assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusPtime, 20);
 });
 
