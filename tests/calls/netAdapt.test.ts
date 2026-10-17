@@ -20,9 +20,9 @@ test("gate: no UA sniffing in the gate or ladder", () => {
   assert.doesNotMatch(src, /userAgent|matchMedia|ontouchstart|innerWidth/);
 });
 
-test("engine: ladder, MBB parking and in-place ICE on network change are all behind the one gate", () => {
+test("engine: bandwidth ladder on every platform (Oct 17); MBB parking and in-place ICE on network change stay behind the native gate", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(src, /if \(nativeAdaptiveEnabled\(\)\) return this\.startNetLadder\(session\)/);
+  assert.match(src, /return this\.startNetLadder\(session\);/);
   assert.match(src, /if \(nativeAdaptiveEnabled\(\)\) this\.parkMediaForSwitch\(\)/);
   assert.match(src, /this\.mediasoup && nativeAdaptiveEnabled\(\)/);
 });

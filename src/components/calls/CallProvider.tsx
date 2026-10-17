@@ -11,6 +11,7 @@ import { installAppLockPresence } from "@/lib/calls/appLockPresence";
 import { needsBackgroundRing, startBackgroundRing, stopBackgroundRing } from "@/lib/calls/backgroundRing";
 import { appVisible, NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT } from "@/lib/realtime";
 import { native } from "@/lib/native";
+import { checkMediaPermissionsSilently } from "@/lib/calls/permissions";
 import { useCall } from "./useCall";
 
 // the call UI (and livekit-client inside the engine's dynamic import) only loads when a call exists
@@ -43,6 +44,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // ringtone can play even though it arrives over the WebSocket, outside any gesture
   useEffect(() => installAudioUnlock(), []);
   useEffect(() => installAppLockPresence(), []);
+  // every launch: silent camera/mic status (permissions.query, never prompts); the prompt stays at call start
+  useEffect(() => void checkMediaPermissionsSilently().catch(() => {}), []);
 
   useEffect(() => {
     if (connected && meId) void callEngine?.resume();

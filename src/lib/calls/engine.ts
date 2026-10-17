@@ -28,7 +28,7 @@ type CallMediaSession = MediasoupCallSession | NativeMediaSession;
 import { flipCameraTrack } from "./cameraFlip";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
-import { ADAPT, NetLadder, nativeAdaptiveEnabled } from "./netAdapt";
+import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor } from "./netAdapt";
 import { followAudioDevices } from "../audioDevices";
 
 type LK = typeof import("livekit-client");
@@ -62,6 +62,8 @@ export interface CallSnapshot {
   needsGesture: boolean;
   /** "Bea turned on video" prompt (offer to turn on mine) */
   videoInvite: boolean;
+  /** app voice call on the native (audio-only) media path: no mid-call video toggle in the apps (Oct 17) */
+  nativeAudio: boolean;
   /** the same account is in a call on ANOTHER device (display-only pill; never rings or takes audio here) */
   elsewhere: ElsewhereCall | null;
   v: number;
@@ -90,6 +92,7 @@ const initial = (): CallSnapshot => ({
   error: null,
   needsGesture: false,
   videoInvite: false,
+  nativeAudio: false,
   elsewhere: null,
   v: 0,
 });
@@ -824,7 +827,11 @@ export class CallEngine {
         this.micHandoverPending = false;
         session.rebindMic(); // runs as soon as the producer exists
       }
-      await session.connect(this.s.camOn);
+      if (this.s.nativeAudio !== session instanceof NativeMediaSession) this.set({ nativeAudio: session instanceof NativeMediaSession });
+      const first = !this.msRecoveryOnly();
+      await (first
+        ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("udp ice timeout")), CallEngine.FIRST_CONNECT_MS))])
+        : session.connect(this.s.camOn));
       if (this.mediasoup !== session || !this.busy) {
         session.close();
         return null;
@@ -845,12 +852,14 @@ export class CallEngine {
     } catch (e) {
       if (this.busy && !tcpOnly) {
         const recovering = this.msRecoveryOnly();
-        this.netLog("ms-connect-failed", { recovering });
-        // The first transport already offered the same-SFU ICE-TCP candidate next to UDP, so a failed FIRST connect
-        // means that port is unreachable too: go straight to LiveKit instead of a second ~30 s tcpOnly attempt.
-        // Once this call's SFU media has worked, a failed (re)connect is a transient outage: the recovery/rejoin loop
-        // retries the SFU with backoff — never emergency LiveKit.
-        if (!recovering) await this.requestTcpFallback(true);
+        this.netLog("ms-connect-failed", { recovering, reason: String((e as Error)?.message ?? e).slice(0, 160), native: this.mediasoup instanceof NativeMediaSession });
+        // Main SFU only (no LiveKit): a failed FIRST connect enters the same recovery as a mid-call outage — rebuild
+        // the transports with backoff (each offers UDP, ICE-TCP 40443 and TURNS 443), keep the call, show
+        // "Reconnecting…", end only on hangup / server end. Inside recovery the loop itself retries.
+        // UDP-only (Donny, Oct 17): a FIRST connect that fails (ICE never succeeds within FIRST_CONNECT_MS, or the SFU
+        // refuses) ends the attempt cleanly with a clear message — no endless "Reconnecting…". Persistent recovery is
+        // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
+        if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
       }
       return null;
     }
@@ -996,7 +1005,8 @@ export class CallEngine {
   private startQualityGuard(session: CallMediaSession) {
     this.stopQualityGuard();
     this.qualityGuard.reset();
-    if (nativeAdaptiveEnabled()) return this.startNetLadder(session);
+    // bandwidth-aware ladder on every platform (single encoding, no simulcast); QualityGuard path kept unreachable-safe
+    return this.startNetLadder(session);
     this.qualityTimer = setInterval(() => {
       if (this.mediasoup !== session || !this.busy || this.media?.provider !== "mediasoup") return this.stopQualityGuard();
       void session.getTransportStats().then((reports) => {
@@ -1012,8 +1022,15 @@ export class CallEngine {
 
   /** Native apps only: coordinated audio+video ladder first, TCP only when the floor still can't hold (netAdapt.ts). */
   private readonly netLadder = new NetLadder();
+  private ladderCallId: string | null = null;
   private startNetLadder(session: CallMediaSession) {
-    this.netLadder.reset();
+    // after a reconnect within the same call: conservative rung first, then climb on measured headroom
+    const callId = this.s.call?.id ?? null;
+    const startLevel = callId && this.ladderCallId === callId ? ADAPT.reconnectLevel : 0;
+    this.ladderCallId = callId;
+    this.netLadder.reset(startLevel);
+    if (startLevel > 0) void session.applyLadderStep(LADDER[startLevel]);
+    let lastVideoBps = 0;
     let prev: QualityCounters | null = null;
     const w = window as unknown as { __olNetLadder?: { level: number; changes: { t: number; level: number; dir: string }[] } };
     w.__olNetLadder = { level: 0, changes: [] };
@@ -1025,7 +1042,19 @@ export class CallEngine {
         const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
         prev = cur;
         const a = this.netLadder.push(v);
+        if (a.type === "none" && this.s.camOn) {
+          // track the live estimate within the current rung (only re-apply on a >25 % move: no setParameters churn)
+          const step = LADDER[this.netLadder.level];
+          const vbps = videoBpsFor(step, v.outKbps);
+          if (!lastVideoBps || Math.abs(vbps - lastVideoBps) / lastVideoBps > 0.25) {
+            lastVideoBps = vbps;
+            void session.applyLadderStep({ ...step, videoBps: vbps });
+          }
+        }
         if (a.type === "step") {
+          lastVideoBps = videoBpsFor(a.step, v.outKbps);
+          a.step = { ...a.step, videoBps: lastVideoBps };
+          void this.diag("ladder", { level: a.level, dir: a.dir, loss: v.lossPercent ?? "", rtt: v.rttMs ?? "", outKbps: v.outKbps ?? "" });
           this.netLog("ladder", { level: a.level, dir: a.dir, audio: a.step.audioBps, loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps });
           w.__olNetLadder = { level: a.level, changes: [...(w.__olNetLadder?.changes ?? []), { t: Date.now(), level: a.level, dir: a.dir }] };
           void session.applyLadderStep(a.step);
@@ -1100,7 +1129,8 @@ export class CallEngine {
       this.fallbackInFlight = true;
       let ok = false;
       try {
-        ok = !skipSameSfu && (await this.switchToMediasoupTcp().catch(() => false));
+        // UDP-only (Donny, Oct 17): no ICE-TCP switch; recovery = ICE restart / UDP transport rebuild on the same SFU
+        void skipSameSfu;
       } finally {
         this.fallbackInFlight = false;
       }
@@ -1115,10 +1145,11 @@ export class CallEngine {
     this.startUdpRecovery();
     try {
       // 1) same SFU over ICE-TCP (no provider switch, peer unaffected); 2) only if that is unavailable, LiveKit
-      if (!skipSameSfu && (await this.switchToMediasoupTcp().catch(() => false))) return;
-      const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000);
-      if (!r.ok || !r.media || r.media.provider !== "livekit") throw new Error(r.error ?? "TCP fallback unavailable");
-      await this.switchMedia(r.media);
+      // Main SFU only: no LiveKit jump. Recover on the same SFU (ICE restart → transport rebuild with backoff).
+      this.netLog("ms-no-fallback-recover", { skipSameSfu });
+      this.fallbackInFlight = false;
+      void this.recoverMediasoup("tcp-unavailable");
+      return;
     } catch {
       // The server keeps the call's normal reconnect grace; displaying the failure is preferable to a falsely active
       // call if both direct UDP and the durable TCP path are unavailable.
@@ -1402,7 +1433,10 @@ export class CallEngine {
           if (g?.ok && g.call) this.set({ call: g.call });
           return done("rebuild", attempt);
         }
-        if (Date.now() - t0 > CallEngine.LOCAL_GIVEUP_MS && attempt % 10 === 0) this.netLog("still-reconnecting", { ms: Date.now() - t0, attempt });
+        if (Date.now() - t0 > CallEngine.MS_RECOVER_MAX_MS) {
+          this.msRecovering = false;
+          return void this.lastResortLiveKit("recover-timeout", `attempts=${attempt}`);
+        }
         const base = CallEngine.MS_REBUILD_DELAYS[Math.min(attempt, CallEngine.MS_REBUILD_DELAYS.length - 1)];
         await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2))));
         attempt++;
@@ -1445,8 +1479,88 @@ export class CallEngine {
   private wake: (() => void) | null = null;
   /** give up locally only when we can't even reach our server for this long (it ends the call after 45 s) */
   static LOCAL_GIVEUP_MS = 60_000;
+  /** first UDP connect: ICE must succeed within this (UDP-only; no TCP/TLS relay exists to wait for) */
+  static FIRST_CONNECT_MS = 10_000;
+  /** a call that was connected and dropped keeps recovering over UDP at most this long, then ends cleanly */
+  static MS_RECOVER_MAX_MS = 45_000;
+  static UDP_UNREACHABLE_MSG = "Can't connect the call on this network. Try another Wi-Fi or mobile data.";
+  /** first-connect UDP retries before the last-resort LiveKit fallback (no more <0.5 s jumps) */
+  static FIRST_RETRY_WAITS = [1_000, 2_000, 4_000];
+  private inFirstRetry = false;
+  private async retryFirstConnect(reason: string) {
+    if (this.inFirstRetry) return;
+    const callId = this.s.call?.id;
+    const live = () => this.busy && this.s.call?.id === callId && this.media?.provider === "mediasoup";
+    this.inFirstRetry = true;
+    this.set({ reconnecting: true });
+    try {
+      let attempt = 0;
+      for (const wait of CallEngine.FIRST_RETRY_WAITS) {
+        await new Promise((r) => setTimeout(r, wait));
+        if (!live()) return;
+        attempt++;
+        this.netLog("ms-first-retry", { attempt, reason });
+        const media = this.media!;
+        this.dropMediaForRejoin();
+        this.media = media;
+        const session = await this.connectMediasoup(media, true);
+        if (session && this.mediasoup === session && this.mediasoupConnected) {
+          this.set({ reconnecting: false, error: null });
+          return;
+        }
+      }
+      if (live()) await this.lastResortLiveKit("first-connect", reason);
+    } finally {
+      this.inFirstRetry = false;
+    }
+  }
 
+  /** Last resort only after the mediasoup UDP retries truly failed: LiveKit. The clear message only if LiveKit fails too. */
+  private async lastResortLiveKit(stage: string, reason = "") {
+    const callId = this.s.call?.id;
+    if (!callId || !this.busy) return;
+    this.diag("ms-last-resort-livekit", { stage, reason: reason.slice(0, 160) });
+    const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000).catch(() => null);
+    if (!this.busy || this.s.call?.id !== callId) return;
+    if (r?.ok && r.media?.provider === "livekit") {
+      try {
+        await this.switchMedia(r.media);
+        this.set({ reconnecting: false, error: null });
+        return;
+      } catch {
+        /* fall through to the clear message */
+      }
+    }
+    this.failUdpUnreachable(stage, `livekit:${r?.error ?? "failed"}`);
+  }
+
+  /** End the attempt with the clear network message; the server's hangup notifies the other side. Logged via call:diag. */
+  private failUdpUnreachable(stage: string, reason = "") {
+    const call = this.s.call;
+    if (!call || !this.busy) return;
+    this.diag("udp-unreachable", { stage, reason: reason.slice(0, 160) });
+    if (call.id) void this.req("call:hangup", { callId: call.id }).catch(() => {});
+    postNative({ type: "call:ended", callId: call.id });
+    this.teardownMedia();
+    this.endWith(call, CallEngine.UDP_UNREACHABLE_MSG, false);
+    this.set({ error: CallEngine.UDP_UNREACHABLE_MSG });
+  }
+
+  /** failure-reason telemetry to the server log (fire-and-forget; never affects the call) */
+  private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting"]);
+  private diag(ev: string, extra: Record<string, unknown> = {}) {
+    try {
+      const callId = this.s.call?.id;
+      if (!callId || !this.socket) return;
+      const flat: Record<string, string | number | boolean> = {};
+      for (const [k, v] of Object.entries(extra)) if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") flat[k] = v;
+      this.socket.emit("call:diag", { callId, ev, role: this.s.role ?? "", ui: this.s.ui, ...flat });
+    } catch {
+      /* ignore */
+    }
+  }
   private netLog(ev: string, extra: Record<string, unknown> = {}) {
+    if (CallEngine.DIAG_EVENTS.has(ev)) this.diag(ev, extra);
     try {
       const w = window as unknown as { __olCallNet?: { ev: string; t: number }[] };
       (w.__olCallNet ??= []).push({ ev, t: Date.now(), ...extra });

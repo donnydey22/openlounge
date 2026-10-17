@@ -72,6 +72,9 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         // TLS fallback path: TURN-over-TLS on 443 (turns:) relaying to this same SFU. ICE ranks relay candidates
         // last, so direct UDP stays first, then direct ICE-TCP 40443, then TURNS/443 only on networks that allow
         // nothing but TLS:443. Only the turns: URL is offered here to avoid extra UDP/TCP TURN allocations.
+        // Path order (Donny, Oct 17): direct UDP to the SFU first; our own TURN relay (turn.openlounge.app, TLS 443,
+        // short-lived credentials) to the SAME SFU only when UDP can't connect — ICE ranks relay candidates last, so
+        // normal networks never use it. The SFU's ICE-TCP 40443 candidate is not offered (udpOnlyResult).
         const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
         return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}) } : null;
       },
@@ -146,6 +149,16 @@ const NATIVE_CONN = /^n_[A-Za-z0-9]{6,40}$/;
 const nativeConns = new Map<string, { userId: string; socketId: string; timer: NodeJS.Timeout | null }>();
 
 /** resolve the SFU connection id for a relayed ms:* request (exported for tests) */
+/** UDP-only media (Donny, Oct 17): strip the SFU's ICE-TCP (40443) candidates from transport:create for web AND native
+ *  clients, so ICE can only use UDP to the main SFU. Reversible here without touching the SFU's config. */
+export function udpOnlyResult(method: string, value: unknown): unknown {
+  if (method !== "transport:create" || !value || typeof value !== "object") return value;
+  const v = value as { transport?: { iceCandidates?: Array<{ protocol?: string }> } };
+  const c = v.transport?.iceCandidates;
+  if (!Array.isArray(c)) return value;
+  return { ...v, transport: { ...v.transport, iceCandidates: c.filter((x) => String(x?.protocol ?? "udp").toLowerCase() === "udp") } };
+}
+
 export function nativeConnectionFor(socketId: string, userId: string, nativeConn: unknown): string | null {
   if (nativeConn === undefined) return socketId;
   if (typeof nativeConn !== "string" || !NATIVE_CONN.test(nativeConn)) return null;
@@ -214,6 +227,16 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   );
   socket.on("call:hangup", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().hangup(callId, uid))));
   socket.on("call:video", ({ callId, on }: { callId: string; on: boolean }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().setVideo(callId, uid, !!on))));
+  // client call diagnostics (connect failure reasons, recovery, ladder steps): log only, never affects the call
+  socket.on("call:diag", (d: { callId?: unknown; ev?: unknown; [k: string]: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const str = (x: unknown, n = 160) => (typeof x === "string" || typeof x === "number" || typeof x === "boolean" ? String(x).slice(0, n) : undefined);
+      const extra: Record<string, string> = {};
+      for (const [k, v] of Object.entries(d ?? {}).slice(0, 12)) if (k !== "callId" && k !== "ev") { const sv = str(v); if (sv !== undefined) extra[k.slice(0, 24)] = sv; }
+      log.info("[calls] client diag", { callId: str(d?.callId, 36), user: uid.slice(0, 12), ev: str(d?.ev, 40), ...extra });
+      ack({ ok: true });
+    }),
+  );
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
   );
@@ -249,11 +272,18 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       void s()
         .mediaRequest(callId, uid, connectionId, method, payload)
         .then((r) => {
-          if (!r.ok) return ack(r);
-          const value = r.result;
+          if (!r.ok) {
+            // failure-reason telemetry: which SFU step refused this device (first-connect failures were invisible)
+            log.warn("[calls] media request failed", { callId: callId.slice(0, 36), method, native: connectionId !== socket.id, error: String((r as { error?: unknown }).error ?? "").slice(0, 160) });
+            return ack(r);
+          }
+          const value = udpOnlyResult(method, r.result);
           ack(value && typeof value === "object" && !Array.isArray(value) ? { ok: true, ...(value as Record<string, unknown>) } : { ok: true, result: value });
         })
-        .catch(() => ack({ ok: false, error: "UDP media unavailable" }));
+        .catch((e: unknown) => {
+          log.warn("[calls] media request threw", { callId: callId.slice(0, 36), method, native: connectionId !== socket.id, error: String((e as Error)?.message ?? e).slice(0, 160) });
+          ack({ ok: false, error: "UDP media unavailable" });
+        });
     });
   socket.on("ms:join", relay("join"));
   socket.on("ms:leave", relay("leave"));

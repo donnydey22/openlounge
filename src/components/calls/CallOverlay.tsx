@@ -316,9 +316,14 @@ function Controls({ s }: { s: CallSnapshot }) {
       ) : (
         <span />
       )}
-      <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
-        {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
-      </RoundBtn>
+      {/* app voice calls run on native audio-only media: no mid-call video toggle there (video calls start as video) */}
+      {s.nativeAudio ? (
+        <span />
+      ) : (
+        <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
+          {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
+        </RoundBtn>
+      )}
       <RoundBtn label={s.muted ? "Unmute" : "Mute"} active={s.muted} onClick={() => void callEngine.toggleMute()} testId="call-mute">
         {s.muted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
       </RoundBtn>
@@ -438,7 +443,7 @@ export function CallOverlay() {
               {s.error}
             </button>
           )}
-          {s.videoInvite && !s.camOn && active && (
+          {s.videoInvite && !s.camOn && !s.nativeAudio && active && (
             <div className={cn("pointer-events-auto flex items-center gap-2 rounded-full bg-black/55 py-1 pr-1 pl-3 text-xs backdrop-blur-md", css.banner)}>
               {p.name.split(" ")[0]} turned on video
               <button type="button" onClick={() => void callEngine.toggleCam()} className="rounded-full bg-white px-3 py-1 font-semibold text-zinc-900">

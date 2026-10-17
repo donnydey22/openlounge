@@ -35,19 +35,36 @@ export const LADDER: readonly LadderStep[] = [
   { audioBps: 16_000, videoScale: 4, videoFps: 8, videoBps: 60_000 },
 ] as const;
 
+/**
+ * Thresholds (Donny, Oct 17 — bandwidth-aware, WhatsApp-style, single encoding, no simulcast). All platforms.
+ *  - poll getStats every 1 s (availableOutgoingBitrate, loss, RTT)
+ *  - step DOWN after 2 bad samples (2 s): loss > 5 % or RTT > 450 ms or bandwidth below the rung's audio need
+ *  - SEVERE (loss > 15 %, bandwidth < 24 kbps, or no outgoing audio) jumps straight to the floor rung
+ *  - step UP one rung after 8 good samples in a row (8 s steady: loss <= 2 %, RTT <= 250 ms, 1.5x headroom)
+ *  - RECONNECT (main SFU only: ICE restart → rebuild; ICE-TCP 40443 and TURNS 443 are offered in every transport)
+ *    when the floor is still severe for 3 more samples: ~5 s of > 15 % loss in total
+ *  - after a reconnect the ladder starts at rung 1 (conservative) and climbs only on measured headroom
+ *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), never below 60 kbps
+ *  - audio is never starved: the mic encoding is priority/networkPriority "high"; Opus floor is 16 kbps, never paused
+ */
 export const ADAPT = {
-  sampleMs: 2_000,
-  /** bad samples in a row before stepping down (4 s) */
+  sampleMs: 1_000,
+  /** bad samples in a row before stepping down (2 s) */
   downAfter: 2,
-  /** good samples in a row before stepping up (10 s) */
-  upAfter: 5,
-  /** bad samples in a row AT THE FLOOR before TCP (6 s) */
+  /** good samples in a row before stepping up (8 s) */
+  upAfter: 8,
+  /** severe samples in a row AT THE FLOOR before the SFU reconnect flow (3 s; ~5 s from the first severe sample) */
   tcpAfter: 3,
+  /** rung used after a reconnect (conservative start, then climb on measured headroom) */
+  reconnectLevel: 1,
+  /** fraction of availableOutgoingBitrate video may use (after audio) */
+  videoShareOfEstimate: 0.85,
+  minVideoBps: 60_000,
   /** "bad" for the ladder (earlier than QualityGuard's TCP limits so bitrate drops first) */
   lossPercent: 5,
   rttMs: 450,
   /** "severe" = what the floor cannot carry: Opus floor + RTP/UDP overhead */
-  severeLossPercent: 10,
+  severeLossPercent: 15,
   floorKbps: 24,
   /** "good" for stepping up needs clear headroom */
   goodLossPercent: 2,
@@ -81,8 +98,8 @@ export class NetLadder {
     }
     if (!floor && this.bad >= ADAPT.downAfter) {
       this.bad = 0;
-      // a severe sample skips a rung so a collapsing link reaches the floor within ~4–8 s
-      this.level = Math.min(LADDER.length - 1, this.level + (severe ? 2 : 1));
+      // a severe sample goes straight to the floor (audio-first) so a collapsing link is protected within 2 s
+      this.level = severe ? LADDER.length - 1 : Math.min(LADDER.length - 1, this.level + 1);
       return { type: "step", level: this.level, step: LADDER[this.level], dir: "down" };
     }
     if (this.level > 0 && this.good >= ADAPT.upAfter) {
@@ -97,4 +114,11 @@ export class NetLadder {
     this.level = level;
     this.bad = this.good = this.floorBad = 0;
   }
+}
+
+/** Video bitrate for the current rung, tracking the live bandwidth estimate (kbps from availableOutgoingBitrate). */
+export function videoBpsFor(step: LadderStep, outKbps: number | null): number {
+  if (outKbps === null || !(outKbps > 0)) return step.videoBps;
+  const share = Math.floor(outKbps * 1000 * ADAPT.videoShareOfEstimate) - step.audioBps;
+  return Math.max(ADAPT.minVideoBps, Math.min(step.videoBps, share));
 }

@@ -44,7 +44,7 @@ test("recovery never ends the call itself: only the server's ended state (call:g
 });
 
 test("a failed SFU (re)connect during recovery or after media worked does not fall into LiveKit", () => {
-  assert.match(eng, /const recovering = this\.msRecoveryOnly\(\);[\s\S]{0,600}if \(!recovering\) await this\.requestTcpFallback\(true\)/);
+  assert.ok(eng.includes("if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("));
 });
 
 test("recovery follows a server-side provider move (the peer's emergency fallback) instead of fighting it", () => {
@@ -73,10 +73,9 @@ test("quality guard / ladder never judge a dead or recovering path (black-holed 
 test("after SFU media worked, requestTcpFallback degrades on the same SFU or keeps recovering — never LiveKit", () => {
   const fb = body("private async requestTcpFallback(", "private onMediaFallback");
   const gate = fb.slice(fb.indexOf("if (this.msRecoveryOnly())"), fb.indexOf("return;\n    }\n    this.fallbackInFlight = true;"));
-  assert.match(gate, /switchToMediasoupTcp\(\)/);
   assert.match(gate, /recoverMediasoup\("tcp-unavailable"\)/);
   assert.doesNotMatch(gate, /call:mediaFallback/);
-  assert.ok(fb.indexOf("if (this.msRecoveryOnly())") < fb.indexOf("call:mediaFallback"));
+  assert.ok(!fb.includes("call:mediaFallback"), "no LiveKit jump from requestTcpFallback (last resort lives in recovery)");
 });
 
 test("one reconnect loop at a time: rejoin and the stuck guard defer to an active SFU recovery", () => {
