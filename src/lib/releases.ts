@@ -1,11 +1,11 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
 export const ANDROID_RELEASE = {
-  version: "0.3.16",
-  build: 32,
-  file: "/downloads/openlounge-0.3.16-32.apk",
+  version: "0.3.17",
+  build: 33,
+  file: "/downloads/openlounge-0.3.17-33.apk",
   size: "98.1 MB",
-  sha256: "d46e12d4eec907a9967539f8021c397dcd162383566f8bf92e8db0b8deba3eda",
+  sha256: "973be897e226effeeba78ed2d1e4428aa23a4f2c30c6c0379be311556d2125aa",
 } as const;
 
 export const IOS_RELEASE = {
