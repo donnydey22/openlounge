@@ -18,7 +18,7 @@ import { native, nativePlatform } from "@/lib/native";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, browserUsesNativeMobileCameraFrame, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults, type NetworkTier } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
-import { playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
+import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { NativeMediaSession, nativeMediaCmd, useNativeMedia } from "./nativeMediaSession";
@@ -187,6 +187,8 @@ export class CallEngine {
   private videoEls = { local: [] as HTMLVideoElement[], remote: [] as HTMLVideoElement[] };
   private acceptedHere = false;
   private acceptT0 = 0;
+  /** outgoing native-media call: SFU join/prewarm held until answer so the native ringback stays loud */
+  private deferNativeConnect = false;
   private metricSent = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
@@ -203,6 +205,7 @@ export class CallEngine {
     const was = this.s.reconnecting;
     this.s = { ...this.s, ...patch, v: this.s.v + 1 };
     if (this.s.reconnecting !== was) this.armStuckGuard();
+    if (typeof window !== "undefined") (window as unknown as { __olCallLive?: boolean }).__olCallLive = this.busy;
     for (const l of this.listeners) l();
   }
   private stuckTimer: ReturnType<typeof setTimeout> | null = null;
@@ -222,6 +225,25 @@ export class CallEngine {
     }, CallEngine.STUCK_MS);
   }
   static STUCK_MS = 20_000;
+  /** Socket (re)connected during a call — e.g. the WebView resumed after the iPhone call screen took over a push-woken
+   *  answer: re-bind this connection to the call right away, adopt the server's state, and if media never came up
+   *  (or dropped) once the first-connect budget is spent, rebuild it instead of sitting silent. */
+  private onSocketBack = () => {
+    const call = this.s.call;
+    if (!call || !this.busy) return;
+    this.diag("socket-back", { media: this.mediaConnected() });
+    void this.req<{ ok: boolean; call?: CallInfo }>("call:get", { callId: call.id }, 5_000)
+      .then((r) => {
+        if (r?.call && this.s.call?.id === call.id) this.onState({ call: r.call });
+        if (!this.busy || this.s.call?.id !== call.id) return;
+        if (this.s.ui !== "active" && this.s.ui !== "connecting") return;
+        if (this.deferNativeConnect || this.mediaConnected() || this.rejoining || this.msRecovering || this.fallbackInFlight) return;
+        const firstConnectSpent = !this.firstConnectT0 || Date.now() - this.firstConnectT0 > CallEngine.FIRST_CONNECT_BUDGET_MS;
+        if (firstConnectSpent) void this.rejoin("socket-back");
+      })
+      .catch(() => {});
+  };
+
   get busy() {
     return this.s.ui !== null && this.s.ui !== "ended";
   }
@@ -237,6 +259,7 @@ export class CallEngine {
       this.socket.off("call:peer", this.onPeer);
       this.socket.off("call:mediaFallback", this.onMediaFallback);
       this.socket.off("call:mediaRestore", this.onMediaRestore);
+      this.socket.off("connect", this.onSocketBack);
     }
     this.socket = socket;
     if (!socket) return;
@@ -246,6 +269,7 @@ export class CallEngine {
     socket.on("call:peer", this.onPeer);
     socket.on("call:mediaFallback", this.onMediaFallback);
     socket.on("call:mediaRestore", this.onMediaRestore);
+    socket.on("connect", this.onSocketBack);
     this.watchNetwork();
   }
 
@@ -383,9 +407,14 @@ export class CallEngine {
     void loadLK().catch(() => {});
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
     // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
+    this.deferNativeConnect = false;
     if (useNativeMedia(video)) {
       this.preMic = Promise.resolve(null);
-      void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
+      // Loud native ringback until connect (Donny, Oct 17): the app's mic grab / WebRTC load flips the iPhone audio
+      // session into call mode (earpiece, call volume) mid-ring, so while the native ringer rings, the prewarm and the
+      // native SFU join wait for the callee's answer (onState → active).
+      this.deferNativeConnect = nativeRingbackMode() !== "off";
+      if (!this.deferNativeConnect) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     } else this.preMic = this.acquireMic();
     // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
     void this.preMic.then(() => this.s.ui === "outgoing" && rearmRing(), () => this.s.ui === "outgoing" && rearmRing());
@@ -429,7 +458,8 @@ export class CallEngine {
       return { ok: false };
     }
     postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video });
-    void this.connect(false);
+    this.diag("call-start", { video });
+    if (!this.deferNativeConnect) void this.connect(false);
     return { ok: true };
   }
 
@@ -476,6 +506,7 @@ export class CallEngine {
     this.acceptedHere = true;
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
+    this.diag("answered", {});
     if (useNativeMedia(withVideo || call.video)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
@@ -580,6 +611,11 @@ export class CallEngine {
         this.set({ call, ui: this.mediaConnected() ? "active" : "connecting", connectedAt: Date.now() });
         if (this.mediaConnected()) playConnected();
         postNative({ type: "call:connected", callId: call.id });
+        this.diag("answered", { deferred: this.deferNativeConnect });
+        if (this.deferNativeConnect) {
+          this.deferNativeConnect = false;
+          void this.connect(false);
+        }
       }
       return;
     }
@@ -601,8 +637,11 @@ export class CallEngine {
     const dur = this.s.connectedAt ? Math.round((Date.now() - this.s.connectedAt) / 1000) : 0;
     const name = (role === "caller" ? call.callee.name : call.caller.name).split(" ")[0];
     const lost = reason === "connection_lost" && outcome === "completed";
+    const unreachable = reason === "peer_unreachable";
     const text =
-      lost
+      unreachable
+        ? `${name}'s phone lost connection — call didn't connect`
+        : lost
         ? `Connection lost · ${fmt(dur)}`
         : outcome === "completed"
         ? `Call ended · ${fmt(dur)}`
@@ -617,7 +656,7 @@ export class CallEngine {
                 : "Call ended";
     if (outcome === "completed") playHangup();
     else if (outcome !== "cancelled") playBusy();
-    this.endWith(call, text, lost || (role === "caller" && (outcome === "missed" || outcome === "declined" || outcome === "busy")));
+    this.endWith(call, text, lost || unreachable || (role === "caller" && (outcome === "missed" || outcome === "declined" || outcome === "busy")));
   }
 
   private endWith(call: CallInfo, text: string, canRetry: boolean) {
@@ -1569,7 +1608,9 @@ export class CallEngine {
       if (!callId || !this.socket) return;
       const flat: Record<string, string | number | boolean> = {};
       for (const [k, v] of Object.entries(extra)) if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") flat[k] = v;
-      this.socket.emit("call:diag", { callId, ev, role: this.s.role ?? "", ui: this.s.ui, ...flat });
+      const platform = nativePlatform() ?? "web";
+      const nativeAudio = useNativeMedia(!!this.s.call?.video || this.s.camOn);
+      this.socket.emit("call:diag", { callId, ev, role: this.s.role ?? "", ui: this.s.ui, platform, native: nativeAudio, ...flat });
     } catch {
       /* ignore */
     }
@@ -1869,6 +1910,7 @@ export class CallEngine {
     mark("first-audio");
     (window as unknown as { __olCallMetric?: number[] }).__olCallMetric = [...((window as unknown as { __olCallMetric?: number[] }).__olCallMetric ?? []), ms];
     void this.req("call:metric", { callId: this.s.call.id, acceptToAudioMs: ms }).catch(() => {});
+    this.diag("first-audio", { ms });
   }
 
   /** First connect of a web-path (mediasoup) call: offer the Speaker toggle (it was only detected on LiveKit, so

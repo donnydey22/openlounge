@@ -28,6 +28,9 @@ export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
  * than by more silence. The heartbeat notices a dead socket within ~10–20 s, so the wall-clock budget is ~55–65 s.
  */
 export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", 45_000);
+/** answered but no first audio from either side yet, and one side went offline: end this soon (peer_unreachable)
+ *  instead of a silent 45 s grace (call 67078d15: callee's socket died 4 s after a push-woken answer) */
+export const CALL_UNREACHABLE_MS = num("CALL_UNREACHABLE_MS", 10_000);
 /** Active call where one side is still online (other tab/device/socket) but no connection of theirs is in the call
  *  any more (call page closed, app killed while a chat socket lingers): end it so it can't block every new call. */
 export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", 60_000);
@@ -106,6 +109,8 @@ interface CallRec {
   orphanSince: number | null;
   /** active call: when each participant lost their last socket (reconnect grace) */
   goneSince: Map<string, number>;
+  /** first audio reported by either participant (call:metric) */
+  audioAt?: number | null;
   /** per participant: when their last in-call connection closed while they stayed online elsewhere */
   detachedSince?: Map<string, number>;
   /** connections (socket ids) that are actually in this call per participant: bound by start/accept/get/media, dropped on close */
@@ -497,6 +502,7 @@ export class CallService {
     const c = this.get(callId, userId);
     const v = Number(acceptToAudioMs);
     if (!c || !Number.isFinite(v) || v <= 0 || v > 60_000) return { ok: false as const };
+    c.audioAt ??= this.now();
     this.metrics.acceptToAudioMs.push(Math.round(v));
     if (this.metrics.acceptToAudioMs.length > METRIC_KEEP) this.metrics.acceptToAudioMs.shift();
     this.d.log?.("call metric", { callId: c.id, acceptToAudioMs: Math.round(v), role: userId === c.calleeId ? "callee" : "caller" });
@@ -568,6 +574,7 @@ export class CallService {
       // active: each side may drop off (no socket) for CALL_RECONNECT_GRACE_MS; the other side is told so it can
       // show "Bea is reconnecting…". Past the grace the call ends as completed (duration kept), never as missed.
       let lost: string | null = null;
+      let unreachable: string | null = null;
       for (const u of [c.callerId, c.calleeId]) {
         const other = u === c.callerId ? c.calleeId : c.callerId;
         if (!this.d.isConnected(u)) {
@@ -576,11 +583,17 @@ export class CallService {
             this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_RECONNECT_GRACE_MS });
             this.d.log?.("call peer offline", { callId: c.id });
           } else if (now - c.goneSince.get(u)! > CALL_RECONNECT_GRACE_MS) lost ??= u;
+          else if (!c.audioAt && now - c.goneSince.get(u)! > CALL_UNREACHABLE_MS) unreachable ??= u;
         } else if (c.goneSince.has(u)) {
           this.d.log?.("call peer back", { callId: c.id, offlineMs: now - c.goneSince.get(u)! });
           c.goneSince.delete(u);
           this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: true });
         }
+      }
+      if (!lost && unreachable) {
+        this.d.log?.("call peer unreachable", { callId: c.id, who: unreachable === c.callerId ? "caller" : "callee" });
+        this.finish(c, "completed", { by: unreachable, reason: "peer_unreachable" });
+        continue;
       }
       if (lost) {
         this.d.log?.("call lost", { callId: c.id });

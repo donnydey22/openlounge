@@ -84,7 +84,10 @@ test("native media: page relays the app's ms:* signaling for this call only, for
 
 test("engine: native-media mode skips WebView getUserMedia on dial and prewarms the app instead", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(src, /if \(useNativeMedia\(video\)\) \{\s*this\.preMic = Promise\.resolve\(null\);\s*void nativeMediaCmd\(\{ op: "prewarm" \}\)/);
+  // still no WebView getUserMedia; the app prewarm runs at dial unless the loud native ringback owns the session
+  // (then prewarm + native SFU join wait for the answer — Oct 17 ring loud→quiet fix)
+  assert.match(src, /if \(useNativeMedia\(video\)\) \{\s*this\.preMic = Promise\.resolve\(null\);[\s\S]{0,400}?this\.deferNativeConnect = nativeRingbackMode\(\) !== "off";\s*if \(!this\.deferNativeConnect\) void nativeMediaCmd\(\{ op: "prewarm" \}\)/);
+  assert.match(src, /if \(this\.deferNativeConnect\) \{\s*this\.deferNativeConnect = false;\s*void this\.connect\(false\);/);
   assert.match(src, /useNativeMedia\([^)]*\) \? NativeMediaSession : MediasoupCallSession/);
 });
 

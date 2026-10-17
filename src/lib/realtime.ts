@@ -143,7 +143,9 @@ export class RealtimeClient {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     // jittered exponential backoff: ~0.2 s first retry, then 0.5, 1, 2, 4, 8 s … capped at 10 s
     const n = this.retry++;
-    const base = n === 0 ? 200 : Math.min(10_000, 500 * 2 ** (n - 1));
+    // during a live call never back off past 1 s: a socket lost under the iPhone call screen must come straight back
+    const inCall = typeof window !== "undefined" && !!(window as unknown as { __olCallLive?: boolean }).__olCallLive;
+    const base = n === 0 ? 200 : Math.min(inCall ? 1_000 : 10_000, 500 * 2 ** (n - 1));
     const delay = base * (0.75 + Math.random() * 0.5);
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
@@ -204,6 +206,8 @@ export class RealtimeClient {
     window.addEventListener("online", this.onWake);
     window.addEventListener("pageshow", this.onWake);
     window.addEventListener("focus", this.onWake);
+    // iOS app: CallKit (de)activated the audio session — e.g. the system call screen just took over a push-woken answer
+    window.addEventListener("openlounge:native-audio-resume", this.onWake);
   }
 
   private unbindWake() {
@@ -213,6 +217,7 @@ export class RealtimeClient {
     window.removeEventListener(NATIVE_VISIBILITY_EVENT, this.onVisibility);
     window.removeEventListener("online", this.onWake);
     window.removeEventListener("pageshow", this.onWake);
+    window.removeEventListener("openlounge:native-audio-resume", this.onWake);
     window.removeEventListener("focus", this.onWake);
   }
 
