@@ -157,3 +157,28 @@ test("native media: Android app shim (OpenLoungeNativeMedia) is used; the Java i
   assert.deepEqual(replies[0], ["m1", true, { ok: true, echo: "ms:join" }]);
   s.close();
 });
+
+test("native media: Android 0.3.17 'wants LiveKit' signal hands over now; iOS/web keep the silent first-connect budget", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
+  assert.equal(m.nativeMediaIsAndroid(), true);
+  const states: string[] = [];
+  const wants: string[] = [];
+  const s = new m.NativeMediaSession(fakeSocket() as never, { provider: "mediasoup", callId: "c1" } as never, {
+    onRemoteTrack() {}, onState: (st) => states.push(st), onLocalVideo() {}, onWantsLiveKit: (r) => wants.push(r),
+  });
+  await s.connect(false);
+  window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "failed", fallback: "livekit", reason: "produce: [json.exception.type_error.305]" } }));
+  window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "failed" } }));
+  assert.deepEqual(wants, ["produce: [json.exception.type_error.305]"]);
+  assert.deepEqual(states, ["failed"], "a plain failed still maps to state");
+  s.close();
+  installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
+  assert.equal(m.nativeMediaIsAndroid(), false, "iOS bridge has no platform");
+
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.ok(src.includes("onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeLiveKitNow(reason); }"));
+  assert.ok(src.includes("if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow("));
+  assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS keep the silent retry budget");
+  assert.ok(src.includes('await this.lastResortLiveKit("native-ms-failed", reason);'));
+});

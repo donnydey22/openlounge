@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, nativeMediaCmd, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 
 /** WebView media session or the iOS app's native media proxy (same surface) */
 type CallMediaSession = MediasoupCallSession | NativeMediaSession;
@@ -859,6 +859,7 @@ export class CallEngine {
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
         onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
+        onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeLiveKitNow(reason); },
         tcpOnly,
       });
       this.mediasoup = session;
@@ -903,7 +904,10 @@ export class CallEngine {
         // UDP-only (Donny, Oct 17): a FIRST connect that fails (ICE never succeeds within FIRST_CONNECT_BUDGET_MS, or the SFU
         // refuses) ends the attempt cleanly with a clear message — no endless "Reconnecting…". Persistent recovery is
         // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
-        if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
+        // Android app native media: a failed FIRST connect goes to the LiveKit backup right away (its mediasoup error
+        // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
+        if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow(String((e as Error)?.message ?? e));
+        else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
       }
       return null;
     }
@@ -1567,6 +1571,15 @@ export class CallEngine {
     } finally {
       this.inFirstRetry = false;
     }
+  }
+
+  /** Android app native mediasoup failed: request LiveKit backup credentials now and hand the call over (once per call). */
+  private nativeLkCall: string | null = null;
+  private async nativeLiveKitNow(reason: string) {
+    const callId = this.s.call?.id;
+    if (!callId || !this.busy || this.nativeLkCall === callId || this.media?.provider !== "mediasoup") return;
+    this.nativeLkCall = callId;
+    await this.lastResortLiveKit("native-ms-failed", reason);
   }
 
   /** Last resort only after the mediasoup UDP retries truly failed: LiveKit. The clear message only if LiveKit fails too. */

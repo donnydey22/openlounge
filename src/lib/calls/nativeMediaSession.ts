@@ -8,6 +8,7 @@ import type { MediasoupRemoteTrack } from "./mediasoupSession";
 
 type NativeMediaBridge = {
   capabilities?: readonly string[];
+  platform?: string;
   nativeMedia?(cmd: Record<string, unknown>): Promise<unknown>;
   msReply?(id: string, ok: boolean, result: unknown, error?: string): void;
 };
@@ -29,6 +30,11 @@ export function nativeMediaAvailable(): boolean {
 /** Audio-only calls in the native-media iOS app use app-owned media. */
 export function useNativeMedia(video: boolean): boolean {
   return !video && nativeMediaAvailable();
+}
+
+/** Android app (0.3.16+ shim sets platform:'android'); the iOS bridge carries no platform */
+export function nativeMediaIsAndroid(): boolean {
+  return bridge()?.platform === "android";
 }
 
 export function nativeMediaCmd(cmd: Record<string, unknown>): Promise<unknown> {
@@ -55,6 +61,8 @@ export class NativeMediaSession {
       rebuild?: boolean;
       /** LiveKit credentials carry no callId */
       callId?: string;
+      /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
+      onWantsLiveKit?(reason: string): void;
     },
   ) {
   }
@@ -62,7 +70,12 @@ export class NativeMediaSession {
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
-    const s = (e as CustomEvent<{ state?: string }>).detail?.state;
+    const d = (e as CustomEvent<{ state?: string; fallback?: string; reason?: string }>).detail;
+    const s = d?.state;
+    if (s === "failed" && d?.fallback === "livekit" && this.opts.onWantsLiveKit) {
+      this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
+      return;
+    }
     if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
     } else if (s === "disconnected" || s === "failed") this.opts.onState(s);
