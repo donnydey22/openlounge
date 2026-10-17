@@ -914,6 +914,8 @@ export class CallEngine {
       el.dataset.olCallAudio = "1";
       el.autoplay = true;
       el.setAttribute("playsinline", "true");
+      el.volume = 1; // full element gain: never inherit a lowered volume from a reused/ring element
+      el.muted = false;
       el.srcObject = new MediaStream([track]);
       document.body.appendChild(el);
       this.audioEls.push(el);
