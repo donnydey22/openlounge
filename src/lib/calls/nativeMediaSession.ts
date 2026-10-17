@@ -27,8 +27,8 @@ export function nativeMediaAvailable(): boolean {
 }
 
 /** Audio-only calls in the native-media iOS app use app-owned media. */
-export function useNativeMedia(video: boolean): boolean {
-  return !video && nativeMediaAvailable();
+export function useNativeMedia(video: boolean, forceWeb = false): boolean {
+  return !video && !forceWeb && nativeMediaAvailable();
 }
 
 export function nativeMediaCmd(cmd: Record<string, unknown>): Promise<unknown> {
@@ -119,7 +119,8 @@ export class NativeMediaSession {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;
     return (Array.isArray(raw) ? raw : []).map((list) => new Map((list ?? []).map((s, i) => [String(s.id ?? i), s])) as unknown as RTCStatsReport);
   }
-  /** The native app path is audio-only (chosen only for voice calls): fail loudly so the UI says so instead of showing camOn with no video. */
+  /** The native app path is audio-only: the engine upgrades the call to the web session for video (CallEngine.upgradeToWebMedia);
+   *  this throw is only the last-resort fallback so the UI says "Camera unavailable" instead of a silent black tile. */
   async enableCamera(): Promise<void> {
     throw new Error("native media is audio-only");
   }

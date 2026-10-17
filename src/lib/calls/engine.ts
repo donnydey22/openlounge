@@ -643,7 +643,76 @@ export class CallEngine {
     if (!this.s.call || d?.callId !== this.s.call.id) return;
     if (d.on && !this.s.camOn) this.set({ videoInvite: true });
     if (!d.on) this.set({ videoInvite: false });
+    // Remote side on app-native (audio-only) media: move to the web session so the peer's video can be shown.
+    if (d.on && this.mediasoup instanceof NativeMediaSession) void this.upgradeToWebMedia(false);
   };
+
+  /** Voice call upgraded off app-native audio: every (re)connect for the rest of this call uses the web session. */
+  private webMedia = false;
+  private upgrading: Promise<boolean> | null = null;
+  /**
+   * App-native audio (NativeMediaSession, audio-only) → web mediasoup/WebRTC session (camera/video capable) without
+   * dropping the call. Order: capture first while native audio keeps flowing (a denied prompt leaves the call
+   * untouched) → close the native session (its relay is cut first, so the app's ms:leave never reaches the SFU and the
+   * app can't rebuild transports over ours) → join the same SFU session from the page (same socket connection; the
+   * new transports replace the app's) with mic (+camera). On failure: back to native audio and false.
+   */
+  private upgradeToWebMedia(withCamera: boolean): Promise<boolean> {
+    if (this.upgrading) return this.upgrading;
+    const run = async (): Promise<boolean> => {
+      const native = this.mediasoup;
+      const media = this.media;
+      const callId = this.s.call?.id;
+      if (!(native instanceof NativeMediaSession) || media?.provider !== "mediasoup" || !this.busy || !callId) return false;
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
+      let mic: MediaStreamTrack | null = null;
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CONSTRAINTS, video: withCamera ? { facingMode: this.s.facing } : false });
+        mic = st.getAudioTracks()[0] ?? null;
+        st.getVideoTracks().forEach((t) => t.stop()); // permission proven; the session captures the camera itself
+      } catch {
+        mic?.stop();
+        return false;
+      }
+      if (!mic || this.mediasoup !== native || !this.busy || this.s.call?.id !== callId) {
+        mic?.stop();
+        return false;
+      }
+      this.netLog("native-to-web-upgrade", { withCamera });
+      this.webMedia = true;
+      this.stopQualityGuard();
+      this.stopUdpProbe();
+      this.clearMediasoupDegrade();
+      this.mediasoup = null;
+      this.mediasoupConnected = false;
+      this.roomPromise = null;
+      native.close();
+      this.tapMic = Promise.resolve(mic);
+      if (withCamera) this.set({ camOn: true, videoInvite: false });
+      const session = await this.connect(true);
+      if (session && this.busy && this.s.call?.id === callId) {
+        if (this.s.muted && session instanceof MediasoupCallSession) await session.setMuted(true).catch(() => {});
+        this.set({ reconnecting: false });
+        return true;
+      }
+      if (!this.busy || this.s.call?.id !== callId) return false;
+      // failed: drop the half-built web session and go back to the proven native audio path
+      this.netLog("native-to-web-upgrade-failed", { withCamera });
+      const failed = this.mediasoup as CallMediaSession | null;
+      this.mediasoup = null;
+      this.roomPromise = null;
+      this.mediasoupConnected = false;
+      failed?.close();
+      void this.tapMic?.then((t) => t?.stop());
+      this.tapMic = null;
+      this.webMedia = false;
+      this.set({ camOn: false });
+      void this.connect(true);
+      return false;
+    };
+    this.upgrading = run().finally(() => { this.upgrading = null; });
+    return this.upgrading;
+  }
 
   // ---------- media ----------
   private newRoom(LK: LK) {
@@ -731,7 +800,7 @@ export class CallEngine {
     const media = this.media;
     if (!media) return Promise.resolve(null);
     // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
-    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn)) {
+    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn, this.webMedia)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -798,7 +867,7 @@ export class CallEngine {
   private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn, this.webMedia) ? NativeMediaSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
@@ -1794,6 +1863,7 @@ export class CallEngine {
     this.audioEls = [];
     document.querySelectorAll("[data-ol-call-audio]").forEach((el) => el.remove());
     this.media = null;
+    this.webMedia = false;
     this.acceptedHere = false;
     this.acceptT0 = 0;
     this.metricSent = false;
@@ -1826,6 +1896,16 @@ export class CallEngine {
     const on = !this.s.camOn;
     buzz("light");
     const call = this.s.call;
+    if (on && this.mediasoup instanceof NativeMediaSession) {
+      // voice call on app-native audio: upgrade to the web session (mic + camera); "Camera unavailable" only if that fails
+      if (!(await this.upgradeToWebMedia(true))) {
+        this.set({ camOn: false, error: "Camera unavailable. Continuing with audio." });
+        return;
+      }
+      this.set({ camOn: true, videoInvite: false });
+      if (call?.id) void this.req("call:video", { callId: call.id, on: true }).catch(() => {});
+      return;
+    }
     if (this.mediasoup) {
       try {
         if (on) await this.mediasoup.enableCamera(this.s.facing);
