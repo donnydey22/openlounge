@@ -304,12 +304,13 @@ function Incoming({ s }: { s: CallSnapshot }) {
 
 function Controls({ s }: { s: CallSnapshot }) {
   return (
-    <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:w-[calc((100%-0.75rem)/4)]">
+    <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:flex-1 [&>*]:max-w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:max-w-[calc((100%-0.75rem)/4)]">
       {s.speakerSupported ? (
         <RoundBtn label="Speaker" active={s.speaker} onClick={() => void callEngine.toggleSpeaker()} testId="call-speaker">
           <Volume2 className="h-6 w-6" />
         </RoundBtn>
-      ) : s.camOn ? (
+      ) : null}
+      {s.camOn ? (
         <RoundBtn label="Flip" onClick={() => void callEngine.flip()} testId="call-flip">
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>

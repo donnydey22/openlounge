@@ -839,8 +839,10 @@ export class CallEngine {
         session.close();
         return null;
       }
+      const firstMediaOk = this.msEverConnected !== (this.s.call?.id ?? null);
       this.mediasoupConnected = true;
       this.msEverConnected = this.s.call?.id ?? null;
+      if (firstMediaOk) this.initCallRoute();
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
       this.startUdpProbe(session);
@@ -937,7 +939,10 @@ export class CallEngine {
         this.firstAudio();
       };
       el.addEventListener("playing", onPlay, { once: true });
-      void el.play().catch(() => this.set({ needsGesture: true }));
+      void el.play().catch((e: unknown) => {
+        this.diag("remote-audio-play-failed", { path: "mediasoup", err: String((e as Error)?.name ?? e).slice(0, 60), vis: document.visibilityState });
+        this.set({ needsGesture: true });
+      });
       track.addEventListener("ended", () => {
         el.remove();
         close();
@@ -1298,7 +1303,10 @@ export class CallEngine {
           document.addEventListener("visibilitychange", this.onVisibleCallAudio);
           // Explicit play(): WKWebView after a CallKit answer (no page gesture) can leave an autoplay <audio> paused
           // on audio-only calls (a video call has a playing <video> that unblocks the page's media).
-          if (el.paused) void el.play().catch(() => this.set({ needsGesture: true }));
+          if (el.paused) void el.play().catch((e: unknown) => {
+            this.diag("remote-audio-play-failed", { path: "livekit", err: String((e as Error)?.name ?? e).slice(0, 60), vis: document.visibilityState });
+            this.set({ needsGesture: true });
+          });
           else this.firstAudio();
         } else if (track.kind === Track.Kind.Video) {
           this.remoteVideo = track;
@@ -1861,6 +1869,73 @@ export class CallEngine {
     mark("first-audio");
     (window as unknown as { __olCallMetric?: number[] }).__olCallMetric = [...((window as unknown as { __olCallMetric?: number[] }).__olCallMetric ?? []), ms];
     void this.req("call:metric", { callId: this.s.call.id, acceptToAudioMs: ms }).catch(() => {});
+  }
+
+  /** First connect of a web-path (mediasoup) call: offer the Speaker toggle (it was only detected on LiveKit, so
+   *  Android/iOS app calls had none) and set the default route — video calls on speaker, voice on earpiece. */
+  private initCallRoute() {
+    const callId = this.s.call?.id;
+    const speaker = !!(this.s.camOn || this.s.call?.video);
+    this.set({ speaker });
+    postNative({ type: "call:audioRoute", speaker });
+    this.startLevelTelemetry();
+    void this.detectSpeaker().then((speakerSupported) => {
+      if (this.s.call?.id !== callId) return;
+      this.set({ speakerSupported });
+      const id = speaker ? this.sinkIds[1] : undefined;
+      if (id) for (const el of this.audioEls) void (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(id).catch(() => {});
+    });
+  }
+
+  /** audio-level telemetry (Donny, 6:22): every 5 s while the call runs, log-only via call:diag */
+  private levelTimer: ReturnType<typeof setInterval> | null = null;
+  private lastAudioBytes = { out: 0, in: 0, t: 0 };
+  private startLevelTelemetry() {
+    if (this.levelTimer) clearInterval(this.levelTimer);
+    const callId = this.s.call?.id;
+    this.lastAudioBytes = { out: 0, in: 0, t: 0 };
+    this.levelTimer = setInterval(() => void (async () => {
+      if (!this.busy || this.s.call?.id !== callId) {
+        if (this.levelTimer) clearInterval(this.levelTimer);
+        this.levelTimer = null;
+        return;
+      }
+      const sess = this.mediasoup as unknown as { getTransportStats?: () => Promise<RTCStatsReport[]> } | null;
+      const reports = (await sess?.getTransportStats?.().catch(() => [])) ?? [];
+      const r: Record<string, string | number> = {};
+      let outB = 0, inB = 0;
+      const n3 = (x: unknown) => (typeof x === "number" ? Math.round(x * 1000) / 1000 : "");
+      for (const rep of reports) rep.forEach((st: Record<string, unknown>) => {
+        if (st.kind !== "audio") return;
+        if (st.type === "media-source") { r.micLevel = n3(st.audioLevel); r.micEnergy = n3(st.totalAudioEnergy); }
+        else if (st.type === "outbound-rtp") outB += Number(st.bytesSent ?? 0);
+        else if (st.type === "inbound-rtp") {
+          inB += Number(st.bytesReceived ?? 0);
+          r.inLevel = n3(st.audioLevel);
+          r.inEnergy = n3(st.totalAudioEnergy);
+          const tot = Number(st.totalSamplesReceived ?? 0);
+          r.concealPct = tot ? Math.round((Number(st.concealedSamples ?? 0) / tot) * 1000) / 10 : "";
+        }
+      });
+      const now = Date.now(), dt = (now - this.lastAudioBytes.t) / 1000;
+      if (this.lastAudioBytes.t && dt > 0) {
+        r.outKbps = Math.round(((outB - this.lastAudioBytes.out) * 8) / dt / 100) / 10;
+        r.inKbps = Math.round(((inB - this.lastAudioBytes.in) * 8) / dt / 100) / 10;
+      }
+      this.lastAudioBytes = { out: outB, in: inB, t: now };
+      const el = this.audioEls[0];
+      const w = window as unknown as { __olNativeCalls?: unknown };
+      this.diag("audio-levels", {
+        ...r,
+        route: this.s.speaker ? "speaker" : "earpiece",
+        vol: el ? el.volume : "",
+        muted: el ? String(el.muted) : "",
+        paused: el ? String(el.paused) : "",
+        plat: /Android/i.test(navigator.userAgent) ? "android" : /iPhone|iPad/i.test(navigator.userAgent) ? "ios" : "web",
+        native: String(!!w.__olNativeCalls),
+        nativeAudio: String(!!this.s.nativeAudio),
+      });
+    })(), 5_000);
   }
 
   private async detectSpeaker() {
