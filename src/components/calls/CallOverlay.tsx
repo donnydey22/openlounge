@@ -304,7 +304,7 @@ function Incoming({ s }: { s: CallSnapshot }) {
 
 function Controls({ s }: { s: CallSnapshot }) {
   return (
-    <div className="grid w-full max-w-md grid-cols-4 items-start gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2">
+    <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:w-[calc((100%-0.75rem)/4)]">
       {s.speakerSupported ? (
         <RoundBtn label="Speaker" active={s.speaker} onClick={() => void callEngine.toggleSpeaker()} testId="call-speaker">
           <Volume2 className="h-6 w-6" />
@@ -313,13 +313,9 @@ function Controls({ s }: { s: CallSnapshot }) {
         <RoundBtn label="Flip" onClick={() => void callEngine.flip()} testId="call-flip">
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>
-      ) : (
-        <span />
-      )}
+      ) : null}
       {/* app voice calls run on native audio-only media: no mid-call video toggle there (video calls start as video) */}
-      {s.nativeAudio ? (
-        <span />
-      ) : (
+      {s.nativeAudio ? null : (
         <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
           {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
         </RoundBtn>
