@@ -95,6 +95,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "ms:produce": { callId: "id", transportId: "id", kind: "string" },
   "ms:consume": { callId: "id", transportId: "id" },
   "ms:consumer:resume": { callId: "id", consumerId: "id" },
+  "ms:consumer:layers": { callId: "id", consumerId: "id" },
   "dm:reaction_add": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:reaction_remove": { peerId: "id", messageId: "id", emoji: "string" },
   "dm:delete": { peerId: "id", messageIds: "string-array?", forEveryone: "bool?" },

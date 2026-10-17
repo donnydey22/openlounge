@@ -263,4 +263,5 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:produce", relay("produce"));
   socket.on("ms:consume", relay("consume"));
   socket.on("ms:consumer:resume", relay("consumer:resume"));
+  socket.on("ms:consumer:layers", relay("consumer:layers"));
 }

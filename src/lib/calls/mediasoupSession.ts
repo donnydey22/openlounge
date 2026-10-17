@@ -5,6 +5,7 @@ import { audioContext } from "@/lib/audioUnlock";
 import { CallVoiceProcessor, isAudioContextRunning } from "./voiceProcessing";
 import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, micNeedsRecovery, shouldRestartIce, useRawDirectCallMicrophone } from "./audioPolicy";
 import { inputKeys, shouldReacquireMic } from "../audioDevices";
+import { isSimulcastConsumer, layerForTile, maxLayerForNetwork, simulcastEncodings, type SimulcastEncoding } from "./simulcast";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, cameraCaptureConstraints, type NetworkTier } from "./videoPolicy";
 
 export type MediasoupRemoteTrack = { kind: "audio" | "video"; track: MediaStreamTrack; close: () => void; receiver?: RTCRtpReceiver };
@@ -111,6 +112,19 @@ export class MediasoupCallSession {
     if (this.mic.readyState === "ended" || this.mic.muted) void this.recoverMic();
   }
   private inputSnapshot: string[] | null = null;
+  /** Encodings the camera producer was created with (null = single layer). */
+  private videoLayers: SimulcastEncoding[] | null = null;
+  /** Remote simulcast video consumers and their tile/network-driven preferred spatial layer. */
+  private layerWatch = new Map<string, { track: MediaStreamTrack; layer: number; ro: ResizeObserver | null; el: HTMLVideoElement | null }>();
+  private layerTimer: ReturnType<typeof setInterval> | null = null;
+  private lossRatio = 0;
+  /** Layer switches create sequence gaps the receiver counts as "lost"; ignore loss right after a switch. */
+  private lastLayerChange = 0;
+  private lastLossSample: { lost: number; recv: number } | null = null;
+  /** Diagnostics: last preferred spatial layer requested per consumer (read by live tests). */
+  getVideoLayerState() {
+    return { producerEncodings: this.videoLayers?.length ?? (this.producers.get("video") ? 1 : 0), lossRatio: Math.round(this.lossRatio * 1000) / 1000, consumers: [...this.layerWatch.entries()].map(([id, w]) => ({ id, layer: w.layer })) };
+  }
   private readonly onDeviceChange = () => void this.checkMicDevice();
 
   constructor(
@@ -475,7 +489,20 @@ export class MediasoupCallSession {
     // Restore the proven direct producer path: Mediasoup/browser congestion control can use the camera's healthy
     // native bitrate instead of being pinned to the #41 400 kbps / 24 fps middle layer. Network-tier capture still
     // requests 360p/24 on constrained links, and LiveKit's adaptive fallback remains unchanged.
-    const producer = await this.send.produce({ track, appData: { source: "camera" } });
+    // Simulcast: three layers (~180p/360p/720p; two on a sub-540p phone frame) so the SFU can forward each viewer the layer its tile and link need.
+    // Any engine/codec that rejects simulcast (e.g. some Safari H.264 builds) falls back to the proven single layer.
+    let producer: Awaited<ReturnType<TransportLike["produce"]>>;
+    const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
+    const layers = simulcastEncodings({ ua: navigator.userAgent }, { width: settings.width, height: settings.height });
+    try {
+      if (!layers) throw new Error("simulcast off");
+      producer = await this.send.produce({ track, encodings: layers.map((e) => ({ ...e })), codecOptions: { videoGoogleStartBitrate: 1000 }, appData: { source: "camera", simulcast: true } });
+      this.videoLayers = layers;
+    } catch {
+      if (this.closed || this.send.closed) throw new Error("UDP media connection cancelled");
+      this.videoLayers = null;
+      producer = await this.send.produce({ track, appData: { source: "camera" } });
+    }
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
       track.stop();
@@ -490,6 +517,7 @@ export class MediasoupCallSession {
   async disableCamera() {
     this.producers.get("video")?.close();
     this.producers.delete("video");
+    this.videoLayers = null;
     this.camera?.stop();
     this.camera = null;
     this.opts.onLocalVideo(null);
@@ -542,13 +570,13 @@ export class MediasoupCallSession {
    */
   async applyLadderStep(step: { audioBps: number; videoScale: number; videoFps: number; videoBps: number }): Promise<boolean> {
     if (this.closed) return false;
-    const set = async (kind: "audio" | "video", patch: (e: RTCRtpEncodingParameters) => void) => {
+    const set = async (kind: "audio" | "video", patch: (e: RTCRtpEncodingParameters, i: number) => void) => {
       const sender = this.producers.get(kind)?.rtpSender;
       if (!sender?.getParameters || !sender.setParameters) return false;
       try {
         const p = sender.getParameters();
         if (!p.encodings?.length) p.encodings = [{}];
-        p.encodings.forEach(patch);
+        p.encodings.forEach((e, i) => patch(e, i));
         await sender.setParameters(p);
         return true;
       } catch {
@@ -556,10 +584,13 @@ export class MediasoupCallSession {
       }
     };
     const a = await set("audio", (e) => { e.maxBitrate = step.audioBps; });
-    await set("video", (e) => {
-      e.maxBitrate = step.videoBps;
-      e.maxFramerate = step.videoFps;
-      e.scaleResolutionDownBy = step.videoScale;
+    const layers = this.videoLayers;
+    await set("video", (e, i) => {
+      // Simulcast: scale each layer from its own base (keeps 3 distinct layers); the top layer gets the ladder's cap.
+      const base = layers?.[i];
+      e.maxBitrate = base?.maxBitrate ? Math.min(base.maxBitrate, step.videoBps) : step.videoBps;
+      e.maxFramerate = base?.maxFramerate ? Math.min(base.maxFramerate, step.videoFps) : step.videoFps;
+      e.scaleResolutionDownBy = base ? base.scaleResolutionDownBy * step.videoScale : step.videoScale;
     });
     return a;
   }
@@ -616,14 +647,15 @@ export class MediasoupCallSession {
   private async syncOnce(generation?: number) {
     if (this.closed || !this.recv || !this.device) return;
     {
-      const r = await this.req<{ ok: boolean; consumers?: Array<{ id: string; producerId: string; kind: "audio" | "video"; rtpParameters: unknown }> }>("ms:consume", {
+      const r = await this.req<{ ok: boolean; consumers?: Array<{ id: string; producerId: string; kind: "audio" | "video"; rtpParameters: unknown; type?: string }> }>("ms:consume", {
         transportId: this.recv.id,
         rtpCapabilities: this.device.rtpCapabilities,
       });
       if (!r.ok) throw new Error("Mediasoup consumer setup failed");
       for (const params of r.consumers ?? []) {
         if (this.closed || (generation !== undefined && generation !== this.generation) || this.consumers.has(params.id)) continue;
-        const consumer = await this.recv.consume(params as Parameters<RecvTransportLike["consume"]>[0]);
+        const { type: consumerType, ...consumeParams } = params;
+        const consumer = await this.recv.consume(consumeParams as Parameters<RecvTransportLike["consume"]>[0]);
         if (this.closed || (generation !== undefined && generation !== this.generation)) {
           consumer.close();
           continue;
@@ -631,8 +663,83 @@ export class MediasoupCallSession {
         this.consumers.set(consumer.id, consumer);
         this.opts.onRemoteTrack({ kind: consumer.kind, track: consumer.track, close: () => consumer.close(), receiver: (consumer as { rtpReceiver?: RTCRtpReceiver }).rtpReceiver });
         await this.req<{ ok: boolean }>("ms:consumer:resume", { consumerId: consumer.id });
+        if (consumer.kind === "video" && (consumerType === "simulcast" || isSimulcastConsumer(params.rtpParameters))) this.watchLayers(consumer.id, consumer.track);
       }
     }
+  }
+
+  /** Tie a simulcast consumer's preferred layer to its rendered tile (ResizeObserver) and the link quality. */
+  private watchLayers(consumerId: string, track: MediaStreamTrack) {
+    this.layerWatch.set(consumerId, { track, layer: -1, ro: null, el: null });
+    track.addEventListener("ended", () => this.unwatchLayers(consumerId));
+    this.updateLayer(consumerId);
+    if (!this.layerTimer) this.layerTimer = setInterval(() => void this.tickLayers(), 2_000);
+  }
+
+  private unwatchLayers(consumerId: string) {
+    this.layerWatch.get(consumerId)?.ro?.disconnect();
+    this.layerWatch.delete(consumerId);
+    if (!this.layerWatch.size && this.layerTimer) {
+      clearInterval(this.layerTimer);
+      this.layerTimer = null;
+    }
+  }
+
+  private findVideoEl(track: MediaStreamTrack): HTMLVideoElement | null {
+    if (typeof document === "undefined") return null;
+    for (const el of document.querySelectorAll("video")) {
+      const src = el.srcObject as MediaStream | null;
+      if (src && typeof src.getTracks === "function" && src.getTracks().includes(track)) return el;
+    }
+    return null;
+  }
+
+  private async tickLayers() {
+    if (this.closed) return;
+    // Receive-side loss over the last interval drives the network cap.
+    try {
+      const stats = await (this.recv as unknown as { getStats?: () => Promise<RTCStatsReport> } | null)?.getStats?.();
+      let lost = 0, recv = 0;
+      // Only the watched camera streams: mediasoup's BWE probator (ssrc 1234) shows up as a "lost"-heavy video stream.
+      const ids = new Set([...this.layerWatch.values()].map((w) => w.track.id));
+      stats?.forEach((r: { type?: string; kind?: string; ssrc?: number; trackIdentifier?: string; packetsLost?: number; packetsReceived?: number }) => {
+        if (r.type !== "inbound-rtp" || r.kind !== "video" || r.ssrc === 1234) return;
+        if (r.trackIdentifier && !ids.has(r.trackIdentifier)) return;
+        lost += r.packetsLost ?? 0;
+        recv += r.packetsReceived ?? 0;
+      });
+      const prev = this.lastLossSample;
+      this.lastLossSample = { lost, recv };
+      if (prev && Date.now() - this.lastLayerChange > 6_000) {
+        const dl = Math.max(0, lost - prev.lost), dr = Math.max(0, recv - prev.recv);
+        const ratio = dr >= 50 ? dl / (dl + dr) : 0;
+        this.lossRatio = this.lossRatio * 0.5 + ratio * 0.5;
+      }
+    } catch {}
+    for (const id of this.layerWatch.keys()) this.updateLayer(id);
+  }
+
+  private updateLayer(consumerId: string) {
+    const w = this.layerWatch.get(consumerId);
+    if (!w || this.closed) return;
+    if (w.track.readyState === "ended") return this.unwatchLayers(consumerId);
+    if (!w.el || !w.el.isConnected) {
+      w.ro?.disconnect();
+      w.ro = null;
+      w.el = this.findVideoEl(w.track);
+      if (w.el && typeof ResizeObserver !== "undefined") {
+        w.ro = new ResizeObserver(() => this.updateLayer(consumerId));
+        w.ro.observe(w.el);
+      }
+    }
+    const cap = maxLayerForNetwork(browserNetworkTier(), this.lossRatio);
+    const rect = w.el?.getBoundingClientRect();
+    // Not rendered yet: start at the middle layer (fast first frame), never above the network cap.
+    const layer = rect && rect.width > 0 ? layerForTile(rect.width, rect.height, window.devicePixelRatio || 1, cap) : Math.min(1, cap);
+    if (layer === w.layer) return;
+    w.layer = layer;
+    this.lastLayerChange = Date.now();
+    void this.req<{ ok: boolean }>("ms:consumer:layers", { consumerId, spatialLayer: layer }).catch(() => {});
   }
 
   private req<T>(event: string, data: Record<string, unknown>) {
@@ -647,6 +754,7 @@ export class MediasoupCallSession {
     this.joined = false;
     if (shouldLeave) void this.socket.request("ms:leave", { callId: this.media.callId }, 1_000).catch(() => {});
     this.socket.off("ms:consumer:available", this.onAvailable);
+    for (const id of [...this.layerWatch.keys()]) this.unwatchLayers(id);
     for (const consumer of this.consumers.values()) consumer.close();
     this.consumers.clear();
     for (const producer of this.producers.values()) producer.close();
