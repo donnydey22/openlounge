@@ -119,10 +119,7 @@ export class NativeMediaSession {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;
     return (Array.isArray(raw) ? raw : []).map((list) => new Map((list ?? []).map((s, i) => [String(s.id ?? i), s])) as unknown as RTCStatsReport);
   }
-  /** The native app path is audio-only (chosen only for voice calls): fail loudly so the UI says so instead of showing camOn with no video. */
-  async enableCamera(): Promise<void> {
-    throw new Error("native media is audio-only");
-  }
+  async enableCamera() {}
   async disableCamera() {}
   async refreshCameraQuality() {}
   async flipCamera() {}
