@@ -1662,7 +1662,7 @@ export class CallEngine {
   }
 
   /** failure-reason telemetry to the server log (fire-and-forget; never affects the call) */
-  private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting"]);
+  private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting", "net-change"]);
   private diag(ev: string, extra: Record<string, unknown> = {}) {
     try {
       const callId = this.s.call?.id;
