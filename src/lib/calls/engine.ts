@@ -1127,7 +1127,12 @@ export class CallEngine {
         } else if (a.type === "tcp") {
           this.stopQualityGuard();
           this.netLog("ms-quality-fallback", { reasons: a.reasons.join(","), loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps, ladder: "floor" });
-          void this.requestTcpFallback();
+          void this.requestTcpFallback().finally(() => {
+            // call 3ae8ff34: a short blip at the floor while the transport stayed connected made recovery a no-op, but the
+            // ladder was already stopped → 16 kbps for the remaining 9 min. Still connected and not recovering: resume
+            // the ladder (restarts at rung 1 and climbs on measured headroom, same as after any reconnect).
+            if (this.mediasoup === session && this.mediasoupConnected && !this.msRecovering && this.busy && !this.qualityTimer && this.media?.provider === "mediasoup") this.startQualityGuard(session);
+          });
         }
       }).catch(() => {});
     }, ADAPT.sampleMs);

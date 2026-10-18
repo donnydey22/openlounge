@@ -209,3 +209,17 @@ test("d8d7eded: push-woken/resumed callee gets a 12 s first-connect grace from s
   // the plain 5 s budget remains the default (web caller, non-woken callee)
   assert.ok(src.includes("return CallEngine.FIRST_CONNECT_BUDGET_MS;"));
 });
+
+test("3ae8ff34: floor 'tcp' verdict while the transport is still connected resumes the ladder instead of freezing at 16 kbps", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.ok(src.includes("void this.requestTcpFallback().finally(() => {"));
+  assert.ok(src.includes("this.mediasoupConnected && !this.msRecovering && this.busy && !this.qualityTimer"));
+  const { NetLadder, ADAPT, LADDER } = await import("../../src/lib/calls/netAdapt");
+  const l = new NetLadder();
+  l.reset(ADAPT.reconnectLevel);
+  let up = 0;
+  for (let i = 0; i < ADAPT.upAfter; i++) { const a = l.push({ lossPercent: 0, rttMs: 60, outKbps: 300, reasons: [] }); if (a.type === "step" && a.dir === "up") up++; }
+  assert.equal(up, 1);
+  assert.equal(LADDER[l.level].audioBps, 48_000);
+});
