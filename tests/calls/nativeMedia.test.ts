@@ -196,3 +196,16 @@ test("Android app: WebView media path, caller budget from answer, LiveKit pinned
   assert.ok(/while \(ringing\(\)\) await[\s\S]{0,80}this\.firstConnectT0 = Date\.now\(\)/.test(src), "caller budget starts at answer");
   assert.ok(!/shouldTryUdp\(now\)\) void this\.requestUdpRestore\(\)/.test(src), "no LiveKit → SFU flap-back");
 });
+
+test("d8d7eded: push-woken/resumed callee gets a 12 s first-connect grace from socket-back; native LiveKit last resort has its own 15 s budget", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  assert.ok(src.includes("static WOKEN_GRACE_MS = 12_000;"));
+  assert.ok(src.includes("static LIVEKIT_JOIN_BUDGET_MS = 15_000;"));
+  assert.ok(src.includes('this.s.role !== "callee"'));
+  assert.ok(src.includes("this.socketUpAt = Date.now();"));
+  assert.ok(src.includes('media.provider === "livekit"\n        ? Promise.race'));
+  assert.ok(src.includes('this.failUdpUnreachable("livekit-native"'));
+  // the plain 5 s budget remains the default (web caller, non-woken callee)
+  assert.ok(src.includes("return CallEngine.FIRST_CONNECT_BUDGET_MS;"));
+});

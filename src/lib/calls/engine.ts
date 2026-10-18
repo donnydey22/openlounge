@@ -229,6 +229,7 @@ export class CallEngine {
    *  answer: re-bind this connection to the call right away, adopt the server's state, and if media never came up
    *  (or dropped) once the first-connect budget is spent, rebuild it instead of sitting silent. */
   private onSocketBack = () => {
+    this.socketUpAt = Date.now();
     const call = this.s.call;
     if (!call || !this.busy) return;
     this.diag("socket-back", { media: this.mediaConnected() });
@@ -238,7 +239,7 @@ export class CallEngine {
         if (!this.busy || this.s.call?.id !== call.id) return;
         if (this.s.ui !== "active" && this.s.ui !== "connecting") return;
         if (this.deferNativeConnect || this.mediaConnected() || this.rejoining || this.msRecovering || this.fallbackInFlight) return;
-        const firstConnectSpent = !this.firstConnectT0 || Date.now() - this.firstConnectT0 > CallEngine.FIRST_CONNECT_BUDGET_MS;
+        const firstConnectSpent = !this.firstConnectT0 || Date.now() - this.firstConnectT0 > this.firstConnectBudgetMs();
         if (firstConnectSpent) void this.rejoin("socket-back");
       })
       .catch(() => {});
@@ -270,6 +271,11 @@ export class CallEngine {
     socket.on("call:mediaFallback", this.onMediaFallback);
     socket.on("call:mediaRestore", this.onMediaRestore);
     socket.on("connect", this.onSocketBack);
+    this.socketUpAt = Date.now();
+    if (typeof document !== "undefined" && !this.resumeWatch) {
+      this.resumeWatch = true;
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") this.resumedAt = Date.now(); });
+    }
     this.watchNetwork();
   }
 
@@ -871,7 +877,10 @@ export class CallEngine {
       const first = !this.msRecoveryOnly();
       if (first && !this.inFirstRetry) this.firstConnectT0 = Date.now();
       // first connect: one ~5 s budget across all silent attempts (ICE races direct UDP and the TURNS relay)
-      await (first
+      // native-app LiveKit last resort (call d8d7eded): it used to race the already-spent first-connect budget (500 ms)
+      await (media.provider === "livekit"
+        ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("livekit join budget")), CallEngine.LIVEKIT_JOIN_BUDGET_MS))])
+        : first
         ? Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])
         : session.connect(this.s.camOn));
       if (this.mediasoup !== session || !this.busy) {
@@ -905,7 +914,8 @@ export class CallEngine {
         // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
         // Android app native media: a failed FIRST connect goes to the LiveKit backup right away (its mediasoup error
         // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
-        if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow(String((e as Error)?.message ?? e));
+        if (media.provider === "livekit") this.failUdpUnreachable("livekit-native", String((e as Error)?.message ?? e));
+        else if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow(String((e as Error)?.message ?? e));
         else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
       }
       return null;
@@ -1546,6 +1556,22 @@ export class CallEngine {
    *  "Reconnecting…", the UI stays Calling/Connecting) within one ~5 s budget, then a silent LiveKit handover. */
   static FIRST_CONNECT_BUDGET_MS = 5_000;
   static FIRST_RETRY_GAP_MS = 400;
+  /** push-woken / just-resumed callee (call d8d7eded, Oct 17): the first connect gets this long from the moment the
+   *  signaling socket is back (or the app resumed), not 5 s from answer, before the LiveKit last resort. UI stays
+   *  Calling/Connecting silently meanwhile. */
+  static WOKEN_GRACE_MS = 12_000;
+  static WAKE_WINDOW_MS = 30_000;
+  /** a LiveKit last-resort join done by the native app gets its own budget (never the spent first-connect one) */
+  static LIVEKIT_JOIN_BUDGET_MS = 15_000;
+  private socketUpAt = 0;
+  private resumedAt = 0;
+  private resumeWatch = false;
+  private firstConnectBudgetMs(): number {
+    const t0 = this.firstConnectT0;
+    const anchor = Math.max(this.socketUpAt, this.resumedAt);
+    if (this.s.role !== "callee" || !t0 || !anchor || t0 - anchor > CallEngine.WAKE_WINDOW_MS) return CallEngine.FIRST_CONNECT_BUDGET_MS;
+    return Math.max(CallEngine.FIRST_CONNECT_BUDGET_MS, anchor - t0 + CallEngine.WOKEN_GRACE_MS);
+  }
   private firstConnectT0 = 0;
   private inFirstRetry = false;
   /**
@@ -1559,8 +1585,10 @@ export class CallEngine {
       while (ringing()) await new Promise((r) => setTimeout(r, 200));
       this.firstConnectT0 = Date.now();
     }
-    const budget = Math.max(500, CallEngine.FIRST_CONNECT_BUDGET_MS - (Date.now() - this.firstConnectT0));
+    let budget = Math.max(500, this.firstConnectBudgetMs() - (Date.now() - this.firstConnectT0));
     await new Promise((r) => setTimeout(r, budget));
+    // the socket came back (or the app resumed) while waiting: extend to the woken grace instead of failing
+    while ((budget = this.firstConnectBudgetMs() - (Date.now() - this.firstConnectT0)) > 0) await new Promise((r) => setTimeout(r, budget));
     throw new Error("first connect budget");
   }
 
@@ -1571,7 +1599,7 @@ export class CallEngine {
     this.inFirstRetry = true;
     try {
       let attempt = 0;
-      while (Date.now() - this.firstConnectT0 < CallEngine.FIRST_CONNECT_BUDGET_MS - CallEngine.FIRST_RETRY_GAP_MS) {
+      while (Date.now() - this.firstConnectT0 < this.firstConnectBudgetMs() - CallEngine.FIRST_RETRY_GAP_MS) {
         await new Promise((r) => setTimeout(r, CallEngine.FIRST_RETRY_GAP_MS));
         if (!live()) return;
         attempt++;
