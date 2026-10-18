@@ -14,6 +14,8 @@ type TransportLike = ReturnType<DeviceLike["createSendTransport"]>;
 type RecvTransportLike = ReturnType<DeviceLike["createRecvTransport"]>;
 
 const CONNECT_TIMEOUT_MS = 8_000;
+/** muted/ended capture recapture attempts (1.2 s apart) before giving up; reset by a healthy capture */
+const MUTED_CAPTURE_RETRIES = 6;
 /** Absolute ceiling for a connect including paused local work (mic permission prompt, chunk load). */
 const CONNECT_HARD_CAP_MS = 30_000;
 /** Re-check interval while UDP ICE is still progressing past the 8 s budget (no TCP while UDP is mid-handshake). */
@@ -81,9 +83,76 @@ export class MediasoupCallSession {
     if (this.micMuteTimer) clearTimeout(this.micMuteTimer);
     this.micMuteTimer = setTimeout(() => {
       this.micMuteTimer = null;
-      if (!this.closed && this.mic?.muted) void this.recoverMic();
+      if (!this.closed && this.mic?.muted && this.micMutedRetries < MUTED_CAPTURE_RETRIES) {
+        this.micMutedRetries++;
+        void this.recoverMic();
+      }
     }, 1_200);
   };
+  /** Bounded recapture while the OS keeps the source interrupted (a recapture taken mid-handover can itself arrive
+   *  already muted, and an already-muted track never fires another "mute" event). Reset once a capture is healthy. */
+  private micMutedRetries = 0;
+  private cameraMutedRetries = 0;
+  private cameraMuteTimer: ReturnType<typeof setTimeout> | null = null;
+  private cameraRecovering: Promise<void> | null = null;
+  /** iOS caller: the camera captured at dial time is interrupted by the same CallKit session activation as the mic
+   *  (self-view black, callee sees nothing). Recapture it onto the existing video producer when it stays muted/ended. */
+  private readonly onCameraMuted = () => {
+    if (this.cameraMuteTimer) clearTimeout(this.cameraMuteTimer);
+    this.cameraMuteTimer = setTimeout(() => {
+      this.cameraMuteTimer = null;
+      const cam = this.camera;
+      if (!this.closed && cam && (cam.muted || cam.readyState === "ended") && this.cameraMutedRetries < MUTED_CAPTURE_RETRIES) {
+        this.cameraMutedRetries++;
+        void this.recoverCamera();
+      }
+    }, 1_200);
+  };
+  private watchCamera(track: MediaStreamTrack) {
+    track.addEventListener?.("mute", this.onCameraMuted);
+    track.addEventListener?.("ended", this.onCameraMuted);
+    if (track.muted) this.onCameraMuted();
+    else this.cameraMutedRetries = 0;
+  }
+  private unwatchCamera(track: MediaStreamTrack | null) {
+    track?.removeEventListener?.("mute", this.onCameraMuted);
+    track?.removeEventListener?.("ended", this.onCameraMuted);
+  }
+  /** Same facing, fresh capture, swapped into the existing producer (no renegotiation). */
+  recoverCamera(): Promise<void> {
+    if (this.cameraRecovering) return this.cameraRecovering;
+    this.cameraRecovering = (async () => {
+      const old = this.camera;
+      const producer = this.producers.get("video") as { replaceTrack?: (input: { track: MediaStreamTrack }) => Promise<void> } | undefined;
+      if (this.closed || !old || !producer?.replaceTrack) return;
+      const facing = old.getSettings?.().facingMode === "environment" ? "environment" : "user";
+      const stream = await navigator.mediaDevices.getUserMedia({ video: cameraCaptureConstraints(facing) }).catch(() => null);
+      const next = stream?.getVideoTracks()[0];
+      if (!next) return;
+      if (this.closed || this.camera !== old) return void next.stop();
+      applyCameraQualityHint(next);
+      try {
+        await producer.replaceTrack({ track: next });
+      } catch {
+        next.stop();
+        return;
+      }
+      this.unwatchCamera(old);
+      old.stop();
+      this.camera = next;
+      this.opts.onLocalVideo(next);
+      this.watchCamera(next);
+    })().finally(() => {
+      this.cameraRecovering = null;
+    });
+    return this.cameraRecovering;
+  }
+  /** Native audio-session handover: recapture a camera that is muted or ended. */
+  checkCameraAlive() {
+    const cam = this.camera;
+    if (this.closed || !cam) return;
+    if (cam.readyState === "ended" || cam.muted) void this.recoverCamera();
+  }
   private micHandoverPending = false;
   private lastMicRebind = 0;
   /**
@@ -99,6 +168,7 @@ export class MediasoupCallSession {
     }
     // Desktop publishes a processed (Web Audio) track; recapturing under it left the sender silent in testing.
     // The handover problem is a phone one (raw AEC mic, useRawDirectCallMicrophone) — desktop only recovers a dead mic.
+    this.checkCameraAlive();
     if (this.micProcessor || this.micOutbound !== this.mic) return this.checkMicAlive();
     const now = Date.now();
     if (now - this.lastMicRebind < 300) return;
@@ -113,6 +183,7 @@ export class MediasoupCallSession {
   checkMicAlive() {
     if (this.closed || !this.mic) return;
     if (this.mic.readyState === "ended" || this.mic.muted) void this.recoverMic();
+    this.checkCameraAlive();
   }
   private inputSnapshot: string[] | null = null;
   private readonly onDeviceChange = () => void this.checkMicDevice();
@@ -393,6 +464,8 @@ export class MediasoupCallSession {
       this.micOutbound = next;
       next.addEventListener("ended", this.onMicEnded);
       next.addEventListener("mute", this.onMicMuted);
+      if (next.muted) this.onMicMuted();
+      else this.micMutedRetries = 0;
       await processor?.destroy();
       void this.queueMicProcessorSync();
     })().finally(() => {
@@ -488,12 +561,16 @@ export class MediasoupCallSession {
       return null;
     }
     this.producers.set("video", producer);
+    this.watchCamera(track);
     return track;
   }
 
   async disableCamera() {
     this.producers.get("video")?.close();
     this.producers.delete("video");
+    this.unwatchCamera(this.camera);
+    if (this.cameraMuteTimer) clearTimeout(this.cameraMuteTimer);
+    this.cameraMuteTimer = null;
     this.camera?.stop();
     this.camera = null;
     this.opts.onLocalVideo(null);
@@ -527,9 +604,11 @@ export class MediasoupCallSession {
       next.stop();
       return null;
     }
+    this.unwatchCamera(this.camera);
     this.camera.stop();
     this.camera = next;
     this.opts.onLocalVideo(next);
+    this.watchCamera(next);
     return next;
   }
 
@@ -662,6 +741,9 @@ export class MediasoupCallSession {
     this.mic?.removeEventListener("ended", this.onMicEnded);
     this.mic?.removeEventListener("mute", this.onMicMuted);
     if (this.micMuteTimer) clearTimeout(this.micMuteTimer);
+    if (this.cameraMuteTimer) clearTimeout(this.cameraMuteTimer);
+    this.cameraMuteTimer = null;
+    this.unwatchCamera(this.camera);
     if (typeof navigator !== "undefined") navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
     this.micProcessorContext = null;
     void this.micProcessor?.destroy();
