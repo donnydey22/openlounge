@@ -21,7 +21,9 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
+import { isAndroidApp } from "@/lib/notify";
 
 /** WebView media session or the iOS app's native media proxy (same surface) */
 type CallMediaSession = MediasoupCallSession | NativeMediaSession;
@@ -865,7 +867,7 @@ export class CallEngine {
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
         onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
-        onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeLiveKitNow(reason); },
+        onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeFailed(reason); },
         tcpOnly,
       });
       this.mediasoup = session;
@@ -894,6 +896,7 @@ export class CallEngine {
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
       this.startUdpProbe(session);
+      this.startAndroidLifecycle(session);
       if (answer || this.s.call?.phase === "active") {
         if (this.s.ui === "connecting") {
           this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
@@ -915,7 +918,7 @@ export class CallEngine {
         // Android app native media: a failed FIRST connect goes to the LiveKit backup right away (its mediasoup error
         // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
         if (media.provider === "livekit") this.failUdpUnreachable("livekit-native", String((e as Error)?.message ?? e));
-        else if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow(String((e as Error)?.message ?? e));
+        else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView(String((e as Error)?.message ?? e));
         else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
       }
       return null;
@@ -1621,6 +1624,62 @@ export class CallEngine {
     }
   }
 
+  /** Native media signalled a deterministic failure: Android drops to the WebView media path; iOS keeps its LiveKit backup. */
+  private nativeFailed(reason: string) {
+    if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);
+    return this.nativeLiveKitNow(reason);
+  }
+
+  /**
+   * Android 0.3.18+ native media failed (first connect error/budget, or failed{fallback}): turn native media off for the
+   * rest of this page session and reconnect the SAME call over the WebView media path (the path every Android call
+   * used before). Its failure runs the normal WebView ladder (silent retries -> LiveKit -> clear message), never silence.
+   */
+  private nativeWebCall: string | null = null;
+  private async androidNativeToWebView(reason: string) {
+    const callId = this.s.call?.id;
+    const media = this.media;
+    if (!callId || !this.busy || this.nativeWebCall === callId || media?.provider !== "mediasoup") return;
+    this.nativeWebCall = callId;
+    disableAndroidNativeMedia(reason);
+    this.diag("native-fallback-webview", { reason: reason.slice(0, 160) });
+    // mid-call recovery loop already running: its next rebuild picks the WebView session (native is now off)
+    if (this.msRecovering) return;
+    this.dropMediaForRejoin();
+    this.media = media;
+    this.msEverConnected = null; // fresh first connect (own budget) on the WebView path
+    await this.connectMediasoup(media, true);
+  }
+
+  /** Android app on the WebView media path: Phase A suspension hardening (heartbeat, stall detection, recovery ladder). */
+  private lifecycle: AndroidCallLifecycle | null = null;
+  private startAndroidLifecycle(session: CallMediaSession) {
+    this.stopAndroidLifecycle();
+    if (!isAndroidApp() || !(session instanceof MediasoupCallSession)) return;
+    const lc = new AndroidCallLifecycle({
+      audioEls: () => this.audioEls,
+      audioContexts: () => { try { const c = audioContext(); return c ? [c] : []; } catch { return []; } },
+      micTrack: () => (this.mediasoup === session ? session.micTrackForHealth() : null),
+      recoverMic: () => session.recoverMic(),
+      health: async () => summarizeStats(await session.getTransportStats()),
+      restartIce: () => session.restartIceAll(),
+      escalate: (reason) => {
+        if (this.mediasoup !== session) return;
+        this.netLog("lifecycle-escalate", { reason });
+        this.onMediasoupState("failed");
+      },
+      busyRecovering: () => this.mediasoup !== session || this.msRecovering || this.rejoining || this.inFirstRetry || this.media?.provider !== "mediasoup",
+      visible: () => typeof document === "undefined" || document.visibilityState === "visible",
+      log: (ev, extra) => { this.diag(ev, extra); this.netLog(ev, extra); },
+    });
+    this.lifecycle = lc;
+    lc.start();
+  }
+  private stopAndroidLifecycle() {
+    this.lifecycle?.stop();
+    this.lifecycle = null;
+  }
+
   /** Android app native mediasoup failed: request LiveKit backup credentials now and hand the call over (once per call). */
   private nativeLkCall: string | null = null;
   private async nativeLiveKitNow(reason: string) {
@@ -1714,6 +1773,7 @@ export class CallEngine {
     }
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
+    this.stopAndroidLifecycle();
     this.stopQualityGuard();
     this.stopUdpProbe();
     this.mediasoupConnected = false;
@@ -2069,6 +2129,7 @@ export class CallEngine {
     }
     const mediasoup = this.mediasoup;
     this.mediasoup = null;
+    this.stopAndroidLifecycle();
     this.stopQualityGuard();
     this.stopUdpProbe();
     this.mediasoupConnected = false;

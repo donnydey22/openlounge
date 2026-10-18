@@ -27,11 +27,35 @@ export function nativeMediaAvailable(): boolean {
   return !!b && typeof b.nativeMedia === "function" && typeof b.msReply === "function" && !!b.capabilities?.includes("nativeMedia");
 }
 
-/** Audio-only calls in the native-media iOS app use app-owned media. */
+/** Android builds with the native-media fix (0.3.18 / build 34: software video codec factories for Device.load). */
+export const ANDROID_NATIVE_MIN_BUILD = 34;
+let androidNativeOff: string | null = null;
+
+/** Android wrapper build number from the WebView UA (`OpenLounge/android/<version>(<build>)`), or null. */
+export function androidAppBuild(ua: string = typeof navigator !== "undefined" ? navigator.userAgent : ""): number | null {
+  const m = /\bOpenLounge\/android\/[^\s(]+\((\d+)\)/i.exec(ua);
+  return m ? Number(m[1]) : null;
+}
+
+/** A native failure on Android turns native media off for the rest of this page session (WebView path from then on). */
+export function disableAndroidNativeMedia(reason: string) {
+  androidNativeOff = reason || "failed";
+}
+export function androidNativeDisabledReason(): string | null {
+  return androidNativeOff;
+}
+/** test hook */
+export function resetAndroidNativeMedia() {
+  androidNativeOff = null;
+}
+
+/** Audio-only calls in the native-media iOS app, and Android app 0.3.18+ (build 34), use app-owned media. */
 export function useNativeMedia(video: boolean): boolean {
-  // Android app (Oct 17): native mediasoup (device-load type_error) and native LiveKit both failed on real phones, so
-  // Android calls use the WebView media path (as video calls and pre-0.3.16 builds do) until the native fix is proven.
-  return !video && nativeMediaAvailable() && !nativeMediaIsAndroid();
+  if (video || !nativeMediaAvailable()) return false;
+  if (!nativeMediaIsAndroid()) return true;
+  // Android (Oct 17): builds <= 33 failed native Device.load on real phones, so they stay on the WebView media path.
+  // 0.3.18 (34) carries the fix; any native failure there drops this page session back to the WebView path.
+  return androidNativeOff === null && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
 }
 
 /** Android app (0.3.16+ shim sets platform:'android'); the iOS bridge carries no platform */

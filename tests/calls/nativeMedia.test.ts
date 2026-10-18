@@ -177,16 +177,50 @@ test("native media: Android 0.3.17 'wants LiveKit' signal hands over now; iOS/we
   assert.equal(m.nativeMediaIsAndroid(), false, "iOS bridge has no platform");
 
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.ok(src.includes("onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeLiveKitNow(reason); }"));
-  assert.ok(src.includes("if (!recovering && this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.nativeLiveKitNow("));
+  assert.ok(src.includes("onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeFailed(reason); }"));
+  assert.ok(src.includes("else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView("));
+  assert.ok(src.includes("if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);"), "Android native failure -> WebView media");
   assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS keep the silent retry budget");
   assert.ok(src.includes('await this.lastResortLiveKit("native-ms-failed", reason);'));
+});
+
+function setUA(ua: string) {
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: ua }, configurable: true, writable: true });
+}
+
+test("Android 0.3.18 (34)+: native media for every user; <=33 stays on WebView; a native failure drops to WebView for the session", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  const prevNav = (globalThis as { navigator?: unknown }).navigator;
+  try {
+    m.resetAndroidNativeMedia();
+    installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
+    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.17(33) OpenLoungeAndroid/0.3.17");
+    assert.equal(m.androidAppBuild(), 33);
+    assert.equal(m.useNativeMedia(false), false, "0.3.17 (33) keeps the WebView path");
+    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.18(34) OpenLoungeAndroid/0.3.18");
+    assert.equal(m.useNativeMedia(false), true, "0.3.18 (34): native audio, no per-account gate");
+    assert.equal(m.useNativeMedia(true), false, "video calls keep the WebView path");
+    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.4.0(40)");
+    assert.equal(m.useNativeMedia(false), true, "later builds too");
+    m.disableAndroidNativeMedia("Device.load failed");
+    assert.equal(m.useNativeMedia(false), false, "after a native failure: WebView path");
+    assert.equal(m.androidNativeDisabledReason(), "Device.load failed");
+    installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
+    assert.equal(m.useNativeMedia(false), true, "iOS is never affected by the Android switch");
+  } finally {
+    m.resetAndroidNativeMedia();
+    Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
+  }
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const fb = src.slice(src.indexOf("private async androidNativeToWebView"), src.indexOf("private lifecycle:"));
+  assert.ok(/disableAndroidNativeMedia\(reason\)[\s\S]*dropMediaForRejoin\(\)[\s\S]*this\.msEverConnected = null[\s\S]*await this\.connectMediasoup\(media, true\)/.test(fb), "same call reconnects over WebView media with a fresh first-connect budget");
+  assert.ok(fb.includes("this.nativeWebCall === callId"), "once per call");
 });
 
 test("Android app: WebView media path, caller budget from answer, LiveKit pinned; iOS native unchanged", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
-  assert.equal(m.useNativeMedia(false), false, "Android app audio calls use the WebView path");
+  assert.equal(m.useNativeMedia(false), false, "Android app without a 0.3.18+ UA uses the WebView path");
   installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
   assert.equal(m.useNativeMedia(false), true, "iOS app keeps native media");
   installWindow(null);

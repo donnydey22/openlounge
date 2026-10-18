@@ -105,6 +105,10 @@ export class MediasoupCallSession {
     this.lastMicRebind = now;
     void this.recoverMic();
   }
+  /** Current local mic (read-only; Android lifecycle killed-vs-paused classification). */
+  micTrackForHealth(): MediaStreamTrack | null {
+    return this.closed ? null : this.mic;
+  }
   /** Native audio-session handover (CallKit activate / connect): recapture a mic that is muted or ended. */
   checkMicAlive() {
     if (this.closed || !this.mic) return;
