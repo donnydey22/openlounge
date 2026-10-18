@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -40,6 +40,7 @@ import { DmRoomActions } from "../rooms/DmRoomActions";
 import { CallMessageRow } from "../calls/CallMessageRow";
 import { startCall } from "../calls/CallProvider";
 import { DropInBanner } from "../rooms/DropInBanner";
+import { ForwardSheet } from "./ForwardSheet";
 import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
 import { FormattedText } from "./FormattedText";
 import { LinkifiedText } from "./LinkifiedText";
@@ -347,6 +348,7 @@ export function DmThread({
 
   // ---- delete (Telegram): dialog → dust + collapse → "Message deleted • Undo" for 5 s → committed on the server ----
   const [delAsk, setDelAsk] = useState<Item[] | null>(null);
+  const [forwardId, setForwardId] = useState<string | null>(null);
   const [pendingDel, setPendingDel] = useState<{ items: Item[]; forEveryone: boolean; at: number } | null>(null);
   const pendingRef = useRef(pendingDel);
   pendingRef.current = pendingDel;
@@ -1033,6 +1035,10 @@ export function DmThread({
       out.push({ key: "report", label: "Report", danger: true, icon: <Flag className="h-[18px] w-[18px]" />, onSelect: () => onReportMessage(m) });
     if (canEdit(m, me?.id))
       out.push({ key: "edit", label: "Edit", icon: <Pencil className="h-[18px] w-[18px]" />, onSelect: () => (setSelected(null), setEditing({ id: m.id, text: m.text })) });
+    // Telegram-style forward: sent text / photos / videos / files (never calls, cards, view-once or timer media)
+    const fwdMedia = m.media;
+    if (!m.state && !m.kind && !m.call && !m.id.startsWith("local-") && (!fwdMedia || (!fwdMedia.viewOnce && !fwdMedia.expiresAt && !mediaGone(fwdMedia, serverNow()))))
+      out.push({ key: "forward", label: "Forward", icon: <Forward className="h-[18px] w-[18px]" />, onSelect: () => setForwardId(m.id) });
     out.push({ key: "select", label: "Select", icon: <CheckCircle2 className="h-[18px] w-[18px]" />, onSelect: () => setSelected(new Set([keyOf(m)])) });
     if (canDelete(m))
       out.push({ key: "delete", label: "Delete", danger: true, icon: <Trash2 className="h-[18px] w-[18px]" />, onSelect: () => setDelAsk([m]) });
@@ -1521,6 +1527,7 @@ export function DmThread({
           onConfirm={confirmDelete}
         />
       )}
+      <ForwardSheet open={!!forwardId} chatId={peerId} messageId={forwardId} onClose={() => setForwardId(null)} onDone={(msg) => toast(msg)} />
       {overlay && (
         <MessageActionOverlay
           // a fresh instance per open; a closing one (150 ms fade) must not close the menu opened right after it

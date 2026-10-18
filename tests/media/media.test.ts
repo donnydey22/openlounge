@@ -529,3 +529,39 @@ test("photos get srcset thumbnails (320 WebP, 640/320 AVIF) on the same signed d
     assert.equal(r.headers.get("content-type"), type);
   }
 });
+
+test("forward (Telegram-style): received photo + text to several chats; new copies; self-destruct and strangers refused", async () => {
+  const { store } = await import("../../server/store");
+  const u = await upload(A, f("gps.jpg"), "photo");
+  const m = u.done!.data.media;
+  const s = await sendMedia(A, B, m.id, { caption: "look" });
+  assert.equal(s.status, 200);
+  // B forwards what A sent to C and back to A, in one request
+  const fw = await api(base, "/api/media/forward", { chatId: id(A), messageId: s.data.message.id, to: [id(C), id(A)] }, { token: tok(B) });
+  assert.equal(fw.status, 200, JSON.stringify(fw.data));
+  assert.equal(fw.data.results.length, 2);
+  assert.ok(fw.data.results.every((r: any) => r.ok), JSON.stringify(fw.data.results));
+  const toC = store.findDm([id(B), id(C)].sort().join("|"), fw.data.results[0].messageId)!;
+  assert.equal(toC.text, "look", "caption travels");
+  assert.notEqual(toC.media!.id, m.id, "a fresh attachment row");
+  assert.ok((await sign(C, toC.media!.id)).thumb, "recipient can open the forwarded copy");
+  // deleting the original leaves the forwarded copy intact
+  assert.equal((await api(base, `/api/media/${m.id}/delete`, {}, { token: tok(A) })).status, 200);
+  assert.ok((await sign(C, toC.media!.id)).thumb);
+  // plain text
+  const t = store.sendDm(id(A), id(B), `hello ${uniq()}`);
+  assert.ok(t.ok);
+  const ft = await api(base, "/api/media/forward", { chatId: id(A), messageId: (t as any).message.id, to: [id(C)] }, { token: tok(B) });
+  assert.equal(ft.status, 200, JSON.stringify(ft.data));
+  assert.equal(store.findDm([id(B), id(C)].sort().join("|"), ft.data.results[0].messageId)!.text, (t as any).message.text);
+  // C can't forward a message from a chat it isn't in
+  assert.equal((await api(base, "/api/media/forward", { chatId: id(A), messageId: (t as any).message.id, to: [id(B)] }, { token: tok(C) })).status, 400);
+  // timer media is never forwardable
+  const u2 = await upload(A, f("gps.jpg"), "photo");
+  const s2 = await sendMedia(A, B, u2.done!.data.media.id, { ttlSeconds: 3600 });
+  const f2 = await api(base, "/api/media/forward", { chatId: id(A), messageId: s2.data.message.id, to: [id(C)] }, { token: tok(B) });
+  assert.equal(f2.status, 400);
+  assert.match(f2.data.results[0].error, /Self-destructing/);
+  // limits
+  assert.equal((await api(base, "/api/media/forward", { chatId: id(A), messageId: s2.data.message.id, to: [] }, { token: tok(B) })).status, 400);
+});

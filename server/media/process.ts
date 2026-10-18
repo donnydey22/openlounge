@@ -78,7 +78,25 @@ export interface Probe {
   durationMs: number;
   format: string;
   video: { codec: string; width: number; height: number; rotation: number; pixFmt: string } | null;
-  audio: { codec: string } | null;
+  /** index (among audio streams, for "-map 0:a:N") of the best playable audio track; iPhone clips can carry an
+   * extra spatial (APAC) or silent track first, and mapping blindly to 0:a:0 dropped the real sound */
+  audio: { codec: string; index: number } | null;
+}
+
+/** codecs ffmpeg here can decode into AAC for every receiver */
+const DECODABLE_AUDIO = /^(aac|mp3|opus|vorbis|flac|alac|pcm_.*|ac3|eac3|amr_nb|amr_wb)$/;
+
+type AudioStream = { codec_name: string; channels?: number; disposition?: { default?: number } };
+/** Pick the audio stream to keep: decodable first, then default-flagged, then ≤2 channels (stereo/mono beats 4-ch spatial). */
+export function pickAudio(audio: AudioStream[]): { codec: string; index: number } | null {
+  if (!audio.length) return null;
+  const score = (s: AudioStream) =>
+    (DECODABLE_AUDIO.test(s.codec_name ?? "") ? 4 : 0) + (s.disposition?.default ? 2 : 0) + ((s.channels ?? 2) <= 2 ? 1 : 0);
+  let best = 0;
+  audio.forEach((s, i) => {
+    if (score(s) > score(audio[best])) best = i;
+  });
+  return { codec: audio[best].codec_name, index: best };
 }
 
 export async function probe(file: string): Promise<Probe> {
@@ -86,11 +104,11 @@ export async function probe(file: string): Promise<Probe> {
   if (r.code !== 0) throw new MediaError("This file couldn't be read as audio or video");
   const j = JSON.parse(r.out.toString() || "{}") as {
     format?: { duration?: string; format_name?: string };
-    streams?: { codec_type: string; codec_name: string; width?: number; height?: number; pix_fmt?: string; duration?: string; tags?: Record<string, string>; side_data_list?: { rotation?: number }[]; disposition?: { attached_pic?: number } }[];
+    streams?: { codec_type: string; codec_name: string; channels?: number; width?: number; height?: number; pix_fmt?: string; duration?: string; tags?: Record<string, string>; side_data_list?: { rotation?: number }[]; disposition?: { attached_pic?: number; default?: number } }[];
   };
   const streams = j.streams ?? [];
   const v = streams.find((s) => s.codec_type === "video" && !s.disposition?.attached_pic);
-  const a = streams.find((s) => s.codec_type === "audio");
+  const a = pickAudio(streams.filter((s) => s.codec_type === "audio"));
   const dur = Number(j.format?.duration ?? v?.duration ?? 0);
   let rotation = 0;
   if (v) rotation = Number(v.tags?.rotate ?? v.side_data_list?.find((x) => x.rotation !== undefined)?.rotation ?? 0) || 0;
@@ -98,7 +116,7 @@ export async function probe(file: string): Promise<Probe> {
     durationMs: Number.isFinite(dur) ? Math.round(dur * 1000) : 0,
     format: j.format?.format_name ?? "",
     video: v ? { codec: v.codec_name, width: v.width ?? 0, height: v.height ?? 0, rotation: ((rotation % 360) + 360) % 360, pixFmt: v.pix_fmt ?? "" } : null,
-    audio: a ? { codec: a.codec_name } : null,
+    audio: a,
   };
 }
 
@@ -219,7 +237,7 @@ export async function processVideo(src: string, outDir: string, opts: { gif?: bo
   // into upright pixels (ffmpeg autorotate = transpose) and drops the matrix, so posters, MP4 and HLS all agree.
   if (!opts.gif && H264_SAFE(p) && p.video.rotation === 0 && Math.max(p.video.width, p.video.height) <= 1920) {
     const r = await ffQueue.run(() =>
-      run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", path.join(outDir, "full.mp4")], { timeoutMs: 5 * 60_000 }),
+      run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", "0:v:0", ...(p.audio ? ["-map", `0:a:${p.audio.index}`] : []), "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", path.join(outDir, "full.mp4")], { timeoutMs: 5 * 60_000 }),
     );
     if (r.code === 0) return { width: w, height: h, durationMs: p.durationMs, placeholder, needsTranscode: false, playable: true };
   }
@@ -233,10 +251,10 @@ export async function transcodeVideo(src: string, outDir: string, opts: { gif?: 
   const tmp = path.join(outDir, "full.tmp.mp4");
   const args = [
     "-y", "-v", "error", "-i", src,
-    "-map", "0:v:0", ...(opts.gif ? ["-an"] : ["-map", "0:a:0?"]),
+    "-map", "0:v:0", ...(opts.gif || !p.audio ? ["-an"] : ["-map", `0:a:${p.audio.index}`]),
     "-vf", `scale=${w}:${h}:flags=bicubic,format=yuv420p`,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", opts.gif ? "28" : "24", "-profile:v", "high", "-level", "4.0",
-    ...(opts.gif ? [] : ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]),
+    ...(opts.gif || !p.audio ? [] : ["-c:a", "aac", "-b:a", "96k", "-ac", "2", "-ar", "48000"]),
     "-metadata:s:v:0", "rotate=0",
     "-threads", String(FFMPEG_THREADS), "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart", "-f", "mp4", tmp,
   ];
@@ -286,7 +304,7 @@ export async function processVoice(src: string, outDir: string): Promise<VoiceOu
   if (!p.audio) throw new MediaError("This recording has no audio");
   const out = path.join(outDir, "full.m4a");
   const r = await ffQueue.run(() =>
-    run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", "0:a:0", "-vn", "-t", String(VOICE_MAX_MS / 1000), "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "48000", "-threads", String(FFMPEG_THREADS), "-map_metadata", "-1", "-movflags", "+faststart", "-f", "mp4", out], { timeoutMs: 5 * 60_000 }),
+    run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", `0:a:${p.audio!.index}`, "-vn", "-t", String(VOICE_MAX_MS / 1000), "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "48000", "-threads", String(FFMPEG_THREADS), "-map_metadata", "-1", "-movflags", "+faststart", "-f", "mp4", out], { timeoutMs: 5 * 60_000 }),
   );
   if (r.code !== 0) throw new MediaError("This recording couldn't be processed");
   const pcm = await run(FFMPEG, ["-v", "error", "-i", out, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"], { stdout: true, timeoutMs: 60_000 });

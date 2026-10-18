@@ -73,7 +73,7 @@ export async function encodeRungs(src: string, hlsDir: string, rungs: number[], 
     fs.mkdirSync(out, { recursive: true });
     args.push(
       "-map", `[v${i}]`,
-      ...(p.audio ? ["-map", "0:a:0"] : []),
+      ...(p.audio ? ["-map", `0:a:${p.audio.index ?? 0}`] : []),
       "-c:v", "libx264", "-preset", "veryfast",
       "-profile:v", s.high ? "high" : "main", "-level:v", "3.1",
       "-crf", "23", "-maxrate", `${s.v}k`, "-bufsize", `${s.v * 2}k`,

@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import type { DirectMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { VideoFirstFrame, VideoSkeleton } from "./VideoFirstFrame";
 import { serverNow } from "@/lib/time";
 import {
   docFamily,
@@ -242,6 +243,8 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
     >
       {/* blurred placeholder: the tile has its final size from the first frame (no layout shift) */}
       {a.ph && <img src={a.ph} alt="" aria-hidden decoding="sync" className={cn("absolute inset-0 h-full w-full scale-110 object-cover blur-xl", viewOnceLocked && "blur-2xl")} draggable={false} />}
+      {/* no blurred placeholder yet (just picked, or an old message without one): never a blank tile */}
+      {isVideo && !a.ph && !loaded && !local && <VideoSkeleton />}
       {!viewOnceLocked && src && (
         <ThumbImage a={a} urls={urls} src={src} local={local} width={box.width} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")} />
       )}
@@ -722,25 +725,9 @@ function DecodeGatedImage({ src, placeholder, alt = "", className, testId }: { s
 // transparent 1×1 GIF: Android WebView's gray "play" poster never shows while the first frame decodes
 const BLANK_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-/** just-sent video's first frame: hidden (blurred placeholder underneath) until the frame has actually decoded */
+/** just-sent video's first frame: skeleton at once, then the decoded frame (shared with the send tray) */
 function LocalPreviewVideo({ local, className, onLoaded }: { local: string; className: string; onLoaded: () => void }) {
-  const [shown, setShown] = useState(false);
-  return (
-    <video
-      src={`${local}#t=0.1`}
-      poster={BLANK_POSTER}
-      muted
-      playsInline
-      preload="metadata"
-      aria-hidden
-      onLoadedData={() => {
-        setShown(true);
-        onLoaded();
-      }}
-      className={cn(className, "ol-chat-video", !shown && "invisible")}
-      data-testid="media-local-video"
-    />
-  );
+  return <VideoFirstFrame src={`${local}#t=0.1`} className={cn(className, "ol-chat-video")} onLoaded={onLoaded} testId="media-local-video" />;
 }
 
 /**
