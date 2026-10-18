@@ -227,6 +227,32 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
 
   private var hasLiveCall: Bool { calls.values.contains { !$0.ended } }
 
+  /// Stale-call clearing (Oct 17): before a new incoming call is reported, end anything CallKit still shows that is not
+  /// a real live call, so a leftover ring/orphan never makes the new call look "busy" or stack behind a dead one.
+  ///  - tracked incoming calls that were never answered and are >5 s past expiresAt → reportCall(ended, .unanswered)
+  ///  - CallKit calls of this app (CXCallObserver) that are not ended and not in `calls` (orphaned UUIDs, e.g. after a
+  ///    JS reload or a lost end event) → CXEndCallAction via CXCallController; reportCall(ended) if the request fails
+  /// Answered/connected and outgoing calls are never touched.
+  private func clearStaleCalls(now: Date = Date()) {
+    for c in Array(calls.values) where c.incoming && !c.answered && !c.ended {
+      if let e = c.expiresAt, now.timeIntervalSince(e) > 5 {
+        NSLog("[OLCalls] clearing expired unanswered call before new incoming")
+        c.ended = true
+        stopTimers(c)
+        calls[c.uuid] = nil
+        provider?.reportCall(with: c.uuid, endedAt: nil, reason: .unanswered)
+      }
+    }
+    for obs in controller.callObserver.calls where !obs.hasEnded && calls[obs.uuid] == nil {
+      let uuid = obs.uuid
+      NSLog("[OLCalls] ending orphaned CallKit call before new incoming")
+      controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { [weak self] error in
+        guard error != nil else { return }
+        DispatchQueue.main.async { self?.provider?.reportCall(with: uuid, endedAt: nil, reason: .remoteEnded) }
+      }
+    }
+  }
+
   // MARK: - PushKit
 
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
@@ -280,6 +306,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
       return
     }
 
+    clearStaleCalls() // orphans / expired rings must not make this call look busy
     // Every VoIP push must produce a reported call, even ones we won't ring for (then it's ended right away).
     let stale = !ok || (d["type"] ?? "call_incoming") != "call_incoming" || (expires.map { $0.timeIntervalSinceNow <= 1 } ?? false)
     let busy = !stale && hasLiveCall
@@ -494,6 +521,7 @@ public final class OLCallManager: NSObject, PKPushRegistryDelegate, CXProviderDe
     switch type {
     case "call:incoming":
       // Page got call:incoming over WS while App Lock is up — report CallKit the same way a VoIP push would.
+      clearStaleCalls()
       guard Self.valid(callId), call(callId) == nil, !hasLiveCall else { return }
       let video = (m["video"] as? Bool) ?? false
       var name = String(((m["name"] as? String) ?? "").prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
