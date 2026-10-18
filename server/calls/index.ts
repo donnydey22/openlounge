@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { liveKitAllowed, sfuSelected } from "./sfuSelect";
+import { isBenignMediaFailure } from "./mediaLog";
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -285,6 +286,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
         .mediaRequest(callId, uid, connectionId, method, payload)
         .then((r) => {
           if (!r.ok) {
+            if (isBenignMediaFailure(method, (r as { error?: unknown }).error)) {
+              log.info("[calls] media leave after call end", { callId: callId.slice(0, 36), native: connectionId !== socket.id });
+              return ack(r);
+            }
             // failure-reason telemetry: which SFU step refused this device (first-connect failures were invisible)
             log.warn("[calls] media request failed", { callId: callId.slice(0, 36), method, native: connectionId !== socket.id, error: String((r as { error?: unknown }).error ?? "").slice(0, 160) });
             return ack(r);
