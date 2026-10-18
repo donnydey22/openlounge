@@ -760,6 +760,29 @@ function VideoStage({
           </button>
         </div>
       )}
+      {/* autoplay with sound refused (Android WebView / Chrome without a gesture): the retry plays muted, so say so
+          plainly instead of leaving a silent video behind hidden controls */}
+      {muted && !a.gif && ready && (
+        <button
+          type="button"
+          data-testid="media-viewer-unmute"
+          onClick={(e) => {
+            e.stopPropagation();
+            const el = v.current;
+            if (!el) return;
+            el.muted = false;
+            try {
+              el.volume = 1;
+            } catch {
+              /* ignore */
+            }
+            void el.play().catch(() => undefined);
+          }}
+          className="absolute top-[max(env(safe-area-inset-top),1rem)] left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-sm text-white"
+        >
+          <VolumeX className="h-4 w-4" /> Tap to unmute
+        </button>
+      )}
     </div>
   );
 }

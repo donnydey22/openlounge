@@ -7,6 +7,7 @@ import { Camera, File as FileIcon, Flame, GripVertical, Images, Paperclip, Plus,
 import { VideoRecorderSheet } from "./VideoRecorder";
 import { Sheet } from "../Sheet";
 import { cn } from "@/lib/utils";
+import { VideoFirstFrame } from "./VideoFirstFrame";
 import { ALBUM_MAX, MAX_TTL_SECONDS, TTL_PRESETS, formatBytes, formatDuration } from "@/lib/media/types";
 import { kindForFile, sizeError } from "@/lib/media/outbox";
 
@@ -243,7 +244,7 @@ export function AttachPreview({
         {tray.map(({ key, file: f }, i) => (
           <div key={key} data-tray-idx={i} className={cn("relative overflow-hidden rounded-xl bg-zinc-900", list.length === 1 && previews[i] ? "max-h-[38dvh]" : "aspect-square")} data-testid="tray-item">
             {previews[i] && kindForFile(f) === "photo" && <img src={previews[i]!} alt="" className={cn("h-full w-full", list.length === 1 ? "max-h-[38dvh] object-contain" : "object-cover")} />}
-            {previews[i] && kindForFile(f) === "video" && <video src={previews[i]!} muted playsInline preload="metadata" className={cn("h-full w-full", list.length === 1 ? "max-h-[38dvh] object-contain" : "object-cover")} />}
+            {previews[i] && kindForFile(f) === "video" && <VideoFirstFrame src={previews[i]!} testId="tray-video" className={cn("relative h-full w-full", list.length === 1 ? "min-h-[160px] max-h-[38dvh] object-contain" : "object-cover")} />}
             {!previews[i] && (
               <div className="flex h-full min-h-[64px] items-center gap-3 p-3">
                 <FileIcon className="h-6 w-6 shrink-0 text-zinc-400" />
