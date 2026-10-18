@@ -114,6 +114,9 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
             await push()?.callIncoming(calleeId, call, { skipIos: rang > 0, declineToken });
           })(),
         ),
+      // ring retry (service callRepushMs): FCM / web push / iOS alert only — never a second VoIP push
+      repush: (calleeId, call) =>
+        bg(push()?.callIncoming(calleeId, call, { declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt) })),
       cancel: (calleeId, callId, reason) => bg(push()?.callCancel(calleeId, callId, reason)),
     },
     log: (msg, extra) => log.info(`[calls] ${msg}`, extra),
@@ -193,6 +196,7 @@ export function nativeConnLeft(connectionId: string) {
 /** Per-connection handlers. `authed` is realtime.ts's guard (acks "Not signed in"). */
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void) {
   const s = () => svc!;
+  const endedResent = new Set<string>(); // call ids whose ended state this socket was re-sent (call:diag)
   // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
   // normal app-side socket teardown; browser code cannot address another connection id.
   // The user this socket made call requests as: on close it leaves whatever call it was in (stale re-dial detection).
@@ -234,6 +238,14 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       const extra: Record<string, string> = {};
       for (const [k, v] of Object.entries(d ?? {}).slice(0, 12)) if (k !== "callId" && k !== "ev") { const sv = str(v); if (sv !== undefined) extra[k.slice(0, 24)] = sv; }
       log.info("[calls] client diag", { callId: str(d?.callId, 36), user: uid.slice(0, 12), ev: str(d?.ev, 40), ...extra });
+      // A client still reporting on a call the server already ended (d8d7eded: the iPhone kept "connecting" 9 s past
+      // the end and missed the next call 51c135b3) gets the ended state again, once per call per socket.
+      const ended = s().endedFor(d?.callId, uid);
+      if (ended && !endedResent.has(ended.id)) {
+        endedResent.add(ended.id);
+        log.info("[calls] call ended resent", { callId: ended.id, user: uid.slice(0, 12), ev: str(d?.ev, 40) });
+        socket.emit("call:state", { call: ended });
+      }
       ack({ ok: true });
     }),
   );

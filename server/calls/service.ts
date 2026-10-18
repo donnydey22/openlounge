@@ -17,6 +17,13 @@ export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
 /** No callee device acked call:incoming within this window → send the push anyway (unacked "foreground" socket). */
 export const CALL_ACK_FALLBACK_MS = num("CALL_ACK_FALLBACK_MS", 4_000);
 /** a call whose participants both lost every WebSocket for this long is over (LiveKit webhook usually ends it sooner) */
+/** Pushed call still un-acked by any callee device after this → push once more to the non-VoIP surfaces (Android FCM,
+ *  web push, iOS alert; same `call:<id>` tag, so it replaces rather than stacks). 51c135b3 / 51976b82: a backgrounded
+ *  phone got one push and never rang. Past the slowest push-woken ack seen today (67078d15: 10.8 s). 0 = off. */
+export const callRepushMs = () => {
+  const v = Number(process.env.CALL_REPUSH_MS);
+  return process.env.CALL_REPUSH_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 15_000;
+};
 export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", 60_000);
 /** caller lost their socket while it was still ringing → cancel after this */
 export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
@@ -73,6 +80,8 @@ export interface CallDeps {
   closeMedia?(callId: string): void;
   push?: {
     incoming(calleeId: string, call: CallInfo): void;
+    /** second ring attempt (no VoIP push: a duplicate CallKit report is unsafe); optional */
+    repush?(calleeId: string, call: CallInfo): void;
     cancel(calleeId: string, callId: string, reason: string): void;
   };
   now?(): number;
@@ -164,7 +173,27 @@ export class CallService {
 
   /** Busy = already in a call (any phase) or in a live audio room. */
   isBusy(userId: string) {
-    return this.live.has(userId) || this.d.inRoom(userId);
+    return this.busyReason(userId) !== null;
+  }
+
+  /**
+   * Why a user is busy, healing stale state first (WhatsApp-style: a finished call must never make the next dial
+   * "busy", faf1a89a). A live-map entry pointing at a missing or ended call is dropped; a never-answered call that is
+   * past its ring timeout (+5 s slack: its timer was lost) is finished as missed.
+   */
+  busyReason(userId: string): { why: "call" | "room"; callId?: string; phase?: CallPhase; ageMs?: number } | null {
+    const id = this.live.get(userId);
+    if (id) {
+      const c = this.calls.get(id);
+      if (!c || c.phase === "ended") {
+        this.live.delete(userId);
+        this.d.log?.("call stale busy cleared", { callId: id, why: c ? "ended" : "missing" });
+      } else if (c.phase !== "active" && this.now() - c.createdAt > CALL_RING_TIMEOUT_MS + 5_000) {
+        this.d.log?.("call stale busy cleared", { callId: c.id, why: "ring-expired" });
+        this.finish(c, "missed");
+      } else return { why: "call", callId: c.id, phase: c.phase, ageMs: this.now() - c.createdAt };
+    }
+    return this.d.inRoom(userId) ? { why: "room" } : null;
   }
 
   liveCallOf(userId: string): CallInfo | null {
@@ -303,7 +332,9 @@ export class CallService {
       conns: new Map(),
     };
     this.calls.set(c.id, c);
-    if (this.isBusy(calleeId)) {
+    const busy = this.busyReason(calleeId);
+    if (busy) {
+      this.d.log?.("call busy", { callId: c.id, why: busy.why, blocking: busy.callId ?? null, phase: busy.phase ?? null, ageMs: busy.ageMs ?? null, callee: calleeId.slice(0, 12) });
       // "Line busy": the caller sees Busy, the callee gets a missed-call message (Telegram behaviour)
       this.finish(c, "busy", { silentToCallee: true });
       return { ok: false, error: `${this.d.peer(calleeId)?.name.split(" ")[0] ?? "They"} is on another call`, reason: "busy", call: this.info(c) };
@@ -326,6 +357,7 @@ export class CallService {
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
       this.d.push.incoming(calleeId, info);
+      this.armRepush(c, info);
     } else if (this.d.push) {
       // A "foreground" socket that never acks (frozen/unattended tab, stale WebView) used to mean no ring anywhere
       // for the full 45 s. If no callee device acks in time, fall back to push so their phone still rings.
@@ -334,11 +366,31 @@ export class CallService {
         c.pushed = true;
         this.d.log?.("call ack fallback push", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null });
         this.d.push.incoming(calleeId, info);
+        this.armRepush(c, info);
       }, CALL_ACK_FALLBACK_MS);
       t.unref?.();
     }
     this.d.log?.("call start", { callId: c.id, video: c.video });
     return { ok: true, call: info, media: await this.media(c, callerId) };
+  }
+
+  /** One ring retry when no callee device acked a pushed call (still "calling" — never after ring ack/answer/end). */
+  private armRepush(c: CallRec, info: CallInfo) {
+    const repush = this.d.push?.repush;
+    const ms = callRepushMs();
+    if (!repush || !(ms > 0)) return;
+    const t = setTimeout(() => {
+      if (c.phase !== "calling") return;
+      this.d.log?.("call repush", { callId: c.id, calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
+      repush(c.calleeId, info);
+    }, ms);
+    t.unref?.();
+  }
+
+  /** Ended-call view for a participant (null while live/unknown): lets a client stuck on a finished call clear itself. */
+  endedFor(callId: unknown, userId: string): CallInfo | null {
+    const c = this.get(callId, userId);
+    return c && c.phase === "ended" ? this.info(c) : null;
   }
 
   private get(callId: unknown, userId: string) {
