@@ -1124,6 +1124,70 @@ export class MediaService {
     return out;
   }
 
+  /**
+   * Forwarding (Telegram-style): a fresh, unsent copy of a sent attachment owned by the forwarder, so the normal
+   * send() path (ownership, albums, groups, pushes) handles it. Files are hard-linked (no extra disk, copy fallback);
+   * deleting either message only unlinks its own copy. View-once and timer media are never forwardable.
+   */
+  async cloneForForward(userId: string, mediaId: string): Promise<string> {
+    const r = ID_RE.test(mediaId) ? this.rows.get(mediaId) : undefined;
+    if (!r || !r.messageId || !this.canView(userId, r)) throw new MediaError("That attachment isn't available any more", 404);
+    if (r.viewOnce || r.expiresAt || r.ttlSeconds) throw new MediaError("Self-destructing media can't be forwarded", 400);
+    if (r.status !== "ready") throw new MediaError("That video is still processing. Try again in a moment.", 409);
+    const id = randomUUID().replace(/-/g, "");
+    const from = this.dirOf(r.id);
+    const to = this.dirOf(id);
+    const linkTree = (a: string, b: string) => {
+      fs.mkdirSync(b, { recursive: true });
+      for (const e of fs.readdirSync(a, { withFileTypes: true })) {
+        const pa = path.join(a, e.name);
+        const pb = path.join(b, e.name);
+        if (e.isDirectory()) linkTree(pa, pb);
+        else if (e.isFile()) {
+          try {
+            fs.linkSync(pa, pb);
+          } catch {
+            fs.copyFileSync(pa, pb);
+          }
+        }
+      }
+    };
+    try {
+      linkTree(from, to);
+      const now = Date.now();
+      const row: MediaRow = {
+        ...r,
+        files: JSON.parse(JSON.stringify(r.files)) as MediaRow["files"],
+        id,
+        ownerId: userId,
+        conversationId: null,
+        messageId: null,
+        ttlSeconds: null,
+        viewOnce: false,
+        expiresAt: null,
+        openedAt: null,
+        playedAt: null,
+        createdAt: now,
+        sentAt: null,
+        position: 0,
+        label: true,
+        rev: 1,
+      };
+      this.rows.set(id, row);
+      await this.repo!.insert(row);
+      return id;
+    } catch (e) {
+      this.rows.delete(id);
+      fs.rmSync(to, { recursive: true, force: true });
+      throw e;
+    }
+  }
+
+  /** ids of the attachments on a message, album order (forwarding) */
+  mediaIdsOf(messageId: string) {
+    return this.itemsOfMessage(messageId).map((r) => r.id);
+  }
+
   /** test/debug */
   row(id: string) {
     return this.rows.get(id);

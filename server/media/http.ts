@@ -45,6 +45,11 @@ export async function handleMediaApi(req: IncomingMessage, res: ServerResponse, 
       const r = media.send(uid, await body());
       return json(res, r.ok ? 200 : 400, r);
     }
+    if (url === "/api/media/forward" && req.method === "POST") {
+      const { forwardMessage } = await import("../forward");
+      const r = await forwardMessage(uid, await body());
+      return json(res, r.ok ? 200 : 400, r);
+    }
     if (url === "/api/media/sign" && req.method === "POST") return json(res, 200, { ok: true, ...media.sign(uid, (await body(65_536)).items) });
     if (url === "/api/media/reconcile" && req.method === "POST") return json(res, 200, { ok: true, ...media.reconcile(uid, (await body(65_536)).messageIds) });
     const act = /^\/api\/media\/([A-Za-z0-9_-]+)\/(open|viewed|played|delete)$/.exec(url);
