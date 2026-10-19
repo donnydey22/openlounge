@@ -617,9 +617,17 @@ export class CallService {
       }
       // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 45s
       if (c.phase !== "active") {
-        if (!this.d.isConnected(c.callerId)) {
+        // Half-open ring: the caller is still "online" (another tab / device / a lingering chat socket) but every
+        // connection that was in this call has closed (call page closed, WebView killed) and none re-attached
+        // (a reloaded page re-binds via call:get within ~1 s). Cancel instead of ringing the callee for 45 s.
+        const callerSet = c.conns.get(c.callerId);
+        const callerDetached = !!callerSet && callerSet.size === 0;
+        if (!this.d.isConnected(c.callerId) || callerDetached) {
           c.orphanSince ??= now;
-          if (now - c.orphanSince > CALL_CALLER_GONE_MS) this.finish(c, "cancelled");
+          if (now - c.orphanSince > CALL_CALLER_GONE_MS) {
+            if (callerDetached && this.d.isConnected(c.callerId)) this.d.log?.("call caller detached", { callId: c.id });
+            this.finish(c, "cancelled", { reason: callerDetached ? "caller_detached" : undefined });
+          }
         } else c.orphanSince = null;
         continue;
       }
@@ -671,6 +679,14 @@ export class CallService {
         if (now - c.orphanSince > CALL_ORPHAN_MS) this.finish(c, "completed");
       } else c.orphanSince = null;
     }
+  }
+
+  /** A media `leave` for a call that is already over (or that the server no longer knows): nothing left to tear down. */
+  leaveIsNoop(callId: unknown, userId: string) {
+    if (typeof callId !== "string") return false;
+    const c = this.calls.get(callId);
+    if (!c) return true;
+    return c.phase === "ended" && (c.callerId === userId || c.calleeId === userId);
   }
 
   /** test hook */

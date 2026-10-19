@@ -281,6 +281,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       if (!connectionId) return ack({ ok: false, error: "bad native connection" });
       callUser = uid;
       if (method === "leave" && connectionId !== socket.id) nativeConnLeft(connectionId);
+      // Leaving a call that already ended is idempotent: the call's media was closed by finish(). Ack ok instead of
+      // logging a spurious "media request failed" (seen after every normal hangup).
+      // (No connection teardown here: the same socket may already be in the next call.)
+      if (method === "leave" && s().leaveIsNoop(callId, uid)) return ack({ ok: true, alreadyLeft: true });
       void s()
         .mediaRequest(callId, uid, connectionId, method, payload)
         .then((r) => {
