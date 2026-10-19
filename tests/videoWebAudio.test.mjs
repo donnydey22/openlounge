@@ -39,8 +39,10 @@ assert.match(nativeAudio, /static func didActivate\(_ session: AVAudioSession, v
   'the active CallKit mode is passed into the WebRTC audio unit');
 
 assert.ok(!/prewarmNativeMedia\(\)/.test(calls), 'the generic native call action does not prewarm media outside the call engine');
-assert.match(media, /case 'prewarm'/, 'the app accepts explicit call-engine prewarm commands only');
-assert.match(media, /takeStream\(this\.nativeVideo\)/, 'native capture receives the server-granted native-video flag');
+assert.match(media, /case 'prepare':[\s\S]{0,700}ms:join/, 'ring-time preparation loads signaling state without capture');
+assert.match(media, /case 'prewarm':[\s\S]{0,120}capture is intentionally deferred/, 'legacy prewarm is a capture-free compatibility no-op');
+assert.match(media, /const requestedVideo = cmd\.video === true && cmd\.nativeVideo === true;[\s\S]{0,700}this\.capture = capture \?\? \{ callId, stream, nativeVideo, streamId/,
+  'native capture receives and latches the server-granted paired-video state');
 assert.match(media, /if \(this\.nativeVideo\) \{[\s\S]{0,380}camera-unavailable/,
   'camera failure keeps the native audio call alive');
 
