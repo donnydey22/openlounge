@@ -89,6 +89,8 @@ export interface CallDeps {
   /** Optional self-hosted TURN credentials; this remains untouched when no secret is configured. */
   turnIceServers?(callId: string, userId: string): TurnIceServer[] | null;
   closeMedia?(callId: string): void;
+  /** why a user's last socket closed (close code/reason/cause), for "call peer offline" diagnostics */
+  lastCloseOf?(userId: string): Record<string, unknown> | null;
   push?: {
     incoming(calleeId: string, call: CallInfo): void;
     /** second ring attempt (no VoIP push: a duplicate CallKit report is unsafe); optional */
@@ -743,11 +745,11 @@ export class CallService {
           if (!c.goneSince.has(u)) {
             c.goneSince.set(u, now);
             this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_RECONNECT_GRACE_MS });
-            this.d.log?.("call peer offline", { callId: c.id });
+            this.d.log?.("call peer offline", { callId: c.id, userId: u, who: u === c.callerId ? "caller" : "callee", ...(this.d.lastCloseOf?.(u) ?? {}) });
           } else if (now - c.goneSince.get(u)! > CALL_RECONNECT_GRACE_MS) lost ??= u;
           else if (!c.audioAt && now - c.goneSince.get(u)! > CALL_UNREACHABLE_MS) unreachable ??= u;
         } else if (c.goneSince.has(u)) {
-          this.d.log?.("call peer back", { callId: c.id, offlineMs: now - c.goneSince.get(u)! });
+          this.d.log?.("call peer back", { callId: c.id, userId: u, offlineMs: now - c.goneSince.get(u)! });
           c.goneSince.delete(u);
           this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: true });
         }
@@ -758,7 +760,7 @@ export class CallService {
         continue;
       }
       if (lost) {
-        this.d.log?.("call lost", { callId: c.id });
+        this.d.log?.("call lost", { callId: c.id, userId: lost, ...(this.d.lastCloseOf?.(lost) ?? {}) });
         this.finish(c, "completed", { by: lost, reason: "connection_lost" });
         continue;
       }
@@ -775,7 +777,7 @@ export class CallService {
             // its own media has stalled) instead of silent dead air until CALL_DETACHED_MS.
             (c.detachedNotified ??= new Set()).add(u);
             this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_DETACHED_MS, detached: true });
-            this.d.log?.("call peer detached", { callId: c.id });
+            this.d.log?.("call peer detached", { callId: c.id, userId: u, ...(this.d.lastCloseOf?.(u) ?? {}) });
           }
         } else {
           if (c.detachedNotified?.delete(u)) {
