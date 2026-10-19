@@ -493,6 +493,8 @@ export function registerRealtime(io: WsHub) {
       presence.setVisible(socket.id, visible !== false, hallway === true);
       socket.hidden = visible === false;
       store.setSocketVisible(socket.id, visible !== false);
+      const vu = me();
+      if (vu && visible === false) calls()?.visibilityChanged(vu); // callee backgrounded mid-ring → push (calls/service.ts)
       ack({ ok: true });
     });
 

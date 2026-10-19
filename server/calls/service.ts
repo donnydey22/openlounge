@@ -43,6 +43,8 @@ export const CALL_UNREACHABLE_MS = num("CALL_UNREACHABLE_MS", 10_000);
 export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", 60_000);
 /** detached this long (≥ one sweep after detection) → the other side is told "reconnecting" */
 export const CALL_DETACHED_NOTICE_MS = num("CALL_DETACHED_NOTICE_MS", 5_000);
+/** callee's app went to the background while ringing in the foreground (no push yet) → push after this, if still hidden */
+export const CALL_BG_RING_PUSH_MS = num("CALL_BG_RING_PUSH_MS", 1_500);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 /**
  * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
@@ -398,6 +400,27 @@ export class CallService {
       this.d.log?.("call repush", { callId: c.id, calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
       repush(c.calleeId, info);
     }, ms);
+    t.unref?.();
+  }
+
+  /**
+   * A user's foreground state changed (presence:visible). A call that started ringing on a VISIBLE callee got no push;
+   * if that callee now backgrounds the app / hides the tab mid-ring, the in-page ring is out of sight. After a short
+   * debounce (quick app switches) push once on the non-VoIP surfaces (Android FCM full-screen, web push, iOS alert —
+   * the same `repush` path: a late VoIP/CallKit report is unsafe and the native layer is left alone).
+   */
+  visibilityChanged(userId: string) {
+    const id = this.live.get(userId);
+    const c = id ? this.calls.get(id) : undefined;
+    if (!c || c.calleeId !== userId || (c.phase !== "calling" && c.phase !== "ringing") || c.pushed) return;
+    if (this.d.isForeground(userId) || !this.d.push) return;
+    const t = setTimeout(() => {
+      if ((c.phase !== "calling" && c.phase !== "ringing") || c.pushed || !this.d.push || this.d.isForeground(userId)) return;
+      c.pushed = true;
+      this.d.log?.("call ring backgrounded push", { callId: c.id, phase: c.phase });
+      const info = this.info(c);
+      (this.d.push.repush ?? this.d.push.incoming)(c.calleeId, info);
+    }, CALL_BG_RING_PUSH_MS);
     t.unref?.();
   }
 
