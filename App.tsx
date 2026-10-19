@@ -6,7 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus, Keyboard, Linking, Platform, Share, StyleSheet, View } from 'react-native';
+import { AppState, type AppStateStatus, Keyboard, type LayoutChangeEvent, Linking, Platform, Share, StyleSheet, View } from 'react-native';
+import { RTCView } from '@livekit/react-native-webrtc';
 import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
@@ -54,7 +55,7 @@ import {
   startNativeCalls,
   syncCallAuthFromSession,
 } from './src/calls';
-import { NativeMediaController } from './src/nativeMedia';
+import { NativeMediaController, type NativeVideoState } from './src/nativeMedia';
 import { type Theme, loadTheme, saveTheme } from './src/themeStore';
 import { schemeOf } from './src/url';
 
@@ -66,6 +67,42 @@ try {
 } catch {}
 
 const themeColor = (t: Theme) => (t === 'light' ? COLORS.light : COLORS.dark);
+
+type NativeTileRect = { x: number; y: number; width: number; height: number };
+type NativeVideoLayout = {
+  callId: string;
+  hidden: boolean;
+  big: { kind: 'local' | 'remote'; rect: NativeTileRect; fit: 'cover' | 'contain' } | null;
+  pip: { kind: 'local' | 'remote'; rect: NativeTileRect; mirror: boolean } | null;
+};
+type WebFrame = { x: number; y: number; width: number; height: number };
+
+const finiteUnitRect = (value: unknown): NativeTileRect | null => {
+  if (!value || typeof value !== 'object') return null;
+  const r = value as Record<string, unknown>;
+  const n = (key: string) => typeof r[key] === 'number' && Number.isFinite(r[key]) ? r[key] as number : NaN;
+  const x = n('x'); const y = n('y'); const width = n('width'); const height = n('height');
+  return x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= 1.001 && y + height <= 1.001 ? { x, y, width, height } : null;
+};
+
+const parseNativeVideoLayout = (value: unknown): NativeVideoLayout | null => {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  if (v.op !== 'videoLayout' || v.version !== 1 || typeof v.callId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v.callId) || typeof v.hidden !== 'boolean') return null;
+  if (v.hidden) return { callId: v.callId, hidden: true, big: null, pip: null };
+  const readTile = (value: unknown) => {
+    if (!value || typeof value !== 'object') return null;
+    const tile = value as Record<string, unknown>;
+    const kind: 'local' | 'remote' | null = tile.kind === 'local' || tile.kind === 'remote' ? tile.kind : null;
+    const fit: 'cover' | 'contain' | null = tile.fit === 'cover' || tile.fit === 'contain' ? tile.fit : null;
+    const rect = finiteUnitRect(tile.rect);
+    return kind && fit && rect ? { kind, fit, rect, mirror: tile.mirror === true } : null;
+  };
+  const big = readTile(v.big);
+  const pip = readTile(v.pip);
+  if (!big || (pip && pip.fit !== 'cover')) return null;
+  return { callId: v.callId, hidden: v.hidden, big: { kind: big.kind, fit: big.fit, rect: big.rect }, pip: pip ? { kind: pip.kind, rect: pip.rect, mirror: pip.mirror } : null };
+};
 
 // WebKit errors that are not "the page could not be loaded".
 const IGNORED_LOAD_ERRORS = new Set([
@@ -98,6 +135,11 @@ function Shell() {
   const [offline, setOffline] = useState(false);
   const [webKey, setWebKey] = useState(0);
   const [sourceUri, setSourceUri] = useState(START_URL);
+  // Native iPhone video is intentionally held outside the WebView. Streams never cross the JS bridge; the page
+  // remains the call-control overlay while RTCView owns only the actual camera/remote pixels.
+  const [nativeVideo, setNativeVideo] = useState<NativeVideoState>(null);
+  const [nativeVideoLayout, setNativeVideoLayout] = useState<NativeVideoLayout | null>(null);
+  const [webFrame, setWebFrame] = useState<WebFrame | null>(null);
   const [kbHeight, setKbHeight] = useState(0);
 
   const injected = useMemo(() => injectedBeforeContentLoaded(Platform.OS, APP_VERSION, nativeCallsAvailable(), APP_BUILD), []);
@@ -483,7 +525,12 @@ function Shell() {
         } else navigate(url); // /call/<id>?accept=1: the web layer joins instantly
         return;
       }
-      if (a.type === 'decline' || a.type === 'hangup') setIncomingCard(null);
+      if (a.type === 'decline' || a.type === 'hangup') {
+        setIncomingCard(null);
+        // CallKit can end while WKWebView is cold, terminated, or reloading. App-owned capture is independent of
+        // page delivery, so stop it eagerly before the best-effort signaling injection below.
+        nativeMedia.current?.closeAll();
+      }
       if (coldStart || !everLoaded.current) return; // nothing to tell a page that isn't loaded
       const detail = a.type === 'mute' ? { type: 'call:mute', muted: a.muted } : { type: a.type === 'decline' ? 'call:decline' : 'call:hangup' };
       inject(nativeEventScript('openlounge:native-call', detail));
@@ -538,11 +585,11 @@ function Shell() {
     const show = Keyboard.addListener('keyboardWillShow', (e) => {
       const h = e.endCoordinates.height;
       inject(keyboardScript(true, h, e.duration ?? 250));
-      if (KEYBOARD_MODE === 'resize') setKbHeight(h);
+      setKbHeight(h);
     });
     const hide = Keyboard.addListener('keyboardWillHide', (e) => {
       inject(keyboardScript(false, 0, e.duration ?? 250));
-      if (KEYBOARD_MODE === 'resize') setKbHeight(0);
+      setKbHeight(0);
     });
     return () => {
       show.remove();
@@ -574,6 +621,7 @@ function Shell() {
           inject(`(function(){try{window.__olNativeMsReq(${JSON.stringify(id)},${JSON.stringify(event)},${JSON.stringify(data)});}catch(e){window.OpenLoungeNative&&window.OpenLoungeNative.msReply(${JSON.stringify(id)},false,null,'no relay');}})();true;`);
         }),
       (detail) => inject(nativeEventScript('openlounge:native-media', detail)),
+      (state) => setNativeVideo(state),
     );
   }
   nativeMediaRef.current = nativeMedia.current;
@@ -623,6 +671,13 @@ function Shell() {
             .catch(() => {});
           return;
         case 'nativeMedia': {
+          // This is visual placement only. Streams remain native and never cross the WebView bridge.
+          const layout = parseNativeVideoLayout(msg.value);
+          if (layout) {
+            setNativeVideoLayout(layout);
+            reply(msg.id, true, true);
+            return;
+          }
           const ctl = nativeMedia.current;
           if (!ctl) {
             reply(msg.id, false, null, 'nativeMedia unavailable');
@@ -645,7 +700,10 @@ function Shell() {
         }
         case 'call': {
           const v = msg.value as { type?: string; callId?: string; name?: string; video?: boolean };
-          if (v?.type === 'call:ended') nativeMedia.current?.closeAll();
+          if (v?.type === 'call:ended') {
+            nativeMedia.current?.closeAll();
+            setNativeVideoLayout(null);
+          }
           forwardPageCallMessage(msg.value);
           if (v?.type === 'call:incoming' && typeof v.callId === 'string' && lockRef.current !== 'unlocked') {
             // Fallback card above LockScreen if CallKit is delayed / refused; CallKit still gets the page message.
@@ -740,6 +798,21 @@ function Shell() {
   }, []);
 
   const bg = themeColor(theme);
+  const nativeBigLayout = nativeVideoLayout?.hidden ? null : nativeVideoLayout?.big ?? null;
+  const nativePipLayout = nativeBigLayout ? nativeVideoLayout?.pip ?? null : null;
+  const visibleNativeVideo = !!nativeVideo && !!nativeVideoLayout && nativeVideo.callId === nativeVideoLayout.callId && !!nativeBigLayout && !!webFrame;
+  const mapTile = (rect: NativeTileRect | null) => {
+    if (!rect || !webFrame) return null;
+    const maxHeight = Math.max(0, webFrame.height - kbHeight);
+    const left = webFrame.x + rect.x * webFrame.width;
+    const top = webFrame.y + rect.y * webFrame.height;
+    const width = rect.width * webFrame.width;
+    const height = Math.max(0, Math.min(rect.height * webFrame.height, webFrame.y + maxHeight - top));
+    return width > 0 && height > 0 ? { left, top, width, height } : null;
+  };
+  const bigTile = visibleNativeVideo ? mapTile(nativeBigLayout?.rect ?? null) : null;
+  const pipTile = visibleNativeVideo ? mapTile(nativePipLayout?.rect ?? null) : null;
+  const streamFor = (kind: 'local' | 'remote') => kind === 'local' ? nativeVideo?.local : nativeVideo?.remote;
 
   return (
     <View style={[styles.root, { backgroundColor: bg }]}>
@@ -750,12 +823,23 @@ function Shell() {
           { paddingTop: EDGE_TO_EDGE_TOP ? 0 : insets.top, paddingBottom: KEYBOARD_MODE === 'resize' ? kbHeight : 0 },
         ]}
       >
+        {visibleNativeVideo && nativeBigLayout && bigTile && streamFor(nativeBigLayout.kind) && (
+          <View pointerEvents="none" style={styles.nativeVideoLayer} accessibilityElementsHidden>
+            <RTCView streamURL={streamFor(nativeBigLayout.kind)!.toURL()} style={[styles.nativeTile, bigTile]} objectFit={nativeBigLayout.fit} mirror={nativeBigLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+            {pipTile && nativePipLayout && streamFor(nativePipLayout.kind) && (
+              <View style={[styles.nativePipFrame, pipTile]}>
+                <RTCView streamURL={streamFor(nativePipLayout.kind)!.toURL()} style={styles.nativeFill} objectFit="cover" mirror={nativePipLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+              </View>
+            )}
+          </View>
+        )}
         <WebView
           key={webKey}
           ref={webRef}
           source={{ uri: sourceUri, headers: { 'Cache-Control': 'no-cache' } }}
-          style={[styles.root, { backgroundColor: bg }]}
-          containerStyle={{ backgroundColor: bg }}
+          style={styles.webView}
+          containerStyle={{ backgroundColor: 'transparent' }}
+          onLayout={(e: LayoutChangeEvent) => setWebFrame(e.nativeEvent.layout)}
           // Safe areas: no automatic insets; the page sees real env(safe-area-inset-*) values (bottom: home
           // indicator; top is 0 because the WebView starts below the status bar unless EDGE_TO_EDGE_TOP).
           contentInsetAdjustmentBehavior="never"
@@ -866,5 +950,12 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, position: 'relative' },
+  // The page remains the interactive control layer. It makes only native-video pixels transparent, exposing this
+  // underlying RTC layer at the exact measured tile rectangles.
+  webView: { flex: 1, zIndex: 1, backgroundColor: 'transparent' },
+  nativeVideoLayer: { ...StyleSheet.absoluteFill, zIndex: 0 },
+  nativeTile: { position: 'absolute', backgroundColor: '#050505' },
+  nativePipFrame: { position: 'absolute', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.48)', backgroundColor: '#111' },
+  nativeFill: { width: '100%', height: '100%' },
 });

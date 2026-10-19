@@ -70,6 +70,7 @@ t(B.parseBridgeMessage('{"__ol":1,"method":"openAppSettings"}'), { __ol: 1, meth
 t(B.parseBridgeMessage('{"__ol":1,"method":"setBadge","value":3.7}'), { __ol: 1, method: 'setBadge', value: 3 }, 'setBadge');
 t(B.parseBridgeMessage('{"__ol":1,"method":"setBadge","value":-1}'), null, 'setBadge negative');
 t(B.parseBridgeMessage('{"type":"call:outgoing","callId":"c_1","name":"Ann","video":true}'), { __ol: 1, method: 'call', value: { type: 'call:outgoing', callId: 'c_1', name: 'Ann', video: true } }, 'call outgoing');
+t(B.parseBridgeMessage('{"type":"call:outgoing","callId":"c_1","name":"Ann","video":true,"nativeMedia":true}'), { __ol: 1, method: 'call', value: { type: 'call:outgoing', callId: 'c_1', name: 'Ann', video: true, nativeMedia: true } }, 'call outgoing native grant');
 t(B.parseBridgeMessage('{"type":"call:connected","callId":"c_1"}'), { __ol: 1, method: 'call', value: { type: 'call:connected', callId: 'c_1' } }, 'call connected');
 t(B.parseBridgeMessage('{"type":"call:ended"}'), { __ol: 1, method: 'call', value: { type: 'call:ended', callId: '' } }, 'call ended no id');
 t(B.parseBridgeMessage('{"type":"call:ended","callId":"../x"}'), null, 'call ended bad id');
@@ -84,7 +85,7 @@ t(B.parseBridgeMessage('{"__ol":1,"method":"msReply","value":{"id":"nm1","ok":tr
 t(B.parseBridgeMessage('{"__ol":1,"method":"msReply","value":{"ok":true}}'), null, 'msReply needs id');
 {
   const js = B.injectedBeforeContentLoaded('ios', '0.3.1', true);
-  t(/__olNativeCalls = 1/.test(js) && /if \(true\)/.test(js) && /'calls', 'nativeMedia'\]/.test(js), true, 'native calls flag on');
+  t(/__olNativeCalls = 1/.test(js) && /if \(true\)/.test(js) && /'calls', 'nativeMedia', 'nativeVideo'\]/.test(js), true, 'native calls flag on');
   const off = B.injectedBeforeContentLoaded('ios', '0.3.1');
   t(/if \(false\)/.test(off) && !/'calls'/.test(off), true, 'native calls flag off by default');
 }

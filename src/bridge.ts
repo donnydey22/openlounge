@@ -94,7 +94,7 @@ export type BridgeRequest =
 /** Page → native call messages (NATIVE_SPEC.md §5), sent as plain {type:"call:*"} JSON (no __ol envelope). */
 export type PageCallMessage =
   | { type: 'call:incoming'; callId: string; name: string; video: boolean; photo?: string; expiresAt?: number }
-  | { type: 'call:outgoing'; callId: string; name: string; video: boolean }
+  | { type: 'call:outgoing'; callId: string; name: string; video: boolean; /** server-issued current-call native video grant */ nativeMedia?: boolean }
   | { type: 'call:connected'; callId: string }
   | { type: 'call:ended'; callId: string }
   | { type: 'call:muted'; muted: boolean }
@@ -120,7 +120,7 @@ function parseCallMessage(m: Record<string, unknown>): BridgeRequest | null {
           })
         : null;
     case 'call:outgoing':
-      return id ? wrap({ type: 'call:outgoing', callId: id, name: typeof m.name === 'string' ? m.name.slice(0, 80) : '', video: m.video === true }) : null;
+      return id ? wrap({ type: 'call:outgoing', callId: id, name: typeof m.name === 'string' ? m.name.slice(0, 80) : '', video: m.video === true, ...(m.nativeMedia === true ? { nativeMedia: true } : {}) }) : null;
     case 'call:connected':
     case 'call:ended':
       // callId may be missing on old pages; '' means "the current call"
@@ -295,7 +295,8 @@ export function injectedBeforeContentLoaded(platform: string, appVersion: string
       buildNumber: ${JSON.stringify(appBuild)},
       getVersion: function () { return ${JSON.stringify(appVersion)}; },
       getBuildNumber: function () { return ${JSON.stringify(appBuild)}; },
-      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics', 'phoneAuth'${nativeCalls ? ", 'calls', 'nativeMedia'" : ''}]),
+      // nativeVideo is deliberately separate from nativeMedia: legacy audio-only wrappers must retain WebView video.
+      capabilities: Object.freeze(['session', 'theme', 'ready', 'haptic', 'haptics', 'openAuth', 'openExternal', 'browser', 'camera', 'push', 'share', 'contacts', 'badge', 'biometrics', 'phoneAuth'${nativeCalls ? ", 'calls', 'nativeMedia', 'nativeVideo'" : ''}]),
       // native call media (iOS app owns mic + transports + AVAudioSession; the page relays signaling)
       nativeMedia: function (cmd) { return call('nativeMedia', cmd, 30000); },
       msReply: function (id, ok, result, error) { post({ __ol: 1, method: 'msReply', value: { id: String(id), ok: !!ok, result: result === undefined ? null : result, error: error ? String(error) : undefined } }); },
