@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, disableAndroidNativeMedia, noteAndroidNativeOptIn, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, noteAndroidNativeOptIn, nativeMediaAvailable, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { isAndroidApp } from "@/lib/notify";
 
@@ -65,8 +65,10 @@ export interface CallSnapshot {
   needsGesture: boolean;
   /** "Bea turned on video" prompt (offer to turn on mine) */
   videoInvite: boolean;
-  /** app voice call on the native (audio-only) media path: no mid-call video toggle in the apps (Oct 17) */
+  /** app call uses app-owned media; audio-only native calls retain their prior no-upgrade control policy */
   nativeAudio: boolean;
+  /** explicit caller-only iPhone native video grant; keeps the existing camera toggle/flip UI available */
+  nativeVideo: boolean;
   /** the same account is in a call on ANOTHER device (display-only pill; never rings or takes audio here) */
   elsewhere: ElsewhereCall | null;
   v: number;
@@ -96,6 +98,7 @@ const initial = (): CallSnapshot => ({
   needsGesture: false,
   videoInvite: false,
   nativeAudio: false,
+  nativeVideo: false,
   elsewhere: null,
   v: 0,
 });
@@ -200,6 +203,9 @@ export class CallEngine {
   private acceptT0 = 0;
   /** outgoing native-media call: SFU join/prewarm held until answer so the native ringback stays loud */
   private deferNativeConnect = false;
+  /** Server-authoritative opt-in, refreshed after socket authentication and before a caller taps Video. False is safe. */
+  private iosNativeVideoAvailable = false;
+  private iosNativeVideoCapabilityUser: string | null = null;
   private metricSent = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
@@ -261,9 +267,23 @@ export class CallEngine {
   }
 
   // ---------- socket ----------
+  /** Read an optional rollout capability only after this WebSocket belongs to an authenticated account. */
+  refreshIosNativeVideoCapability() {
+    const socket = this.socket;
+    const meId = this.meId;
+    this.iosNativeVideoAvailable = false;
+    if (!socket || !meId || nativePlatform() !== "ios" || !nativeMediaAvailable()) return;
+    this.iosNativeVideoCapabilityUser = meId;
+    void socket.request<{ ok?: boolean; iosNativeVideo?: unknown }>("call:nativeMediaCapabilities", {}, 5_000).then((r) => {
+      if (this.socket === socket && this.meId === meId) this.iosNativeVideoAvailable = r?.ok === true && r.iosNativeVideo === true;
+    }).catch(() => {});
+  }
   bind(socket: RealtimeClient | null, meId: string | null) {
     this.meId = meId;
-    if (this.socket === socket) return;
+    if (this.socket === socket) {
+      if (meId && this.iosNativeVideoCapabilityUser !== meId) this.refreshIosNativeVideoCapability();
+      return;
+    }
     if (this.socket) {
       this.socket.off("call:incoming", this.onIncoming);
       this.socket.off("call:state", this.onState);
@@ -274,6 +294,8 @@ export class CallEngine {
       this.socket.off("connect", this.onSocketBack);
     }
     this.socket = socket;
+    this.iosNativeVideoAvailable = false;
+    this.iosNativeVideoCapabilityUser = null;
     if (!socket) return;
     socket.on("call:incoming", this.onIncoming);
     socket.on("call:state", this.onState);
@@ -283,6 +305,7 @@ export class CallEngine {
     socket.on("call:mediaRestore", this.onMediaRestore);
     socket.on("connect", this.onSocketBack);
     this.socketUpAt = Date.now();
+    if (meId) this.refreshIosNativeVideoCapability();
     if (typeof document !== "undefined" && !this.resumeWatch) {
       this.resumeWatch = true;
       document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") this.resumedAt = Date.now(); });
@@ -297,13 +320,13 @@ export class CallEngine {
   static START_WAIT_MS = 8_000;
   /** call:start, retried while the connection is (re)establishing — a tap right after page load / resume isn't lost.
    *  Safe to repeat: the server hands back the same call for the same pair. Times out to "Couldn't start the call". */
-  private async startWhenConnected(peerId: string, video: boolean): Promise<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string }> {
+  private async startWhenConnected(peerId: string, video: boolean, iosNativeVideo = false): Promise<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string }> {
     const until = Date.now() + CallEngine.START_WAIT_MS;
     let attempt = 0;
     for (;;) {
       let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string } | null = null;
       try {
-        r = await this.req("call:start", { peerId, video }, Math.max(1_000, Math.min(10_000, until - Date.now())));
+        r = await this.req("call:start", { peerId, video, nativeVideo: iosNativeVideo }, Math.max(1_000, Math.min(10_000, until - Date.now())));
       } catch {
         r = null;
       }
@@ -425,7 +448,12 @@ export class CallEngine {
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
     // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
     this.deferNativeConnect = false;
-    if (useNativeMedia(video)) {
+    const deferIosVideoCapture = video && nativePlatform() === "ios" && nativeMediaAvailable() && this.iosNativeVideoAvailable;
+    if (deferIosVideoCapture) {
+      // The server grants app-owned video only after call:start. Do not let WKWebView seize the microphone at tap
+      // time: CallKit will activate the native session shortly after this and WebKit cannot reliably recover it.
+      this.preMic = Promise.resolve(null);
+    } else if (useNativeMedia(video, null)) {
       this.preMic = Promise.resolve(null);
       // Loud native ringback until connect (Donny, Oct 17): the app's mic grab / WebRTC load flips the iPhone audio
       // session into call mode (earpiece, call volume) mid-ring, so while the native ringer rings, the prewarm and the
@@ -438,9 +466,9 @@ export class CallEngine {
     } else this.preMic = this.acquireMic();
     // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
     void this.preMic.then(() => this.s.ui === "outgoing" && rearmRing(), () => this.s.ui === "outgoing" && rearmRing());
-    if (video) void this.ensureCamPreview();
+    if (video && !deferIosVideoCapture) void this.ensureCamPreview();
     let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string };
-    r = await this.startWhenConnected(peer.id, video);
+    r = await this.startWhenConnected(peer.id, video, deferIosVideoCapture);
     if (r.reason === "cancelled") return; // hung up while the connection was coming back
     if (!r.ok || !r.call) {
       if (r.reason === "busy") {
@@ -471,13 +499,23 @@ export class CallEngine {
     }
     if (ringing() !== "outgoing") playRingback({ video, untilMs: ringUntil(r.call) });
     this.media = r.media ?? null;
+    // A default-off or unsupported server response remains on the WebView baseline, but capture begins only before
+    // call:outgoing asks CallKit to activate. A granted iOS native-video call never invokes page getUserMedia.
+    if (deferIosVideoCapture && !this.media?.iosNativeVideo) {
+      this.preMic = this.acquireMic();
+      const camera = this.ensureCamPreview();
+      // Fail closed to the established page path before CallKit can activate. This rare case occurs only when the
+      // rollout switch changed after its socket-scoped capability response; it must never leave a WebKit mic racing
+      // a videoChat activation.
+      await Promise.all([this.preMic.catch(() => null), camera.catch(() => null)]);
+    }
     this.set({ call: r.call });
     if (!this.media) {
       this.set({ error: "Calls aren't available right now" });
       void this.hangup();
       return { ok: false };
     }
-    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video });
+    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video, nativeMedia: this.media.iosNativeVideo === true });
     this.diag("call-start", { video, app: appVersionFromUa() });
     if (!this.deferNativeConnect) void this.connect(false);
     return { ok: true };
@@ -499,7 +537,7 @@ export class CallEngine {
     mark("ring");
     // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
     // a UDP transport before the user consents to answer.
-    const nativeMedia = useNativeMedia(call.video);
+    const nativeMedia = useNativeMedia(call.video, this.media);
     if (this.media?.provider === "livekit" && !nativeMedia)
       void loadLK()
         .then((LK) => {
@@ -527,7 +565,7 @@ export class CallEngine {
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     this.diag("answered", {});
-    if (useNativeMedia(withVideo || call.video)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
+    if (useNativeMedia(withVideo || call.video, this.media)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
       this.tapMic = navigator.mediaDevices
@@ -535,7 +573,7 @@ export class CallEngine {
         .then((st) => st.getAudioTracks()[0] ?? null)
         .catch(() => null);
     }
-    if (this.media?.provider === "livekit" && !useNativeMedia(withVideo || call.video)) {
+    if (this.media?.provider === "livekit" && !useNativeMedia(withVideo || call.video, this.media)) {
       if (!this.preMic) this.preMic = this.acquireMic();
       if (withVideo) void this.ensureCamPreview();
     }
@@ -794,7 +832,7 @@ export class CallEngine {
     const media = this.media;
     if (!media) return Promise.resolve(null);
     // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
-    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn)) {
+    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -861,7 +899,7 @@ export class CallEngine {
   private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn) ? NativeMediaSession : MediasoupCallSession;
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn, media) ? NativeMediaSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
@@ -893,7 +931,9 @@ export class CallEngine {
         this.micHandoverPending = false;
         session.rebindMic(); // runs as soon as the producer exists
       }
-      if (this.s.nativeAudio !== session instanceof NativeMediaSession) this.set({ nativeAudio: session instanceof NativeMediaSession });
+      const appOwnedMedia = session instanceof NativeMediaSession;
+      const nativeVideo = appOwnedMedia && media.iosNativeVideo === true;
+      if (this.s.nativeAudio !== appOwnedMedia || this.s.nativeVideo !== nativeVideo) this.set({ nativeAudio: appOwnedMedia, nativeVideo });
       const first = !this.msRecoveryOnly();
       if (first && !this.inFirstRetry) this.firstConnectT0 = Date.now();
       // first connect: one ~5 s budget across all silent attempts (ICE races direct UDP and the TURNS relay)
@@ -1751,7 +1791,7 @@ export class CallEngine {
       const flat: Record<string, string | number | boolean> = {};
       for (const [k, v] of Object.entries(extra)) if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") flat[k] = v;
       const platform = nativePlatform() ?? "web";
-      const nativeAudio = useNativeMedia(!!this.s.call?.video || this.s.camOn);
+      const nativeAudio = useNativeMedia(!!this.s.call?.video || this.s.camOn, this.media);
       this.socket.emit("call:diag", { callId, ev, role: this.s.role ?? "", ui: this.s.ui, platform, native: nativeAudio, ...flat });
     } catch {
       /* ignore */

@@ -13,7 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
-import { androidNativeEnabled, iosMicReacquireEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
+import { androidNativeEnabled, iosMicReacquireEnabled, iosNativeVideoEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
 import { isBenignMediaFailure } from "./mediaLog";
 
 /** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
@@ -31,6 +31,14 @@ const mediaGateway = () => (gateway ??= new MediasoupGateway());
 /** room id passed to createJoinToken / closeLiveKitRoom → LiveKit room "openlounge-call-<id>" */
 const mediaRoom = (callId: string) => `call-${callId}`;
 const CALL_ROOM_RE = /^openlounge-call-([0-9a-f-]{36})$/;
+type ObservedPlatform = "ios" | "android" | "web";
+/** WebSocket upgrade headers, unlike page request bodies, are set by WKWebView itself. */
+export function observedPlatform(userAgent: unknown): ObservedPlatform {
+  const ua = typeof userAgent === "string" ? userAgent : "";
+  if (/\bOpenLounge\/ios\/[^\s(]+\(\d+\)/i.test(ua)) return "ios";
+  if (/\bOpenLounge\/android\/[^\s(]+\(\d+\)/i.test(ua)) return "android";
+  return "web";
+}
 
 /** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */
 function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, declineToken: string) {
@@ -53,22 +61,28 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   const gw = mediaGateway();
   // native-media connections (iOS app owns the SFU peer) are delivered to whichever page socket currently relays them
   gw.setNotifier(({ connectionId, event, data }) => io.get(nativeConns.get(connectionId)?.socketId ?? connectionId)?.emit(event, data));
-  const liveKitBackend = (): CallMediaBackend | null => {
+  const liveKitBackend = (participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null => {
     if (!livekit.enabled) return null;
+    // Keep the same one-native-connection audio+camera contract if the SFU path falls back to LiveKit. This is
+    // still strictly caller-scoped and disabled unless CALL_IOS_NATIVE_VIDEO is exactly "on".
+    const iosNativeVideo = iosNativeVideoEnabled() && participants?.callerPlatform === "ios" && participants.video === true && participants.iosNativeVideo === true;
     return {
       provider: "livekit",
       issue: async ({ callId, userId, name, ttlSec }) => {
         const token = await createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec });
         const iceServers = mintTurnIceServers(callId, userId);
-        return { provider: "livekit", url: livekit.url, token, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}) };
+        return { provider: "livekit", url: livekit.url, token, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}), ...(iosNativeVideo && userId === participants?.callerId ? { iosNativeVideo: true } : {}) };
       },
       close: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     };
   };
-  const mediasoupBackend = (participants?: { callerId: string; calleeId: string }): CallMediaBackend | null => {
+  const mediasoupBackend = (participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null => {
     // The gateway must be connected before a new call ever selects UDP. If the SFU is unavailable, the unchanged
     // LiveKit/TCP call path is selected instead; no user action and no in-call backend choice is required.
     if (!sfuSelected(participants) || !gw.connected) return null;
+    // This deliberately requires all four conditions: an explicit server switch, the initiating iOS app, an
+    // actual video call, and the caller's own per-call grant. Everyone else remains on the established path.
+    const iosNativeVideo = iosNativeVideoEnabled() && participants?.callerPlatform === "ios" && participants.video === true && participants.iosNativeVideo === true;
     return {
       provider: "mediasoup",
       issue: async ({ callId, userId, ttlSec }) => {
@@ -80,7 +94,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         // short-lived credentials) to the SAME SFU only when UDP can't connect — ICE ranks relay candidates last, so
         // normal networks never use it. The SFU's ICE-TCP 40443 candidate is not offered (udpOnlyResult).
         const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
-        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}), ...(androidNativeEnabled() ? { androidNative: true } : {}), ...(iosMicReacquireEnabled() ? { iosMicReacquire: true } : {}) } : null;
+        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}), ...(androidNativeEnabled() ? { androidNative: true } : {}), ...(iosMicReacquireEnabled() ? { iosMicReacquire: true } : {}), ...(iosNativeVideo && userId === participants?.callerId ? { iosNativeVideo: true } : {}) } : null;
       },
       relay: (input) => gw.request(input),
       close: (callId) => gw.closeCall(callId),
@@ -106,8 +120,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend() : null),
-    liveKitFallback: () => (liveKitAllowed() ? liveKitBackend() : null),
+    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend(participants) : null),
+    liveKitFallback: (participants) => (liveKitAllowed() ? liveKitBackend(participants) : null),
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
@@ -203,7 +217,7 @@ export function nativeConnLeft(connectionId: string) {
 }
 
 /** Per-connection handlers. `authed` is realtime.ts's guard (acks "Not signed in"). */
-export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void) {
+export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void, platform: ObservedPlatform = "web") {
   const s = () => svc!;
   const endedResent = new Set<string>(); // call ids whose ended state this socket was re-sent (call:diag)
   // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
@@ -230,11 +244,14 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:gateway:hello", ({ secret }: { secret?: unknown }, ack: AckFn = noop) => ack(mediaGateway().attach(socket, secret)));
   socket.on("ms:gateway:response", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleResponse(socket, data)));
   socket.on("ms:gateway:notice", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleNotice(socket, data)));
-  socket.on("call:start", ({ peerId, video }: { peerId: string; video?: boolean }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+  socket.on("call:nativeMediaCapabilities", (_: unknown, ack: AckFn = noop) =>
+    authed(ack, () => ack({ ok: true, iosNativeVideo: platform === "ios" && iosNativeVideoEnabled() })),
+  );
+  socket.on("call:start", ({ peerId, video, nativeVideo }: { peerId: string; video?: boolean; nativeVideo?: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, platform, nativeVideo)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
-  socket.on("call:accept", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
+  socket.on("call:accept", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().accept(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
   );
   socket.on("call:decline", ({ callId, message }: { callId: string; message?: string }, ack: AckFn = noop) =>

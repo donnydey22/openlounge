@@ -48,7 +48,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => void checkMediaPermissionsSilently().catch(() => {}), []);
 
   useEffect(() => {
-    if (connected && meId) void callEngine?.resume();
+    if (!connected || !meId) return;
+    callEngine?.refreshIosNativeVideoCapability();
+    void callEngine?.resume();
   }, [connected, meId]);
 
   // errors with no call screen up (e.g. "You can call Bea once they message you") → app toast

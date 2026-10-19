@@ -80,9 +80,9 @@ export interface CallDeps {
   appendCallMessage(meta: CallMeta, calleeId: string): void;
   /** Preferred backend for a NEW call. The selected instance is retained on the call record. */
   /** Chooses the media backend for a new call; receives both participants so a server-side test allowlist can opt them in. */
-  selectMedia?(participants?: { callerId: string; calleeId: string }): CallMediaBackend | null;
+  selectMedia?(participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null;
   /** Existing LiveKit path for compatibility and layered Mediasoup fallback. */
-  liveKitFallback?(): CallMediaBackend | null;
+  liveKitFallback?(participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null;
   /** Legacy LiveKit hooks retained for focused unit tests and older integration wiring. */
   mintToken?(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
   mediaUrl?(): string | null;
@@ -118,6 +118,10 @@ interface CallRec {
   answeredConn?: string | null;
   /** platform the answering device reported on accept ("ios" | "android" | "web"); absent = unknown */
   calleePlatform?: "ios" | "android" | "web";
+  /** initiating endpoint, derived from its server-observed wrapper user agent. */
+  callerPlatform?: "ios" | "android" | "web";
+  /** caller explicitly opted into the cached, server-authoritative native-video capability for this one call. */
+  iosNativeVideo?: boolean;
   endedAt: number | null;
   outcome: CallOutcome | null;
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
@@ -182,7 +186,7 @@ export class CallService {
     };
   }
 
-  private selectBackend(participants?: { callerId: string; calleeId: string }) {
+  private selectBackend(participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }) {
     return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
   }
 
@@ -310,7 +314,7 @@ export class CallService {
     return !!set && set.size === 0;
   }
 
-  async start(callerId: string, calleeId: string, video: boolean, connId?: string): Promise<StartResult> {
+  async start(callerId: string, calleeId: string, video: boolean, connId?: string, platform?: unknown, iosNativeVideo?: unknown): Promise<StartResult> {
     const pol = this.d.policy(callerId, calleeId);
     if (!pol.ok) return { ok: false, error: pol.error, reason: pol.reason };
     // already in a call with this same person (double tap / second tab) → hand back that call
@@ -329,7 +333,11 @@ export class CallService {
     }
     if (this.d.inRoom(callerId)) return { ok: false, error: "Leave the room you're in to start a call", reason: "self_busy" };
     if (this.limited(callerId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
-    const backend = this.selectBackend({ callerId, calleeId });
+    const callerPlatform = platform === "ios" || platform === "android" || platform === "web" ? platform : undefined;
+    // A caller can request native video only after a server-issued capability said it was enabled. The final grant
+    // remains gated below by the observed iOS wrapper platform and CALL_IOS_NATIVE_VIDEO, never by page JS alone.
+    const wantsIosNativeVideo = iosNativeVideo === true && callerPlatform === "ios" && !!video;
+    const backend = this.selectBackend({ callerId, calleeId, callerPlatform, video: !!video, iosNativeVideo: wantsIosNativeVideo });
     if (!backend) return { ok: false, error: "Calls aren't available right now", reason: "media_unavailable" };
     const now = this.now();
     const c: CallRec = {
@@ -341,6 +349,8 @@ export class CallService {
       phase: "calling",
       createdAt: now,
       ackAt: null,
+      ...(callerPlatform ? { callerPlatform } : {}),
+      ...(wantsIosNativeVideo ? { iosNativeVideo: true } : {}),
       answeredAt: null,
       endedAt: null,
       outcome: null,
@@ -533,7 +543,7 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.phase === "ended") return { ok: false as const, error: "This call isn't available" };
     if (c.backend.provider === "livekit") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyFallback: true };
-    const fallback = this.d.liveKitFallback?.() ?? this.legacyLiveKit();
+    const fallback = this.d.liveKitFallback?.({ callerId: c.callerId, calleeId: c.calleeId, callerPlatform: c.callerPlatform, video: c.video, iosNativeVideo: c.iosNativeVideo === true }) ?? this.legacyLiveKit();
     if (!fallback) return { ok: false as const, error: "TCP fallback isn't available" };
     c.primary = c.backend;
     c.switchedAt = this.now();

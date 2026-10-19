@@ -319,8 +319,8 @@ function Controls({ s }: { s: CallSnapshot }) {
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>
       ) : null}
-      {/* app voice calls run on native audio-only media: no mid-call video toggle there (video calls start as video) */}
-      {s.nativeAudio ? null : (
+      {/* Native voice calls retain their audio-only policy; the separately granted iPhone video path keeps normal camera controls. */}
+      {s.nativeAudio && !s.nativeVideo ? null : (
         <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
           {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
         </RoundBtn>
@@ -444,7 +444,7 @@ export function CallOverlay() {
               {s.error}
             </button>
           )}
-          {s.videoInvite && !s.camOn && !s.nativeAudio && active && (
+          {s.videoInvite && !s.camOn && !(s.nativeAudio && !s.nativeVideo) && active && (
             <div className={cn("pointer-events-auto flex items-center gap-2 rounded-full bg-black/55 py-1 pr-1 pl-3 text-xs backdrop-blur-md", css.banner)}>
               {p.name.split(" ")[0]} turned on video
               <button type="button" onClick={() => void callEngine.toggleCam()} className="rounded-full bg-white px-3 py-1 font-semibold text-zinc-900">

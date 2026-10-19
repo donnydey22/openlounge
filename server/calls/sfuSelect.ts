@@ -23,6 +23,12 @@ export function liveKitAllowed(env: Record<string, string | undefined> = process
 export function iosMicReacquireEnabled(env: Record<string, string | undefined> = process.env): boolean {
   return env.CALL_IOS_MIC_REACQUIRE === "on";
 }
+/** CALL_IOS_NATIVE_VIDEO=on is the explicit, server-side rollout gate for app-owned iPhone video media.
+ * Default OFF preserves the existing WebView video path; the grant is further restricted to the iOS caller of a
+ * video call, so it cannot affect Android, browser, audio-only, or receiving endpoints. */
+export function iosNativeVideoEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.CALL_IOS_NATIVE_VIDEO === "on";
+}
 
 export function androidNativeEnabled(env: Record<string, string | undefined> = process.env): boolean {
   return env.CALL_ANDROID_NATIVE === "on";
