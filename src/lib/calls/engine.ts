@@ -834,7 +834,7 @@ export class CallEngine {
     const media = this.media;
     if (!media) return Promise.resolve(null);
     // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
-    if (media.provider === "mediasoup" || useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {
+    if (media.provider === "mediasoup" || (useNativeMedia(!!this.s.call?.video || this.s.camOn, media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -901,7 +901,7 @@ export class CallEngine {
   private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn, media) ? NativeMediaSession : MediasoupCallSession;
+      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn, media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id ? NativeMediaSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;

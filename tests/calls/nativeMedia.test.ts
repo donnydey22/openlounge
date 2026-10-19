@@ -92,7 +92,8 @@ test("engine: native-media mode skips WebView getUserMedia on dial and defers an
   assert.match(src, /this\.preMic = Promise\.resolve\(null\)/);
   assert.match(src, /if \(this\.media\?\.iosNativeVideo\) this\.deferNativeConnect/);
   assert.match(src, /if \(this\.deferNativeConnect\) \{\s*this\.deferNativeConnect = false;\s*void this\.connect\(false\);/);
-  assert.match(src, /useNativeMedia\([^)]*\) \? NativeMediaSession : MediasoupCallSession/);
+  assert.match(src, /const Session = useNativeMedia\([^)]*\) && this\.iosNativeVideoWebFallbackCall !== this\.s\.call\?\.id \? NativeMediaSession : MediasoupCallSession/);
+  assert.match(src, /media\.provider === "mediasoup" \|\| \(useNativeMedia\([^)]*\) && this\.iosNativeVideoWebFallbackCall !== this\.s\.call\?\.id\)/);
 });
 
 test("server: native SFU connection is stable across page sockets and survives a reload window", async () => {
@@ -124,7 +125,7 @@ test("native media: emergency LiveKit is joined by the app; page never captures 
   await s.connect(false);
   assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [], video: false, nativeVideo: false });
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(src, /media\.provider === "mediasoup" \|\| useNativeMedia\(/);
+  assert.match(src, /media\.provider === "mediasoup" \|\| \(useNativeMedia\(/);
   assert.match(src, /provider === "livekit" && !useNativeMedia\(withVideo \|\| call\.video, this\.media\)/);
 });
 
