@@ -58,8 +58,8 @@ test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting 
   const lk = eng.slice(eng.indexOf("private async lastResortLiveKit("), eng.indexOf("private failUdpUnreachable("));
   assert.doesNotMatch(lk, /reconnecting: true/);
   assert.match(lk, /"call:mediaFallback"/);
-  assert.match(lk, /if \(this\.iosNativeVideoOwnsCamera\(\)\) return void this\.iosNativeVideoToWebView\(/,
-    "a granted iPhone native-video call returns to WebView media before a disabled LiveKit fallback can end it");
+  assert.match(lk, /if \(this\.iosNativeVideoLatched\(\)\) \{[\s\S]{0,240}this\.rejoin/,
+    "a granted iPhone native-video call keeps native ownership when TCP fallback is unavailable");
   assert.match(lk, /this\.failUdpUnreachable\(stage/, "ordinary calls retain the terminal UDP fallback");
   assert.match(eng, /MS_RECOVER_MAX_MS\) \{[\s\S]{0,120}lastResortLiveKit\("recover-timeout"/);
   assert.match(eng, /Can't connect the call on this network\. Try another Wi-Fi or mobile data\./);
@@ -91,7 +91,7 @@ test("apps: native voice stays camera-free while an explicit native-video grant 
   const ov = readFileSync("src/components/calls/CallOverlay.tsx", "utf8");
   assert.match(ov, /\{s\.nativeAudio && !s\.nativeVideo \? null : \(\s*<RoundBtn label=\{s\.camOn \? "Stop video" : "Video"\}/);
   assert.match(ov, /s\.videoInvite && !s\.camOn && !\(s\.nativeAudio && !s\.nativeVideo\) && active/);
-  assert.match(eng, /const nativeVideo = appOwnedMedia && media\.iosNativeVideo === true;[\s\S]{0,200}this\.set\(\{ nativeAudio: appOwnedMedia, nativeVideo \}\)/);
+  assert.match(eng, /const nativeVideo = appOwnedMedia && this\.iosNativeVideoLatched\(\);[\s\S]{0,200}this\.set\(\{ nativeAudio: appOwnedMedia, nativeVideo \}\)/);
 });
 
 test("speaker (6:20): toggle offered on web-path calls, default route video=speaker/voice=earpiece, Flip kept beside it; audio telemetry", () => {

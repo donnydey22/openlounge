@@ -26,7 +26,7 @@ test("disconnected/failed after SFU media worked → recoverMediasoup, never req
 
 test("recovery: ICE restart first, then transport rebuild loop with backoff + jitter", () => {
   assert.ok(recover.indexOf("restartIceAll()") > 0);
-  assert.ok(recover.indexOf("restartIceAll()") < recover.indexOf("this.connectMediasoup(media, true)"));
+  assert.ok(recover.indexOf("restartIceAll()") < recover.indexOf("this.connectMediasoup(media, true, false, this.iosNativeVideoLatched() && attempt >= 2)"));
   assert.match(recover, /while \(live\(\)\)/);
   assert.match(recover, /MS_REBUILD_DELAYS\[Math\.min\(attempt/);
   assert.match(recover, /Math\.random\(\)/);

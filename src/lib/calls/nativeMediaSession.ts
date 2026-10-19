@@ -147,6 +147,25 @@ export function nativeMediaCmd(cmd: Record<string, unknown>): Promise<unknown> {
   return b.nativeMedia(cmd);
 }
 
+/** Ring-time native preparation: install an authenticated relay only while the app loads SFU/LiveKit state.
+ * It deliberately never asks the WebView for media and is replaced by the real session relay at answer. */
+export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedia, opts: { callId: string; streamId?: string }) {
+  const b = bridge();
+  if (!b?.nativeMedia || !b.msReply) return;
+  const callId = opts.callId;
+  const relay = (id: string, event: string, data: Record<string, unknown>) => {
+    if (!MS_EVENT.test(event) || data?.callId !== callId) return b.msReply?.(id, false, null, "relay refused");
+    socket.request(event, data, 8_000).then((r) => b.msReply?.(id, true, r ?? null), (e: unknown) => b.msReply?.(id, false, null, String((e as Error)?.message ?? e)));
+  };
+  const w = window as unknown as { __olNativeMsReq?: typeof relay };
+  w.__olNativeMsReq = relay;
+  try {
+    await b.nativeMedia({ op: "prepare", callId, iceServers: media.iceServers ?? [], video: true, nativeVideo: true, ...(opts.streamId ? { streamId: opts.streamId } : {}) });
+  } finally {
+    if (w.__olNativeMsReq === relay) delete w.__olNativeMsReq;
+  }
+}
+
 const MS_EVENT = /^ms:[a-z:]+$/i;
 
 export class NativeMediaSession {
@@ -162,6 +181,10 @@ export class NativeMediaSession {
       onLocalVideo(track: MediaStreamTrack | null): void;
       onCameraUnavailable?(): void;
       tcpOnly?: boolean;
+      /** second native rebuild rung: TURN-TLS relay only, never a page fallback */
+      relayOnly?: boolean;
+      /** server-granted call latch carried across media-provider remints */
+      nativeVideo?: boolean;
       /** force fresh native transports (outage recovery) instead of re-attaching to the live session */
       rebuild?: boolean;
       /** LiveKit credentials carry no callId */
@@ -241,11 +264,11 @@ export class NativeMediaSession {
     this.socket.on("ms:consumer:available", this.onAvailable);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
-    const nativeVideo = withVideo && iosNativeVideoGranted(m);
+    const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
-    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [] });
-    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
+    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}) });
+    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }

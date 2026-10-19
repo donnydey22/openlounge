@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { isAndroidApp } from "@/lib/notify";
 
@@ -205,6 +205,11 @@ export class CallEngine {
   private deferNativeConnect = false;
   /** A paired iPhone-video dial has reserved camera ownership before its per-call grant returns. */
   private iosNativeVideoCaptureFenced = false;
+  /** Immutable for one caller-placed, server-granted iPhone video call. It survives media remints and provider moves. */
+  private iosNativeCall: string | null = null;
+  private iosNativeVideoLatched() {
+    return !!this.iosNativeCall && this.iosNativeCall === this.s.call?.id;
+  }
   private metricSent = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
@@ -485,14 +490,20 @@ export class CallEngine {
     this.media = r.media ?? null;
     // A default-off or unsupported server response remains on the WebView baseline, but capture begins only before
     // call:outgoing asks CallKit to activate. A granted iOS native-video call never invokes page getUserMedia.
-    if (deferIosVideoCapture && !this.media?.iosNativeVideo) {
+    if (deferIosVideoCapture && iosNativeVideoGranted(this.media)) {
+      // The caller-only grant is the one-way ownership handoff. From here through terminal teardown, page capture is
+      // forbidden even if refreshed media credentials move to LiveKit and no longer repeat the grant field.
+      this.iosNativeCall = r.call.id;
+      this.iosNativeVideoCaptureFenced = true;
+      this.deferNativeConnect = nativeRingbackMode() !== "off" && !nativeMediaIsAndroid();
+      if (this.socket && this.media) void prepareNativeMedia(this.socket, this.media, { callId: r.call.id, streamId: this.meId ? `ol-${r.call.id}-${this.meId}` : undefined }).catch(() => {});
+    } else if (deferIosVideoCapture) {
       this.iosNativeVideoCaptureFenced = false;
       this.preMic = this.acquireMic();
       const camera = this.ensureCamPreview();
       // The server did not issue the per-call grant, so return to the established page path before CallKit activates.
       await Promise.all([this.preMic.catch(() => null), camera.catch(() => null)]);
     }
-    if (iosNativeVideoGranted(this.media)) this.deferNativeConnect = nativeRingbackMode() !== "off" && !nativeMediaIsAndroid();
     this.set({ call: r.call });
     if (!this.media) {
       this.set({ error: "Calls aren't available right now" });
@@ -746,6 +757,8 @@ export class CallEngine {
   }
 
   private async acquireMic(): Promise<LocalAudioTrack | null> {
+    // Once the server grant has been consumed, a WKWebView capture can permanently lose its mic at CallKit activation.
+    if (this.iosNativeVideoLatched()) return null;
     try {
       const LK = await loadLK();
       const t = await LK.createLocalAudioTrack(CALL_AUDIO_CONSTRAINTS);
@@ -782,7 +795,7 @@ export class CallEngine {
   }
 
   private async ensureCamPreview() {
-    if (this.iosNativeVideoCaptureFenced || this.iosNativeVideoOwnsCamera()) return null;
+    if (this.iosNativeVideoCaptureFenced || this.iosNativeVideoLatched()) return null;
     if (this.camTrack) return this.camTrack;
     try {
       const LK = await loadLK();
@@ -816,9 +829,9 @@ export class CallEngine {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
-    // Native iPhone voice calls retain their app-owned LiveKit audio path. Granted iPhone video is app-owned only on
-    // its direct Mediasoup grant; after that grant fails, the established WebView media fallback owns the connection.
-    if (media.provider === "mediasoup" || (useNativeMedia(!!this.s.call?.video || this.s.camOn, media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id)) {
+    // Native iPhone voice retains its existing app-owned audio path. A granted iPhone video caller stays app-owned
+    // across direct-SFU recovery and native LiveKit migration; the page remains signaling and controls only.
+    if (media.provider === "mediasoup" || this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
     }
@@ -882,10 +895,10 @@ export class CallEngine {
   /** true while this device's direct media runs over the same SFU's ICE-TCP port (explicit fallback) */
   private msTcp = false;
 
-  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false): Promise<CallMediaSession | null> {
+  private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false, relayOnly = false): Promise<CallMediaSession | null> {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = useNativeMedia(!!this.s.call?.video || this.s.camOn, media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id ? NativeMediaSession : MediasoupCallSession;
+      const Session = this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media) ? NativeMediaSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
@@ -898,8 +911,9 @@ export class CallEngine {
       this.releaseLiveKitPrewarm();
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
-        ...(iosNativeVideoGranted(media) && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}` } : {}),
+        ...(this.iosNativeVideoLatched() && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}`, nativeVideo: true } : {}),
         ...(this.msRecovering ? { rebuild: true } : {}),
+        ...(relayOnly ? { relayOnly: true } : {}),
         ...(tapMic ? { preTrack: tapMic.catch(() => null) } : {}),
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
@@ -920,7 +934,7 @@ export class CallEngine {
         session.rebindMic(); // runs as soon as the producer exists
       }
       const appOwnedMedia = session instanceof NativeMediaSession;
-      const nativeVideo = appOwnedMedia && media.iosNativeVideo === true;
+      const nativeVideo = appOwnedMedia && this.iosNativeVideoLatched();
       if (this.s.nativeAudio !== appOwnedMedia || this.s.nativeVideo !== nativeVideo) this.set({ nativeAudio: appOwnedMedia, nativeVideo });
       const first = !this.msRecoveryOnly();
       if (first && !this.inFirstRetry) this.firstConnectT0 = Date.now();
@@ -963,7 +977,7 @@ export class CallEngine {
         // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
         // Android app native media: a failed FIRST connect goes to the LiveKit backup right away (its mediasoup error
         // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
-        if (this.iosNativeVideoOwnsCamera()) void this.iosNativeVideoToWebView(String((e as Error)?.message ?? e));
+        if (this.iosNativeVideoLatched()) void this.rejoin("native-media-connect-failed");
         else if (media.provider === "livekit") this.failUdpUnreachable("livekit-native", String((e as Error)?.message ?? e));
         else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView(String((e as Error)?.message ?? e));
         else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
@@ -1552,7 +1566,7 @@ export class CallEngine {
         this.dropMediaForRejoin();
         this.media = media;
         this.msTcp = false;
-        const session = await this.connectMediasoup(media, true);
+        const session = await this.connectMediasoup(media, true, false, this.iosNativeVideoLatched() && attempt >= 2);
         if (session && this.mediasoup === session && this.mediasoupConnected) {
           if (g?.ok && g.call) this.set({ call: g.call });
           return done("rebuild", attempt);
@@ -1666,48 +1680,31 @@ export class CallEngine {
         const media = this.media!;
         this.dropMediaForRejoin();
         this.media = media;
-        const session = await this.connectMediasoup(media, true);
+        const session = await this.connectMediasoup(media, true, false, this.iosNativeVideoLatched() && attempt >= 2);
         if (session && this.mediasoup === session && this.mediasoupConnected) return;
       }
       if (live()) {
-        if (this.iosNativeVideoOwnsCamera()) await this.iosNativeVideoToWebView(reason);
-        else await this.lastResortLiveKit("first-connect", reason);
+        await this.lastResortLiveKit("first-connect", reason);
       }
     } finally {
       this.inFirstRetry = false;
     }
   }
 
-  /** Native media signalled a deterministic failure: Android and granted iPhone video return to WebView; iPhone voice retains its native audio fallback. */
+  /** Native media failures keep a granted caller on app-owned media; Android retains its existing WebView escape. */
   private nativeFailed(reason: string) {
     if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);
-    if (this.iosNativeVideoOwnsCamera()) return this.iosNativeVideoToWebView(reason);
+    if (this.iosNativeVideoLatched()) return this.lastResortLiveKit("native-ms-failed", reason);
     return this.nativeLiveKitNow(reason);
   }
 
-  /**
-   * Android 0.3.18+ native media failed (first connect error/budget, or failed{fallback}): turn native media off for the
-   * rest of this page session and reconnect the SAME call over the WebView media path (the path every Android call
-   * used before). Its failure runs the normal WebView ladder (silent retries -> LiveKit -> clear message), never silence.
-   */
-  private nativeWebCall: string | null = null;
-  /** Only a failed explicitly granted iPhone video call may relinquish native ownership back to the legacy WebView path. */
-  private iosNativeVideoWebFallbackCall: string | null = null;
+  /** True only for the server-granted caller video call whose capture is permanently app-owned for this call. */
   private iosNativeVideoOwnsCamera() {
-    return iosNativeVideoGranted(this.media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id;
+    return this.iosNativeVideoLatched();
   }
-  private async iosNativeVideoToWebView(reason: string) {
-    const callId = this.s.call?.id;
-    const media = this.media;
-    if (!callId || !this.busy || this.iosNativeVideoWebFallbackCall === callId || !this.iosNativeVideoOwnsCamera() || !media) return;
-    this.iosNativeVideoWebFallbackCall = callId;
-    this.iosNativeVideoCaptureFenced = false;
-    this.dropMediaForRejoin(); // closes app-owned mic/camera before the page reconnects
-    this.media = { ...media, iosNativeVideo: false };
-    this.msEverConnected = null;
-    this.set({ nativeAudio: false, nativeVideo: false });
-    await this.connect(true);
-  }
+
+  /** Android-only existing WebView fallback guard; unrelated to the iPhone native-video latch. */
+  private nativeWebCall: string | null = null;
   private async androidNativeToWebView(reason: string) {
     const callId = this.s.call?.id;
     const media = this.media;
@@ -1777,9 +1774,12 @@ export class CallEngine {
         /* fall through to the clear message */
       }
     }
-    // The paired iPhone path must never turn an unavailable TCP fallback into a call-ending error. It releases the
-    // app-owned capture first, then retries the established WebView media path with the same Mediasoup grant.
-    if (this.iosNativeVideoOwnsCamera()) return void this.iosNativeVideoToWebView(`livekit:${r?.error ?? "failed"}`);
+    // The paired iPhone path must never turn an unavailable TCP fallback into a call-ending error or page capture.
+    // It keeps the app-owned capture and retries native recovery while the server call remains live.
+    if (this.iosNativeVideoLatched()) {
+      // Native retry remains authoritative for this call: do not translate an unavailable TCP credential into a hangup.
+      return void this.rejoin(`native-livekit:${r?.error ?? "failed"}`);
+    }
     this.failUdpUnreachable(stage, `livekit:${r?.error ?? "failed"}`);
   }
 
@@ -2266,6 +2266,7 @@ export class CallEngine {
     document.querySelectorAll("[data-ol-call-audio]").forEach((el) => el.remove());
     this.media = null;
     this.iosNativeVideoCaptureFenced = false;
+    this.iosNativeCall = null;
     this.acceptedHere = false;
     this.acceptT0 = 0;
     this.metricSent = false;
