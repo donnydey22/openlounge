@@ -399,7 +399,16 @@ export function CallOverlay() {
       if (![r.left, r.top, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return null;
       return { x: Math.max(0, Math.min(1, r.left / width)), y: Math.max(0, Math.min(1, r.top / height)), width: Math.max(0, Math.min(1, r.width / width)), height: Math.max(0, Math.min(1, r.height / height)) };
     };
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: s.minimized || !video, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: rect(bigTile.current), fit: window.matchMedia("(max-width: 600px), (pointer: coarse) and (max-height: 600px)").matches ? "cover" : "contain" }, pip: showPip ? { kind: bigWhich === "local" ? "remote" : "local", rect: rect(pipTile.current), fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+    const hidden = s.minimized || !video;
+    if (hidden) {
+      // BigVideo unmounts in these states, so the native stage must receive a valid hidden-only record.
+      void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: true }).catch(() => {});
+      return;
+    }
+    const big = rect(bigTile.current);
+    if (!big) return;
+    const pip = showPip ? rect(pipTile.current) : null;
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: big, fit: window.matchMedia("(max-width: 600px), (pointer: coarse) and (max-height: 600px)").matches ? "cover" : "contain" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
   }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
   useEffect(() => {
     if (!s.nativeVideo || !s.call) return;

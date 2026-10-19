@@ -838,7 +838,8 @@ export class CallEngine {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
-    // native-media iOS app: every backend (UDP/TCP SFU and emergency LiveKit) is joined by the app, never the WebView
+    // Native iPhone voice calls retain their app-owned LiveKit audio path. Granted iPhone video is app-owned only on
+    // its direct Mediasoup grant; after that grant fails, the established WebView media fallback owns the connection.
     if (media.provider === "mediasoup" || (useNativeMedia(!!this.s.call?.video || this.s.camOn, media) && this.iosNativeVideoWebFallbackCall !== this.s.call?.id)) {
       this.roomPromise = this.connectMediasoup(media, answer);
       return this.roomPromise;
@@ -984,7 +985,7 @@ export class CallEngine {
         // only for calls that were connected over UDP and then dropped (bounded by MS_RECOVER_MAX_MS).
         // Android app native media: a failed FIRST connect goes to the LiveKit backup right away (its mediasoup error
         // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
-        if (media.provider === "livekit" && this.iosNativeVideoOwnsCamera()) void this.iosNativeVideoToWebView(String((e as Error)?.message ?? e));
+        if (this.iosNativeVideoOwnsCamera()) void this.iosNativeVideoToWebView(String((e as Error)?.message ?? e));
         else if (media.provider === "livekit") this.failUdpUnreachable("livekit-native", String((e as Error)?.message ?? e));
         else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView(String((e as Error)?.message ?? e));
         else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
@@ -1690,15 +1691,19 @@ export class CallEngine {
         const session = await this.connectMediasoup(media, true);
         if (session && this.mediasoup === session && this.mediasoupConnected) return;
       }
-      if (live()) await this.lastResortLiveKit("first-connect", reason);
+      if (live()) {
+        if (this.iosNativeVideoOwnsCamera()) await this.iosNativeVideoToWebView(reason);
+        else await this.lastResortLiveKit("first-connect", reason);
+      }
     } finally {
       this.inFirstRetry = false;
     }
   }
 
-  /** Native media signalled a deterministic failure: Android drops to the WebView media path; iOS keeps its LiveKit backup. */
+  /** Native media signalled a deterministic failure: Android and granted iPhone video return to WebView; iPhone voice retains its native audio fallback. */
   private nativeFailed(reason: string) {
     if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);
+    if (this.iosNativeVideoOwnsCamera()) return this.iosNativeVideoToWebView(reason);
     return this.nativeLiveKitNow(reason);
   }
 
@@ -1723,7 +1728,7 @@ export class CallEngine {
     this.dropMediaForRejoin(); // closes app-owned mic/camera before the page reconnects
     this.media = { ...media, iosNativeVideo: false };
     this.msEverConnected = null;
-    this.set({ nativeAudio: false, nativeVideo: false, reconnecting: true });
+    this.set({ nativeAudio: false, nativeVideo: false });
     await this.connect(true);
   }
   private async androidNativeToWebView(reason: string) {
@@ -1795,6 +1800,9 @@ export class CallEngine {
         /* fall through to the clear message */
       }
     }
+    // The paired iPhone path must never turn an unavailable TCP fallback into a call-ending error. It releases the
+    // app-owned capture first, then retries the established WebView media path with the same Mediasoup grant.
+    if (this.iosNativeVideoOwnsCamera()) return void this.iosNativeVideoToWebView(`livekit:${r?.error ?? "failed"}`);
     this.failUdpUnreachable(stage, `livekit:${r?.error ?? "failed"}`);
   }
 

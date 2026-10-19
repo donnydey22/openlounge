@@ -45,7 +45,7 @@ test("native media: iOS voice stays native and an explicit paired-video grant is
   assert.equal(m.useNativeMedia(true, { iosNativeVideo: false } as never), false);
 });
 
-test("native media: page relays the app's ms:* signaling for this call only, forwards consumer notices, maps state", async () => {
+test("native media: page relays the app's ms:* signaling for this call only, forwards consumer availability, maps state", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];
   const replies: Array<[string, boolean, unknown, string | undefined]> = [];
@@ -80,6 +80,8 @@ test("native media: page relays the app's ms:* signaling for this call only, for
   assert.ok(cmds.some((c) => c.op === "mute" && c.muted === true));
   const stats = await s.getTransportStats();
   assert.equal((stats[0] as unknown as Map<string, unknown>).size, 1);
+  const bridgeSource = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(bridgeSource, /consumerClosed|ms:consumer:closed/);
   s.close();
   assert.equal(w.__olNativeMsReq, undefined);
   assert.ok(cmds.some((c) => c.op === "close"));
@@ -115,7 +117,7 @@ test("server: native SFU connection is stable across page sockets and survives a
   assert.equal(m.nativeConnectionFor("sockX", "u2", "n_abc12345"), "native:u2:n_abc12345", "scoped per authenticated user");
 });
 
-test("native media: emergency LiveKit is joined by the app; page never captures the mic in native mode", async () => {
+test("native media: emergency LiveKit remains the established app-owned audio-only fallback", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];
   installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async (c: Record<string, unknown>) => { cmds.push(c); return true; }, msReply() {} });
@@ -123,7 +125,7 @@ test("native media: emergency LiveKit is joined by the app; page never captures 
     onRemoteTrack() {}, onState() {}, onLocalVideo() {}, callId: "c9",
   });
   await s.connect(false);
-  assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [], video: false, nativeVideo: false });
+  assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [] });
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.match(src, /media\.provider === "mediasoup" \|\| \(useNativeMedia\(/);
   assert.match(src, /provider === "livekit" && !useNativeMedia\(withVideo \|\| call\.video, this\.media\)/);
@@ -185,7 +187,8 @@ test("native media: Android 0.3.17 'wants LiveKit' signal hands over now; iOS/we
   assert.ok(src.includes("onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeFailed(reason); }"));
   assert.ok(src.includes("else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView("));
   assert.ok(src.includes("if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);"), "Android native failure -> WebView media");
-  assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS keep the silent retry budget");
+  assert.ok(src.includes("if (this.iosNativeVideoOwnsCamera()) void this.iosNativeVideoToWebView("), "granted iPhone video falls back before the retry ladder can end the call");
+  assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS baseline keeps the silent retry budget");
   assert.ok(src.includes('await this.lastResortLiveKit("native-ms-failed", reason);'));
 });
 
@@ -242,6 +245,24 @@ test("server: CALL_ANDROID_NATIVE defaults OFF; only 'on' adds androidNative to 
   const idx = readFileSync(new URL("../../server/calls/index.ts", import.meta.url), "utf8");
   assert.ok(idx.includes("...(androidNativeEnabled() ? { androidNative: true } : {})"));
   assert.equal((idx.match(/androidNative: true/g) ?? []).length, 1, "only the mediasoup grant");
+});
+
+test("CALL_IOS_NATIVE_VIDEO=off leaves Android native-audio opt-in and Android-to-Android video on their existing paths", async () => {
+  const { iosNativeVideoEnabled } = await import("../../server/calls/sfuSelect");
+  assert.equal(iosNativeVideoEnabled({ CALL_IOS_NATIVE_VIDEO: "off" }), false);
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  const prevNav = (globalThis as { navigator?: unknown }).navigator;
+  try {
+    m.resetAndroidNativeMedia();
+    installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
+    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.19(35) OpenLoungeAndroid/0.3.19");
+    m.noteAndroidNativeOptIn(true);
+    assert.equal(m.useNativeMedia(false), true, "Android native audio remains controlled solely by its own opt-in");
+    assert.equal(m.useNativeMedia(true), false, "Android-to-Android video remains on the frozen WebView path");
+  } finally {
+    m.resetAndroidNativeMedia();
+    Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
+  }
 });
 
 test("baseline regression (a8a754e): Android WebView path keeps the 5 s first-connect budget from answer, mic handling, LiveKit pin", () => {
@@ -328,6 +349,8 @@ test("iPhone paired-video path: one explicit msid, fenced page camera, deferred 
   assert.match(src, /if \(!this\.mediasoup && \(this\.iosNativeVideoCaptureFenced \|\| this\.iosNativeVideoOwnsCamera\(\)\)\)/);
   assert.match(src, /iosNativeVideoToWebView[\s\S]*iosNativeVideo: false/);
   assert.match(src, /if \(this\.media\?\.iosNativeVideo\) this\.deferNativeConnect/);
+  assert.match(src, /iosNativeVideoToWebView[\s\S]{0,800}nativeVideo: false \}\);/);
+  assert.doesNotMatch(src.slice(src.indexOf("private async iosNativeVideoToWebView"), src.indexOf("private async androidNativeToWebView")), /reconnecting: true/, "the initial iPhone fallback remains silent");
   assert.match(bridge, /async refreshCameraQuality\(\) \{ return false; \}/);
   assert.doesNotMatch(bridge, /refresh: true/, "network adaptation must not restart a native iPhone camera");
 });

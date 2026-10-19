@@ -8,6 +8,11 @@ import { AUDIO_SPEECH } from "../../src/lib/calls/videoPolicy";
 import { MediasoupCallSession } from "../../src/lib/calls/mediasoupSession";
 
 const media = { provider: "mediasoup", callId: "call1" } as any;
+function replaceNavigator(value: unknown) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value });
+  return () => previous ? Object.defineProperty(globalThis, "navigator", previous) : Reflect.deleteProperty(globalThis, "navigator");
+}
 
 test("Opus voice: mono, no DTX (onset clipping), inband FEC, 48 kbps average, 20 ms ptime", () => {
   assert.equal(OPUS_VOICE_CODEC_OPTIONS.opusStereo, false);
@@ -29,13 +34,17 @@ test("mediasoup mic producer is published with the Opus options and the high-pri
   const s = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, media, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
   const a = s as any;
   const track = { kind: "audio", readyState: "live", addEventListener() {}, removeEventListener() {}, stop() {} };
-  (globalThis as any).navigator = { userAgent: "Android", mediaDevices: { getUserMedia: async () => ({ getAudioTracks: () => [track] }), addEventListener() {}, removeEventListener() {} } };
-  a.send = { close() {}, produce: async (o: any) => { produced.push(o); return { close() {}, pause() {}, resume() {}, replaceTrack: async () => {} }; } };
-  await a.publishAudio();
-  assert.equal(produced.length, 1);
-  assert.deepEqual(produced[0].codecOptions, OPUS_VOICE_CODEC_OPTIONS);
-  assert.deepEqual(produced[0].encodings, [{ ...MIC_AUDIO_ENCODING }]);
-  s.close();
+  const restore = replaceNavigator({ userAgent: "Android", mediaDevices: { getUserMedia: async () => ({ getAudioTracks: () => [track] }), addEventListener() {}, removeEventListener() {} } });
+  try {
+    a.send = { close() {}, produce: async (o: any) => { produced.push(o); return { close() {}, pause() {}, resume() {}, replaceTrack: async () => {} }; } };
+    await a.publishAudio();
+    assert.equal(produced.length, 1);
+    assert.deepEqual(produced[0].codecOptions, OPUS_VOICE_CODEC_OPTIONS);
+    assert.deepEqual(produced[0].encodings, [{ ...MIC_AUDIO_ENCODING }]);
+    s.close();
+  } finally {
+    restore();
+  }
 });
 
 test("ICE restart triggers only on disconnected/failed", () => {
@@ -95,27 +104,35 @@ test("ended microphone is recaptured and swapped into the same producer without 
   const replaced: any[] = [];
   let stopped = 0;
   const next = { id: "new", addEventListener() {}, removeEventListener() {}, stop() {} };
-  (globalThis as any).navigator = { mediaDevices: { getUserMedia: async (c: any) => { assert.ok(c.audio.echoCancellation); return { getAudioTracks: () => [next] }; }, removeEventListener() {} } };
-  const s = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, media, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
-  const a = s as any;
-  a.mic = { id: "old", readyState: "ended", removeEventListener() {}, stop: () => stopped++ };
-  a.producers.set("audio", { close() {}, pause() {}, resume() {}, replaceTrack: async (x: any) => replaced.push(x.track.id) });
-  await Promise.all([s.recoverMic(), s.recoverMic()]); // concurrent triggers coalesce
-  assert.deepEqual(replaced, ["new"]);
-  assert.equal(stopped, 1);
-  assert.equal(a.mic, next);
-  assert.equal(a.micOutbound, next);
+  const restore = replaceNavigator({ mediaDevices: { getUserMedia: async (c: any) => { assert.ok(c.audio.echoCancellation); return { getAudioTracks: () => [next] }; }, removeEventListener() {} } });
+  try {
+    const s = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, media, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
+    const a = s as any;
+    a.mic = { id: "old", readyState: "ended", removeEventListener() {}, stop: () => stopped++ };
+    a.producers.set("audio", { close() {}, pause() {}, resume() {}, replaceTrack: async (x: any) => replaced.push(x.track.id) });
+    await Promise.all([s.recoverMic(), s.recoverMic()]); // concurrent triggers coalesce
+    assert.deepEqual(replaced, ["new"]);
+    assert.equal(stopped, 1);
+    assert.equal(a.mic, next);
+    assert.equal(a.micOutbound, next);
+  } finally {
+    restore();
+  }
 });
 
 test("mic recovery keeps the old track if recapture fails", async () => {
-  (globalThis as any).navigator = { mediaDevices: { getUserMedia: async () => { throw new Error("denied"); } } };
-  const s = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, media, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
-  const a = s as any;
-  const old = { readyState: "ended", stop() { throw new Error("must not stop"); } };
-  a.mic = old;
-  a.producers.set("audio", { close() {}, pause() {}, resume() {}, replaceTrack: async () => assert.fail("no replace") });
-  await s.recoverMic();
-  assert.equal(a.mic, old);
+  const restore = replaceNavigator({ mediaDevices: { getUserMedia: async () => { throw new Error("denied"); } } });
+  try {
+    const s = new MediasoupCallSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as any, media, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
+    const a = s as any;
+    const old = { readyState: "ended", stop() { throw new Error("must not stop"); } };
+    a.mic = old;
+    a.producers.set("audio", { close() {}, pause() {}, resume() {}, replaceTrack: async () => assert.fail("no replace") });
+    await s.recoverMic();
+    assert.equal(a.mic, old);
+  } finally {
+    restore();
+  }
 });
 
 test("paused remote voice elements are replayed; a still-blocked element is reported", async () => {

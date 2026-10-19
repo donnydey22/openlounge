@@ -177,9 +177,6 @@ export class NativeMediaSession {
   }
 
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
-  private readonly onConsumerClosed = (data: { consumerId?: unknown }) => {
-    if (typeof data?.consumerId === "string") void nativeMediaCmd({ op: "consumerClosed", consumerId: data.consumerId }).catch(() => {});
-  };
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
     const d = (e as CustomEvent<{ state?: string; fallback?: string; reason?: string }>).detail;
@@ -242,12 +239,11 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
-    this.socket.on("ms:consumer:closed", this.onConsumerClosed);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
-    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [], video: withVideo, nativeVideo: m.iosNativeVideo === true });
+    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [] });
     else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], video: withVideo, nativeVideo: m.iosNativeVideo === true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
@@ -284,7 +280,6 @@ export class NativeMediaSession {
     if (this.closed) return;
     this.closed = true;
     this.socket.off("ms:consumer:available", this.onAvailable);
-    this.socket.off("ms:consumer:closed", this.onConsumerClosed);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;

@@ -210,7 +210,6 @@ async function routeRpc(input) {
         consumer.on("producerclose", () => {
           s.consumers.delete(producer.id);
           consumer.close();
-          emitGateway("ms:gateway:notice", { connectionId, event: "ms:consumer:closed", data: { callId, consumerId: consumer.id } });
         });
         s.consumers.set(producer.id, consumer);
         consumers.push({ id: consumer.id, producerId: producer.id, kind: consumer.kind, rtpParameters: consumer.rtpParameters });

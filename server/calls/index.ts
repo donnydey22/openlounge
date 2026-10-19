@@ -61,28 +61,25 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   const gw = mediaGateway();
   // native-media connections (iOS app owns the SFU peer) are delivered to whichever page socket currently relays them
   gw.setNotifier(({ connectionId, event, data }) => io.get(nativeConns.get(connectionId)?.socketId ?? connectionId)?.emit(event, data));
-  const liveKitBackend = (participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null => {
+  const liveKitBackend = (): CallMediaBackend | null => {
     if (!livekit.enabled) return null;
-    // Keep the same one-native-connection audio+camera contract if the SFU path falls back to LiveKit. This is
-    // still strictly caller-scoped and disabled unless CALL_IOS_NATIVE_VIDEO is exactly "on".
-    const iosNativeVideo = iosNativeVideoEnabled() && participants?.callerPlatform === "ios" && participants.video === true && participants.iosNativeVideo === true;
     return {
       provider: "livekit",
       issue: async ({ callId, userId, name, ttlSec }) => {
         const token = await createJoinToken({ roomId: mediaRoom(callId), userId, name, canPublish: true, ttlSec });
         const iceServers = mintTurnIceServers(callId, userId);
-        return { provider: "livekit", url: livekit.url, token, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}), ...(iosNativeVideo && userId === participants?.callerId ? { iosNativeVideo: true } : {}) };
+        return { provider: "livekit", url: livekit.url, token, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}) };
       },
       close: (callId) => closeLiveKitRoom(mediaRoom(callId), 3000),
     };
   };
-  const mediasoupBackend = (participants?: { callerId: string; calleeId: string; callerPlatform?: "ios" | "android" | "web"; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null => {
+  const mediasoupBackend = (participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null => {
     // The gateway must be connected before a new call ever selects UDP. If the SFU is unavailable, the unchanged
     // LiveKit/TCP call path is selected instead; no user action and no in-call backend choice is required.
     if (!sfuSelected(participants) || !gw.connected) return null;
-    // This deliberately requires all four conditions: an explicit server switch, the initiating iOS app, an
-    // actual video call, and the caller's own per-call grant. Everyone else remains on the established path.
-    const iosNativeVideo = iosNativeVideoEnabled() && participants?.callerPlatform === "ios" && participants.video === true && participants.iosNativeVideo === true;
+    // call:start already made the server-authoritative iOS wrapper/capability decision; only that one-call grant
+    // reaches the caller's direct-SFU credential, while all other endpoints remain on their established path.
+    const iosNativeVideo = participants?.video === true && participants.iosNativeVideo === true;
     return {
       provider: "mediasoup",
       issue: async ({ callId, userId, ttlSec }) => {
@@ -120,8 +117,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend(participants) : null),
-    liveKitFallback: (participants) => (liveKitAllowed() ? liveKitBackend(participants) : null),
+    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend() : null),
+    liveKitFallback: () => (liveKitAllowed() ? liveKitBackend() : null),
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
@@ -254,7 +251,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     }),
   );
   socket.on("call:start", ({ peerId, video, nativeVideo }: { peerId: string; video?: boolean; nativeVideo?: unknown }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, platform, nativeVideo === true && iosNativeVideoEligible)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoEligible)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   // Keep the established client platform field for accept: legacy Android wrappers use OpenLoungeAndroid/ rather

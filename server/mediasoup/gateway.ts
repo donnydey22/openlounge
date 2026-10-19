@@ -5,7 +5,7 @@ import { usableAdmissionSecret } from "./admission";
 
 const RPC_TIMEOUT_MS = 5_000;
 const MIN_GATEWAY_SECRET_BYTES = 32;
-const GATEWAY_NOTICES = new Set(["ms:consumer:available", "ms:consumer:closed", "ms:peer:state"]);
+const GATEWAY_NOTICES = new Set(["ms:consumer:available", "ms:peer:state"]);
 
 export type GatewayNotice = { connectionId: string; event: string; data: unknown };
 
