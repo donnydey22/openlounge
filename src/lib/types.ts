@@ -255,6 +255,8 @@ export interface CallMedia {
   androidNative?: boolean;
   /** server opt-in (CALL_IOS_MIC_REACQUIRE=on): iOS app may re-acquire a silent mic on video calls it places to Android */
   iosMicReacquire?: boolean;
+  /** server opt-in (CALL_IOS_NATIVE_VIDEO=on): only the iOS caller of this video call may use one app-owned audio+camera SFU session */
+  iosNativeVideo?: boolean;
   provider: "livekit" | "mediasoup";
   /** LiveKit signalling URL, or the opaque "broker" label for Mediasoup (never a browser control endpoint). */
   url: string;

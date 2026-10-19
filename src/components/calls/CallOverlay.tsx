@@ -8,6 +8,7 @@ import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Vi
 import { Avatar } from "@/components/Avatar";
 import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
+import { nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
 import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
@@ -86,7 +87,7 @@ function Background({ s }: { s: CallSnapshot }) {
 }
 
 /** Self-view: draggable, snaps to the nearest corner, tap swaps big/small. */
-function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean }) {
+function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null>; onTileChanged?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
@@ -147,9 +148,10 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
     };
   }, []);
   const p = drag ?? (typeof window !== "undefined" ? pos(corner) : { x: 0, y: 0 });
+  useEffect(() => { const id = requestAnimationFrame(() => onTileChanged?.()); return () => cancelAnimationFrame(id); }, [p.x, p.y, aspectRatio, onTileChanged]);
   return (
     <div
-      ref={ref}
+      ref={(el) => { ref.current = el; if (tileRef) tileRef.current = el; }}
       className={cn(css.pip, "w-36 max-h-[38vh] max-w-[40vw] overflow-hidden max-[340px]:w-28 [@media(max-height:480px)]:w-32 bg-zinc-950", drag && css.pipDragging)}
       style={{ transform: `translate3d(${p.x}px, ${p.y}px, 0)`, left: 0, top: 0, aspectRatio }}
       data-testid="call-pip"
@@ -198,7 +200,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
   );
 }
 
-function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: boolean }) {
+function BigVideo({ which, mirrored, tileRef }: { which: "local" | "remote"; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null> }) {
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
   const back = useRef<HTMLVideoElement>(null);
@@ -216,7 +218,7 @@ function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: bo
   // Phones: cover edge to edge (no backdrop). Tablets/desktop: contain over a blurred copy of the same stream.
   const flip = mirrored ? "-scale-x-100" : undefined;
   return (
-    <div className={css.videoStage} data-testid="call-video-stage">
+    <div ref={(el) => { if (tileRef) tileRef.current = el; }} className={css.videoStage} data-testid="call-video-stage">
       <video ref={back} aria-hidden autoPlay playsInline muted poster={NO_POSTER} controls={false} disablePictureInPicture tabIndex={-1} className={cn(css.stageBackdrop, flip)} data-testid={`call-backdrop-${which}`} />
       <video ref={vid} autoPlay playsInline muted poster={NO_POSTER} controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ zIndex: 1 }} data-testid={`call-video-${which}`} />
       <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} data-testid={`call-hold-${which}`} />
@@ -319,8 +321,8 @@ function Controls({ s }: { s: CallSnapshot }) {
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>
       ) : null}
-      {/* app voice calls run on native audio-only media: no mid-call video toggle there (video calls start as video) */}
-      {s.nativeAudio ? null : (
+      {/* Native voice calls retain their audio-only policy; the separately granted iPhone video path keeps normal camera controls. */}
+      {s.nativeAudio && !s.nativeVideo ? null : (
         <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
           {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
         </RoundBtn>
@@ -381,19 +383,56 @@ export function CallOverlay() {
     return () => window.removeEventListener("keydown", k);
   }, [active]);
 
+  const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
+  const showPip = s.remoteCam && s.camOn;
+  const ctlHidden = video && !showCtl;
+  const bigTile = useRef<HTMLDivElement | null>(null);
+  const pipTile = useRef<HTMLDivElement | null>(null);
+  const reportNativeLayout = useCallback(() => {
+    if (!s.nativeVideo || !s.call) return;
+    const width = window.innerWidth || document.documentElement.clientWidth;
+    const height = window.innerHeight || document.documentElement.clientHeight;
+    if (!width || !height) return;
+    const rect = (el: HTMLDivElement | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (![r.left, r.top, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return null;
+      return { x: Math.max(0, Math.min(1, r.left / width)), y: Math.max(0, Math.min(1, r.top / height)), width: Math.max(0, Math.min(1, r.width / width)), height: Math.max(0, Math.min(1, r.height / height)) };
+    };
+    const hidden = s.minimized || !video;
+    if (hidden) {
+      // BigVideo unmounts in these states, so the native stage must receive a valid hidden-only record.
+      void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: true }).catch(() => {});
+      return;
+    }
+    const big = rect(bigTile.current);
+    if (!big) return;
+    const pip = showPip ? rect(pipTile.current) : null;
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: big, fit: window.matchMedia("(max-width: 600px), (pointer: coarse) and (max-height: 600px)").matches ? "cover" : "contain" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+  }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
+  useEffect(() => {
+    if (!s.nativeVideo || !s.call) return;
+    const notify = () => requestAnimationFrame(reportNativeLayout);
+    notify();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(notify);
+    if (bigTile.current) observer?.observe(bigTile.current);
+    if (pipTile.current) observer?.observe(pipTile.current);
+    window.addEventListener("resize", notify);
+    window.visualViewport?.addEventListener("resize", notify);
+    window.visualViewport?.addEventListener("scroll", notify);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("scroll", notify); };
+  }, [reportNativeLayout, s.call, s.nativeVideo]);
+
   if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
   if (!s.ui || !s.call) return null;
   if (s.minimized && s.ui !== "incoming" && s.ui !== "ended") return <MiniBar s={s} />;
   const p = peerOf(s);
   const ringing = s.ui === "outgoing" || s.ui === "incoming";
-  const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
-  const showPip = s.remoteCam && s.camOn;
-  const ctlHidden = video && !showCtl;
 
   return (
-    <div className={css.screen} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
-      {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} /> : <Background s={s} />}
-      {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} />}
+    <div className={cn(css.screen, s.nativeVideo && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
+      {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
+      {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         {/* top bar */}
@@ -444,7 +483,7 @@ export function CallOverlay() {
               {s.error}
             </button>
           )}
-          {s.videoInvite && !s.camOn && !s.nativeAudio && active && (
+          {s.videoInvite && !s.camOn && !(s.nativeAudio && !s.nativeVideo) && active && (
             <div className={cn("pointer-events-auto flex items-center gap-2 rounded-full bg-black/55 py-1 pr-1 pl-3 text-xs backdrop-blur-md", css.banner)}>
               {p.name.split(" ")[0]} turned on video
               <button type="button" onClick={() => void callEngine.toggleCam()} className="rounded-full bg-white px-3 py-1 font-semibold text-zinc-900">

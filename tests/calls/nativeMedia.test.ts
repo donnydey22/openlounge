@@ -31,7 +31,7 @@ function fakeSocket() {
   };
 }
 
-test("native media: only the iOS app with the nativeMedia capability, and only audio-only calls", async () => {
+test("native media: iOS voice stays native and an explicit paired-video grant is the only video exception", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   installWindow(null);
   assert.equal(m.useNativeMedia(false), false, "Safari / web: never");
@@ -39,10 +39,13 @@ test("native media: only the iOS app with the nativeMedia capability, and only a
   assert.equal(m.useNativeMedia(false), false, "older iOS app without the capability");
   installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
   assert.equal(m.useNativeMedia(false), true);
-  assert.equal(m.useNativeMedia(true), false, "video calls keep the WebView path");
+  assert.equal(m.useNativeMedia(true), false, "older binaries keep WebView video");
+  installWindow({ capabilities: ["calls", "nativeMedia", "nativeVideo"], nativeMedia: async () => true, msReply() {} });
+  assert.equal(m.useNativeMedia(true, { iosNativeVideo: true } as never), true, "only the server grant enables paired native video");
+  assert.equal(m.useNativeMedia(true, { iosNativeVideo: false } as never), false);
 });
 
-test("native media: page relays the app's ms:* signaling for this call only, forwards consumer notices, maps state", async () => {
+test("native media: page relays the app's ms:* signaling for this call only, forwards consumer availability, maps state", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];
   const replies: Array<[string, boolean, unknown, string | undefined]> = [];
@@ -77,18 +80,35 @@ test("native media: page relays the app's ms:* signaling for this call only, for
   assert.ok(cmds.some((c) => c.op === "mute" && c.muted === true));
   const stats = await s.getTransportStats();
   assert.equal((stats[0] as unknown as Map<string, unknown>).size, 1);
+  const bridgeSource = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(bridgeSource, /consumerClosed|ms:consumer:closed/);
   s.close();
   assert.equal(w.__olNativeMsReq, undefined);
   assert.ok(cmds.some((c) => c.op === "close"));
 });
 
-test("engine: native-media mode skips WebView getUserMedia on dial and prewarms the app instead", () => {
+test("engine: an updated iPhone wrapper fences WebView capture on dial and uses only a server-issued grant", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  // still no WebView getUserMedia; the app prewarm runs at dial unless the loud native ringback owns the session
-  // (then prewarm + native SFU join wait for the answer — Oct 17 ring loud→quiet fix)
-  assert.match(src, /if \(useNativeMedia\(video\)\) \{\s*this\.preMic = Promise\.resolve\(null\);[\s\S]{0,1200}?this\.deferNativeConnect = nativeRingbackMode\(\) !== "off" && !nativeMediaIsAndroid\(\);\s*if \(!this\.deferNativeConnect\) void nativeMediaCmd\(\{ op: "prewarm" \}\)/);
+  // An explicitly granted iPhone video caller must never let WKWebView acquire its microphone first.
+  assert.match(src, /const deferIosVideoCapture = video && nativePlatform\(\) === "ios" && nativeVideoAvailable\(\)/);
+  assert.doesNotMatch(src, /call:nativeMediaCapabilities|iosNativeVideoAvailable/);
+  assert.match(src, /this\.preMic = Promise\.resolve\(null\)/);
+  assert.match(src, /if \(iosNativeVideoGranted\(this\.media\)\) this\.deferNativeConnect/);
   assert.match(src, /if \(this\.deferNativeConnect\) \{\s*this\.deferNativeConnect = false;\s*void this\.connect\(false\);/);
-  assert.match(src, /useNativeMedia\([^)]*\) \? NativeMediaSession : MediasoupCallSession/);
+  assert.match(src, /const Session = useNativeMedia\([^)]*\) && this\.iosNativeVideoWebFallbackCall !== this\.s\.call\?\.id \? NativeMediaSession : MediasoupCallSession/);
+  assert.match(src, /media\.provider === "mediasoup" \|\| \(useNativeMedia\([^)]*\) && this\.iosNativeVideoWebFallbackCall !== this\.s\.call\?\.id\)/);
+});
+
+test("native media: only an explicit iPhone video grant adds video fields and the shared msid to the app command", async () => {
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  const cmds: Record<string, unknown>[] = [];
+  installWindow({ capabilities: ["calls", "nativeMedia", "nativeVideo"], nativeMedia: async (c: Record<string, unknown>) => { cmds.push(c); return true; }, msReply() {} });
+  const s = new m.NativeMediaSession(fakeSocket() as never, { provider: "mediasoup", callId: "c-native", iceServers: [], iosNativeVideo: true } as never, {
+    onRemoteTrack() {}, onState() {}, onLocalVideo() {}, callId: "c-native", streamId: "ol-c-native-u1",
+  });
+  await s.connect(true);
+  assert.deepEqual(cmds[0], { op: "connect", callId: "c-native", iceServers: [], video: true, nativeVideo: true, streamId: "ol-c-native-u1", tcpOnly: false });
+  s.close();
 });
 
 test("server: native SFU connection is stable across page sockets and survives a reload window", async () => {
@@ -110,7 +130,7 @@ test("server: native SFU connection is stable across page sockets and survives a
   assert.equal(m.nativeConnectionFor("sockX", "u2", "n_abc12345"), "native:u2:n_abc12345", "scoped per authenticated user");
 });
 
-test("native media: emergency LiveKit is joined by the app; page never captures the mic in native mode", async () => {
+test("native media: emergency LiveKit remains the established app-owned audio-only fallback", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];
   installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async (c: Record<string, unknown>) => { cmds.push(c); return true; }, msReply() {} });
@@ -120,8 +140,8 @@ test("native media: emergency LiveKit is joined by the app; page never captures 
   await s.connect(false);
   assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [] });
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(src, /media\.provider === "mediasoup" \|\| useNativeMedia\(/);
-  assert.match(src, /provider === "livekit" && !useNativeMedia\(withVideo \|\| call\.video\)/);
+  assert.match(src, /media\.provider === "mediasoup" \|\| \(useNativeMedia\(/);
+  assert.match(src, /provider === "livekit" && !useNativeMedia\(withVideo \|\| call\.video, this\.media\)/);
 });
 
 test("web/Safari: Answer tap binds the mic in the gesture and hands it to the UDP session", () => {
@@ -180,7 +200,8 @@ test("native media: Android 0.3.17 'wants LiveKit' signal hands over now; iOS/we
   assert.ok(src.includes("onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeFailed(reason); }"));
   assert.ok(src.includes("else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView("));
   assert.ok(src.includes("if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);"), "Android native failure -> WebView media");
-  assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS keep the silent retry budget");
+  assert.ok(src.includes("if (this.iosNativeVideoOwnsCamera()) void this.iosNativeVideoToWebView("), "granted iPhone video falls back before the retry ladder can end the call");
+  assert.ok(src.includes("else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect("), "web/iOS baseline keeps the silent retry budget");
   assert.ok(src.includes('await this.lastResortLiveKit("native-ms-failed", reason);'));
 });
 
@@ -237,6 +258,24 @@ test("server: CALL_ANDROID_NATIVE defaults OFF; only 'on' adds androidNative to 
   const idx = readFileSync(new URL("../../server/calls/index.ts", import.meta.url), "utf8");
   assert.ok(idx.includes("...(androidNativeEnabled() ? { androidNative: true } : {})"));
   assert.equal((idx.match(/androidNative: true/g) ?? []).length, 1, "only the mediasoup grant");
+});
+
+test("CALL_IOS_NATIVE_VIDEO=off leaves Android native-audio opt-in and Android-to-Android video on their existing paths", async () => {
+  const { iosNativeVideoEnabled } = await import("../../server/calls/sfuSelect");
+  assert.equal(iosNativeVideoEnabled({ CALL_IOS_NATIVE_VIDEO: "off" }), false);
+  const m = await import("../../src/lib/calls/nativeMediaSession");
+  const prevNav = (globalThis as { navigator?: unknown }).navigator;
+  try {
+    m.resetAndroidNativeMedia();
+    installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
+    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.19(35) OpenLoungeAndroid/0.3.19");
+    m.noteAndroidNativeOptIn(true);
+    assert.equal(m.useNativeMedia(false), true, "Android native audio remains controlled solely by its own opt-in");
+    assert.equal(m.useNativeMedia(true), false, "Android-to-Android video remains on the frozen WebView path");
+  } finally {
+    m.resetAndroidNativeMedia();
+    Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
+  }
 });
 
 test("baseline regression (a8a754e): Android WebView path keeps the 5 s first-connect budget from answer, mic handling, LiveKit pin", () => {
@@ -310,4 +349,21 @@ test("protected: Android video path unchanged — video never takes native media
   const { execSync } = await import("node:child_process");
   const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/mediasoupSession.ts src/lib/calls/androidLifecycle.ts src/lib/calls/netAdapt.ts", { encoding: "utf8" }).trim();
   assert.equal(changed, "", "WebView media session / Android lifecycle / bandwidth ladder untouched");
+});
+
+
+test("iPhone paired-video path: one explicit msid, fenced page camera, deferred ringback and final WebView fallback", () => {
+  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
+  const bridge = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
+  assert.match(bridge, /connectInner\(withVideo: boolean\)/);
+  assert.match(bridge, /nativeVideo \? \{ video: true, nativeVideo: true, \.\.\.\(this\.opts\.streamId \? \{ streamId: this\.opts\.streamId \} : \{\}\) \} : \{\}/);
+  assert.match(src, /iosNativeVideoOwnsCamera\(\)/);
+  assert.match(src, /if \(this\.iosNativeVideoCaptureFenced \|\| this\.iosNativeVideoOwnsCamera\(\)\) return null;/);
+  assert.match(src, /if \(!this\.mediasoup && \(this\.iosNativeVideoCaptureFenced \|\| this\.iosNativeVideoOwnsCamera\(\)\)\)/);
+  assert.match(src, /iosNativeVideoToWebView[\s\S]*iosNativeVideo: false/);
+  assert.match(src, /if \(iosNativeVideoGranted\(this\.media\)\) this\.deferNativeConnect/);
+  assert.match(src, /iosNativeVideoToWebView[\s\S]{0,800}nativeVideo: false \}\);/);
+  assert.doesNotMatch(src.slice(src.indexOf("private async iosNativeVideoToWebView"), src.indexOf("private async androidNativeToWebView")), /reconnecting: true/, "the initial iPhone fallback remains silent");
+  assert.match(bridge, /async refreshCameraQuality\(\) \{ return false; \}/);
+  assert.doesNotMatch(bridge, /refresh: true/, "network adaptation must not restart a native iPhone camera");
 });

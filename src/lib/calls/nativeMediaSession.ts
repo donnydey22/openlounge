@@ -1,7 +1,8 @@
 // iOS app native call media (openlounge-ios src/nativeMedia.ts): the app owns the microphone, the mediasoup
 // transports and the CallKit audio session. This page is UI + signaling only: it relays the app's ms:* requests
 // over its authenticated realtime socket and forwards ms:consumer:available. No getUserMedia, no WebView media.
-// Audio-only calls only (video calls keep the WebView path). Safari / Android web paths never take this branch.
+// Audio calls stay native as before; iPhone video is native only when its individual server media grant says so.
+// Safari and Android WebView paths never take the iPhone video branch.
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { MediasoupRemoteTrack } from "./mediasoupSession";
@@ -25,6 +26,11 @@ function bridge(): NativeMediaBridge | null {
 export function nativeMediaAvailable(): boolean {
   const b = bridge();
   return !!b && typeof b.nativeMedia === "function" && typeof b.msReply === "function" && !!b.capabilities?.includes("nativeMedia");
+}
+/** Present only in the paired-media iOS wrapper release; older audio-only native binaries stay on WebView video. */
+export function nativeVideoAvailable(): boolean {
+  const b = bridge();
+  return nativeMediaAvailable() && !!b?.capabilities?.includes("nativeVideo");
 }
 
 /** Android builds with the native-media fix (0.3.18 / build 34: software video codec factories for Device.load). */
@@ -117,9 +123,15 @@ export function resetAndroidNativeMedia() {
   }
 }
 
-/** Audio-only calls in the native-media iOS app use app-owned media; Android only when opted in (see above). */
-export function useNativeMedia(video: boolean): boolean {
-  if (video || !nativeMediaAvailable()) return false;
+/** iPhone video is app-owned only for an explicit current-call grant; this is the default-off production gate. */
+export function iosNativeVideoGranted(media: CallMedia | null | undefined): boolean {
+  return !!media?.iosNativeVideo && !nativeMediaIsAndroid() && nativeVideoAvailable();
+}
+/** Audio-only calls in the native-media iOS app use app-owned media; iPhone video is allowed only by its grant.
+ * Android stays behind its independent opt-in and never inherits the iPhone path. */
+export function useNativeMedia(video: boolean, media?: CallMedia | null): boolean {
+  if (!nativeMediaAvailable()) return false;
+  if (video) return iosNativeVideoGranted(media);
   if (!nativeMediaIsAndroid()) return true;
   return androidNativeOff === null && androidNativeOptedIn() && androidNativeHealthy() && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
 }
@@ -148,11 +160,14 @@ export class NativeMediaSession {
       onRemoteTrack(track: MediasoupRemoteTrack): void;
       onState(state: "connected" | "disconnected" | "failed"): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
+      onCameraUnavailable?(): void;
       tcpOnly?: boolean;
       /** force fresh native transports (outage recovery) instead of re-attaching to the live session */
       rebuild?: boolean;
       /** LiveKit credentials carry no callId */
       callId?: string;
+      /** Explicit msid shared by this caller's audio and camera producers. */
+      streamId?: string;
       /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
       onWantsLiveKit?(reason: string): void;
       /** timing of each native step (relayed ms:* request, connect) for diagnostics */
@@ -170,7 +185,8 @@ export class NativeMediaSession {
       this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
       return;
     }
-    if (s === "connected") {
+    if (s === "camera-unavailable") this.opts.onCameraUnavailable?.();
+    else if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
     } else if (s === "disconnected" || s === "failed") this.opts.onState(s);
   };
@@ -207,10 +223,10 @@ export class NativeMediaSession {
     }
   }
 
-  async connect(_withVideo: boolean) {
+  async connect(withVideo: boolean) {
     const t0 = Date.now();
     try {
-      await this.connectInner();
+      await this.connectInner(withVideo);
       this.step("connect", t0, true);
     } catch (e) {
       this.step("connect", t0, false, String((e as Error)?.message ?? e));
@@ -218,17 +234,18 @@ export class NativeMediaSession {
     }
   }
 
-  private async connectInner() {
+  private async connectInner(withVideo: boolean) {
     const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"] };
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
+    const nativeVideo = withVideo && iosNativeVideoGranted(m);
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
     if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [] });
-    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
+    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }
@@ -254,10 +271,11 @@ export class NativeMediaSession {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;
     return (Array.isArray(raw) ? raw : []).map((list) => new Map((list ?? []).map((s, i) => [String(s.id ?? i), s])) as unknown as RTCStatsReport);
   }
-  async enableCamera() {}
-  async disableCamera() {}
-  async refreshCameraQuality() {}
-  async flipCamera() {}
+  async enableCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user" }); }
+  async disableCamera() { await nativeMediaCmd({ op: "camera", on: false }); }
+  /** Native keeps its sensor-oriented capture; adaptive constraints must not restart a live camera. */
+  async refreshCameraQuality() { return false; }
+  async flipCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user" }); }
 
   close() {
     if (this.closed) return;

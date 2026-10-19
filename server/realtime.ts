@@ -16,7 +16,7 @@ import { deviceLabel } from "./auth";
 import type { IncomingMessage } from "node:http";
 import { demoOtpEnabled, firebaseConfigured, verifyPhoneIdToken } from "./firebase";
 import { bg, push, setForegroundCheck, setInAppSink } from "./push";
-import { attachCallHandlers, calls, wireCalls } from "./calls";
+import { attachCallHandlers, calls, isIosNativeVideoWrapper, wireCalls } from "./calls";
 import { creator } from "./creator/service";
 
 const TYPING_MIN_GAP_MS = 1_000; // a "typing" ping per peer at most once a second (clients send every ~3s)
@@ -327,7 +327,7 @@ export function registerRealtime(io: WsHub) {
       fn(userId);
     };
 
-    attachCallHandlers(socket, authed);
+    attachCallHandlers(socket, authed, isIosNativeVideoWrapper(ua));
 
     // any authenticated interaction moves "last seen" forward (throttled; no-op while online)
     socket.onAny = (ev) => {

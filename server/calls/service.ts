@@ -80,7 +80,7 @@ export interface CallDeps {
   appendCallMessage(meta: CallMeta, calleeId: string): void;
   /** Preferred backend for a NEW call. The selected instance is retained on the call record. */
   /** Chooses the media backend for a new call; receives both participants so a server-side test allowlist can opt them in. */
-  selectMedia?(participants?: { callerId: string; calleeId: string }): CallMediaBackend | null;
+  selectMedia?(participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null;
   /** Existing LiveKit path for compatibility and layered Mediasoup fallback. */
   liveKitFallback?(): CallMediaBackend | null;
   /** Legacy LiveKit hooks retained for focused unit tests and older integration wiring. */
@@ -118,6 +118,8 @@ interface CallRec {
   answeredConn?: string | null;
   /** platform the answering device reported on accept ("ios" | "android" | "web"); absent = unknown */
   calleePlatform?: "ios" | "android" | "web";
+  /** Server-issued one-call grant; no caller platform or client capability is retained. */
+  iosNativeVideo?: boolean;
   endedAt: number | null;
   outcome: CallOutcome | null;
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
@@ -182,7 +184,7 @@ export class CallService {
     };
   }
 
-  private selectBackend(participants?: { callerId: string; calleeId: string }) {
+  private selectBackend(participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }) {
     return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
   }
 
@@ -310,7 +312,7 @@ export class CallService {
     return !!set && set.size === 0;
   }
 
-  async start(callerId: string, calleeId: string, video: boolean, connId?: string): Promise<StartResult> {
+  async start(callerId: string, calleeId: string, video: boolean, connId?: string, iosNativeVideo?: unknown): Promise<StartResult> {
     const pol = this.d.policy(callerId, calleeId);
     if (!pol.ok) return { ok: false, error: pol.error, reason: pol.reason };
     // already in a call with this same person (double tap / second tab) → hand back that call
@@ -329,7 +331,10 @@ export class CallService {
     }
     if (this.d.inRoom(callerId)) return { ok: false, error: "Leave the room you're in to start a call", reason: "self_busy" };
     if (this.limited(callerId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
-    const backend = this.selectBackend({ callerId, calleeId });
+    // wireCalls computes this once from the server-observed iOS wrapper and default-off gate; this record keeps only
+    // the resulting grant so older binaries remain on WebView video without retaining caller platform metadata.
+    const wantsIosNativeVideo = iosNativeVideo === true && !!video;
+    const backend = this.selectBackend({ callerId, calleeId, video: !!video, iosNativeVideo: wantsIosNativeVideo });
     if (!backend) return { ok: false, error: "Calls aren't available right now", reason: "media_unavailable" };
     const now = this.now();
     const c: CallRec = {
@@ -341,6 +346,7 @@ export class CallService {
       phase: "calling",
       createdAt: now,
       ackAt: null,
+      ...(wantsIosNativeVideo ? { iosNativeVideo: true } : {}),
       answeredAt: null,
       endedAt: null,
       outcome: null,
