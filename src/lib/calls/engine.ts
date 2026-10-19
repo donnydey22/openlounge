@@ -28,6 +28,7 @@ import { isAndroidApp } from "@/lib/notify";
 /** WebView media session or the iOS app's native media proxy (same surface) */
 type CallMediaSession = MediasoupCallSession | NativeMediaSession;
 import { flipCameraTrack } from "./cameraFlip";
+import { IosMicWatch, iosMicReacquireEligible } from "./iosMicReacquire";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
 import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor } from "./netAdapt";
@@ -477,7 +478,7 @@ export class CallEngine {
       return { ok: false };
     }
     postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video });
-    this.diag("call-start", { video });
+    this.diag("call-start", { video, app: appVersionFromUa() });
     if (!this.deferNativeConnect) void this.connect(false);
     return { ok: true };
   }
@@ -539,7 +540,7 @@ export class CallEngine {
       if (withVideo) void this.ensureCamPreview();
     }
     // connect with the ring-time token right away, in parallel with telling the server
-    const accepted = this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:accept", { callId: call.id }).catch(() => ({ ok: false, error: "No connection" }) as const);
+    const accepted = this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:accept", { callId: call.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const);
     if (!this.media) {
       const r = await accepted;
       if (!r.ok) return this.acceptFailed(call, r.error);
@@ -631,6 +632,7 @@ export class CallEngine {
         if (this.mediaConnected()) playConnected();
         postNative({ type: "call:connected", callId: call.id });
         this.diag("answered", { deferred: this.deferNativeConnect });
+        if (this.metricSent) this.maybeWatchIosMic(); // first audio already arrived before the active state
         if (this.deferNativeConnect) {
           this.deferNativeConnect = false;
           void this.connect(false);
@@ -1953,10 +1955,12 @@ export class CallEngine {
         // The session just changed hands → flip a fresh capture onto the existing producer right away.
         if (this.mediasoup) this.mediasoup.rebindMic();
         else this.micHandoverPending = true;
+        this.iosMicWatch?.rearm();
         return;
       }
       // ...and the outbound mic: an outgoing call captured it before CallKit took the session (muted → silence)
       this.mediasoup?.checkMicAlive();
+      this.iosMicWatch?.rearm();
     });
   }
 
@@ -2052,6 +2056,39 @@ export class CallEngine {
     (window as unknown as { __olCallMetric?: number[] }).__olCallMetric = [...((window as unknown as { __olCallMetric?: number[] }).__olCallMetric ?? []), ms];
     void this.req("call:metric", { callId: this.s.call.id, acceptToAudioMs: ms }).catch(() => {});
     this.diag("first-audio", { ms });
+    this.maybeWatchIosMic();
+  }
+
+  /** iOS outgoing video → Android: re-acquire a silent WebView mic (iosMicReacquire.ts). Gate is evaluated here only. */
+  private iosMicWatch: IosMicWatch | null = null;
+  private maybeWatchIosMic() {
+    const call = this.s.call;
+    const session = this.mediasoup;
+    if (this.iosMicWatch || !call || !this.mediasoupConnected || !(session instanceof MediasoupCallSession)) return;
+    const eligible = iosMicReacquireEligible({
+      flag: !!this.media?.iosMicReacquire,
+      localPlatform: nativePlatform(),
+      role: this.s.role ?? null,
+      video: !!call.video,
+      nativeMedia: !!this.s.nativeAudio,
+      peerPlatform: call.calleePlatform,
+      provider: this.media?.provider,
+    });
+    if (!eligible) return;
+    const callId = call.id;
+    this.iosMicWatch = new IosMicWatch({
+      stats: () => session.getTransportStats(),
+      reacquire: async () => {
+        const before = session.micTrackForHealth();
+        await session.recoverMic();
+        const after = session.micTrackForHealth();
+        return !!after && after !== before;
+      },
+      muted: () => this.s.muted,
+      alive: () => this.busy && this.s.call?.id === callId && this.mediasoup === session,
+      log: (ev, extra) => this.diag(ev, extra),
+    });
+    this.iosMicWatch.start(1_000);
   }
 
   /** First connect of a web-path (mediasoup) call: offer the Speaker toggle (it was only detected on LiveKit, so
@@ -2139,6 +2176,8 @@ export class CallEngine {
   private teardownMedia() {
     stopTones();
     this.msTcp = false;
+    this.iosMicWatch?.stop();
+    this.iosMicWatch = null;
     this.releaseParked();
     const room = this.room;
     this.room = null;
@@ -2340,3 +2379,13 @@ export const fmt = (s: number) => {
 };
 
 export const callEngine = typeof window !== "undefined" ? new CallEngine() : (null as unknown as CallEngine);
+
+/** wrapper app version + build from the UA (`OpenLounge/<ios|android>/<v>(<b>)`), "" on the plain web */
+function appVersionFromUa(): string {
+  try {
+    const m = /\bOpenLounge\/(ios|android)\/([^\s(]+)\((\d+)\)/i.exec(typeof navigator === "undefined" ? "" : navigator.userAgent);
+    return m ? `${m[1]} ${m[2]} (${m[3]})` : "";
+  } catch {
+    return "";
+  }
+}
