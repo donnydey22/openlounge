@@ -16,6 +16,9 @@ import { MediasoupGateway } from "../mediasoup/gateway";
 import { liveKitAllowed, sfuSelected } from "./sfuSelect";
 import { isBenignMediaFailure } from "./mediaLog";
 
+/** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
+const lastClose = new Map<string, Record<string, unknown>>();
+
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
 
@@ -84,6 +87,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     };
   };
   svc = new CallService({
+    lastCloseOf: (userId) => lastClose.get(userId) ?? null,
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
     isConnected: (userId) => {
       for (const _ of io.members(`user:${userId}`)) return true;
@@ -207,6 +211,13 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   // The user this socket made call requests as: on close it leaves whatever call it was in (stale re-dial detection).
   let callUser: string | null = null;
   socket.onClose(() => {
+    const info = socket.closeInfo;
+    const uid = callUser ?? ([...socket.rooms].find((r) => r.startsWith("user:"))?.slice(5) ?? null);
+    if (uid && info) {
+      lastClose.set(uid, { closeCode: info.code, closeReason: info.reason, closeCause: info.cause, closeHidden: info.hidden, closeMissedPongs: info.missed, socketAgeMs: info.ageMs, socketIdleMs: info.idleMs, closedAt: Date.now() });
+      const live = svc?.liveCallOf(uid);
+      if (live) log.info("[calls] socket closed during call", { callId: live.id, userId: uid, phase: live.phase, ...info });
+    }
     mediaGateway().closeConnection(socket.id);
     if (callUser) svc?.connClosed(socket.id, callUser);
     nativeSocketClosed(socket.id, (connectionId, userId) => {

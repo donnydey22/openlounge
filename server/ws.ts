@@ -56,6 +56,12 @@ export class Conn {
   private tokens = WS_BURST;
   private refillAt = Date.now();
   strikes = 0;
+  readonly openedAt = Date.now();
+  lastMsgAt = Date.now();
+  /** why the server itself closed this socket (heartbeat reap, drain, policy, slow consumer); null = client/network */
+  serverCause: string | null = null;
+  /** filled on close: code/reason/cause + liveness context, for "call peer offline" diagnostics */
+  closeInfo: { code: number; reason: string; cause: string; hidden: boolean; missed: number; ageMs: number; idleMs: number } | null = null;
 
   constructor(
     readonly ws: WebSocket,
@@ -87,6 +93,7 @@ export class Conn {
     if (this.ws.bufferedAmount > WS_MAX_BUFFERED) {
       metrics.inc("ws_slow_consumer_closed_total");
       log.warn("ws slow consumer closed", { conn: this.id, buffered: this.ws.bufferedAmount });
+      this.serverCause = "slow-consumer";
       this.ws.close(1013, "slow consumer");
       return false;
     }
@@ -108,6 +115,7 @@ export class Conn {
     metrics.inc(`ws_rejected_${reason}_total`);
     if (++this.strikes >= WS_MAX_STRIKES) {
       log.warn("ws closing abusive connection", { conn: this.id, reason });
+      this.serverCause = "policy";
       this.ws.close(1008, "policy violation");
     }
   }
@@ -227,6 +235,7 @@ export class WsHub {
             continue;
           }
           metrics.inc("ws_dead_reaped_total");
+          c.serverCause = c.hidden ? "heartbeat-hidden" : "heartbeat";
           c.ws.terminate();
           continue;
         }
@@ -261,6 +270,7 @@ export class WsHub {
     clearInterval(this.heartbeat);
     for (const c of this.conns.values()) {
       try {
+        c.serverCause = "server-drain";
         c.ws.close(1012, "server restarting");
       } catch {
         /* ignore */
@@ -283,9 +293,20 @@ export class WsHub {
     ws.on("pong", () => (conn.alive = true));
     ws.on("message", (buf) => {
       conn.alive = true;
+      conn.lastMsgAt = Date.now();
       void conn.dispatch(buf.toString());
     });
-    ws.on("close", () => {
+    ws.on("close", (code: number, reason: Buffer) => {
+      const now = Date.now();
+      conn.closeInfo = {
+        code,
+        reason: String(reason ?? "").slice(0, 80),
+        cause: conn.serverCause ?? (code === 1006 ? "network-abnormal" : code === 1001 ? "client-going-away" : code === 1000 ? "client-normal" : "client"),
+        hidden: conn.hidden,
+        missed: conn.missed,
+        ageMs: now - conn.openedAt,
+        idleMs: now - conn.lastMsgAt,
+      };
       this.conns.delete(conn.id);
       conn.closed();
     });

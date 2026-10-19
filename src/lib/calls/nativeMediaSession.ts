@@ -89,6 +89,8 @@ export class NativeMediaSession {
       callId?: string;
       /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
       onWantsLiveKit?(reason: string): void;
+      /** timing of each native step (relayed ms:* request, connect) for diagnostics */
+      onStep?(step: { event: string; ms: number; ok: boolean; error?: string }): void;
     },
   ) {
   }
@@ -116,13 +118,41 @@ export class NativeMediaSession {
       b.msReply(id, false, null, "relay refused");
       return;
     }
+    const t0 = Date.now();
+    const method = typeof data.method === "string" ? `${event}:${data.method}` : event;
     this.socket.request(event, data, 8_000).then(
-      (r) => b.msReply?.(id, true, r ?? null),
-      (err: unknown) => b.msReply?.(id, false, null, String((err as Error)?.message ?? err)),
+      (r) => {
+        this.step(method, t0, true);
+        b.msReply?.(id, true, r ?? null);
+      },
+      (err: unknown) => {
+        const msg = String((err as Error)?.message ?? err);
+        this.step(method, t0, false, msg);
+        b.msReply?.(id, false, null, msg);
+      },
     );
   };
 
+  private step(event: string, t0: number, ok: boolean, error?: string) {
+    try {
+      this.opts.onStep?.({ event, ms: Date.now() - t0, ok, ...(error ? { error: error.slice(0, 120) } : {}) });
+    } catch {
+      /* diagnostics only */
+    }
+  }
+
   async connect(_withVideo: boolean) {
+    const t0 = Date.now();
+    try {
+      await this.connectInner();
+      this.step("connect", t0, true);
+    } catch (e) {
+      this.step("connect", t0, false, String((e as Error)?.message ?? e));
+      throw e;
+    }
+  }
+
+  private async connectInner() {
     const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"] };
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
@@ -162,6 +192,25 @@ export class NativeMediaSession {
   async disableCamera() {}
   async refreshCameraQuality() {}
   async flipCamera() {}
+
+  /** Close and wait (bounded) for the app to confirm its media/mic are released. true = confirmed. */
+  async closeAndWait(ms: number): Promise<boolean> {
+    if (this.closed) return true;
+    const t0 = Date.now();
+    this.detach();
+    const done = nativeMediaCmd({ op: "close" }).then(() => true, () => false);
+    const ok = await Promise.race([done, new Promise<boolean>((r) => setTimeout(() => r(false), ms))]);
+    this.step("close", t0, ok);
+    return ok;
+  }
+
+  private detach() {
+    this.closed = true;
+    this.socket.off("ms:consumer:available", this.onAvailable);
+    window.removeEventListener("openlounge:native-media", this.onNativeEvent);
+    const w = window as unknown as { __olNativeMsReq?: unknown };
+    if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;
+  }
 
   close() {
     if (this.closed) return;

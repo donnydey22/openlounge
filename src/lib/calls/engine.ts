@@ -421,7 +421,10 @@ export class CallEngine {
       // Loud native ringback until connect (Donny, Oct 17): the app's mic grab / WebRTC load flips the iPhone audio
       // session into call mode (earpiece, call volume) mid-ring, so while the native ringer rings, the prewarm and the
       // native SFU join wait for the callee's answer (onState → active).
-      this.deferNativeConnect = nativeRingbackMode() !== "off";
+      // Android (0.3.19 calls f8729e66 / 0f542027 / fe55fdf2): deferring the native join to the answer left its ~6 serial
+      // setup requests to run after pickup and the 5 s first-connect budget killed them. Android already enters call
+      // audio at call:outgoing, so the deferral buys nothing there: join + build transports while it rings.
+      this.deferNativeConnect = nativeRingbackMode() !== "off" && !nativeMediaIsAndroid();
       if (!this.deferNativeConnect) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     } else this.preMic = this.acquireMic();
     // iOS: getUserMedia reconfigures the audio session and can leave the ringback element "playing" but silent
@@ -868,6 +871,11 @@ export class CallEngine {
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
         onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
         onWantsLiveKit: (reason) => { if (this.mediasoup === session) void this.nativeFailed(reason); },
+        // per-step native timing (each relayed ms:* request + the whole connect): proves where a slow native join spends it
+        onStep: (step: { event: string; ms: number; ok: boolean; error?: string }) => {
+          this.netLog("native-step", step);
+          this.diag("native-step", step);
+        },
         tcpOnly,
       });
       this.mediasoup = session;
@@ -1571,14 +1579,18 @@ export class CallEngine {
   static WAKE_WINDOW_MS = 30_000;
   /** a LiveKit last-resort join done by the native app gets its own budget (never the spent first-connect one) */
   static LIVEKIT_JOIN_BUDGET_MS = 15_000;
+  /** native-app media first connect (app-side request timeouts are 12 s / 9 s, NativeCallMedia.kt): 5 s was shorter
+   *  than one slow native step, so a healthy-but-slow native join was always cut off and handed to the WebView. */
+  static NATIVE_FIRST_CONNECT_BUDGET_MS = 15_000;
   private socketUpAt = 0;
   private resumedAt = 0;
   private resumeWatch = false;
   private firstConnectBudgetMs(): number {
     const t0 = this.firstConnectT0;
     const anchor = Math.max(this.socketUpAt, this.resumedAt);
-    if (this.s.role !== "callee" || !t0 || !anchor || t0 - anchor > CallEngine.WAKE_WINDOW_MS) return CallEngine.FIRST_CONNECT_BUDGET_MS;
-    return Math.max(CallEngine.FIRST_CONNECT_BUDGET_MS, anchor - t0 + CallEngine.WOKEN_GRACE_MS);
+    const base = this.mediasoup instanceof NativeMediaSession ? CallEngine.NATIVE_FIRST_CONNECT_BUDGET_MS : CallEngine.FIRST_CONNECT_BUDGET_MS;
+    if (this.s.role !== "callee" || !t0 || !anchor || t0 - anchor > CallEngine.WAKE_WINDOW_MS) return base;
+    return Math.max(base, anchor - t0 + CallEngine.WOKEN_GRACE_MS);
   }
   private firstConnectT0 = 0;
   private inFirstRetry = false;
@@ -1636,6 +1648,7 @@ export class CallEngine {
    * used before). Its failure runs the normal WebView ladder (silent retries -> LiveKit -> clear message), never silence.
    */
   private nativeWebCall: string | null = null;
+  static NATIVE_TEARDOWN_WAIT_MS = 3_000;
   private async androidNativeToWebView(reason: string) {
     const callId = this.s.call?.id;
     const media = this.media;
@@ -1643,6 +1656,15 @@ export class CallEngine {
     this.nativeWebCall = callId;
     disableAndroidNativeMedia(reason);
     this.diag("native-fallback-webview", { reason: reason.slice(0, 160) });
+    // Release the native session (mic, audio unit, transports) and WAIT for the app to confirm before the WebView
+    // captures the mic and builds its own transports; racing them left the WebView path silent on 0.3.19.
+    const native = this.mediasoup;
+    if (native instanceof NativeMediaSession) {
+      const t0 = Date.now();
+      const ok = await native.closeAndWait(CallEngine.NATIVE_TEARDOWN_WAIT_MS);
+      this.diag("native-teardown", { ms: Date.now() - t0, confirmed: ok });
+      if (!this.busy || this.s.call?.id !== callId) return;
+    }
     // mid-call recovery loop already running: its next rebuild picks the WebView session (native is now off)
     if (this.msRecovering) return;
     this.dropMediaForRejoin();
