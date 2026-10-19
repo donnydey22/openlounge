@@ -27,6 +27,11 @@ export function nativeMediaAvailable(): boolean {
   const b = bridge();
   return !!b && typeof b.nativeMedia === "function" && typeof b.msReply === "function" && !!b.capabilities?.includes("nativeMedia");
 }
+/** Present only in the paired-media iOS wrapper release; older audio-only native binaries stay on WebView video. */
+export function nativeVideoAvailable(): boolean {
+  const b = bridge();
+  return nativeMediaAvailable() && !!b?.capabilities?.includes("nativeVideo");
+}
 
 /** Android builds with the native-media fix (0.3.18 / build 34: software video codec factories for Device.load). */
 export const ANDROID_NATIVE_MIN_BUILD = 34;
@@ -120,7 +125,7 @@ export function resetAndroidNativeMedia() {
 
 /** iPhone video is app-owned only for an explicit current-call grant; this is the default-off production gate. */
 export function iosNativeVideoGranted(media: CallMedia | null | undefined): boolean {
-  return !!media?.iosNativeVideo && !nativeMediaIsAndroid() && nativeMediaAvailable();
+  return !!media?.iosNativeVideo && !nativeMediaIsAndroid() && nativeVideoAvailable();
 }
 /** Audio-only calls in the native-media iOS app use app-owned media; iPhone video is allowed only by its grant.
  * Android stays behind its independent opt-in and never inherits the iPhone path. */

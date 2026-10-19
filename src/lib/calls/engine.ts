@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, disableAndroidNativeMedia, noteAndroidNativeOptIn, nativeMediaAvailable, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, noteAndroidNativeOptIn, nativeMediaCmd, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { isAndroidApp } from "@/lib/notify";
 
@@ -272,7 +272,7 @@ export class CallEngine {
     const socket = this.socket;
     const meId = this.meId;
     this.iosNativeVideoAvailable = false;
-    if (!socket || !meId || nativePlatform() !== "ios" || !nativeMediaAvailable()) return;
+    if (!socket || !meId || nativePlatform() !== "ios" || !nativeVideoAvailable()) return;
     this.iosNativeVideoCapabilityUser = meId;
     void socket.request<{ ok?: boolean; iosNativeVideo?: unknown }>("call:nativeMediaCapabilities", {}, 5_000).then((r) => {
       if (this.socket === socket && this.meId === meId) this.iosNativeVideoAvailable = r?.ok === true && r.iosNativeVideo === true;
@@ -448,7 +448,7 @@ export class CallEngine {
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
     // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
     this.deferNativeConnect = false;
-    const deferIosVideoCapture = video && nativePlatform() === "ios" && nativeMediaAvailable() && this.iosNativeVideoAvailable;
+    const deferIosVideoCapture = video && nativePlatform() === "ios" && nativeVideoAvailable() && this.iosNativeVideoAvailable;
     if (deferIosVideoCapture) {
       // The server grants app-owned video only after call:start. Do not let WKWebView seize the microphone at tap
       // time: CallKit will activate the native session shortly after this and WebKit cannot reliably recover it.

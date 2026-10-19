@@ -220,6 +220,9 @@ export function nativeConnLeft(connectionId: string) {
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void, platform: ObservedPlatform = "web") {
   const s = () => svc!;
   const endedResent = new Set<string>(); // call ids whose ended state this socket was re-sent (call:diag)
+  // A page may request native video only after this authenticated socket received the server’s rollout response.
+  // This also keeps legacy iOS wrappers, which do not advertise nativeVideo, on the WebView video path.
+  let iosNativeVideoEligible = false;
   // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after
   // normal app-side socket teardown; browser code cannot address another connection id.
   // The user this socket made call requests as: on close it leaves whatever call it was in (stale re-dial detection).
@@ -245,10 +248,13 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:gateway:response", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleResponse(socket, data)));
   socket.on("ms:gateway:notice", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleNotice(socket, data)));
   socket.on("call:nativeMediaCapabilities", (_: unknown, ack: AckFn = noop) =>
-    authed(ack, () => ack({ ok: true, iosNativeVideo: platform === "ios" && iosNativeVideoEnabled() })),
+    authed(ack, () => {
+      iosNativeVideoEligible = platform === "ios" && iosNativeVideoEnabled();
+      ack({ ok: true, iosNativeVideo: iosNativeVideoEligible });
+    }),
   );
   socket.on("call:start", ({ peerId, video, nativeVideo }: { peerId: string; video?: boolean; nativeVideo?: unknown }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, platform, nativeVideo)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, platform, nativeVideo === true && iosNativeVideoEligible)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId }: { callId: string }, ack: AckFn = noop) =>
