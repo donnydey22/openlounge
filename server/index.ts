@@ -204,6 +204,7 @@ async function main() {
     const until = Date.now() + SHUTDOWN_MS / 2;
     while (inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
     server.closeAllConnections();
+    await persistCalls().catch((err) => log.error("live call persist failed", { err }));
     await store.close().catch((err) => log.error("store close failed", { err }));
     log.info("shutdown complete", { sig });
     process.exit(code);

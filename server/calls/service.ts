@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 import type { CallMediaBackend } from "./mediaBackend";
+import type { LiveCallRow, LiveCallStore } from "./liveStore";
 
 const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
@@ -24,7 +25,11 @@ export const callRepushMs = () => {
   const v = Number(process.env.CALL_REPUSH_MS);
   return process.env.CALL_REPUSH_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 15_000;
 };
-export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", 60_000);
+/** Hard rule (Donny, Oct 18): no interruption may drop a live call (server restart/crash, network blip, Wi-Fi <-> cellular,
+ *  app crash/update, OS update, backgrounded). Every "peer gone" window is minutes, not seconds; the other side shows
+ *  "Reconnecting..." meanwhile and the call ends only on a hangup or when this long passes with no return. */
+const SURVIVE_MS = num("CALL_SURVIVE_MS", 300_000);
+export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", SURVIVE_MS);
 /** caller lost their socket while it was still ringing → cancel after this */
 export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
 /**
@@ -34,13 +39,15 @@ export const CALL_CALLER_GONE_MS = num("CALL_CALLER_GONE_MS", 15_000);
  * < 30 s; and past ~45 s the other person is better served by "Call ended · connection lost" + one-tap call back
  * than by more silence. The heartbeat notices a dead socket within ~10–20 s, so the wall-clock budget is ~55–65 s.
  */
-export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", 45_000);
+export const CALL_RECONNECT_GRACE_MS = num("CALL_RECONNECT_GRACE_MS", SURVIVE_MS);
 /** answered but no first audio from either side yet, and one side went offline: end this soon (peer_unreachable)
  *  instead of a silent 45 s grace (call 67078d15: callee's socket died 4 s after a push-woken answer) */
 export const CALL_UNREACHABLE_MS = num("CALL_UNREACHABLE_MS", 10_000);
+/** after a server restart, restored calls get this long for both sides to come back (clients reconnect in ~0.2-2 s) */
+export const CALL_RESTORE_GRACE_MS = num("CALL_RESTORE_GRACE_MS", SURVIVE_MS);
 /** Active call where one side is still online (other tab/device/socket) but no connection of theirs is in the call
  *  any more (call page closed, app killed while a chat socket lingers): end it so it can't block every new call. */
-export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", 60_000);
+export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", SURVIVE_MS);
 /** detached this long (≥ one sweep after detection) → the other side is told "reconnecting" */
 export const CALL_DETACHED_NOTICE_MS = num("CALL_DETACHED_NOTICE_MS", 5_000);
 /** callee's app went to the background while ringing in the foreground (no push yet) → push after this, if still hidden */
@@ -89,7 +96,11 @@ export interface CallDeps {
   /** Optional self-hosted TURN credentials; this remains untouched when no secret is configured. */
   turnIceServers?(callId: string, userId: string): TurnIceServer[] | null;
   closeMedia?(callId: string): void;
-  /** why a user's last socket closed (close code/reason/cause), for "call peer offline" diagnostics */
+  /** durable copy of live calls (restart survival); absent = memory only (old behaviour) */
+  liveStore?: LiveCallStore;
+  /** rebuild a restored call's backend by provider name ("mediasoup" | "livekit") */
+  backendFor?(provider: string, participants: { callerId: string; calleeId: string }): CallMediaBackend | null;
+  /** why a user's last socket closed (close code/reason/heartbeat), for "call peer offline" diagnostics */
   lastCloseOf?(userId: string): Record<string, unknown> | null;
   push?: {
     incoming(calleeId: string, call: CallInfo): void;
@@ -141,6 +152,8 @@ interface CallRec {
   detachedNotified?: Set<string>;
   /** connections (socket ids) that are actually in this call per participant: bound by start/accept/get/media, dropped on close */
   conns: Map<string, Set<string>>;
+  /** restored from the durable store after a server restart */
+  restoredAt?: number | null;
 }
 
 export type StartResult =
@@ -184,8 +197,110 @@ export class CallService {
     return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
   }
 
+  // ---------- restart survival ----------
+  private persistTimer: NodeJS.Timeout | null = null;
+  private persistChain: Promise<void> = Promise.resolve();
+  private lastPersisted = "";
+
+  private row(c: CallRec): LiveCallRow | null {
+    if (c.phase === "ended") return null;
+    return {
+      id: c.id, callerId: c.callerId, calleeId: c.calleeId, video: c.video, everVideo: c.everVideo, phase: c.phase,
+      createdAt: c.createdAt, ackAt: c.ackAt, answeredAt: c.answeredAt, answeredConn: c.answeredConn ?? null,
+      pushed: c.pushed, audioAt: c.audioAt ?? null, provider: c.backend.provider,
+      primaryProvider: c.primary?.provider ?? null, savedAt: 0,
+    };
+  }
+
+  /** Debounced write of every live call (changes are rare: start / ack / accept / media switch / first audio / end). */
+  persistSoon() {
+    if (!this.d.liveStore || this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      void this.persistNow();
+    }, 100);
+    this.persistTimer.unref?.();
+  }
+
+  /** Write now (also on SIGTERM before exit). Never throws; skips identical snapshots. */
+  persistNow(): Promise<void> {
+    const store = this.d.liveStore;
+    if (!store) return Promise.resolve();
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    const rows = [...this.calls.values()].map((c) => this.row(c)).filter((r): r is LiveCallRow => !!r);
+    const key = JSON.stringify(rows);
+    if (key === this.lastPersisted) return this.persistChain;
+    this.lastPersisted = key;
+    const now = this.now();
+    this.persistChain = this.persistChain
+      .then(() => store.save(rows.map((r) => ({ ...r, savedAt: now }))))
+      .catch((err) => {
+        this.lastPersisted = "";
+        this.d.log?.("call persist failed", { err: String((err as Error)?.message ?? err).slice(0, 160) });
+      });
+    return this.persistChain;
+  }
+
+  /**
+   * Boot: bring back the calls that were live when the previous process stopped (deploy, restart, crash) instead of
+   * forgetting them. Media never went away (SFU/LiveKit run separately); both clients reconnect their socket within
+   * seconds and re-attach by call id (call:current / call:get). A side that doesn't return within CALL_RESTORE_GRACE_MS
+   * ends the call as completed/connection_lost, exactly like a mid-call network loss.
+   */
+  async restore(): Promise<number> {
+    const store = this.d.liveStore;
+    if (!store) return 0;
+    let rows: LiveCallRow[] = [];
+    try {
+      rows = await store.load();
+    } catch (err) {
+      this.d.log?.("call restore failed", { err: String((err as Error)?.message ?? err).slice(0, 160) });
+      return 0;
+    }
+    const now = this.now();
+    let n = 0;
+    for (const r of rows) {
+      if (!r?.id || this.calls.has(r.id) || this.live.has(r.callerId) || this.live.has(r.calleeId)) continue;
+      const parts = { callerId: r.callerId, calleeId: r.calleeId };
+      const backend =
+        this.d.backendFor?.(r.provider, parts) ??
+        (r.provider === "livekit" ? (this.d.liveKitFallback?.() ?? this.legacyLiveKit()) : null) ??
+        this.selectBackend(parts);
+      if (!backend) {
+        this.d.log?.("call restore skipped", { callId: r.id, why: "no-media-backend" });
+        continue;
+      }
+      const c: CallRec = {
+        id: r.id, callerId: r.callerId, calleeId: r.calleeId, video: r.video, everVideo: r.everVideo, phase: r.phase,
+        createdAt: r.createdAt, ackAt: r.ackAt, answeredAt: r.answeredAt,
+        answeredConn: null, // the answering socket died with the old process; the same device re-accepts freely
+        endedAt: null, outcome: null, tokens: new Map(), backend,
+        primary: r.primaryProvider && r.primaryProvider !== r.provider ? (this.d.backendFor?.(r.primaryProvider, parts) ?? null) : null,
+        timer: null, pushed: r.pushed, orphanSince: null, goneSince: new Map(), audioAt: r.audioAt, conns: new Map(), restoredAt: now,
+      };
+      this.calls.set(c.id, c);
+      this.live.set(c.callerId, c.id);
+      this.live.set(c.calleeId, c.id);
+      n++;
+      if (c.phase !== "active") {
+        const left = c.createdAt + CALL_RING_TIMEOUT_MS - now;
+        if (left <= 0) {
+          this.finish(c, "missed");
+          continue;
+        }
+        c.timer = setTimeout(() => this.timeout(c.id), left);
+        c.timer.unref?.();
+      }
+      this.d.log?.("call restored", { callId: c.id, phase: c.phase, provider: backend.provider, downMs: r.savedAt ? now - r.savedAt : null });
+    }
+    if (rows.length) this.persistSoon();
+    return n;
+  }
+
   dispose() {
     clearInterval(this.sweeper);
+    if (this.persistTimer) clearTimeout(this.persistTimer);
     for (const c of this.calls.values()) if (c.timer) clearTimeout(c.timer);
   }
 
@@ -280,6 +395,7 @@ export class CallService {
   }
 
   private broadcast(c: CallRec, ev: string, extra: Record<string, unknown> = {}) {
+    this.persistSoon();
     const info = this.info(c);
     for (const u of [c.callerId, c.calleeId]) this.d.emitUser(u, ev, { call: info, ...extra });
   }
@@ -540,6 +656,7 @@ export class CallService {
     const info = this.info(c);
     const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
     for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaFallback", { call: info, media, from: "mediasoup", to: "livekit" });
+    this.persistSoon();
     this.d.log?.("call media fallback", { callId: c.id, from: "mediasoup", to: "livekit" });
     return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
   }
@@ -572,6 +689,7 @@ export class CallService {
     }
     tcp.close(c.id);
     for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaRestore", { call: info, media, from: "livekit", to: "mediasoup" });
+    this.persistSoon();
     this.d.log?.("call media restore", { callId: c.id, from: "livekit", to: "mediasoup" });
     return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
   }
@@ -593,6 +711,7 @@ export class CallService {
     const c = this.get(callId, userId);
     const v = Number(acceptToAudioMs);
     if (!c || !Number.isFinite(v) || v <= 0 || v > 60_000) return { ok: false as const };
+    if (!c.audioAt) this.persistSoon();
     c.audioAt ??= this.now();
     this.metrics.acceptToAudioMs.push(Math.round(v));
     if (this.metrics.acceptToAudioMs.length > METRIC_KEEP) this.metrics.acceptToAudioMs.shift();
@@ -698,6 +817,7 @@ export class CallService {
     c.timer = null;
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
     c.tokens.clear(); // the media credential dies with the call: nothing is handed out or re-minted after this
+    this.persistSoon();
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;
     if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
     else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });
@@ -745,7 +865,7 @@ export class CallService {
           if (!c.goneSince.has(u)) {
             c.goneSince.set(u, now);
             this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_RECONNECT_GRACE_MS });
-            this.d.log?.("call peer offline", { callId: c.id, userId: u, who: u === c.callerId ? "caller" : "callee", ...(this.d.lastCloseOf?.(u) ?? {}) });
+            this.d.log?.("call peer offline", { callId: c.id, userId: u, who: u === c.callerId ? "caller" : "callee", graceMs: CALL_RECONNECT_GRACE_MS, afterRestart: !!c.restoredAt, ...(this.d.lastCloseOf?.(u) ?? {}) });
           } else if (now - c.goneSince.get(u)! > CALL_RECONNECT_GRACE_MS) lost ??= u;
           else if (!c.audioAt && now - c.goneSince.get(u)! > CALL_UNREACHABLE_MS) unreachable ??= u;
         } else if (c.goneSince.has(u)) {

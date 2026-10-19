@@ -15,9 +15,17 @@ import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { liveKitAllowed, sfuSelected } from "./sfuSelect";
 import { isBenignMediaFailure } from "./mediaLog";
+import { defaultLiveCallStore, type LiveCallStore } from "./liveStore";
 
-/** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
+/** user → last socket close (code/cause/context): proves why a caller's socket dropped on the next "call peer offline" */
 const lastClose = new Map<string, Record<string, unknown>>();
+/** Media sessions of a socket that closed during a live call are kept this long (the client reconnects and either keeps
+ *  using them or rebuilds; the call's end closes everything anyway). Before: closed instantly, so any WS blip or a
+ *  deploy's 1012 drain tore down live SFU media. */
+const MEDIA_DETACH_GRACE_MS = Number(process.env.CALL_MEDIA_DETACH_GRACE_MS || 300_000);
+let liveStoreOverride: LiveCallStore | null = null;
+/** tests: inject a store */
+export function setLiveCallStore(s: LiveCallStore | null) { liveStoreOverride = s; }
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -26,6 +34,8 @@ let svc: CallService | null = null;
 let unwatchMedia: (() => void) | null = null;
 let gateway: MediasoupGateway | null = null;
 export const calls = () => svc;
+/** SIGTERM: write live calls before exit so the next process restores them */
+export const persistCalls = () => svc?.persistNow() ?? Promise.resolve();
 const mediaGateway = () => (gateway ??= new MediasoupGateway());
 
 /** room id passed to createJoinToken / closeLiveKitRoom → LiveKit room "openlounge-call-<id>" */
@@ -86,7 +96,23 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       close: (callId) => gw.closeCall(callId),
     };
   };
+  const backendFor = (provider: string, participants: { callerId: string; calleeId: string }) =>
+    provider === "mediasoup" ? (gw.connected ? mediasoupBackend(participants) : mediasoupRestoreBackend()) : liveKitBackend();
+  // A restored mediasoup call whose gateway hasn't reconnected yet (SFU dials back within ~0.5-10 s): same backend
+  // shape, requests queue on the gateway, so calls never get pushed to LiveKit just because the app restarted.
+  const mediasoupRestoreBackend = (): CallMediaBackend => ({
+    provider: "mediasoup",
+    issue: async ({ callId, userId, ttlSec }) => {
+      const token = mintMediasoupAdmission({ callId, userId, nonce: randomUUID(), ttlSec });
+      const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
+      return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}) } : null;
+    },
+    relay: (input) => gw.request(input),
+    close: (callId) => gw.closeCall(callId),
+  });
   svc = new CallService({
+    liveStore: liveStoreOverride ?? defaultLiveCallStore(),
+    backendFor,
     lastCloseOf: (userId) => lastClose.get(userId) ?? null,
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
     isConnected: (userId) => {
@@ -127,6 +153,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     log: (msg, extra) => log.info(`[calls] ${msg}`, extra),
   });
   const cur = svc;
+  // restart survival: bring back calls that were live when the previous process stopped
+  void cur.restore().then((n) => { if (n) log.info("[calls] restored live calls after restart", { n }); });
   // The call's media credential dies with the call: anyone joining an ENDED call's LiveKit room (e.g. with a token
   // LiveKit refreshed for them during the call, valid ~10 min) is removed and the room closed. Unknown calls (app
   // server restarted mid-call) are left alone — those calls end through the clients' own call:get.
@@ -156,7 +184,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
  * `native:<userId>:<nativeConn>` (stable across page reloads) instead of the socket id. When the relaying socket closes
  * the peer is kept for NATIVE_REATTACH_MS so a reloaded page re-attaches; otherwise it is torn down as before.
  */
-export const NATIVE_REATTACH_MS = 45_000;
+export const NATIVE_REATTACH_MS = Number(process.env.CALL_NATIVE_REATTACH_MS || 300_000);
 const NATIVE_CONN = /^n_[A-Za-z0-9]{6,40}$/;
 const nativeConns = new Map<string, { userId: string; socketId: string; timer: NodeJS.Timeout | null }>();
 
@@ -218,7 +246,14 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       const live = svc?.liveCallOf(uid);
       if (live) log.info("[calls] socket closed during call", { callId: live.id, userId: uid, phase: live.phase, ...info });
     }
-    mediaGateway().closeConnection(socket.id);
+    const inLive = !!(uid && svc?.liveCallOf(uid)?.phase === "active");
+    if (inLive) {
+      // keep this socket's SFU session: the client is reconnecting (blip / network switch / deploy drain) and its WebRTC
+      // transports keep carrying audio meanwhile. Closed later only if the call is no longer live for this user.
+      const user = uid!;
+      const t = setTimeout(() => { if (svc?.liveCallOf(user)?.phase !== "active") mediaGateway().closeConnection(socket.id); }, MEDIA_DETACH_GRACE_MS);
+      t.unref?.();
+    } else mediaGateway().closeConnection(socket.id);
     if (callUser) svc?.connClosed(socket.id, callUser);
     nativeSocketClosed(socket.id, (connectionId, userId) => {
       mediaGateway().closeConnection(connectionId);
