@@ -31,7 +31,8 @@ test("#50 no blurred / gradient filler video behind the call picture", () => {
   assert.match(css, /\.stageVideo[\s\S]*object-fit: cover/);
 });
 test("#49 no poster / placeholder of any kind; last frame held on a canvas, no transition", () => {
-  assert.doesNotMatch(overlay, /poster=/);
+  // only the transparent 1x1 poster (suppresses Android WebView default play poster); never a visible image
+  assert.doesNotMatch(overlay.replace(/poster=\{NO_POSTER\}/g, ""), /poster=/);
   assert.match(overlay, /holdFrames\(el, hold\.current\)/);
   assert.match(css, /\.holdFrame[^}]*transition: none/);
   assert.match(overlay, /controls=\{false\}/);
@@ -57,4 +58,10 @@ test("ring: fallback watchdog runs for the whole ring and is cleared on stop", (
 test("call bar: symmetric insets and pushes content instead of covering it", () => {
   assert.match(css, /padding-inline: max\(16px, env\(safe-area-inset-left, 0px\), env\(safe-area-inset-right, 0px\)\)/);
   assert.match(css, /html\[data-call-bar\]\) :global\(body\) \{ padding-top: var\(--ol-callbar-h\)/);
+});
+test("Android WebView default play-poster blip: every call <video> has the transparent poster", () => {
+  const vids = overlay.match(/<video\b[^>]*>/g) ?? [];
+  assert.equal(vids.length, 3);
+  for (const v of vids) assert.match(v, /poster=\{NO_POSTER\}/);
+  assert.match(overlay, /const NO_POSTER = "data:image\/gif;base64,R0lGODlhAQABAIAAAAAAAP\/\/\/yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"/);
 });
