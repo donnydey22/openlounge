@@ -208,3 +208,6 @@
 /* Native RTCViews live below WKWebView. Hide only the existing app-shell sibling while the transparent caller-video
    overlay is full-screen, exposing RTCView beneath the unchanged page-owned controls. */
 .nativeVideoUnderlay { display: contents; visibility: hidden; pointer-events: none; }
+
+/* Always layout-neutral, so the wrapper never changes AppShell sizing on web, Android or any other pairing. */
+.appShellSlot { display: contents; }

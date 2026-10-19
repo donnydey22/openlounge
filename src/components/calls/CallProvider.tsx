@@ -187,7 +187,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <div className={nativeFullscreen ? css.nativeVideoUnderlay : undefined} aria-hidden={nativeFullscreen || undefined}>{children}</div>
+      <div className={nativeFullscreen ? `${css.appShellSlot} ${css.nativeVideoUnderlay}` : css.appShellSlot} aria-hidden={nativeFullscreen || undefined}>{children}</div>
       {s.ui && <CallOverlay />}
     </>
   );
