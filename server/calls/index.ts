@@ -139,6 +139,10 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   });
   metrics.gauge("calls_live", () => cur.stats().live);
   metrics.gauge("calls_accept_to_audio_p50_ms", () => cur.stats().acceptToAudio.p50 ?? 0);
+  metrics.gauge("calls_quality_two_way_total", () => cur.stats().quality["two-way"]);
+  metrics.gauge("calls_quality_one_way_total", () => cur.stats().quality["one-way"]);
+  metrics.gauge("calls_quality_no_audio_total", () => cur.stats().quality["no-audio"]);
+  metrics.gauge("calls_quality_no_data_total", () => cur.stats().quality["no-data"]);
   return svc;
 }
 
@@ -238,6 +242,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       const extra: Record<string, string> = {};
       for (const [k, v] of Object.entries(d ?? {}).slice(0, 12)) if (k !== "callId" && k !== "ev") { const sv = str(v); if (sv !== undefined) extra[k.slice(0, 24)] = sv; }
       log.info("[calls] client diag", { callId: str(d?.callId, 36), user: uid.slice(0, 12), ev: str(d?.ev, 40), ...extra });
+      if (d?.ev === "audio-levels") s().qualitySample(d?.callId, uid, d as Record<string, unknown>); // server-side quality (service.ts)
       // A client still reporting on a call the server already ended (d8d7eded: the iPhone kept "connecting" 9 s past
       // the end and missed the next call 51c135b3) gets the ended state again, once per call per socket.
       const ended = s().endedFor(d?.callId, uid);

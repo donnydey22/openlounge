@@ -56,6 +56,13 @@ export const CALL_TOKEN_TTL_S = num("CALL_TOKEN_TTL_S", 180);
 const ENDED_KEEP_MS = 12 * 60_000;
 const METRIC_KEEP = 500;
 
+/** one 5 s audio report from a participant's client (what THEY receive / send) */
+export interface QualitySample { inKbps: number | null; outKbps: number | null; concealPct: number | null; }
+export type QualityVerdict = "two-way" | "one-way" | "no-audio" | "no-data";
+/** inbound Opus below this (kbps) counts as "receiving nothing" (DTX silence is ~1 kbps; speech 20–40) */
+const QUALITY_SILENT_KBPS = 2;
+const QUALITY_MAX_SAMPLES = 720; // 1 h of 5 s reports per participant
+
 export interface CallDeps {
   emitUser(userId: string, ev: string, data: unknown): void;
   /** does the user have any open (authenticated) socket? */
@@ -118,6 +125,8 @@ interface CallRec {
   orphanSince: number | null;
   /** active call: when each participant lost their last socket (reconnect grace) */
   goneSince: Map<string, number>;
+  /** server-side quality: per participant, samples from the client's 5 s audio-levels report (call:diag) */
+  quality?: Map<string, QualitySample[]>;
   /** first audio reported by either participant (call:metric) */
   audioAt?: number | null;
   /** per participant: when their last in-call connection closed while they stayed online elsewhere */
@@ -136,6 +145,7 @@ export class CallService {
   private live = new Map<string, string>();
   private rate = new Map<string, number[]>();
   private metrics: { acceptToAudioMs: number[]; ringMs: number[] } = { acceptToAudioMs: [], ringMs: [] };
+  private verdicts: Record<QualityVerdict, number> = { "two-way": 0, "one-way": 0, "no-audio": 0, "no-data": 0 };
   private sweeper: NodeJS.Timeout;
 
   constructor(private d: CallDeps) {
@@ -561,6 +571,65 @@ export class CallService {
     return { ok: true as const };
   }
 
+  /**
+   * Server-side quality verification (no reliance on user reports): the clients already send an audio-levels report every
+   * 5 s during a connected call (call:diag). Keep the numbers per participant; finish() turns them into a per-call
+   * verdict + summary line ("call quality") and /metrics counters. Never affects the call itself.
+   */
+  qualitySample(callId: unknown, userId: string, r: Record<string, unknown>) {
+    const c = this.get(callId, userId);
+    if (!c || c.phase !== "active") return false;
+    const n = (x: unknown) => {
+      if (x === "" || x === null || x === undefined) return null;
+      const v = Number(x);
+      return Number.isFinite(v) && v >= 0 && v < 100_000 ? v : null;
+    };
+    const sample: QualitySample = { inKbps: n(r.inKbps), outKbps: n(r.outKbps), concealPct: n(r.concealPct) };
+    if (sample.inKbps === null && sample.outKbps === null) return false;
+    c.quality ??= new Map();
+    const arr = c.quality.get(userId) ?? [];
+    arr.push(sample);
+    if (arr.length > QUALITY_MAX_SAMPLES) arr.shift();
+    c.quality.set(userId, arr);
+    return true;
+  }
+
+  /** summary of what one participant RECEIVED (null = no reports from them) */
+  private static summarize(arr: QualitySample[] | undefined) {
+    const vals = (k: keyof QualitySample) => (arr ?? []).map((x) => x[k]).filter((v): v is number => v !== null);
+    const med = (a: number[]) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
+    const inK = vals("inKbps");
+    if (!arr?.length) return null;
+    const silent = inK.filter((v) => v < QUALITY_SILENT_KBPS).length;
+    return {
+      samples: arr.length,
+      inKbpsMedian: med(inK),
+      outKbpsMedian: med(vals("outKbps")),
+      concealPctMedian: med(vals("concealPct")),
+      silentInPct: inK.length ? Math.round((silent / inK.length) * 100) : null,
+      hears: inK.length ? (med(inK) ?? 0) >= QUALITY_SILENT_KBPS : null,
+    };
+  }
+
+  /** verdict for a finished call from both sides' reports */
+  static qualityOf(caller: ReturnType<typeof CallService.summarize>, callee: ReturnType<typeof CallService.summarize>): QualityVerdict {
+    const h = [caller?.hears, callee?.hears].filter((x): x is boolean => typeof x === "boolean");
+    if (!h.length) return "no-data";
+    if (h.length === 2) return h[0] && h[1] ? "two-way" : h[0] || h[1] ? "one-way" : "no-audio";
+    return h[0] ? "two-way" : "one-way"; // only one side reported: its own direction decides
+  }
+
+  private reportQuality(c: CallRec, durationSec: number) {
+    if (!c.answeredAt) return;
+    const caller = CallService.summarize(c.quality?.get(c.callerId));
+    const callee = CallService.summarize(c.quality?.get(c.calleeId));
+    // no reports at all from a very short call is expected (first report is at 5 s): don't count it as a failure
+    if (!caller && !callee && durationSec < 10) return;
+    const verdict = CallService.qualityOf(caller, callee);
+    this.verdicts[verdict]++;
+    this.d.log?.("call quality", { callId: c.id, verdict, durationSec, caller, callee, backend: c.backend.provider });
+  }
+
   stats() {
     const pct = (a: number[], p: number) => {
       if (!a.length) return null;
@@ -572,6 +641,7 @@ export class CallService {
       live: [...this.calls.values()].filter((c) => c.phase !== "ended").length,
       acceptToAudio: { n: a.length, p50: pct(a, 50), p95: pct(a, 95) },
       ringAck: { n: this.metrics.ringMs.length, p50: pct(this.metrics.ringMs, 50) },
+      quality: { ...this.verdicts },
     };
   }
 
@@ -605,6 +675,11 @@ export class CallService {
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
     c.backend.close(c.id);
     this.d.appendCallMessage({ id: c.id, callerId: c.callerId, video: c.everVideo, outcome, durationSec }, c.calleeId);
+    try {
+      this.reportQuality(c, durationSec);
+    } catch {
+      /* telemetry only */
+    }
     this.d.log?.("call end", { callId: c.id, outcome, durationSec, by: opts.by === c.callerId ? "caller" : opts.by === c.calleeId ? "callee" : (opts.by ?? null), reason: opts.reason ?? null });
   }
 
