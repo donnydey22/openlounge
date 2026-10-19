@@ -116,6 +116,8 @@ interface CallRec {
   answeredAt: number | null;
   /** socket that answered (multi-device first-accept-wins) */
   answeredConn?: string | null;
+  /** platform the answering device reported on accept ("ios" | "android" | "web"); absent = unknown */
+  calleePlatform?: "ios" | "android" | "web";
   endedAt: number | null;
   outcome: CallOutcome | null;
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
@@ -236,6 +238,7 @@ export class CallService {
       caller: this.d.peer(c.callerId) ?? anon(c.callerId),
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
       ...(c.goneSince?.size ? { offline: [...c.goneSince.keys()] } : {}),
+      ...(c.calleePlatform ? { calleePlatform: c.calleePlatform } : {}),
     };
   }
 
@@ -459,7 +462,7 @@ export class CallService {
     return { ok: true as const, call: this.info(c) };
   }
 
-  async accept(callId: unknown, userId: string, connId?: string) {
+  async accept(callId: unknown, userId: string, connId?: string, platform?: unknown) {
     const c = this.get(callId, userId);
     if (!c || c.calleeId !== userId) return { ok: false as const, error: "No such call", reason: "unknown" };
     if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
@@ -472,6 +475,7 @@ export class CallService {
     if (c.phase !== "active") {
       c.phase = "active";
       c.answeredConn = connId ?? null;
+      if (platform === "ios" || platform === "android" || platform === "web") c.calleePlatform = platform;
       c.answeredAt = this.now();
       if (c.timer) clearTimeout(c.timer);
       c.timer = null;

@@ -234,6 +234,8 @@ export interface CallInfo {
   callee: CallPeer;
   /** active call: participants currently without a connection (inside the reconnect grace) */
   offline?: string[];
+  /** platform the answering device reported on accept; absent = unknown (iOS mic re-acquire gate) */
+  calleePlatform?: "ios" | "android" | "web";
 }
 /** A public, short-lived TURN credential handed to an authenticated call participant. */
 export interface TurnIceServer {
@@ -251,6 +253,8 @@ export interface TurnIceServer {
 export interface CallMedia {
   /** server opt-in (CALL_ANDROID_NATIVE=on): Android app may use app-owned native media; absent = WebView baseline */
   androidNative?: boolean;
+  /** server opt-in (CALL_IOS_MIC_REACQUIRE=on): iOS app may re-acquire a silent mic on video calls it places to Android */
+  iosMicReacquire?: boolean;
   provider: "livekit" | "mediasoup";
   /** LiveKit signalling URL, or the opaque "broker" label for Mediasoup (never a browser control endpoint). */
   url: string;

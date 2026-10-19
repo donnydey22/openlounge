@@ -18,6 +18,12 @@ export function liveKitAllowed(env: Record<string, string | undefined> = process
 
 /** CALL_ANDROID_NATIVE=on opts Android app builds into native (app-owned) call media. Default OFF: Android uses the
  *  WebView media path that was live and working before 1:37 PM MST Oct 17 (a8a754e) — the known-good baseline. */
+/** CALL_IOS_MIC_REACQUIRE=on lets the iOS app re-acquire a silent WebView mic on video calls it places to an Android
+ *  phone (grant field iosMicReacquire). Default OFF: absent / anything else = unchanged behaviour. */
+export function iosMicReacquireEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.CALL_IOS_MIC_REACQUIRE === "on";
+}
+
 export function androidNativeEnabled(env: Record<string, string | undefined> = process.env): boolean {
   return env.CALL_ANDROID_NATIVE === "on";
 }
