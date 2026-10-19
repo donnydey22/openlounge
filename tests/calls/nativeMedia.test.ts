@@ -99,6 +99,21 @@ test("engine: a granted iPhone video call latches native ownership and permanent
   assert.doesNotMatch(src, /iosNativeVideoToWebView|iosNativeVideoWebFallbackCall/);
 });
 
+test("native iPhone video reuses the existing call overlay above a suppressed app-shell raster", () => {
+  const overlay = readFileSync(new URL("../../src/components/calls/CallOverlay.tsx", import.meta.url), "utf8");
+  const provider = readFileSync(new URL("../../src/components/calls/CallProvider.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../../src/components/calls/calls.module.css", import.meta.url), "utf8");
+  assert.match(provider, /const nativeFullscreen = s\.nativeVideo && !s\.minimized/);
+  assert.match(provider, /s\.ui === "connecting" \|\| s\.ui === "active"/);
+  assert.match(provider, /s\.remoteCam \|\| s\.camOn/);
+  assert.match(provider, /css\.nativeVideoUnderlay/);
+  assert.match(overlay, /const nativeFullscreen = s\.nativeVideo && !s\.minimized/);
+  assert.match(overlay, /nativeFullscreen && css\.nativeVideoScreen/);
+  assert.doesNotMatch(overlay, /createPortal|data-ol-native-video-call/);
+  assert.match(styles, /\.nativeVideoUnderlay \{ display: contents; visibility: hidden; pointer-events: none; \}/);
+  assert.match(styles, /\.nativeVideoScreen, \.nativeVideoScreen \.videoStage, \.nativeVideoScreen \.pip \{ background: transparent !important; \}/);
+});
+
 test("native media: only an explicit iPhone video grant adds video fields and the shared msid to the app command", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];

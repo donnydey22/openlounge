@@ -204,3 +204,7 @@
 /* App-owned iPhone video is rendered below a transparent WKWebView. The DOM retains its controls, gestures, and exact tile geometry but contributes no video pixels. */
 .nativeVideoScreen, .nativeVideoScreen .videoStage, .nativeVideoScreen .pip { background: transparent !important; }
 .nativeVideoScreen .stageVideo, .nativeVideoScreen .stageBackdrop, .nativeVideoScreen .pip video, .nativeVideoScreen .pip canvas { visibility: hidden; }
+
+/* Native RTCViews live below WKWebView. Hide only the existing app-shell sibling while the transparent caller-video
+   overlay is full-screen, exposing RTCView beneath the unchanged page-owned controls. */
+.nativeVideoUnderlay { display: contents; visibility: hidden; pointer-events: none; }

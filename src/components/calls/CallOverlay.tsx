@@ -428,9 +428,10 @@ export function CallOverlay() {
   if (s.minimized && s.ui !== "incoming" && s.ui !== "ended") return <MiniBar s={s} />;
   const p = peerOf(s);
   const ringing = s.ui === "outgoing" || s.ui === "incoming";
+  const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && video;
 
   return (
-    <div className={cn(css.screen, s.nativeVideo && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
+    <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
       {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
       {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
 

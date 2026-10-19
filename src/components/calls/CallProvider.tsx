@@ -13,6 +13,7 @@ import { appVisible, NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT } from "@/lib/re
 import { native } from "@/lib/native";
 import { checkMediaPermissionsSilently } from "@/lib/calls/permissions";
 import { useCall } from "./useCall";
+import css from "./calls.module.css";
 
 // the call UI (and livekit-client inside the engine's dynamic import) only loads when a call exists
 const CallOverlay = dynamic(() => import("./CallOverlay").then((m) => m.CallOverlay), { ssr: false });
@@ -35,6 +36,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const s = useCall();
   const meId = me?.id ?? null;
   const lastIncomingNative = useRef<string | null>(null);
+  // Only the server-granted caller-native-video path needs a transparent WebView. Voice, Android, web, minimized,
+  // and camera-off calls retain their existing page/compositor behavior.
+  const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && (s.remoteCam || s.camOn);
 
   useEffect(() => {
     callEngine?.bind(socket, meId);
@@ -183,7 +187,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {children}
+      <div className={nativeFullscreen ? css.nativeVideoUnderlay : undefined} aria-hidden={nativeFullscreen || undefined}>{children}</div>
       {s.ui && <CallOverlay />}
     </>
   );
