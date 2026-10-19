@@ -200,3 +200,7 @@
 .callVideo::-webkit-media-controls-start-playback-button { display: none !important; -webkit-appearance: none; }
 /* last-frame hold: shown/hidden instantly by frameHold.ts (no transition → no flash) */
 .holdFrame { z-index: 2; visibility: hidden; transition: none !important; animation: none !important; pointer-events: none; }
+
+/* App-owned iPhone video is rendered below a transparent WKWebView. The DOM retains its controls, gestures, and exact tile geometry but contributes no video pixels. */
+.nativeVideoScreen, .nativeVideoScreen .videoStage, .nativeVideoScreen .pip { background: transparent !important; }
+.nativeVideoScreen .stageVideo, .nativeVideoScreen .stageBackdrop, .nativeVideoScreen .pip video, .nativeVideoScreen .pip canvas { visibility: hidden; }

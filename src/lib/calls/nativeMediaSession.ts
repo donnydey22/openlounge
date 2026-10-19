@@ -160,11 +160,14 @@ export class NativeMediaSession {
       onRemoteTrack(track: MediasoupRemoteTrack): void;
       onState(state: "connected" | "disconnected" | "failed"): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
+      onCameraUnavailable?(): void;
       tcpOnly?: boolean;
       /** force fresh native transports (outage recovery) instead of re-attaching to the live session */
       rebuild?: boolean;
       /** LiveKit credentials carry no callId */
       callId?: string;
+      /** Explicit msid shared by this caller's audio and camera producers. */
+      streamId?: string;
       /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
       onWantsLiveKit?(reason: string): void;
       /** timing of each native step (relayed ms:* request, connect) for diagnostics */
@@ -185,7 +188,8 @@ export class NativeMediaSession {
       this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
       return;
     }
-    if (s === "connected") {
+    if (s === "camera-unavailable") this.opts.onCameraUnavailable?.();
+    else if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
     } else if (s === "disconnected" || s === "failed") this.opts.onState(s);
   };
@@ -225,7 +229,7 @@ export class NativeMediaSession {
   async connect(withVideo: boolean) {
     const t0 = Date.now();
     try {
-      await this.connectInner();
+      await this.connectInner(withVideo);
       this.step("connect", t0, true);
     } catch (e) {
       this.step("connect", t0, false, String((e as Error)?.message ?? e));
@@ -233,7 +237,7 @@ export class NativeMediaSession {
     }
   }
 
-  private async connectInner() {
+  private async connectInner(withVideo: boolean) {
     const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"] };
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
@@ -244,7 +248,7 @@ export class NativeMediaSession {
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
     if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [], video: withVideo, nativeVideo: m.iosNativeVideo === true });
-    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], video: withVideo, nativeVideo: m.iosNativeVideo === true, tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
+    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], video: withVideo, nativeVideo: m.iosNativeVideo === true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }

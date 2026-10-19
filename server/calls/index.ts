@@ -257,8 +257,13 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, platform, nativeVideo === true && iosNativeVideoEligible)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
-  socket.on("call:accept", ({ callId }: { callId: string }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void ((callUser = uid), s().accept(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
+  // Keep the established client platform field for accept: legacy Android wrappers use OpenLoungeAndroid/ rather
+  // than the newer server-observed UA marker. The observed platform is used only for iOS native-video grants at start.
+  socket.on("call:accept", ({ callId, platform: clientPlatform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const acceptedPlatform: ObservedPlatform = clientPlatform === "ios" || clientPlatform === "android" ? clientPlatform : "web";
+      void ((callUser = uid), s().accept(callId, uid, socket.id, acceptedPlatform)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }));
+    }),
   );
   socket.on("call:decline", ({ callId, message }: { callId: string; message?: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
