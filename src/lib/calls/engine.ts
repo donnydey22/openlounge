@@ -206,6 +206,8 @@ export class CallEngine {
   /** Server-authoritative opt-in, refreshed after socket authentication and before a caller taps Video. False is safe. */
   private iosNativeVideoAvailable = false;
   private iosNativeVideoCapabilityUser: string | null = null;
+  /** A paired iPhone-video dial has reserved camera ownership before its per-call grant returns. */
+  private iosNativeVideoCaptureFenced = false;
   private metricSent = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
@@ -449,6 +451,7 @@ export class CallEngine {
     // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
     this.deferNativeConnect = false;
     const deferIosVideoCapture = video && nativePlatform() === "ios" && nativeVideoAvailable() && this.iosNativeVideoAvailable;
+    this.iosNativeVideoCaptureFenced = deferIosVideoCapture;
     if (deferIosVideoCapture) {
       // The server grants app-owned video only after call:start. Do not let WKWebView seize the microphone at tap
       // time: CallKit will activate the native session shortly after this and WebKit cannot reliably recover it.
@@ -476,6 +479,7 @@ export class CallEngine {
         this.endWith(r.call ?? optimistic, `${peer.name.split(" ")[0]} is on another call`, true);
       } else {
         this.teardownMedia();
+        this.iosNativeVideoCaptureFenced = false;
         this.set({ ...initial(), error: r.error ?? "Couldn't start the call", v: this.s.v + 1 });
       }
       return { ok: false, error: r.error };
@@ -502,6 +506,7 @@ export class CallEngine {
     // A default-off or unsupported server response remains on the WebView baseline, but capture begins only before
     // call:outgoing asks CallKit to activate. A granted iOS native-video call never invokes page getUserMedia.
     if (deferIosVideoCapture && !this.media?.iosNativeVideo) {
+      this.iosNativeVideoCaptureFenced = false;
       this.preMic = this.acquireMic();
       const camera = this.ensureCamPreview();
       // Fail closed to the established page path before CallKit can activate. This rare case occurs only when the
@@ -799,7 +804,7 @@ export class CallEngine {
   }
 
   private async ensureCamPreview() {
-    if (this.iosNativeVideoOwnsCamera()) return null;
+    if (this.iosNativeVideoCaptureFenced || this.iosNativeVideoOwnsCamera()) return null;
     if (this.camTrack) return this.camTrack;
     try {
       const LK = await loadLK();
@@ -1713,6 +1718,7 @@ export class CallEngine {
     const media = this.media;
     if (!callId || !this.busy || this.iosNativeVideoWebFallbackCall === callId || !this.iosNativeVideoOwnsCamera() || !media) return;
     this.iosNativeVideoWebFallbackCall = callId;
+    this.iosNativeVideoCaptureFenced = false;
     this.diag("ios-native-video-fallback-webview", { reason: reason.slice(0, 160) });
     this.dropMediaForRejoin(); // closes app-owned mic/camera before the page reconnects
     this.media = { ...media, iosNativeVideo: false };
@@ -2274,6 +2280,7 @@ export class CallEngine {
     this.audioEls = [];
     document.querySelectorAll("[data-ol-call-audio]").forEach((el) => el.remove());
     this.media = null;
+    this.iosNativeVideoCaptureFenced = false;
     this.acceptedHere = false;
     this.acceptT0 = 0;
     this.metricSent = false;
@@ -2306,7 +2313,7 @@ export class CallEngine {
     const on = !this.s.camOn;
     buzz("light");
     const call = this.s.call;
-    if (!this.mediasoup && this.iosNativeVideoOwnsCamera()) {
+    if (!this.mediasoup && (this.iosNativeVideoCaptureFenced || this.iosNativeVideoOwnsCamera())) {
       this.set({ camOn: on, videoInvite: false });
       if (call?.id) void this.req("call:video", { callId: call.id, on }).catch(() => {});
       return;

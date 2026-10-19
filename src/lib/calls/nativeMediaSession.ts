@@ -276,8 +276,9 @@ export class NativeMediaSession {
   }
   async enableCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user" }); }
   async disableCamera() { await nativeMediaCmd({ op: "camera", on: false }); }
-  async refreshCameraQuality(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user", refresh: true }).catch(() => {}); }
-  async flipCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user", refresh: true }); }
+  /** Native keeps its sensor-oriented capture; adaptive constraints must not restart a live camera. */
+  async refreshCameraQuality() { return false; }
+  async flipCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user" }); }
 
   close() {
     if (this.closed) return;

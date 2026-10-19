@@ -324,7 +324,10 @@ test("iPhone paired-video path: one explicit msid, fenced page camera, deferred 
   assert.match(bridge, /connectInner\(withVideo: boolean\)/);
   assert.match(bridge, /streamId: this\.opts\.streamId/);
   assert.match(src, /iosNativeVideoOwnsCamera\(\)/);
-  assert.match(src, /if \(this\.iosNativeVideoOwnsCamera\(\)\) return null;/);
+  assert.match(src, /if \(this\.iosNativeVideoCaptureFenced \|\| this\.iosNativeVideoOwnsCamera\(\)\) return null;/);
+  assert.match(src, /if \(!this\.mediasoup && \(this\.iosNativeVideoCaptureFenced \|\| this\.iosNativeVideoOwnsCamera\(\)\)\)/);
   assert.match(src, /iosNativeVideoToWebView[\s\S]*iosNativeVideo: false/);
   assert.match(src, /if \(this\.media\?\.iosNativeVideo\) this\.deferNativeConnect/);
+  assert.match(bridge, /async refreshCameraQuality\(\) \{ return false; \}/);
+  assert.doesNotMatch(bridge, /refresh: true/, "network adaptation must not restart a native iPhone camera");
 });
