@@ -15,6 +15,10 @@ import css from "./calls.module.css";
 
 const QUICK_REPLIES = ["Can't talk now. What's up?", "I'll call you right back.", "I'll call you later.", "Can't talk now. Call me later?"];
 
+// Transparent 1x1 GIF. Without a poster, Android WebView paints its default gray "play" poster until the first
+// frame decodes (~1 s blip). A transparent poster suppresses that; nothing is ever visible.
+const NO_POSTER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
 function useTicker(on: boolean) {
   const [, set] = useState(0);
   useEffect(() => {
@@ -188,7 +192,7 @@ function Pip({ which, onSwap, mirrored }: { which: "local" | "remote"; onSwap: (
         setDrag(null);
       }}
     >
-      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn("relative z-[1] h-full w-full object-contain", css.callVideo)} style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} data-testid={`call-pip-video-${which}`} />
+      <video ref={vid} autoPlay playsInline muted poster={NO_POSTER} controls={false} disablePictureInPicture className={cn("relative z-[1] h-full w-full object-contain", css.callVideo)} style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} data-testid={`call-pip-video-${which}`} />
       <canvas ref={hold} aria-hidden className={cn("pointer-events-none absolute inset-0 z-[2] h-full w-full object-contain", css.holdFrame)} style={{ transform: `${mirrored ? "scaleX(-1) " : ""}translateZ(0)` }} data-testid={`call-pip-hold-${which}`} />
     </div>
   );
@@ -213,8 +217,8 @@ function BigVideo({ which, mirrored }: { which: "local" | "remote"; mirrored: bo
   const flip = mirrored ? "-scale-x-100" : undefined;
   return (
     <div className={css.videoStage} data-testid="call-video-stage">
-      <video ref={back} aria-hidden autoPlay playsInline muted controls={false} disablePictureInPicture tabIndex={-1} className={cn(css.stageBackdrop, flip)} data-testid={`call-backdrop-${which}`} />
-      <video ref={vid} autoPlay playsInline muted controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ zIndex: 1 }} data-testid={`call-video-${which}`} />
+      <video ref={back} aria-hidden autoPlay playsInline muted poster={NO_POSTER} controls={false} disablePictureInPicture tabIndex={-1} className={cn(css.stageBackdrop, flip)} data-testid={`call-backdrop-${which}`} />
+      <video ref={vid} autoPlay playsInline muted poster={NO_POSTER} controls={false} disablePictureInPicture className={cn(css.stageVideo, css.callVideo, flip)} style={{ zIndex: 1 }} data-testid={`call-video-${which}`} />
       <canvas ref={hold} aria-hidden className={cn(css.stageVideo, css.holdFrame, flip)} data-testid={`call-hold-${which}`} />
     </div>
   );
