@@ -41,6 +41,8 @@ export const CALL_UNREACHABLE_MS = num("CALL_UNREACHABLE_MS", 10_000);
 /** Active call where one side is still online (other tab/device/socket) but no connection of theirs is in the call
  *  any more (call page closed, app killed while a chat socket lingers): end it so it can't block every new call. */
 export const CALL_DETACHED_MS = num("CALL_DETACHED_MS", 60_000);
+/** detached this long (≥ one sweep after detection) → the other side is told "reconnecting" */
+export const CALL_DETACHED_NOTICE_MS = num("CALL_DETACHED_NOTICE_MS", 5_000);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 /**
  * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
@@ -122,6 +124,8 @@ interface CallRec {
   audioAt?: number | null;
   /** per participant: when their last in-call connection closed while they stayed online elsewhere */
   detachedSince?: Map<string, number>;
+  /** participants whose detachment the other side was told about (call:peer online:false, detached) */
+  detachedNotified?: Set<string>;
   /** connections (socket ids) that are actually in this call per participant: bound by start/accept/get/media, dropped on close */
   conns: Map<string, Set<string>>;
 }
@@ -654,11 +658,26 @@ export class CallService {
       }
       for (const u of [c.callerId, c.calleeId]) {
         const set = c.conns.get(u);
+        const other = u === c.callerId ? c.calleeId : c.callerId;
         if (set && set.size === 0 && this.d.isConnected(u)) {
           if (!c.detachedSince) c.detachedSince = new Map();
           if (!c.detachedSince.has(u)) c.detachedSince.set(u, now);
           else if (now - c.detachedSince.get(u)! > CALL_DETACHED_MS) lost ??= u;
-        } else c.detachedSince?.delete(u);
+          else if (!c.detachedNotified?.has(u) && now - c.detachedSince.get(u)! >= CALL_DETACHED_NOTICE_MS) {
+            // Still online but no connection in the call (page reload / WebView restart that hasn't re-joined yet):
+            // tell the other side, like a socket drop, so it can show "Reconnecting…" (the client only shows it when
+            // its own media has stalled) instead of silent dead air until CALL_DETACHED_MS.
+            (c.detachedNotified ??= new Set()).add(u);
+            this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: false, graceMs: CALL_DETACHED_MS, detached: true });
+            this.d.log?.("call peer detached", { callId: c.id });
+          }
+        } else {
+          if (c.detachedNotified?.delete(u)) {
+            this.d.log?.("call peer reattached", { callId: c.id, detachedMs: now - (c.detachedSince?.get(u) ?? now) });
+            if (this.d.isConnected(u)) this.d.emitUser(other, "call:peer", { callId: c.id, userId: u, online: true });
+          }
+          c.detachedSince?.delete(u);
+        }
       }
       if (lost) {
         this.d.log?.("call detached", { callId: c.id });
