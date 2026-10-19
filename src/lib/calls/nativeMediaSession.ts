@@ -37,9 +37,69 @@ export function androidAppBuild(ua: string = typeof navigator !== "undefined" ? 
   return m ? Number(m[1]) : null;
 }
 
-/** A native failure on Android turns native media off for the rest of this page session (WebView path from then on). */
+/**
+ * Android baseline moat (Donny, Oct 18). The WebView media path that was live before 1:37 PM MST Oct 17 (a8a754e) is the
+ * DEFAULT for the Android app. Native (app-owned) media is opt-in only, and needs all of:
+ *   1. server opt-in: the last mediasoup grant carried androidNative:true (CALL_ANDROID_NATIVE=on), remembered on device
+ *      so the next call can pre-warm while it rings;
+ *   2. app build >= 34;
+ *   3. device health guard: no native failure on this device in the last ANDROID_NATIVE_COOLDOWN_MS;
+ *   4. no native failure in this page session.
+ * Any native failure drops the SAME call to the baseline path and trips the device guard.
+ */
+const OPT_IN_KEY = "ol.calls.androidNative.optIn";
+const FAIL_KEY = "ol.calls.androidNative.failedAt";
+export const ANDROID_NATIVE_COOLDOWN_MS = 7 * 24 * 3600_000;
+function store(): Storage | null {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+let androidOptIn: boolean | null = null;
+/** record the server's opt-in from a media grant (false clears it: server kill switch wins on the next grant) */
+export function noteAndroidNativeOptIn(on: boolean) {
+  androidOptIn = on;
+  try {
+    if (on) store()?.setItem(OPT_IN_KEY, "1");
+    else store()?.removeItem(OPT_IN_KEY);
+  } catch {
+    /* storage unavailable: memory only */
+  }
+}
+export function androidNativeOptedIn(): boolean {
+  if (androidOptIn !== null) return androidOptIn;
+  try {
+    return store()?.getItem(OPT_IN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+/** device health guard: a recent native failure on this device keeps it on the baseline path */
+let failedAtMem = 0;
+export function androidNativeHealthy(now = Date.now()): boolean {
+  try {
+    const at = Math.max(failedAtMem, Number(store()?.getItem(FAIL_KEY) ?? 0));
+    return !at || now - at > ANDROID_NATIVE_COOLDOWN_MS;
+  } catch {
+    return true;
+  }
+}
+
+/** A native failure on Android turns native media off for this page session AND trips the device health guard. */
 export function disableAndroidNativeMedia(reason: string) {
   androidNativeOff = reason || "failed";
+  failedAtMem = Date.now();
+  try {
+    store()?.setItem(FAIL_KEY, String(Date.now()));
+  } catch {
+    /* memory-only guard */
+  }
+}
+/** test hook: simulate a fresh page load (session flag cleared, device guard kept) */
+export function newAndroidPageSession() {
+  androidNativeOff = null;
 }
 export function androidNativeDisabledReason(): string | null {
   return androidNativeOff;
@@ -47,15 +107,21 @@ export function androidNativeDisabledReason(): string | null {
 /** test hook */
 export function resetAndroidNativeMedia() {
   androidNativeOff = null;
+  androidOptIn = null;
+  failedAtMem = 0;
+  try {
+    store()?.removeItem(OPT_IN_KEY);
+    store()?.removeItem(FAIL_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
-/** Audio-only calls in the native-media iOS app, and Android app 0.3.18+ (build 34), use app-owned media. */
+/** Audio-only calls in the native-media iOS app use app-owned media; Android only when opted in (see above). */
 export function useNativeMedia(video: boolean): boolean {
   if (video || !nativeMediaAvailable()) return false;
   if (!nativeMediaIsAndroid()) return true;
-  // Android (Oct 17): builds <= 33 failed native Device.load on real phones, so they stay on the WebView media path.
-  // 0.3.18 (34) carries the fix; any native failure there drops this page session back to the WebView path.
-  return androidNativeOff === null && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
+  return androidNativeOff === null && androidNativeOptedIn() && androidNativeHealthy() && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
 }
 
 /** Android app (0.3.16+ shim sets platform:'android'); the iOS bridge carries no platform */
@@ -89,6 +155,8 @@ export class NativeMediaSession {
       callId?: string;
       /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
       onWantsLiveKit?(reason: string): void;
+      /** timing of each native step (relayed ms:* request, connect) for diagnostics */
+      onStep?(step: { event: string; ms: number; ok: boolean; error?: string }): void;
     },
   ) {
   }
@@ -116,13 +184,41 @@ export class NativeMediaSession {
       b.msReply(id, false, null, "relay refused");
       return;
     }
+    const t0 = Date.now();
+    const method = typeof data.method === "string" ? `${event}:${data.method}` : event;
     this.socket.request(event, data, 8_000).then(
-      (r) => b.msReply?.(id, true, r ?? null),
-      (err: unknown) => b.msReply?.(id, false, null, String((err as Error)?.message ?? err)),
+      (r) => {
+        this.step(method, t0, true);
+        b.msReply?.(id, true, r ?? null);
+      },
+      (err: unknown) => {
+        const msg = String((err as Error)?.message ?? err);
+        this.step(method, t0, false, msg);
+        b.msReply?.(id, false, null, msg);
+      },
     );
   };
 
+  private step(event: string, t0: number, ok: boolean, error?: string) {
+    try {
+      this.opts.onStep?.({ event, ms: Date.now() - t0, ok, ...(error ? { error: error.slice(0, 120) } : {}) });
+    } catch {
+      /* diagnostics only */
+    }
+  }
+
   async connect(_withVideo: boolean) {
+    const t0 = Date.now();
+    try {
+      await this.connectInner();
+      this.step("connect", t0, true);
+    } catch (e) {
+      this.step("connect", t0, false, String((e as Error)?.message ?? e));
+      throw e;
+    }
+  }
+
+  private async connectInner() {
     const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"] };
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
