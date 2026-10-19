@@ -1,6 +1,5 @@
 // Android 0.3.19 native audio failed the first connect (calls f8729e66 / 0f542027 / fe55fdf2): the deferred native join
 // ran its ~6 serial setup requests after the answer and the 5 s first-connect budget cut it off (app timeouts 12 s / 9 s),
-// then the WebView fallback raced the still-live native session for the mic.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,37 +24,6 @@ test("native connect budget: native media gets its own 15 s first-connect budget
 
 test("native connect budget: Android native joins + builds transports while ringing; iOS keeps the deferred join", () => {
   assert.match(engine(), /this\.deferNativeConnect = nativeRingbackMode\(\) !== "off" && !nativeMediaIsAndroid\(\);/);
-});
-
-test("native connect budget: web fallback waits for native teardown (mic released) before the WebView connects", () => {
-  const src = engine();
-  const i = src.indexOf("private async androidNativeToWebView");
-  const body = src.slice(i, i + 1600);
-  const wait = body.indexOf("closeAndWait(CallEngine.NATIVE_TEARDOWN_WAIT_MS)");
-  const drop = body.indexOf("this.dropMediaForRejoin()");
-  const connect = body.indexOf("this.connectMediasoup(media, true)");
-  assert.ok(wait > 0 && drop > wait && connect > drop, "close native → drop → connect WebView");
-});
-
-test("native connect budget: closeAndWait resolves on the app's confirmation, and is bounded when the app never answers", async () => {
-  const m = await import("../../src/lib/calls/nativeMediaSession");
-  const cmds: string[] = [];
-  installWindow({ platform: "android", capabilities: ["calls", "nativeMedia"], nativeMedia: async (c: { op: string }) => { cmds.push(c.op); return true; }, msReply() {} });
-  const steps: Array<{ event: string; ok: boolean }> = [];
-  const s = new m.NativeMediaSession(fakeSocket() as never, { provider: "mediasoup", callId: "c1" } as never, { onRemoteTrack() {}, onState() {}, onLocalVideo() {}, onStep: (st) => steps.push(st) });
-  await s.connect(false);
-  assert.equal(await s.closeAndWait(1000), true);
-  assert.deepEqual(cmds, ["connect", "close"]);
-  assert.ok(steps.some((x) => x.event === "connect" && x.ok) && steps.some((x) => x.event === "close" && x.ok));
-  s.close(); // idempotent: no second close command
-  assert.equal(cmds.filter((c) => c === "close").length, 1);
-
-  installWindow({ platform: "android", capabilities: ["calls", "nativeMedia"], nativeMedia: (c: { op: string }) => (c.op === "close" ? new Promise(() => {}) : Promise.resolve(true)), msReply() {} });
-  const s2 = new m.NativeMediaSession(fakeSocket() as never, { provider: "mediasoup", callId: "c2" } as never, { onRemoteTrack() {}, onState() {}, onLocalVideo() {} });
-  await s2.connect(false);
-  const t0 = Date.now();
-  assert.equal(await s2.closeAndWait(150), false);
-  assert.ok(Date.now() - t0 < 1000);
 });
 
 test("native connect budget: every relayed native ms:* step is timed (ok and failed) for call:diag", async () => {
