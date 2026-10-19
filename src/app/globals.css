@@ -67,6 +67,19 @@ body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
+/* The app-owned iPhone caller-video RTCViews sit below a transparent WKWebView. The chat shell is hidden by
+ * CallProvider, but html/body otherwise still paint an opaque document canvas above those views. This marker is
+ * present only for the server-granted, active full-screen native-video call; its sibling CallOverlay remains the
+ * visible name/timer/control surface. */
+html[data-native-video-screen],
+html[data-native-video-screen] body {
+  background: transparent !important;
+}
+html[data-native-video-screen] body {
+  background-image: none !important;
+  transition: none;
+}
+
 /*
  * App lock (Telegram/WhatsApp feel): the document itself never scrolls, pans sideways, rubber-bands or zooms on
  * focus. <html>/<body> are pinned to the viewport and clipped; all page scrolling happens inside .app-shell

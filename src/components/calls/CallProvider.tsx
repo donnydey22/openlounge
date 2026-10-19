@@ -40,6 +40,16 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // and camera-off calls retain their existing page/compositor behavior.
   const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && (s.remoteCam || s.camOn);
 
+  // The React Native WebView itself is transparent for this path, but the page's html/body canvas normally paints
+  // the app background above the native RTCViews. Mark only the active granted native-video call so globals.css can
+  // expose those pixels while this sibling CallOverlay keeps the existing name, timer, and controls above them.
+  useEffect(() => {
+    if (!nativeFullscreen) return;
+    const root = document.documentElement;
+    root.setAttribute("data-native-video-screen", "");
+    return () => root.removeAttribute("data-native-video-screen");
+  }, [nativeFullscreen]);
+
   useEffect(() => {
     callEngine?.bind(socket, meId);
   }, [socket, meId]);
