@@ -18,6 +18,7 @@ import { BadJson, BodyTooLarge, RateLimiter, clientIp, requestId, securityHeader
 import { isTransientPgError } from "./pg";
 import { handleStickerRoute, initStickers, isStickerRoute } from "./stickers/api";
 import { media } from "./media/service";
+import { persistCalls } from "./calls";
 import { isMediaFileRequest } from "./media/http";
 
 const dev = process.env.NODE_ENV !== "production";
