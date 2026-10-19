@@ -13,7 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
-import { liveKitAllowed, sfuSelected } from "./sfuSelect";
+import { androidNativeEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
 import { isBenignMediaFailure } from "./mediaLog";
 
 /** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
@@ -80,7 +80,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         // short-lived credentials) to the SAME SFU only when UDP can't connect — ICE ranks relay candidates last, so
         // normal networks never use it. The SFU's ICE-TCP 40443 candidate is not offered (udpOnlyResult).
         const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
-        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}) } : null;
+        return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}), ...(androidNativeEnabled() ? { androidNative: true } : {}) } : null;
       },
       relay: (input) => gw.request(input),
       close: (callId) => gw.closeCall(callId),

@@ -249,6 +249,8 @@ export interface TurnIceServer {
  * the brokered UDP path. It never contains a TURN or gateway static secret.
  */
 export interface CallMedia {
+  /** server opt-in (CALL_ANDROID_NATIVE=on): Android app may use app-owned native media; absent = WebView baseline */
+  androidNative?: boolean;
   provider: "livekit" | "mediasoup";
   /** LiveKit signalling URL, or the opaque "broker" label for Mediasoup (never a browser control endpoint). */
   url: string;

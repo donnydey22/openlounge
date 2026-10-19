@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, disableAndroidNativeMedia, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, noteAndroidNativeOptIn, nativeMediaCmd, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { isAndroidApp } from "@/lib/notify";
 
@@ -151,7 +151,15 @@ export class CallEngine {
   private listeners = new Set<() => void>();
   private socket: RealtimeClient | null = null;
   private meId: string | null = null;
-  private media: CallMedia | null = null;
+  private _media: CallMedia | null = null;
+  /** every media grant carries the server's Android-native opt-in (absent = WebView baseline); remembered for the next ring */
+  private get media(): CallMedia | null {
+    return this._media;
+  }
+  private set media(m: CallMedia | null) {
+    this._media = m;
+    if (m && m.provider === "mediasoup") noteAndroidNativeOptIn(!!m.androidNative);
+  }
   private room: Room | null = null;
   private roomPromise: Promise<Room | CallMediaSession | null> | null = null;
   private mediasoup: CallMediaSession | null = null;
@@ -1648,7 +1656,6 @@ export class CallEngine {
    * used before). Its failure runs the normal WebView ladder (silent retries -> LiveKit -> clear message), never silence.
    */
   private nativeWebCall: string | null = null;
-  static NATIVE_TEARDOWN_WAIT_MS = 3_000;
   private async androidNativeToWebView(reason: string) {
     const callId = this.s.call?.id;
     const media = this.media;
@@ -1656,15 +1663,6 @@ export class CallEngine {
     this.nativeWebCall = callId;
     disableAndroidNativeMedia(reason);
     this.diag("native-fallback-webview", { reason: reason.slice(0, 160) });
-    // Release the native session (mic, audio unit, transports) and WAIT for the app to confirm before the WebView
-    // captures the mic and builds its own transports; racing them left the WebView path silent on 0.3.19.
-    const native = this.mediasoup;
-    if (native instanceof NativeMediaSession) {
-      const t0 = Date.now();
-      const ok = await native.closeAndWait(CallEngine.NATIVE_TEARDOWN_WAIT_MS);
-      this.diag("native-teardown", { ms: Date.now() - t0, confirmed: ok });
-      if (!this.busy || this.s.call?.id !== callId) return;
-    }
     // mid-call recovery loop already running: its next rebuild picks the WebView session (native is now off)
     if (this.msRecovering) return;
     this.dropMediaForRejoin();
