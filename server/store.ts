@@ -25,6 +25,7 @@ import type {
 import type { CallMeta, DmKind, MessageKind, RoomCard } from "../src/lib/types";
 import { DM_REACTION_MAX_EMOJI, MESSAGE_EDIT_WINDOW_MS, type MessageEditedEvent } from "../src/lib/types";
 import { parseSticker } from "../src/lib/stickers/token";
+import { replyReference } from "../src/lib/chat/reply";
 import type { MediaAttachment } from "../src/lib/media/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
@@ -1707,7 +1708,7 @@ export class Store {
 
   // ---------- room chat ----------
 
-  private pushChat(room: RoomRecord, authorId: string, text: string, createdAt = Date.now()): ChatMessage | null {
+  private pushChat(room: RoomRecord, authorId: string, text: string, createdAt = Date.now(), replyTo?: import("../src/lib/types").ReplyReference): ChatMessage | null {
     const u = this.users.get(authorId);
     const p = room.participants.get(authorId);
     if (!u || !p) return null;
@@ -1722,6 +1723,7 @@ export class Store {
       authorIsBot: u.isBot,
       text,
       createdAt,
+      ...(replyTo ? { replyTo } : {}),
     };
     room.chat.push(msg);
     if (room.chat.length > ROOM_CHAT_HISTORY) room.chat.splice(0, room.chat.length - ROOM_CHAT_HISTORY);
@@ -1745,7 +1747,7 @@ export class Store {
     return false;
   }
 
-  sendChat(roomId: string, userId: string, rawText: unknown) {
+  sendChat(roomId: string, userId: string, rawText: unknown, replyToId?: unknown) {
     const ctx = this.participant(roomId, userId);
     if (!ctx) return { ok: false as const, error: "Join the room to chat" };
     const c = clean(rawText, CHAT_MAX_LENGTH);
@@ -1754,7 +1756,9 @@ export class Store {
     if (!text) return { ok: false as const, error: "Message is empty" };
     if (this.rateLimited(userId)) return { ok: false as const, error: "Slow down a little 🙂" };
     const firstMessage = !ctx.room.chat.some((m) => m.authorId === userId);
-    const msg = this.pushChat(ctx.room, userId, text)!;
+    const target = typeof replyToId === "string" ? ctx.room.chat.find((m) => m.id === replyToId) : undefined;
+    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    const msg = this.pushChat(ctx.room, userId, text, Date.now(), target ? replyReference(target) : undefined)!;
     this.events?.chatMessage(msg);
 
     // demo flavour: someone in a seeded room waves at newcomers
@@ -2193,8 +2197,8 @@ export class Store {
     return { messages: out.slice(-limit), hasMore: out.length > limit };
   }
 
-  sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown) {
-    if (isGroupId(toId)) return this.groups ? this.groups.send(fromId, toId, rawText, clientId) : { ok: false as const, error: "Group not found" };
+  sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown, replyToId?: unknown) {
+    if (isGroupId(toId)) return this.groups ? this.groups.send(fromId, toId, rawText, clientId, replyToId) : { ok: false as const, error: "Group not found" };
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
     if (!this.users.has(toId)) return { ok: false as const, ...(this.isDeletedUser(toId) ? { deleted: true, error: "You can't message a deleted account." } : { error: "User not found" }) };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
@@ -2211,14 +2215,16 @@ export class Store {
         if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i] };
     }
     if (this.rateLimited(fromId)) return { ok: false as const, error: "Slow down a little 🙂" };
-    const msg = this.appendDm(fromId, toId, text, cid);
+    const target = typeof replyToId === "string" ? this.findDm(conversationId(fromId, toId), replyToId) : null;
+    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    const msg = this.appendDm(fromId, toId, text, cid, target ? { replyTo: replyReference(target) } : undefined);
     // sending implies you've read everything before it
     this.markDmRead(fromId, toId);
     if (DEMO_SEED && this.isBot(toId)) this.scheduleBotDmReply(toId, fromId);
     return { ok: true as const, message: msg };
   }
 
-  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind?: MessageKind; roomId?: string; call?: CallMeta; read?: boolean; media?: MediaAttachment; attachments?: MediaAttachment[] }) {
+  private appendDm(fromId: string, toId: string, text: string, clientId?: string, extra?: { kind?: MessageKind; roomId?: string; call?: CallMeta; read?: boolean; media?: MediaAttachment; attachments?: MediaAttachment[]; replyTo?: import("../src/lib/types").ReplyReference }) {
     const key = conversationId(fromId, toId);
     const list = this.dms.get(key) ?? [];
     const from = this.users.get(fromId);
@@ -2229,6 +2235,7 @@ export class Store {
       fromColor: from?.color ?? "#64748B",
       toId,
       text,
+      ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       // server clock is the source of truth; strictly increasing per conversation so (createdAt, id) order ==
       // send order even if the host clock steps backwards (NTP) or two sends land in the same millisecond
       createdAt: Math.max(Date.now(), (list[list.length - 1]?.createdAt ?? 0) + 1),
@@ -2306,9 +2313,9 @@ export class Store {
   // ---------- media messages (photos, videos, documents, voice notes — server/media owns the attachment) ----------
 
   /** Send a DM carrying an attachment. `text` is the caption or the auto label; server/media validated the media. */
-  sendMediaDm(fromId: string, toId: string, text: string, clientId: unknown, media: MediaAttachment, attachments?: MediaAttachment[]) {
+  sendMediaDm(fromId: string, toId: string, text: string, clientId: unknown, media: MediaAttachment, attachments?: MediaAttachment[], replyToId?: unknown) {
     if (fromId === toId) return { ok: false as const, error: "You can't message yourself" };
-    if (isGroupId(toId)) return this.groups ? this.groups.sendMedia(fromId, toId, text, clientId, media, attachments) : { ok: false as const, error: "Group not found" };
+    if (isGroupId(toId)) return this.groups ? this.groups.sendMedia(fromId, toId, text, clientId, media, attachments, replyToId) : { ok: false as const, error: "Group not found" };
     if (!this.users.has(toId)) return { ok: false as const, error: "User not found" };
     if (this.isBlocked(fromId, toId)) return { ok: false as const, blocked: true, error: "You blocked this account. Unblock them to send a message." };
     if (this.isBlocked(toId, fromId)) return { ok: false as const, blocked: true, error: "You can't message this account." };
@@ -2319,7 +2326,9 @@ export class Store {
         if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i], duplicate: true };
     }
     // no per-message chat limit here: albums send several at once, and uploads are rate limited in server/media
-    const msg = this.appendDm(fromId, toId, text.slice(0, CHAT_MAX_LENGTH), cid, { media, attachments });
+    const target = typeof replyToId === "string" ? this.findDm(conversationId(fromId, toId), replyToId) : null;
+    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    const msg = this.appendDm(fromId, toId, text.slice(0, CHAT_MAX_LENGTH), cid, { media, attachments, ...(target ? { replyTo: replyReference(target) } : {}) });
     this.markDmRead(fromId, toId);
     return { ok: true as const, message: msg, duplicate: false };
   }

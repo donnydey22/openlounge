@@ -139,13 +139,15 @@ export function PinnedBar({ pins, canUnpin, onJump, onUnpin }: { pins: GroupPin[
 export function jumpToMessage(list: HTMLElement | null, messageId: string) {
   const safe = messageId.replace(/[^A-Za-z0-9_-]/g, "");
   // the message row (or a service row) — reaction chips also carry data-mid, so don't match those
-  const el = list?.querySelector<HTMLElement>(`[data-testid="dm-msg"][data-mid="${safe}"], [data-testid="group-service"][data-mid="${safe}"]`);
+  const el = list?.querySelector<HTMLElement>(`[data-testid="dm-msg"][data-mid="${safe}"], [data-testid="group-service"][data-mid="${safe}"], [data-reply-message="${safe}"]`);
   if (!el) return false;
   el.scrollIntoView({ block: "center", behavior: "smooth" });
-  // brief highlight (Web Animations: iOS 13.1+ / every evergreen engine; skipped for reduced motion)
-  const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!reduce && typeof el.animate === "function")
-    el.animate([{ backgroundColor: "rgba(16,185,129,0.22)" }, { backgroundColor: "rgba(16,185,129,0)" }], { duration: 1400, easing: "ease-out" });
+  // CSS animation avoids the inconsistent Web Animations behavior seen in older WebViews.
+  // Restart it on repeated quote taps, then remove its marker once the visual pulse ends.
+  el.classList.remove("ol-flash");
+  void el.offsetWidth;
+  el.classList.add("ol-flash");
+  window.setTimeout(() => el.classList.remove("ol-flash"), 1_450);
   return true;
 }
 

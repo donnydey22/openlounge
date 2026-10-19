@@ -619,12 +619,12 @@ export function registerRealtime(io: WsHub) {
     );
 
     // ----- in-room chat -----
-    socket.on("chat:send", ({ roomId, text }: { roomId: string; text: string }, ack: AckFn = noop) =>
+    socket.on("chat:send", ({ roomId, text, replyToId }: { roomId: string; text: string; replyToId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         if (store.socketOf(roomId, userId) !== socket.id) return ack({ ok: false, error: "Join the room to chat" });
         const stickerErr = stickers().sendError(userId, text); // paid sticker packs: buyers only
         if (stickerErr) return ack({ ok: false, error: stickerErr });
-        ack(store.sendChat(roomId, userId, text));
+        ack(store.sendChat(roomId, userId, text, replyToId));
       }),
     );
 
@@ -660,12 +660,12 @@ export function registerRealtime(io: WsHub) {
     );
 
     // clientId (optional) is echoed on the stored message so the sender's optimistic bubble is swapped in place
-    socket.on("dm:send", ({ to, text, clientId }: { to: string; text: string; clientId?: string }, ack: AckFn = noop) =>
+    socket.on("dm:send", ({ to, text, clientId, replyToId }: { to: string; text: string; clientId?: string; replyToId?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
         presence.activity(userId);
         const stickerErr = stickers().sendError(userId, text); // paid sticker packs: buyers only
         if (stickerErr) return ack({ ok: false, error: stickerErr });
-        ack(store.sendDm(userId, to, text, clientId));
+        ack(store.sendDm(userId, to, text, clientId, replyToId));
       }),
     );
 

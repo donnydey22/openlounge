@@ -145,6 +145,22 @@ test("photo: chunked upload, EXIF/GPS stripped, thumb + placeholder, signed URL 
   assert.ok((await sign(C, m.id)).gone);
 });
 
+test("a photo reply keeps a trusted quote snapshot without a media URL", async () => {
+  const original = await A.client.req("dm:send", { to: id(B), text: "Look at this when it arrives" });
+  assert.equal(original.ok, true, JSON.stringify(original));
+  const uploaded = await upload(B, f("gps.jpg"), "photo");
+  assert.equal(uploaded.done?.status, 200, JSON.stringify(uploaded));
+  const sent = await sendMedia(B, A, uploaded.done!.data.media.id, { replyToId: original.message.id });
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  assert.deepEqual(sent.data.message.replyTo, {
+    messageId: original.message.id,
+    senderId: id(A),
+    senderName: "Alice",
+    text: "Look at this when it arrives",
+  });
+  assert.equal("url" in sent.data.message.replyTo, false);
+});
+
 test("validation: caps, wrong kind rejected on the first chunk, resumable offsets, cancel, html served as download", async () => {
   const big = await api(base, "/api/media/uploads", { kind: "photo", name: "x.jpg", size: 26 * 1024 * 1024 }, { token: tok(A) });
   assert.equal(big.status, 413);

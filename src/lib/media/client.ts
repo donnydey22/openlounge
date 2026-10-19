@@ -136,6 +136,8 @@ export interface SendMediaInput {
   caption?: string;
   ttlSeconds?: number;
   viewOnce?: boolean;
+  /** Existing message in this same conversation to quote on the sent attachment. */
+  replyToId?: string;
 }
 export async function sendMedia(input: SendMediaInput) {
   return (await postJson<{ message: DirectMessage }>("/api/media/send", input)).message;

@@ -12,7 +12,7 @@ import { conversationId } from "./conversation";
 import { randomBytes } from "node:crypto";
 import { log, metrics } from "./log";
 import type { ReportRecord } from "./moderation";
-import type { CallMeta, MessageKind } from "../src/lib/types";
+import type { CallMeta, MessageKind, ReplyReference } from "../src/lib/types";
 import type { DmReaction } from "../src/lib/types";
 import { errText, type IdentityProvider, type LoadResult, type OneTimeBackend, type EmailOtpBackend, type EmailOtpRow, type PersistedDb, type Persistence, type SessionRecord, type UserRecord } from "./persistence";
 
@@ -260,8 +260,8 @@ export class PgPersistence implements Persistence {
       q<{ user_id: string; interest: string }>("SELECT user_id, interest FROM user_interests ORDER BY user_id, position"),
       q<{ follower_id: string; followee_id: string }>("SELECT follower_id, followee_id FROM follows ORDER BY created_at, follower_id, followee_id"),
       q<{ id: string; title: string; topic: string; description: string; host_id: string; created_at: number }>("SELECT * FROM rooms ORDER BY created_at, id"),
-      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null; client_id: string | null; kind: string | null; room_id: string | null; call: CallMeta | null }>(
-        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id, call FROM dms ORDER BY created_at, id",
+      q<{ id: string; from_id: string; from_name: string; from_color: string; to_id: string; text: string; created_at: number; read_at: number | null; client_id: string | null; kind: string | null; room_id: string | null; call: CallMeta | null; reply_to: ReplyReference | null }>(
+        "SELECT id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id, call, reply_to FROM dms ORDER BY created_at, id",
       ),
       q<SessionRow>("SELECT * FROM sessions"),
       q<{ user_id: string; peer_id: string; last_read_at: number }>("SELECT * FROM dm_reads"),
@@ -302,7 +302,7 @@ export class PgPersistence implements Persistence {
       })),
       follows: {},
       rooms: rooms.map((r) => ({ id: r.id, title: r.title, topic: r.topic, description: r.description, hostId: r.host_id, createdAt: r.created_at })),
-      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}), ...(m.kind && m.room_id ? { kind: m.kind as MessageKind, roomId: m.room_id } : {}), ...(m.call ? { call: m.call } : {}), ...(reactionsOf.has(m.id) ? { reactions: reactionsOf.get(m.id) } : {}) })),
+      dms: dms.map((m) => ({ id: m.id, fromId: m.from_id, fromName: m.from_name, fromColor: m.from_color, toId: m.to_id, text: m.text, createdAt: m.created_at, readAt: m.read_at ?? null, ...(m.client_id ? { clientId: m.client_id } : {}), ...(m.kind && m.room_id ? { kind: m.kind as MessageKind, roomId: m.room_id } : {}), ...(m.call ? { call: m.call } : {}), ...(m.reply_to ? { replyTo: m.reply_to } : {}), ...(reactionsOf.has(m.id) ? { reactions: reactionsOf.get(m.id) } : {}) })),
       sessions: sessions.map(sessionFromRow),
       dmReads: {},
       identities: identities.map((i) => ({
@@ -367,7 +367,7 @@ export class PgPersistence implements Persistence {
     }
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
-      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId), tn(m.kind), tn(m.roomId), m.call ? JSON.stringify(m.call) : null]);
+      out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId), tn(m.kind), tn(m.roomId), m.call ? JSON.stringify(m.call) : null, m.replyTo ? JSON.stringify(m.replyTo) : null]);
     for (const m of db.dms ?? [])
       for (const r of m.reactions ?? []) out.reactions.set(`${m.id}${SEP}${r.userId}${SEP}${r.emoji}`, [m.id, t(r.userId), t(r.emoji), r.at]);
     for (const s of db.sessions ?? [])
@@ -474,12 +474,12 @@ export class PgPersistence implements Persistence {
       if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
       if (up.dms.length)
         await client.query(
-          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id, call)
-           SELECT a, b, c, d, e, f, g, h, i, j, k, l, m::jsonb
-             FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[], $13::text[]) AS x(a, b, c, d, e, f, g, h, i, j, k, l, m)
+          `INSERT INTO dms (id, conversation_id, from_id, from_name, from_color, to_id, text, created_at, read_at, client_id, kind, room_id, call, reply_to)
+           SELECT a, b, c, d, e, f, g, h, i, j, k, l, m::jsonb, n::jsonb
+             FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[], $13::text[], $14::text[]) AS x(a, b, c, d, e, f, g, h, i, j, k, l, m, n)
            ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, from_name = EXCLUDED.from_name, from_color = EXCLUDED.from_color,
-             read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id)`,
-          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => col(up.dms, i)),
+             read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id), reply_to = COALESCE(dms.reply_to, EXCLUDED.reply_to)`,
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((i) => col(up.dms, i)),
         );
       // DM reactions (014), after dms (FK; trimmed / deleted messages cascade)
       if (del.reactions.length) {
