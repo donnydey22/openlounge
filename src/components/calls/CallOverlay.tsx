@@ -408,7 +408,9 @@ export function CallOverlay() {
     const big = rect(bigTile.current);
     if (!big) return;
     const pip = showPip ? rect(pipTile.current) : null;
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: big, fit: window.matchMedia("(max-width: 600px), (pointer: coarse) and (max-height: 600px)").matches ? "cover" : "contain" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+    // The app-owned iPhone call surface is phone-only. Keep its remote full tile aspect-filled exactly as this overlay
+    // renders on phones; the native renderer preserves aspect ratio (no stretch) and the local PiP is cover as well.
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
   }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
   useEffect(() => {
     if (!s.nativeVideo || !s.call) return;

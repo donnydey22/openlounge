@@ -178,6 +178,8 @@ export class NativeMediaSession {
     private opts: {
       onRemoteTrack(track: MediasoupRemoteTrack): void;
       onState(state: "connected" | "disconnected" | "failed"): void;
+      /** App-owned remote camera availability only. The native MediaStream never crosses this bridge. */
+      onRemoteVideo?(on: boolean): void;
       onLocalVideo(track: MediaStreamTrack | null): void;
       onCameraUnavailable?(): void;
       tcpOnly?: boolean;
@@ -202,13 +204,14 @@ export class NativeMediaSession {
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
-    const d = (e as CustomEvent<{ state?: string; fallback?: string; reason?: string }>).detail;
+    const d = (e as CustomEvent<{ state?: string; on?: boolean; fallback?: string; reason?: string }>).detail;
     const s = d?.state;
     if (s === "failed" && d?.fallback === "livekit" && this.opts.onWantsLiveKit) {
       this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
       return;
     }
     if (s === "camera-unavailable") this.opts.onCameraUnavailable?.();
+    else if (s === "remote-video") this.opts.onRemoteVideo?.(d?.on === true);
     else if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
     } else if (s === "disconnected" || s === "failed") this.opts.onState(s);

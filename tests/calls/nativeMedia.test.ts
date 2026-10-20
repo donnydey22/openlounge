@@ -58,8 +58,9 @@ test("native media: page relays the app's ms:* signaling for this call only, for
   });
   const sock = fakeSocket();
   const states: string[] = [];
+  const remoteVideo: boolean[] = [];
   const s = new m.NativeMediaSession(sock as never, { provider: "mediasoup", callId: "c1", iceServers: [{ urls: "turn:x" }] } as never, {
-    onRemoteTrack() {}, onState: (st) => states.push(st), onLocalVideo() {}, tcpOnly: true,
+    onRemoteTrack() {}, onState: (st) => states.push(st), onRemoteVideo: (on) => remoteVideo.push(on), onLocalVideo() {}, tcpOnly: true,
   });
   await s.connect(false);
   assert.deepEqual(cmds[0], { op: "connect", callId: "c1", iceServers: [{ urls: "turn:x" }], tcpOnly: true });
@@ -77,7 +78,11 @@ test("native media: page relays the app's ms:* signaling for this call only, for
   assert.ok(cmds.some((c) => c.op === "consumerAvailable"));
   window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "disconnected" } }));
   window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "connected" } }));
+  // Availability only: the native MediaStream remains in App.tsx, while the page selects remote-full/local-PiP.
+  window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "remote-video", on: true } }));
+  window.dispatchEvent(new CustomEvent("openlounge:native-media", { detail: { state: "remote-video", on: false } }));
   assert.deepEqual(states, ["disconnected", "connected"]);
+  assert.deepEqual(remoteVideo, [true, false]);
   await s.setMuted(true);
   assert.ok(cmds.some((c) => c.op === "mute" && c.muted === true));
   const stats = await s.getTransportStats();
@@ -112,6 +117,7 @@ test("native iPhone video reuses the existing call overlay above a suppressed ap
   assert.match(provider, /css\.nativeVideoUnderlay/);
   assert.match(overlay, /const nativeFullscreen = s\.nativeVideo && !s\.minimized/);
   assert.match(overlay, /nativeFullscreen && css\.nativeVideoScreen/);
+  assert.match(overlay, /big: \{ kind: bigWhich, rect: big, fit: "cover" \}/);
   assert.doesNotMatch(overlay, /createPortal|data-ol-native-video-call/);
   assert.match(styles, /\.nativeVideoUnderlay \{ display: contents; visibility: hidden; pointer-events: none; \}/);
   assert.match(styles, /\.nativeVideoScreen, \.nativeVideoScreen \.videoStage, \.nativeVideoScreen \.pip \{ background: transparent !important; \}/);
@@ -358,4 +364,7 @@ test("iPhone paired-video path: one explicit msid, native prepare, relay-only re
   assert.match(src, /this\.iosNativeVideoLatched\(\) && attempt >= 2/);
   assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return null;/);
   assert.doesNotMatch(src, /iosNativeVideoToWebView|iosNativeVideoWebFallbackCall/);
+  assert.match(bridge, /onRemoteVideo\?\(on: boolean\): void/);
+  assert.match(bridge, /s === "remote-video"\) this\.opts\.onRemoteVideo\?\.\(d\?\.on === true\)/);
+  assert.match(src, /onRemoteVideo: \(on\) => \{[\s\S]{0,160}remoteCam: on/);
 });

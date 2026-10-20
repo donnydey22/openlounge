@@ -917,6 +917,12 @@ export class CallEngine {
         ...(tapMic ? { preTrack: tapMic.catch(() => null) } : {}),
         // a session parked for make-before-break (or superseded) must never drive this call's state
         onRemoteTrack: (track) => { if (this.mediasoup === session) this.onMediasoupTrack(track); },
+        // Native MediaStreams remain inside the app. This availability event only lets the existing page overlay pick
+        // remote-full/local-PiP geometry once the app has a remote camera track (and hide it when that track ends).
+        onRemoteVideo: (on) => {
+          if (this.mediasoup !== session) return;
+          this.set({ remoteCam: on, videoInvite: on && !this.s.camOn });
+        },
         onState: (state) => { if (this.mediasoup === session) this.onMediasoupState(state); },
         onLocalVideo: (track) => { if (this.mediasoup === session) this.setMediasoupLocalVideo(track); },
         onCameraUnavailable: () => { if (this.mediasoup === session) this.set({ camOn: false, error: "Camera unavailable. Continuing with audio." }); },
