@@ -10,7 +10,7 @@
 //   {op:'status'}  → {callId, kind, connected} | null    (a reloaded page re-attaches; connect on the same call = attach)
 //   {op:'mute', muted} | {op:'close'} | {op:'restartIce'} | {op:'stats'} | {op:'ladder', audioBps}
 //   {op:'consumerAvailable'}  SFU remote-track availability arrived on the page socket
-// App → page events (CustomEvent 'openlounge:native-media'): {state:'connected'|'disconnected'|'failed'|'remote-audio'}
+// App → page events (CustomEvent 'openlounge:native-media'): {state:'connected'|'disconnected'|'failed'|'remote-audio'|'remote-video', on?:boolean}
 // App-only video state is delivered directly to App.tsx; MediaStream values are never serialized into the WebView.
 import { mediaDevices, MediaStream, type MediaStreamTrack } from '@livekit/react-native-webrtc';
 import { registerGlobals } from '@livekit/react-native';
@@ -25,8 +25,9 @@ function ensureGlobals() {
   globalsDone = true;
 }
 
-/** Native camera constraints deliberately preserve the sensor frame. RTCView uses contain for remote video, so
- * a portrait iPhone feed is never zoomed/cropped to fill a landscape stage. */
+/** Native camera constraints preserve an upright 720p-class sensor frame at 30 fps. RTCView renders the full-screen
+ * remote tile with aspect fill and the local tile with aspect fill, matching the existing phone call UI without
+ * stretching either source. Capture exposure remains AVFoundation's native automatic exposure. */
 const cameraConstraints = (facing: 'user' | 'environment' = 'user') => ({
   facingMode: facing,
   width: { ideal: 720 },
@@ -312,19 +313,29 @@ export class NativeMediaSession {
               for (const [id, prior] of this.consumers) {
                 if (prior.kind === 'video') { prior.close(); this.consumers.delete(id); }
               }
-              this.remoteVideo?.getTracks().forEach((t) => t.stop());
+              // Replace the native renderer stream before stopping the old track. Its ended callback then sees it is
+              // stale and cannot transiently clear the remote-video UI state during a producer replacement.
+              const previousRemote = this.remoteVideo;
               this.remoteVideo = new MediaStream([c.track]);
+              previousRemote?.getTracks().forEach((t) => t.stop());
               c.track.addEventListener('ended', () => {
                 if (!this.remoteVideo?.getVideoTracks().some((track) => track === c.track)) return;
                 this.remoteVideo?.getTracks().forEach((track) => track.stop());
                 this.remoteVideo = null;
                 this.emitVideoState();
+                // Control state only: the page uses this to choose remote-full/local-PiP geometry. Streams stay native.
+                this.emit({ state: 'remote-video', on: false });
               }, { once: true });
             }
             this.consumers.set(c.id, c);
             await this.r('ms:consumer:resume', { consumerId: c.id });
             if (c.kind === 'audio') this.emit({ state: 'remote-audio' });
-            else if (this.nativeVideo) this.emitVideoState();
+            else if (this.nativeVideo) {
+              this.emitVideoState();
+              // The WebView cannot inspect the native track. It receives only availability so its existing overlay
+              // selects the remote full-screen tile and local PiP; App.tsx keeps both MediaStreams native.
+              this.emit({ state: 'remote-video', on: true });
+            }
           }
         } while (this.syncAgain && !this.closed);
       } finally {
@@ -380,9 +391,11 @@ export class NativeMediaSession {
     this.videoProducer?.close();
     this.videoProducer = null;
     this.localVideo = null;
+    const hadRemoteVideo = !!this.remoteVideo;
     this.remoteVideo?.getTracks().forEach((t) => t.stop());
     this.remoteVideo = null;
     this.emitVideoState();
+    if (hadRemoteVideo) this.emit({ state: 'remote-video', on: false });
     this.send?.close();
     this.recv?.close();
     // The controller owns capture across native rebuilds and LiveKit migration; terminal closeAll stops it.
@@ -420,9 +433,19 @@ class NativeLiveKitSession {
     room.on(LK.RoomEvent.Disconnected, () => { if (!this.closed) this.emit({ state: 'failed' }); });
     room.on(LK.RoomEvent.TrackSubscribed, (t: any) => {
       if (t.kind === 'audio') this.emit({ state: 'remote-audio' });
-      else if (t.kind === 'video' && this.capture.nativeVideo) { this.remoteVideo = new MediaStream([t.mediaStreamTrack]); this.state(); }
+      else if (t.kind === 'video' && this.capture.nativeVideo) {
+        this.remoteVideo = new MediaStream([t.mediaStreamTrack]);
+        this.state();
+        this.emit({ state: 'remote-video', on: true });
+      }
     });
-    room.on(LK.RoomEvent.TrackUnsubscribed, (t: any) => { if (t.kind === 'video') { this.remoteVideo = null; this.state(); } });
+    room.on(LK.RoomEvent.TrackUnsubscribed, (t: any) => {
+      if (t.kind === 'video') {
+        this.remoteVideo = null;
+        this.state();
+        this.emit({ state: 'remote-video', on: false });
+      }
+    });
     await room.connect(url, token, { autoSubscribe: true, rtcConfig: iceServers.length ? { iceServers: iceServers as RTCIceServer[] } : undefined });
     if (this.closed) throw new Error('native media closed');
     const mic = stream.getAudioTracks()[0];
@@ -447,7 +470,17 @@ class NativeLiveKitSession {
     const LK = await import('livekit-client'); await this.publishCamera(LK, track); return true;
   }
   setMuted(muted: boolean) { this.capture.stream.getAudioTracks().forEach((t) => { t.enabled = !muted; }); }
-  close() { if (this.closed) return; this.closed = true; void this.room?.disconnect?.(); this.room = null; this.localVideo = null; this.remoteVideo = null; this.emitVideo(null); }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    const hadRemoteVideo = !!this.remoteVideo;
+    void this.room?.disconnect?.();
+    this.room = null;
+    this.localVideo = null;
+    this.remoteVideo = null;
+    this.emitVideo(null);
+    if (hadRemoteVideo) this.emit({ state: 'remote-video', on: false });
+  }
 }
 const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const STREAM_ID = /^[A-Za-z0-9:_-]{1,160}$/;

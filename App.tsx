@@ -101,7 +101,9 @@ const parseNativeVideoLayout = (value: unknown): NativeVideoLayout | null => {
   const big = readTile(v.big);
   const pip = readTile(v.pip);
   if (!big || (pip && pip.fit !== 'cover')) return null;
-  return { callId: v.callId, hidden: v.hidden, big: { kind: big.kind, fit: big.fit, rect: big.rect }, pip: pip ? { kind: pip.kind, rect: pip.rect, mirror: pip.mirror } : null };
+  // Native iPhone calls deliberately use the phone-sized call surface: remote full tile is always aspect-fill. The
+  // page still owns tile identities and rectangles, while RTCView retains source aspect ratio without stretching.
+  return { callId: v.callId, hidden: v.hidden, big: { kind: big.kind, fit: 'cover', rect: big.rect }, pip: pip ? { kind: pip.kind, rect: pip.rect, mirror: pip.mirror } : null };
 };
 
 // WebKit errors that are not "the page could not be loaded".
@@ -803,11 +805,13 @@ function Shell() {
   const visibleNativeVideo = !!nativeVideo && !!nativeVideoLayout && nativeVideo.callId === nativeVideoLayout.callId && !!nativeBigLayout && !!webFrame;
   const mapTile = (rect: NativeTileRect | null) => {
     if (!rect || !webFrame) return null;
-    const maxHeight = Math.max(0, webFrame.height - kbHeight);
     const left = webFrame.x + rect.x * webFrame.width;
     const top = webFrame.y + rect.y * webFrame.height;
     const width = rect.width * webFrame.width;
-    const height = Math.max(0, Math.min(rect.height * webFrame.height, webFrame.y + maxHeight - top));
+    // `rect` is already normalized to the current WebView visual call surface. In overlay keyboard mode, subtracting
+    // the native keyboard height a second time clips the native full-screen tile; in resize mode the WebView itself
+    // has already resized. Preserve the page-owned rectangle in either mode.
+    const height = rect.height * webFrame.height;
     return width > 0 && height > 0 ? { left, top, width, height } : null;
   };
   const bigTile = visibleNativeVideo ? mapTile(nativeBigLayout?.rect ?? null) : null;
@@ -825,10 +829,10 @@ function Shell() {
       >
         {visibleNativeVideo && nativeBigLayout && bigTile && streamFor(nativeBigLayout.kind) && (
           <View pointerEvents="none" style={styles.nativeVideoLayer} accessibilityElementsHidden>
-            <RTCView streamURL={streamFor(nativeBigLayout.kind)!.toURL()} style={[styles.nativeTile, bigTile]} objectFit={nativeBigLayout.fit} mirror={nativeBigLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+            <RTCView streamURL={streamFor(nativeBigLayout.kind)!.toURL()} style={[styles.nativeTile, bigTile]} objectFit="cover" zOrder={0} mirror={nativeBigLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
             {pipTile && nativePipLayout && streamFor(nativePipLayout.kind) && (
               <View style={[styles.nativePipFrame, pipTile]}>
-                <RTCView streamURL={streamFor(nativePipLayout.kind)!.toURL()} style={styles.nativeFill} objectFit="cover" mirror={nativePipLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+                <RTCView streamURL={streamFor(nativePipLayout.kind)!.toURL()} style={styles.nativeFill} objectFit="cover" zOrder={1} mirror={nativePipLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
               </View>
             )}
           </View>
