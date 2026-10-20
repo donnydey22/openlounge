@@ -204,14 +204,18 @@ export class NativeMediaSession {
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
-    const d = (e as CustomEvent<{ state?: string; on?: boolean; fallback?: string; reason?: string }>).detail;
+    const d = (e as CustomEvent<{ state?: string; callId?: string; on?: boolean; fallback?: string; reason?: string }>).detail;
     const s = d?.state;
     if (s === "failed" && d?.fallback === "livekit" && this.opts.onWantsLiveKit) {
       this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
       return;
     }
     if (s === "camera-unavailable") this.opts.onCameraUnavailable?.();
-    else if (s === "remote-video") this.opts.onRemoteVideo?.(d?.on === true);
+    else if (s === "remote-video") {
+      const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
+      // App-owned media is retained across a WebView reload. Never apply a late renderer event from a prior call.
+      if (typeof d?.callId === "string" && d.callId === callId) this.opts.onRemoteVideo?.(d.on === true);
+    }
     else if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
     } else if (s === "disconnected" || s === "failed") this.opts.onState(s);

@@ -118,13 +118,19 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
     };
   }, [which]);
   const M = 12;
-  const pos = (c: typeof corner) => {
+  const bounds = () => {
     const w = ref.current?.offsetWidth ?? 100;
     const h = ref.current?.offsetHeight ?? 140;
     // WebKit's innerWidth can include its transient mobile visual viewport while the fixed call screen is laid out
     // against documentElement. Use the layout viewport so the PiP stays inside the rendered screen.
     const W = document.documentElement.clientWidth || window.innerWidth;
     const H = document.documentElement.clientHeight || window.innerHeight;
+    const top = 64;
+    const bottom = 150;
+    return { w, h, W, H, minX: M, maxX: Math.max(M, W - w - M), minY: top, maxY: Math.max(top, H - h - bottom) };
+  };
+  const pos = (c: typeof corner) => {
+    const { w, h, W, H } = bounds();
     const top = 64;
     const bottom = 150;
     return { x: c.endsWith("l") ? M : W - w - M, y: c.startsWith("t") ? top : H - h - bottom };
@@ -139,11 +145,13 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
     const settled = setTimeout(r, 250);
     const viewport = window.visualViewport;
     window.addEventListener("resize", r);
+    window.addEventListener("orientationchange", r);
     viewport?.addEventListener("resize", r);
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(settled);
       window.removeEventListener("resize", r);
+      window.removeEventListener("orientationchange", r);
       viewport?.removeEventListener("resize", r);
     };
   }, []);
@@ -172,7 +180,9 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
         const cur = pos(corner);
         if (!st.moved && Math.hypot(x - cur.x, y - cur.y) < 6) return;
         st.moved = true;
-        setDrag({ x, y });
+        // Keep the page PiP and its app-owned RTCView on the same fully visible rectangle while dragging.
+        const b = bounds();
+        setDrag({ x: Math.max(b.minX, Math.min(b.maxX, x)), y: Math.max(b.minY, Math.min(b.maxY, y)) });
       }}
       onPointerUp={(e) => {
         const st = start.current;
@@ -182,8 +192,7 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
           onSwap();
           return;
         }
-        const W = window.innerWidth;
-        const H = window.innerHeight;
+        const { W, H } = bounds();
         const cx = e.clientX;
         const cy = e.clientY;
         setCorner(`${cy < H / 2 ? "t" : "b"}${cx < W / 2 ? "l" : "r"}` as typeof corner);
@@ -390,27 +399,33 @@ export function CallOverlay() {
   const pipTile = useRef<HTMLDivElement | null>(null);
   const reportNativeLayout = useCallback(() => {
     if (!s.nativeVideo || !s.call) return;
-    const width = window.innerWidth || document.documentElement.clientWidth;
-    const height = window.innerHeight || document.documentElement.clientHeight;
-    if (!width || !height) return;
-    const rect = (el: HTMLDivElement | null) => {
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      if (![r.left, r.top, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return null;
-      return { x: Math.max(0, Math.min(1, r.left / width)), y: Math.max(0, Math.min(1, r.top / height)), width: Math.max(0, Math.min(1, r.width / width)), height: Math.max(0, Math.min(1, r.height / height)) };
-    };
     const hidden = s.minimized || !video;
     if (hidden) {
       // BigVideo unmounts in these states, so the native stage must receive a valid hidden-only record.
       void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: true }).catch(() => {});
       return;
     }
+    // Both full-screen and PiP rectangles are normalized against the actual fixed call stage, never a mix of
+    // layout-, visual-, and browser viewport values. App.tsx maps this same unit space into the WebView frame.
+    const stage = bigTile.current?.getBoundingClientRect();
+    if (!stage || ![stage.left, stage.top, stage.width, stage.height].every(Number.isFinite) || stage.width <= 0 || stage.height <= 0) return;
+    const rect = (el: HTMLDivElement | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (![r.left, r.top, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return null;
+      const left = Math.max(stage.left, r.left);
+      const top = Math.max(stage.top, r.top);
+      const right = Math.min(stage.right, r.right);
+      const bottom = Math.min(stage.bottom, r.bottom);
+      if (right <= left || bottom <= top) return null;
+      return { x: (left - stage.left) / stage.width, y: (top - stage.top) / stage.height, width: (right - left) / stage.width, height: (bottom - top) / stage.height };
+    };
     const big = rect(bigTile.current);
     if (!big) return;
     const pip = showPip ? rect(pipTile.current) : null;
     // The app-owned iPhone call surface is phone-only. Keep its remote full tile aspect-filled exactly as this overlay
     // renders on phones; the native renderer preserves aspect ratio (no stretch) and the local PiP is cover as well.
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width, height, keyboard: Math.max(0, height - (window.visualViewport?.height ?? height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
   }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
   useEffect(() => {
     if (!s.nativeVideo || !s.call) return;
@@ -420,9 +435,10 @@ export function CallOverlay() {
     if (bigTile.current) observer?.observe(bigTile.current);
     if (pipTile.current) observer?.observe(pipTile.current);
     window.addEventListener("resize", notify);
+    window.addEventListener("orientationchange", notify);
     window.visualViewport?.addEventListener("resize", notify);
     window.visualViewport?.addEventListener("scroll", notify);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("scroll", notify); };
+    return () => { observer?.disconnect(); window.removeEventListener("resize", notify); window.removeEventListener("orientationchange", notify); window.visualViewport?.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("scroll", notify); };
   }, [reportNativeLayout, s.call, s.nativeVideo]);
 
   if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
