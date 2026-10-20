@@ -92,6 +92,13 @@ export class NativeMediaSession {
     return this.connected && !this.closed;
   }
 
+  /** Re-assert app-owned renderer state when a reloaded WebView re-attaches to this live native session. */
+  replayVideoState() {
+    if (!this.nativeVideo) return;
+    this.emitVideoState();
+    this.emit({ state: 'remote-video', callId: this.callId, on: !!this.remoteVideo });
+  }
+
   private r<T>(event: string, data: Record<string, unknown> = {}) {
     return this.req<T>(event, { callId: this.callId, nativeConn: this.nativeConn, ...data });
   }
@@ -324,7 +331,7 @@ export class NativeMediaSession {
                 this.remoteVideo = null;
                 this.emitVideoState();
                 // Control state only: the page uses this to choose remote-full/local-PiP geometry. Streams stay native.
-                this.emit({ state: 'remote-video', on: false });
+                this.emit({ state: 'remote-video', callId: this.callId, on: false });
               }, { once: true });
             }
             this.consumers.set(c.id, c);
@@ -334,7 +341,7 @@ export class NativeMediaSession {
               this.emitVideoState();
               // The WebView cannot inspect the native track. It receives only availability so its existing overlay
               // selects the remote full-screen tile and local PiP; App.tsx keeps both MediaStreams native.
-              this.emit({ state: 'remote-video', on: true });
+              this.emit({ state: 'remote-video', callId: this.callId, on: true });
             }
           }
         } while (this.syncAgain && !this.closed);
@@ -395,7 +402,7 @@ export class NativeMediaSession {
     this.remoteVideo?.getTracks().forEach((t) => t.stop());
     this.remoteVideo = null;
     this.emitVideoState();
-    if (hadRemoteVideo) this.emit({ state: 'remote-video', on: false });
+    if (hadRemoteVideo) this.emit({ state: 'remote-video', callId: this.callId, on: false });
     this.send?.close();
     this.recv?.close();
     // The controller owns capture across native rebuilds and LiveKit migration; terminal closeAll stops it.
@@ -418,10 +425,25 @@ class NativeLiveKitSession {
   private closed = false;
   private localVideo: MediaStream | null = null;
   private remoteVideo: MediaStream | null = null;
+  private remoteTrack: MediaStreamTrack | null = null;
   private videoTrack: MediaStreamTrack | null = null;
   constructor(readonly callId: string, private capture: NativeCapture, private emit: Emit, private emitVideo: (state: NativeVideoState) => void) {}
   get alive() { return !this.closed; }
   private state() { this.emitVideo(this.closed ? null : { callId: this.callId, local: this.localVideo, remote: this.remoteVideo, facing: this.capture.facing }); }
+  private clearRemoteVideo(track?: MediaStreamTrack) {
+    // A late unsubscribe from a replaced subscription must not clear the current remote full-screen stream.
+    if (track && track !== this.remoteTrack) return;
+    if (!this.remoteTrack && !this.remoteVideo) return;
+    this.remoteTrack = null;
+    this.remoteVideo = null;
+    this.state();
+    this.emit({ state: 'remote-video', callId: this.callId, on: false });
+  }
+  replayVideoState() {
+    if (!this.capture.nativeVideo) return;
+    this.state();
+    this.emit({ state: 'remote-video', callId: this.callId, on: !!this.remoteVideo });
+  }
   async connect(url: string, token: string, iceServers: unknown[]) {
     ensureGlobals();
     const LK = await import('livekit-client');
@@ -434,17 +456,17 @@ class NativeLiveKitSession {
     room.on(LK.RoomEvent.TrackSubscribed, (t: any) => {
       if (t.kind === 'audio') this.emit({ state: 'remote-audio' });
       else if (t.kind === 'video' && this.capture.nativeVideo) {
-        this.remoteVideo = new MediaStream([t.mediaStreamTrack]);
+        const track = t.mediaStreamTrack as MediaStreamTrack | undefined;
+        if (!track) return;
+        this.remoteTrack = track;
+        this.remoteVideo = new MediaStream([track]);
+        track.addEventListener('ended', () => this.clearRemoteVideo(track), { once: true });
         this.state();
-        this.emit({ state: 'remote-video', on: true });
+        this.emit({ state: 'remote-video', callId: this.callId, on: true });
       }
     });
     room.on(LK.RoomEvent.TrackUnsubscribed, (t: any) => {
-      if (t.kind === 'video') {
-        this.remoteVideo = null;
-        this.state();
-        this.emit({ state: 'remote-video', on: false });
-      }
+      if (t.kind === 'video') this.clearRemoteVideo(t.mediaStreamTrack as MediaStreamTrack | undefined);
     });
     await room.connect(url, token, { autoSubscribe: true, rtcConfig: iceServers.length ? { iceServers: iceServers as RTCIceServer[] } : undefined });
     if (this.closed) throw new Error('native media closed');
@@ -478,8 +500,9 @@ class NativeLiveKitSession {
     this.room = null;
     this.localVideo = null;
     this.remoteVideo = null;
+    this.remoteTrack = null;
     this.emitVideo(null);
-    if (hadRemoteVideo) this.emit({ state: 'remote-video', on: false });
+    if (hadRemoteVideo) this.emit({ state: 'remote-video', callId: this.callId, on: false });
   }
 }
 const CALL_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -534,6 +557,7 @@ export class NativeMediaController {
         if (!rebuild && cur?.alive && cur.callId === callId && cur.tcpOnly === tcpOnly) {
           if (cur.isConnected) {
             void cur.syncConsumers().catch(() => {});
+            cur.replayVideoState();
             return { attached: true };
           }
         }
@@ -575,7 +599,10 @@ export class NativeMediaController {
       }
       case 'connectLiveKit': {
         if (!CALL_ID.test(callId) || typeof cmd.url !== 'string' || typeof cmd.token !== 'string') throw new Error('bad livekit media');
-        if (this.lk?.alive && this.lk.callId === callId) return { attached: true };
+        if (this.lk?.alive && this.lk.callId === callId) {
+          this.lk.replayVideoState();
+          return { attached: true };
+        }
         this.session?.close();
         this.session = null;
         this.lk?.close();

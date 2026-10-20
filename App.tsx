@@ -829,10 +829,10 @@ function Shell() {
       >
         {visibleNativeVideo && nativeBigLayout && bigTile && streamFor(nativeBigLayout.kind) && (
           <View pointerEvents="none" style={styles.nativeVideoLayer} accessibilityElementsHidden>
-            <RTCView streamURL={streamFor(nativeBigLayout.kind)!.toURL()} style={[styles.nativeTile, bigTile]} objectFit="cover" zOrder={0} mirror={nativeBigLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+            <RTCView streamURL={streamFor(nativeBigLayout.kind)!.toURL()} style={[styles.nativeTile, bigTile]} objectFit="cover" mirror={nativeBigLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
             {pipTile && nativePipLayout && streamFor(nativePipLayout.kind) && (
               <View style={[styles.nativePipFrame, pipTile]}>
-                <RTCView streamURL={streamFor(nativePipLayout.kind)!.toURL()} style={styles.nativeFill} objectFit="cover" zOrder={1} mirror={nativePipLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
+                <RTCView streamURL={streamFor(nativePipLayout.kind)!.toURL()} style={styles.nativeFill} objectFit="cover" mirror={nativePipLayout.kind === 'local' && nativeVideo!.facing === 'user'} />
               </View>
             )}
           </View>
@@ -959,7 +959,9 @@ const styles = StyleSheet.create({
   // underlying RTC layer at the exact measured tile rectangles.
   webView: { flex: 1, zIndex: 1, backgroundColor: 'transparent' },
   nativeVideoLayer: { ...StyleSheet.absoluteFill, zIndex: 0 },
-  nativeTile: { position: 'absolute', backgroundColor: '#050505' },
-  nativePipFrame: { position: 'absolute', borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.48)', backgroundColor: '#111' },
+  nativeTile: { position: 'absolute', zIndex: 0, backgroundColor: '#050505' },
+  // UIKit uses sibling z-index/order; RTCView's zOrder prop is not exported on iOS by this installed WebRTC package.
+  // Match the established call-overlay PiP: rounded 18 px corner, dark depth shadow, and no separate visible border.
+  nativePipFrame: { position: 'absolute', zIndex: 1, borderRadius: 18, overflow: 'hidden', backgroundColor: '#111', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.45, shadowRadius: 15 },
   nativeFill: { width: '100%', height: '100%' },
 });
