@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/@:handle([A-Za-z0-9_]{1,30})", destination: "/u/:handle" }];
   },
+  // native binaries live on GitHub release assets (see BINARY_HOST in src/lib/releases.ts)
+  async redirects() {
+    return [{ source: "/downloads/:file([A-Za-z0-9._-]+\\.(?:ipa|apk))", destination: "https://github.com/donnydey22/openlounge/releases/download/downloads-v1/:file", permanent: false }];
+  },
   async headers() {
     return [
       {

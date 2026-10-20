@@ -19,3 +19,7 @@ export const IOS_RELEASE = {
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";
+
+// Binaries are hosted as GitHub release assets (a ~400 MB `railway up` upload kept failing); /downloads/*.ipa|apk redirect there.
+export const BINARY_HOST = "https://github.com/donnydey22/openlounge/releases/download/downloads-v1";
+export const binaryUrl = (file: string) => `${BINARY_HOST}/${file.split("/").pop()}`;

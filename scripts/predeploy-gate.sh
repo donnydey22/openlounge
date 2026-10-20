@@ -62,7 +62,7 @@ for p in healthz readyz; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-tim
 node -e 'const W=require("ws");const w=new W("wss://openlounge.app/ws",{headers:{Origin:"https://openlounge.app"}});const t=setTimeout(()=>process.exit(1),8000);w.on("open",()=>{w.close();process.exit(0)});w.on("error",()=>process.exit(1));w.on("unexpected-response",()=>process.exit(1))' && pass "wss upgrade" || fail "wss upgrade"
 timeout 8 openssl s_client -connect turn.openlounge.app:443 -servername turn.openlounge.app </dev/null 2>/dev/null | grep -q "Verify return code: 0" && pass "TURN TLS :443 cert ok" || fail "TURN TLS :443"
 timeout 6 bash -c '</dev/tcp/165.232.137.71/40443' 2>/dev/null && pass "mediasoup TCP 40443 open" || fail "mediasoup TCP 40443"
-c=$(curl -sI -o /dev/null -w '%{http_code}' --max-time 10 https://openlounge.app/downloads/openlounge-0.3.18-34.apk); [[ $c == 200 ]] && pass "APK 0.3.18-34 served" || fail "APK $c"
+c=$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 10 https://openlounge.app/downloads/openlounge-0.3.18-34.apk); [[ $c == 200 ]] && pass "APK 0.3.18-34 served" || fail "APK $c"
 
 
 echo "== 4b. native shells (static, read-only; no builds)"

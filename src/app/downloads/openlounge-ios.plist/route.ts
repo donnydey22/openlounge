@@ -1,4 +1,4 @@
-import { IOS_RELEASE } from "@/lib/releases";
+import { IOS_RELEASE, binaryUrl } from "@/lib/releases";
 
 export const dynamic = "force-static";
 
@@ -17,7 +17,7 @@ export function GET() {
           <key>kind</key>
           <string>software-package</string>
           <key>url</key>
-          <string>https://openlounge.app${IOS_RELEASE.file}</string>
+          <string>${binaryUrl(IOS_RELEASE.file)}</string>
         </dict>
       </array>
       <key>metadata</key>
