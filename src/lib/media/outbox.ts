@@ -3,7 +3,7 @@
 // the upload runs with a progress ring and a cancel button, then the server message replaces the bubble in place
 // (same clientId). Failures keep the bubble with "Retry"; uploads resume after network drops on their own.
 import { useSyncExternalStore } from "react";
-import type { DirectMessage } from "@/lib/types";
+import type { DirectMessage, ReplyReference } from "@/lib/types";
 import { MEDIA_LIMITS, albumLabel, formatBytes, mediaLabel, type MediaAttachment, type MediaKind } from "./types";
 import { MediaHttpError, UploadCancelled, sendMedia, uploadMedia } from "./client";
 
@@ -17,6 +17,8 @@ export interface OutboxEntry {
   caption: string;
   ttlSeconds: number;
   viewOnce: boolean;
+  replyToId?: string;
+  replyTo?: ReplyReference;
   progress: number;
   phase: OutboxPhase;
   error?: string;
@@ -114,6 +116,9 @@ export interface QueueOpts {
   viewOnce?: boolean;
   /** extra local info for voice notes (live waveform + duration while recording) */
   voice?: { durMs: number; wave: string };
+  /** Existing message in this conversation to quote after the media upload completes. */
+  replyToId?: string;
+  replyTo?: ReplyReference;
   now: number;
   newClientId: () => string;
 }
@@ -154,6 +159,8 @@ export async function queueMedia(file: File | Blob, kind: MediaKind, o: QueueOpt
     caption,
     ttlSeconds: o.ttlSeconds ?? 0,
     viewOnce: !!o.viewOnce,
+    replyToId: o.replyToId,
+    replyTo: o.replyTo,
     progress: 0,
     phase: "uploading",
     previewUrl: local.url,
@@ -171,6 +178,7 @@ export async function queueMedia(file: File | Blob, kind: MediaKind, o: QueueOpt
     text: caption || mediaLabel(media),
     createdAt: o.now,
     media,
+    ...(o.replyTo ? { replyTo: o.replyTo } : {}),
     state: "sending",
   };
 }
@@ -210,6 +218,8 @@ export async function queueAlbum(files: File[], o: QueueOpts, cb: QueueCallbacks
     caption,
     ttlSeconds: o.ttlSeconds ?? 0,
     viewOnce: false,
+    replyToId: o.replyToId,
+    replyTo: o.replyTo,
     progress: 0,
     phase: "uploading",
     previewUrl: items[0].previewUrl,
@@ -228,6 +238,7 @@ export async function queueAlbum(files: File[], o: QueueOpts, cb: QueueCallbacks
     createdAt: o.now,
     media: { ...atts[0], size: total },
     attachments: atts,
+    ...(o.replyTo ? { replyTo: o.replyTo } : {}),
     state: "sending",
   };
 }
@@ -273,7 +284,7 @@ async function run(clientId: string, cb: QueueCallbacks) {
       patch(clientId, { phase: "uploading", error: undefined });
       const mediaIds = await uploadAlbum(clientId);
       patch(clientId, { phase: "sending" });
-      const message = await sendWithRetry({ to: e.peerId, mediaIds, clientId, caption: e.caption, ttlSeconds: e.ttlSeconds || undefined });
+      const message = await sendWithRetry({ to: e.peerId, mediaIds, clientId, caption: e.caption, ttlSeconds: e.ttlSeconds || undefined, replyToId: e.replyToId });
       patch(clientId, { phase: "done" });
       cb.onDone(clientId, message);
       setTimeout(() => {
@@ -298,7 +309,7 @@ async function run(clientId: string, cb: QueueCallbacks) {
       });
       patch(clientId, { uploaded, progress: 1, phase: "sending" });
     }
-    const message = await sendWithRetry({ to: e.peerId, mediaId: uploaded.id, clientId, caption: e.caption, ttlSeconds: e.ttlSeconds || undefined, viewOnce: e.viewOnce || undefined });
+    const message = await sendWithRetry({ to: e.peerId, mediaId: uploaded.id, clientId, caption: e.caption, ttlSeconds: e.ttlSeconds || undefined, viewOnce: e.viewOnce || undefined, replyToId: e.replyToId });
     patch(clientId, { phase: "done" });
     cb.onDone(clientId, message);
     // keep the local preview until the bubble swapped to the server copy and its thumbnail loaded

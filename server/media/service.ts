@@ -675,7 +675,7 @@ export class MediaService {
     });
     const list = items.map((r) => this.toAttachment(r));
     const text = caption || (album ? albumLabel(list) : mediaLabel(list[0]));
-    const res = store.sendMediaDm(fromId, to, text, body.clientId, list[0], album ? list : undefined);
+    const res = store.sendMediaDm(fromId, to, text, body.clientId, list[0], album ? list : undefined, body.replyToId);
     if (!res.ok || res.duplicate) {
       for (const r of items) Object.assign(r, { ttlSeconds: null, viewOnce: false, expiresAt: null, position: 0 });
       return res;

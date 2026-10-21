@@ -136,6 +136,8 @@ export interface SendMediaInput {
   caption?: string;
   ttlSeconds?: number;
   viewOnce?: boolean;
+  /** Existing message in this same conversation to quote on the sent attachment. */
+  replyToId?: string;
 }
 export async function sendMedia(input: SendMediaInput) {
   return (await postJson<{ message: DirectMessage }>("/api/media/send", input)).message;
@@ -145,9 +147,14 @@ export async function sendMedia(input: SendMediaInput) {
 
 type Urls = Partial<Record<MediaVariant, string>> & { gone?: boolean };
 const cache = new Map<string, { urls: Urls; until: number }>();
+const cacheListeners = new Map<string, Set<() => void>>();
 const pending = new Map<string, { v: MediaVariant[]; waiters: ((u: Urls) => void)[] }>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 const URL_CACHE_MS = 4 * 60_000;
+
+function notifyCachedUrls(id: string) {
+  for (const listener of cacheListeners.get(id) ?? []) listener();
+}
 
 export function variantsFor(m: MediaAttachment): MediaVariant[] {
   if (m.kind === "photo") return m.srcset ? ["thumb", "thumbS", "thumbAvif", "thumbSAvif", "full"] : ["thumb", "full"];
@@ -169,6 +176,7 @@ async function flush() {
     for (const [id, p] of batch) {
       const urls = r.urls[id] ?? { gone: true };
       cache.set(id, { urls, until: Date.now() + URL_CACHE_MS });
+      notifyCachedUrls(id);
       p.waiters.forEach((w) => w(urls));
     }
   } catch {
@@ -217,7 +225,20 @@ export const cachedUrls = (id: string) => {
   const c = cache.get(id);
   return c && c.until > Date.now() ? c.urls : null;
 };
-export const dropUrls = (id: string) => cache.delete(id);
+/** Subscribe to a pre-existing signed-URL cache entry without initiating a signing request. */
+export function onCachedUrls(id: string, listener: () => void) {
+  const listeners = cacheListeners.get(id) ?? new Set<() => void>();
+  listeners.add(listener);
+  cacheListeners.set(id, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) cacheListeners.delete(id);
+  };
+}
+export const dropUrls = (id: string) => {
+  cache.delete(id);
+  notifyCachedUrls(id);
+};
 
 // ---------- actions ----------
 export const openViewOnce = (id: string) => postJson<{ urls: Urls }>(`/api/media/${id}/open`, {});

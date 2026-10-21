@@ -28,7 +28,7 @@ interface LiveRoomContextValue {
   leave(): void;
   setReactionTrayOpen(open: boolean): void;
   sendReaction(emoji: string): Promise<void>;
-  sendChat(text: string): Promise<boolean>;
+  sendChat(text: string, replyToId?: string): Promise<boolean>;
   editChat(messageId: string, text: string): Promise<boolean>;
   deleteChat(messageId: string): Promise<void>;
   setSelfMuted(muted: boolean): void;
@@ -245,10 +245,10 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
   );
 
   const sendChat = useCallback(
-    async (text: string) => {
+    async (text: string, replyToId?: string) => {
       if (!roomId) return false;
       try {
-        await request("chat:send", { roomId, text });
+        await request("chat:send", { roomId, text, replyToId });
         return true;
       } catch (error) {
         reportError(error);

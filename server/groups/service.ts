@@ -26,6 +26,7 @@ import {
 import { filterText } from "../moderation";
 import { isGroupId } from "../conversation";
 import { log } from "../log";
+import { replyReference } from "../../src/lib/chat/reply";
 import type { GroupsRepo } from "./repo";
 import type { ConvRecord, GroupRole, InviteRecord, MemberRecord, PinRecord, ServicePayload } from "./types";
 
@@ -668,7 +669,7 @@ export class GroupService {
 
   // ---------- messaging (called through the generic DM endpoints with peerId = group id) ----------
 
-  send(fromId: string, gid: string, rawText: unknown, clientId?: unknown): { ok: true; message: DirectMessage } | { ok: false; error: string } {
+  send(fromId: string, gid: string, rawText: unknown, clientId?: unknown, replyToId?: unknown): { ok: true; message: DirectMessage } | { ok: false; error: string } {
     const conv = this.convs.get(gid);
     if (!conv || !this.member(gid, fromId)) return { ok: false, error: "You're not a member of this group" };
     const c = cleanText(rawText, CHAT_MAX_LENGTH);
@@ -678,7 +679,9 @@ export class GroupService {
     const list = this.store.dms.get(gid) ?? [];
     if (cid) for (let i = list.length - 1; i >= Math.max(0, list.length - 50); i--) if (list[i].clientId === cid && list[i].fromId === fromId) return { ok: true, message: this.decorate(list[i]) };
     if (this.slide(this.msgRate, fromId, 10_000, MSG_MAX_PER_10S)) return { ok: false, error: "Slow down a little 🙂" };
-    const msg = this.buildMessage(gid, fromId, c.text, cid);
+    const target = typeof replyToId === "string" ? list.find((m) => m.id === replyToId) : undefined;
+    if (replyToId !== undefined && !target) return { ok: false, error: "Original message is no longer available" };
+    const msg = { ...this.buildMessage(gid, fromId, c.text, cid), ...(target ? { replyTo: replyReference(target) } : {}) };
     this.store.pushConversationMessage(gid, msg);
     const me = this.member(gid, fromId)!;
     me.lastReadAt = msg.createdAt;
@@ -687,7 +690,7 @@ export class GroupService {
   }
 
   /** A photo / video / file / voice note / album into a group (server/media builds the attachments; same fan-out). */
-  sendMedia(fromId: string, gid: string, text: string, clientId: unknown, media: NonNullable<DirectMessage["media"]>, attachments?: DirectMessage["attachments"]): { ok: true; message: DirectMessage; duplicate: boolean } | { ok: false; error: string } {
+  sendMedia(fromId: string, gid: string, text: string, clientId: unknown, media: NonNullable<DirectMessage["media"]>, attachments?: DirectMessage["attachments"], replyToId?: unknown): { ok: true; message: DirectMessage; duplicate: boolean } | { ok: false; error: string } {
     const conv = this.convs.get(gid);
     const me = this.member(gid, fromId);
     if (!conv || !me) return { ok: false, error: "You're not a member of this group" };
@@ -695,7 +698,9 @@ export class GroupService {
     const list = this.store.dms.get(gid) ?? [];
     if (cid) for (let i = list.length - 1; i >= Math.max(0, list.length - 50); i--) if (list[i].clientId === cid && list[i].fromId === fromId) return { ok: true, message: this.decorate(list[i]), duplicate: true };
     // no per-message limit (albums are one message; uploads are rate limited in server/media)
-    const msg: DirectMessage = { ...this.buildMessage(gid, fromId, text.slice(0, CHAT_MAX_LENGTH), cid), media, ...(attachments?.length ? { attachments } : {}) };
+    const target = typeof replyToId === "string" ? list.find((m) => m.id === replyToId) : undefined;
+    if (replyToId !== undefined && !target) return { ok: false, error: "Original message is no longer available" };
+    const msg: DirectMessage = { ...this.buildMessage(gid, fromId, text.slice(0, CHAT_MAX_LENGTH), cid), media, ...(attachments?.length ? { attachments } : {}), ...(target ? { replyTo: replyReference(target) } : {}) };
     this.store.pushConversationMessage(gid, msg);
     me.lastReadAt = msg.createdAt;
     this.repo.upsertMember(me);

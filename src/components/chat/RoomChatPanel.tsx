@@ -12,6 +12,10 @@ import { Avatar } from "../Avatar";
 import { ChatComposer } from "./ChatComposer";
 import { StickerMessage } from "../stickers/StickerMessage";
 import { parseSticker } from "@/lib/stickers/token";
+import { ReplyGesture } from "./ReplyGesture";
+import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
+import { replyReference } from "@/lib/chat/reply";
+import { jumpToMessage } from "../groups/GroupBits";
 
 const GROUP_WINDOW_MS = 2 * 60_000;
 
@@ -57,7 +61,7 @@ export function RoomChatPanel({
   /** Only the host may remove a host-authored room-chat message. */
   canModerateHost?: boolean;
   connected: boolean;
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, replyToId?: string) => Promise<boolean>;
   onDelete: (messageId: string) => void;
   /** save an edit of my own message; false keeps edit mode open */
   onEdit?: (messageId: string, text: string) => Promise<boolean>;
@@ -78,6 +82,7 @@ export function RoomChatPanel({
   const [showJump, setShowJump] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [replying, setReplying] = useState<import("@/lib/types").ReplyReference | null>(null);
   const [, setTick] = useState(0);
 
   // re-render every 30s so soft timestamps stay fresh
@@ -142,11 +147,13 @@ export function RoomChatPanel({
             const canDelete = mine || (canModerate && (m.authorId !== hostId || canModerateHost));
             const canReport = !mine && !!onReport && !m.authorIsBot;
             const canEdit = !!onEdit && mine && !sticker && Date.now() - m.createdAt < 48 * 3600_000;
-            const canAct = canDelete || canReport || canEdit;
+            // Reply is universal; moderation actions remain exactly as before.
+            const canAct = true;
             const isHost = m.authorId === hostId;
             const roleMark = isHost ? "✳︎" : m.authorRole === "speaker" ? "🎙" : null;
             return (
-              <div key={m.id} className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start", grouped ? "mt-0.5" : "mt-2.5")}>
+              <ReplyGesture key={m.id} messageId={m.id} onReply={() => setReplying(replyReference(m))} testId="room-replyable-message">
+              <div data-testid="dm-msg" data-mid={m.id} className={cn("flex items-end gap-2", mine ? "justify-end" : "justify-start", grouped ? "mt-0.5" : "mt-2.5")}>
                 {!mine && (
                   <div className="w-6 shrink-0">
                     {!grouped && (
@@ -183,6 +190,7 @@ export function RoomChatPanel({
                       <span className="text-[10px] text-zinc-500">{softTime(m.createdAt)}</span>
                     </div>
                   )}
+                  {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={(messageId) => jumpToMessage(listRef.current, messageId)} />}
                   {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-snug text-zinc-100"><FormattedText text={m.text} leaf={roomLeaf} /></p>}
                   {(m.editedAt || (!grouped && mine)) && (
                     <div className={cn("mt-0.5 text-[10px] leading-none text-zinc-500", mine && "text-right")} data-testid={m.editedAt ? "room-chat-edited" : undefined}>
@@ -199,6 +207,20 @@ export function RoomChatPanel({
                         selected === m.id ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
                       )}
                     >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelected(null);
+                          setEditing(null);
+                          setReplying(replyReference(m));
+                        }}
+                        title="Reply"
+                        aria-label="Reply"
+                        data-testid="room-chat-reply"
+                        className="rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow hover:text-emerald-400"
+                      >
+                        ↩
+                      </button>
                       {canReport && (
                         <button
                           onClick={(e) => {
@@ -245,6 +267,7 @@ export function RoomChatPanel({
                   )}
                 </div>
               </div>
+              </ReplyGesture>
             );
           })}
         </div>
@@ -260,13 +283,18 @@ export function RoomChatPanel({
 
       <div className="px-3 pt-1 pb-3">
         <ChatComposer
-          onSend={onSend}
+          onSend={async (text) => {
+            const ok = await onSend(text, replying?.messageId);
+            if (ok) setReplying(null);
+            return ok;
+          }}
           disabled={!connected}
           placeholder="Say something nice…"
           compact
           editing={editing}
           onEditSave={async (text) => (editing && onEdit ? onEdit(editing.id, text) : false)}
           onEditCancel={() => setEditing(null)}
+          above={replying ? () => <ReplyComposerPreview reply={replying} onCancel={() => setReplying(null)} /> : undefined}
         />
       </div>
     </div>

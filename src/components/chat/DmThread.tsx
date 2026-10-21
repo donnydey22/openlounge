@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, CornerUpLeft, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -51,6 +51,9 @@ import { mediaGone } from "@/lib/media/types";
 import { MediaLayer } from "../media/MediaLayer";
 import { MediaAttach, MediaVoiceButton, type MediaSendCtx } from "../media/MediaComposer";
 import { retryMedia, type QueueCallbacks } from "@/lib/media/outbox";
+import { ReplyGesture } from "./ReplyGesture";
+import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
+import { replyReference } from "@/lib/chat/reply";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -309,6 +312,7 @@ export function DmThread({
 
   // ---- edit (Telegram): "Edit" in the menu → the composer holds the text → ✓ saves (optimistic, reverted on error) ----
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [replying, setReplying] = useState<import("@/lib/types").ReplyReference | null>(null);
   const [flashEdit, setFlashEdit] = useState<Record<string, number>>({});
   const applyEdit = useCallback((messageId: string, patch: { text: string; editedAt?: number; editCount?: number }) => {
     setMessages((list) => (list && list.some((x) => x.id === messageId) ? list.map((x) => (x.id === messageId ? { ...x, ...patch } : x)) : list));
@@ -332,7 +336,10 @@ export function DmThread({
     },
     [editing, applyEdit, request, peerId, toast],
   );
-  useEffect(() => setEditing(null), [peerId]);
+  useEffect(() => {
+    setEditing(null);
+    setReplying(null);
+  }, [peerId]);
   useEffect(() => {
     if (editing && messages && !messages.some((x) => x.id === editing.id)) setEditing(null); // deleted meanwhile
   }, [editing, messages]);
@@ -813,7 +820,7 @@ export function DmThread({
     async (item: Item) => {
       if (item.media) return; // attachments upload + send through the media outbox (resumable, own retries)
       try {
-        const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId });
+        const r = await request<{ message: DirectMessage }>("dm:send", { to: peerId, text: item.text, clientId: item.clientId, replyToId: item.replyTo?.messageId });
         if (item.clientId) {
           clearTimeout(stallTimers.current.get(item.clientId));
           stallTimers.current.delete(item.clientId);
@@ -842,14 +849,15 @@ export function DmThread({
     [],
   );
   const onMediaQueued = useCallback((item: Item) => {
+    if (item.replyTo) setReplying(null);
     stickToBottom.current = true;
     smoothNext.current = true;
     setUnseenBelow(0);
     setMessages((list) => [...(list ?? []), item]);
   }, []);
   const mediaCtx = useMemo<MediaSendCtx>(
-    () => ({ peerId, peerName: peer ? firstName(peer.name) : undefined, group: isGroupId(peerId), me: me ? { id: me.id, name: me.name, color: me.color } : null, newClientId, onQueued: onMediaQueued, callbacks: mediaCallbacks }),
-    [peerId, peer, me, onMediaQueued, mediaCallbacks],
+    () => ({ peerId, peerName: peer ? firstName(peer.name) : undefined, group: isGroupId(peerId), me: me ? { id: me.id, name: me.name, color: me.color } : null, replyToId: replying?.messageId, replyTo: replying ?? undefined, newClientId, onQueued: onMediaQueued, callbacks: mediaCallbacks }),
+    [peerId, peer, me, replying, onMediaQueued, mediaCallbacks],
   );
   const canAttach = !!peer && !peer.isBot && (!isGroup || (!!group && !gone)); // groups: members only (photos, files, voice, albums)
   const [pastedFiles, setPastedFiles] = useState<File[] | null>(null);
@@ -866,6 +874,7 @@ export function DmThread({
       fromColor: me.color,
       toId: peerId,
       text,
+      ...(replying ? { replyTo: replying } : {}),
       createdAt: serverNow(), // display only; the server stamps the real createdAt
       state: "sending",
     };
@@ -881,6 +890,7 @@ export function DmThread({
     setMessages((list) => [...(list ?? []), item]);
     armStall(clientId);
     if (connected) void deliver(item);
+    setReplying(null);
     return true; // composer clears immediately
   };
 
@@ -1013,7 +1023,10 @@ export function DmThread({
     // attachments: Copy copies the caption only (never an auto label like "📷 Photo"); Open → the viewer (save/share/delete)
     const ma = mediaActions(m, me?.id);
     const copy = ma ? ma.copyText : m.text;
-    const out: MessageAction[] = copy
+    const out: MessageAction[] = [
+      { key: "reply", label: "Reply", icon: <CornerUpLeft className="h-[18px] w-[18px]" />, onSelect: () => (setSelected(null), setEditing(null), setReplying(replyReference(m)), requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus())) },
+    ];
+    const copyActions: MessageAction[] = copy
       ? [
           {
             key: "copy",
@@ -1025,6 +1038,7 @@ export function DmThread({
           },
         ]
       : [];
+    out.push(...copyActions);
     if (ma && m.media && !m.state && m.media.kind !== "voice" && m.media.kind !== "document" && !mediaGone(m.media, serverNow()) && !m.media.viewOnce)
       out.unshift({ key: "open", label: ma.count > 1 ? "Open album" : "Open", icon: <Maximize2 className="h-[18px] w-[18px]" />, onSelect: () => openViewer({ message: m, from: overlay.target.el.getBoundingClientRect(), mode: "visual", index: 0 }) });
     if (groupRow && !m.state && groupRow.amAdmin) {
@@ -1047,6 +1061,14 @@ export function DmThread({
 
   // minute tick / foreground / timezone change → separators ("Today" → "Yesterday" at midnight) re-render
   const clockTick = useClockTick();
+  const beginReply = useCallback((m: Item) => {
+    if (m.state) return;
+    setSelected(null);
+    setEditing(null);
+    setReplying(replyReference(m));
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus());
+  }, []);
+
   const rows = useMemo(() => {
     if (!messages) return [];
     return messages.map((m, i) => {
@@ -1065,6 +1087,14 @@ export function DmThread({
   const [renderWindow, setRenderWindow] = useState(RENDER_WINDOW);
   const rowOffset = Math.max(0, rows.length - renderWindow);
   const visibleRows = rowOffset ? rows.slice(rowOffset) : rows;
+
+  const jumpToReply = useCallback((messageId: string) => {
+    if (jumpToMessage(listRef.current, messageId)) return;
+    setRenderWindow((n) => Math.max(n, rows.length));
+    requestAnimationFrame(() => {
+      if (!jumpToMessage(listRef.current, messageId)) toast("Original message is no longer loaded");
+    });
+  }, [rows.length, toast]);
 
   const lastMineIdx = useMemo(() => {
     if (!messages || !me) return -1;
@@ -1355,7 +1385,9 @@ export function DmThread({
                   Show earlier messages
                 </button>
               )}
-              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return m.kind === "call" && m.call ? (
+              {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return (
+                <ReplyGesture key={keyOf(m)} messageId={m.id} onReply={() => beginReply(m)} disabled={!!m.state || !!selected} testId="replyable-message">
+                {m.kind === "call" && m.call ? (
                 <CallMessageRow
                   key={keyOf(m)}
                   meta={m.call}
@@ -1411,6 +1443,7 @@ export function DmThread({
                   chipPlay={chipPlay[m.id] ?? null}
                   interactNonce={interact[m.id] ?? 0}
                   takeFlyFrom={takeFlyFrom}
+                  onJumpToReply={jumpToReply}
                   selecting={!!selected}
                   selected={!!selected?.has(keyOf(m))}
                   onSelect={toggleSelect}
@@ -1418,6 +1451,8 @@ export function DmThread({
                 />
                 {linkIds.has(keyOf(m)) && <RoomLinkCards ids={linkIds.get(keyOf(m))!} cards={roomCards} mine={m.fromId === me?.id} />}
                 </div>
+              )}
+                </ReplyGesture>
               ); })}
               {/* sponsored message in large groups: one per view, after the last message (server-gated, OFF by default) */}
               {isGroup && messages.length > 0 && <SponsoredSlot placement="groups" chat={peerId} className="my-2" />}
@@ -1506,7 +1541,7 @@ export function DmThread({
           onTypingStop={onTypingStop}
           disabled={messages === null}
           placeholder={peer && !isGroup ? `Message ${firstName(peer.name)}…` : "Message…"}
-          above={isGroup && group ? (t, set) => <MentionPicker text={t} members={group.members} meId={me?.id} onPick={set} /> : undefined}
+          above={replying || (isGroup && group) ? (t, set) => <>{replying && <ReplyComposerPreview reply={replying} onCancel={() => setReplying(null)} />}{isGroup && group && <MentionPicker text={t} members={group.members} meId={me?.id} onPick={set} />}</> : undefined}
           autoFocus
           emojiPanel
           panelHost={panelHost}
@@ -1571,6 +1606,7 @@ const MessageRow = memo(function MessageRow({
   chipPlay,
   interactNonce,
   takeFlyFrom,
+  onJumpToReply,
   selecting,
   selected,
   onSelect,
@@ -1602,6 +1638,7 @@ const MessageRow = memo(function MessageRow({
   chipPlay: string | null;
   interactNonce: number;
   takeFlyFrom: (clientId: string) => DOMRect | undefined;
+  onJumpToReply: (messageId: string) => void;
   /** multi-select mode: a tap toggles the row, long-press / reactions are off */
   selecting?: boolean;
   selected?: boolean;
@@ -1747,8 +1784,11 @@ const MessageRow = memo(function MessageRow({
         {mine && <Receipt m={m} onRetry={onRetry} />}
         {mine && !m.state && !selecting && <ReactButton onClick={open} />}
         {m.media ? (
-          <div ref={bubble} title={formatFull(m.createdAt)} data-testid="dm-bubble" data-ts={m.createdAt} data-mid-bubble={m.id} {...pressHandlers} className="msg-in flex min-w-0 max-w-full">
-            <MediaBubble m={m} mine={mine} shape={shape} onRetry={onRetry} />
+          <div ref={bubble} title={formatFull(m.createdAt)} data-testid="dm-bubble" data-ts={m.createdAt} data-mid-bubble={m.id} {...pressHandlers} className="msg-in min-w-0 max-w-full">
+            <div className="min-w-0 rounded-xl bg-zinc-900/35 p-1.5">
+              {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={onJumpToReply} />}
+              <MediaBubble m={m} mine={mine} shape={shape} onRetry={onRetry} />
+            </div>
           </div>
         ) : (
         <div
@@ -1770,6 +1810,7 @@ const MessageRow = memo(function MessageRow({
             m.state === "failed" && "opacity-60",
           )}
         >
+          {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={onJumpToReply} />}
           {sticker ? (
             <StickerMessage sticker={sticker} pending={m.state === "sending"} />
           ) : parts ? (

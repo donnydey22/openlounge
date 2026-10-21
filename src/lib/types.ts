@@ -143,8 +143,31 @@ export interface ChatMessage {
   authorIsBot: boolean;
   text: string;
   createdAt: number;
+  /** Trusted, immutable snapshot of the room message this message replies to. */
+  replyTo?: ReplyReference;
   /** set when the author edited the message (room chat is in-memory, like the message itself) */
   editedAt?: number;
+}
+
+/**
+ * Small immutable original-message snapshot stored on a reply. The server constructs it from
+ * the target message; no media URL or user-supplied sender information is accepted.
+ */
+export interface ReplyReference {
+  messageId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  /** Attachment metadata is server-derived; URLs are deliberately never stored in a reply snapshot. */
+  mediaId?: string;
+  mediaKind?: "photo" | "video" | "voice" | "document";
+  mediaName?: string;
+  mediaDurationMs?: number;
+  /** Present only for an album; the first attachment is the optional cache-only visual preview. */
+  albumCount?: number;
+  albumPhotoCount?: number;
+  messageKind?: MessageKind;
+  sticker?: boolean;
 }
 
 export interface DirectMessage {
@@ -180,6 +203,8 @@ export interface DirectMessage {
   /** Last edit (epoch ms) and how many times it was edited (message editing). Absent = never edited. */
   editedAt?: number;
   editCount?: number;
+  /** Trusted, immutable snapshot of the message this one replies to. */
+  replyTo?: ReplyReference;
 }
 
 /** Authors can edit their text messages this long after sending (Telegram: 48 h). */

@@ -2,7 +2,7 @@
 // Composer side of attachments for a chat thread: 📎 button + preview sheet, paste / drag-and-drop of files, and the
 // voice note button. Everything ends in queueMedia() (optimistic bubble + resumable upload + send).
 import { useCallback, useEffect, useState } from "react";
-import type { DirectMessage } from "@/lib/types";
+import type { DirectMessage, ReplyReference } from "@/lib/types";
 import { serverNow } from "@/lib/time";
 import { kindForFile, queueAlbum, queueMedia, type QueueCallbacks } from "@/lib/media/outbox";
 import { ALBUM_MAX } from "@/lib/media/types";
@@ -15,6 +15,9 @@ export interface MediaSendCtx {
   /** a group chat: no view-once option */
   group?: boolean;
   me: { id: string; name: string; color: string } | null;
+  /** Target message for the next attachment reply, if any. */
+  replyToId?: string;
+  replyTo?: ReplyReference;
   newClientId: () => string;
   /** add the optimistic message to the thread (and scroll to it) */
   onQueued: (m: DirectMessage & { state: "sending" }) => void;
@@ -22,11 +25,11 @@ export interface MediaSendCtx {
 }
 
 export function useMediaSend(ctx: MediaSendCtx) {
-  const { peerId, me, newClientId, onQueued, callbacks } = ctx;
+  const { peerId, me, newClientId, onQueued, callbacks, replyToId, replyTo } = ctx;
   const sendFiles = useCallback(
     async (s: AttachSend) => {
       if (!me) return;
-      const base = { peerId, me, ttlSeconds: s.ttlSeconds, now: serverNow(), newClientId };
+      const base = { peerId, me, ttlSeconds: s.ttlSeconds, now: serverNow(), newClientId, replyToId, replyTo };
       if (s.album && !s.asFile && s.files.length > 1) {
         // albums of up to 10, in the tray's order; the caption rides on the first one
         for (let i = 0; i < s.files.length; i += ALBUM_MAX) {
@@ -42,15 +45,15 @@ export function useMediaSend(ctx: MediaSendCtx) {
         onQueued(item);
       }
     },
-    [peerId, me, newClientId, onQueued, callbacks],
+    [peerId, me, newClientId, onQueued, callbacks, replyToId, replyTo],
   );
   const sendVoice = useCallback(
     async (r: Recorded) => {
       if (!me) return;
-      const item = await queueMedia(r.blob, "voice", { peerId, me, voice: { durMs: r.durMs, wave: r.wave }, now: serverNow(), newClientId }, callbacks);
+      const item = await queueMedia(r.blob, "voice", { peerId, me, voice: { durMs: r.durMs, wave: r.wave }, now: serverNow(), newClientId, replyToId, replyTo }, callbacks);
       onQueued(item);
     },
-    [peerId, me, newClientId, onQueued, callbacks],
+    [peerId, me, newClientId, onQueued, callbacks, replyToId, replyTo],
   );
   return { sendFiles, sendVoice };
 }
