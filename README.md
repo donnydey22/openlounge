@@ -258,9 +258,9 @@ A **debug** (sideload) APK wraps Open Lounge in a native WebView shell:
 
 | | |
 |---|---|
-| File | `openlounge.apk` — **not built yet under the Open Lounge name**; it will be rebuilt after the Railway deploy (the last build was `clubroom.apk`, package `com.clubroom.app.debug`) |
-| Package | `com.donnydey.openlounge.debug` |
-| Version | 0.1.0 |
+| File | `android/app/build/outputs/apk/debug/app-debug.apk` (local build output; not committed) |
+| Package | `com.donnydey.openlounge` |
+| Version | 0.2.8 (versionCode 10) |
 | Min Android | 7.0 (API 24) |
 | Signing | Debug keystore (not Play Store–ready) |
 
@@ -268,7 +268,7 @@ The APK does **not** embed the Node server. After install, paste your deployed *
 
 ### Install on your phone
 
-1. Copy `openlounge.apk` to the phone (USB, Drive, email, AirDrop-to-Files, etc.).
+1. Build `app-debug.apk` as described below, then copy it to the phone (USB, Drive, email, etc.).
 2. Open the file in **Files** / **Downloads**.
 3. If Android blocks it: **Settings → Apps → Special app access → Install unknown apps** (or **Settings → Security → Unknown sources**) and allow the app you're installing from (Chrome, Files, Drive, …).
 4. Tap **Install**. Launch **Open Lounge**.
