@@ -3,9 +3,18 @@
 import { MessageSquareReply } from "lucide-react";
 import { useRef, useState } from "react";
 import { haptic, prefersReducedMotion, spring, SPRING_SNAPPY } from "./emoji/motion";
+import { carouselOwnsGesture } from "@/lib/media/gestures";
 
 const REPLY_THRESHOLD = 56;
 const MAX_DRAG = 88;
+const IOS_BACK_SWIPE_GUTTER = 24;
+const INTERACTIVE_SELECTOR = 'button, a[href], input, textarea, select, [contenteditable="true"], [role="slider"], [data-testid="media-voice"]';
+
+/** Rich message controls own their tap/drag; visual media remains replyable outside its actual controls. */
+function replyGestureBlocked(target: EventTarget | null, clientX: number) {
+  if (clientX <= IOS_BACK_SWIPE_GUTTER || carouselOwnsGesture(target)) return true;
+  return target instanceof Element && !!target.closest(INTERACTIVE_SELECTOR);
+}
 
 /**
  * A passive horizontal gesture that leaves vertical scrolling intact. It works around every
@@ -46,8 +55,13 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           transition: gesture.current.axis === "x" || prefersReducedMotion() ? "none" : `transform ${settle.duration}ms ${settle.easing}`,
           touchAction: "pan-y",
         }}
-        onPointerDownCapture={(event) => {
+        onPointerDown={(event) => {
           if (disabled || (event.pointerType !== "touch" && event.pointerType !== "pen") || !event.isPrimary) return;
+          // This is deliberately bubble-phase: AlbumCarousel writes data-hscroll-pass on its own pointerdown first.
+          if (replyGestureBlocked(event.target, event.clientX)) {
+            reset();
+            return;
+          }
           gesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: null, armed: false };
         }}
         onPointerMoveCapture={(event) => {

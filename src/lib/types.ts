@@ -158,8 +158,14 @@ export interface ReplyReference {
   senderId: string;
   senderName: string;
   text: string;
+  /** Attachment metadata is server-derived; URLs are deliberately never stored in a reply snapshot. */
+  mediaId?: string;
   mediaKind?: "photo" | "video" | "voice" | "document";
   mediaName?: string;
+  mediaDurationMs?: number;
+  /** Present only for an album; the first attachment is the optional cache-only visual preview. */
+  albumCount?: number;
+  albumPhotoCount?: number;
   messageKind?: MessageKind;
   sticker?: boolean;
 }
