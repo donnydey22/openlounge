@@ -191,7 +191,7 @@ export function RoomChatPanel({
                     </div>
                   )}
                   {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={(messageId) => jumpToMessage(listRef.current, messageId)} />}
-                  {sticker ? <StickerMessage sticker={sticker} size={112} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-snug text-zinc-100"><FormattedText text={m.text} leaf={roomLeaf} /></p>}
+                  {sticker ? <StickerMessage sticker={sticker} size={112} className={m.replyTo && mine ? "ml-auto" : undefined} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[14px] leading-snug text-zinc-100"><FormattedText text={m.text} leaf={roomLeaf} /></p>}
                   {(m.editedAt || (!grouped && mine)) && (
                     <div className={cn("mt-0.5 text-[10px] leading-none text-zinc-500", mine && "text-right")} data-testid={m.editedAt ? "room-chat-edited" : undefined}>
                       {m.editedAt ? "edited" : ""}
