@@ -85,3 +85,35 @@ test("ladder: no flap on alternating good/bad", () => {
   for (let i = 0; i < 30; i++) l.push(i % 2 ? good : lossy);
   assert.equal(l.level, 0);
 });
+
+test("iPhone native profile: Wi-Fi and LTE keep full quality, while a 300 kbps / 5–10% loss + 200 ms jitter link takes the shared two-sample step-down", () => {
+  const iphone = { inclusiveLossThreshold: true, goodJitterMs: 100 };
+  const wifi = { lossPercent: 0, rttMs: 40, outKbps: 30_000, jitterMs: 4, reasons: [] as string[] };
+  const lte = { lossPercent: 1, rttMs: 90, outKbps: 1_500, jitterMs: 25, reasons: [] as string[] };
+  const weak = { lossPercent: 7, rttMs: 180, outKbps: 300, jitterMs: 200, reasons: ['jitter'] };
+  const l = new NetLadder();
+  for (let i = 0; i < 12; i++) assert.equal(l.push(i % 2 ? wifi : lte, iphone).type, 'none');
+  const first = Array.from({ length: ADAPT.downAfter }, () => l.push(weak, iphone)).at(-1)!;
+  assert.equal(first.type, 'step');
+  if (first.type === 'step') {
+    assert.equal(first.level, 1);
+    assert.equal(first.step.audioBps, 32_000);
+    assert.equal(first.step.videoBps, 400_000);
+  }
+  assert.notEqual(l.level, LADDER.length - 1, 'a brief weak link must not jump straight to the floor');
+});
+
+test("iPhone native profile: audio retains the 16 kbps floor and a same-call reconnect starts at conservative L1", () => {
+  const iphone = { inclusiveLossThreshold: true, goodJitterMs: 100 };
+  const l = new NetLadder();
+  const floor = Array.from({ length: ADAPT.downAfter }, () => l.push(severe, iphone)).at(-1)!;
+  assert.equal(floor.type, "step");
+  assert.equal(LADDER[LADDER.length - 1].audioBps, 16_000);
+  l.reset(ADAPT.reconnectLevel);
+  assert.equal(l.level, 1);
+  const engine = readFileSync(new URL('../../src/lib/calls/engine.ts', import.meta.url), 'utf8');
+  assert.match(engine, /const startLevel = callId && this\.ladderCallId === callId \? ADAPT\.reconnectLevel : 0/);
+  assert.match(engine, /else if \(nativeIosQuality\) void session\.applyLadderStep\(LADDER\[0\]\)/);
+  assert.doesNotMatch(engine, /"ladder"\]\);/);
+  assert.match(engine, /ev === "ladder" && nativeAdaptiveEnabled\(\)/);
+});

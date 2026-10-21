@@ -44,7 +44,8 @@ export const LADDER: readonly LadderStep[] = [
  *  - RECONNECT (main SFU only: ICE restart → rebuild; ICE-TCP 40443 and TURNS 443 are offered in every transport)
  *    when the floor is still severe for 3 more samples: ~5 s of > 15 % loss in total
  *  - after a reconnect the ladder starts at rung 1 (conservative) and climbs only on measured headroom
- *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), never below 60 kbps
+ *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), leaving
+ *    Opus its floor before camera traffic instead of forcing video above a weak link's remaining budget
  *  - audio is never starved: the mic encoding is priority/networkPriority "high"; Opus floor is 16 kbps, never paused
  */
 export const ADAPT = {
@@ -72,6 +73,19 @@ export const ADAPT = {
 } as const;
 
 export type AdaptAction = { type: "none" } | { type: "step"; level: number; step: LadderStep; dir: "down" | "up" } | { type: "tcp"; reasons: string[] };
+export type NetLadderOptions = {
+  /** Per-session override for the app-owned iPhone video path; defaults preserve all other wrappers. */
+  audioFloorBps?: number;
+  /** Treat a measured 5% loss as weak-link pressure rather than waiting for it to exceed the shared baseline. */
+  inclusiveLossThreshold?: boolean;
+  /** Keep recovery conservative until native inbound audio jitter is back below this threshold. */
+  goodJitterMs?: number;
+  /** Custom hysteresis for a session that has native-only sender parameter updates. */
+  downAfter?: number;
+  upAfter?: number;
+  tcpAfter?: number;
+};
+type LadderVerdict = Pick<QualityVerdict, "lossPercent" | "rttMs" | "outKbps" | "reasons"> & { jitterMs?: number | null };
 
 /** Pure state machine; feed one QualityVerdict per sample. */
 export class NetLadder {
@@ -80,32 +94,35 @@ export class NetLadder {
   private good = 0;
   private floorBad = 0;
 
-  push(v: Pick<QualityVerdict, "lossPercent" | "rttMs" | "outKbps" | "reasons">): AdaptAction {
+  push(v: LadderVerdict, opts: NetLadderOptions = {}): AdaptAction {
     const loss = v.lossPercent ?? 0;
     const rtt = v.rttMs ?? 0;
     const out = v.outKbps;
-    const needKbps = LADDER[this.level].audioBps / 1000 + 8; // + RTP/UDP/IP overhead
+    const stepAt = (level: number): LadderStep => ({ ...LADDER[level], audioBps: Math.max(LADDER[level].audioBps, opts.audioFloorBps ?? 0) });
+    const needKbps = stepAt(this.level).audioBps / 1000 + 8; // + RTP/UDP/IP overhead
     const severe = loss > ADAPT.severeLossPercent || (out !== null && out > 0 && out < ADAPT.floorKbps) || v.reasons.includes("no-audio");
-    const bad = severe || loss > ADAPT.lossPercent || rtt > ADAPT.rttMs || (out !== null && out > 0 && out < needKbps);
-    const good = !bad && loss <= ADAPT.goodLossPercent && rtt <= ADAPT.goodRttMs && (out === null || out <= 0 || out >= needKbps * 1.5);
+    const lossBad = opts.inclusiveLossThreshold ? loss >= ADAPT.lossPercent : loss > ADAPT.lossPercent;
+    const bad = severe || lossBad || rtt > ADAPT.rttMs || v.reasons.includes("jitter") || (out !== null && out > 0 && out < needKbps);
+    const goodJitter = v.jitterMs === null || v.jitterMs === undefined || v.jitterMs <= (opts.goodJitterMs ?? Infinity);
+    const good = !bad && goodJitter && loss <= ADAPT.goodLossPercent && rtt <= ADAPT.goodRttMs && (out === null || out <= 0 || out >= needKbps * 1.5);
     this.bad = bad ? this.bad + 1 : 0;
     this.good = good ? this.good + 1 : 0;
     const floor = this.level === LADDER.length - 1;
     this.floorBad = floor && severe ? this.floorBad + 1 : 0;
-    if (floor && this.floorBad >= ADAPT.tcpAfter) {
+    if (floor && this.floorBad >= (opts.tcpAfter ?? ADAPT.tcpAfter)) {
       this.floorBad = 0;
       return { type: "tcp", reasons: v.reasons.length ? v.reasons : ["floor"] };
     }
-    if (!floor && this.bad >= ADAPT.downAfter) {
+    if (!floor && this.bad >= (opts.downAfter ?? ADAPT.downAfter)) {
       this.bad = 0;
       // a severe sample goes straight to the floor (audio-first) so a collapsing link is protected within 2 s
       this.level = severe ? LADDER.length - 1 : Math.min(LADDER.length - 1, this.level + 1);
-      return { type: "step", level: this.level, step: LADDER[this.level], dir: "down" };
+      return { type: "step", level: this.level, step: stepAt(this.level), dir: "down" };
     }
-    if (this.level > 0 && this.good >= ADAPT.upAfter) {
+    if (this.level > 0 && this.good >= (opts.upAfter ?? ADAPT.upAfter)) {
       this.good = 0;
       this.level -= 1;
-      return { type: "step", level: this.level, step: LADDER[this.level], dir: "up" };
+      return { type: "step", level: this.level, step: stepAt(this.level), dir: "up" };
     }
     return { type: "none" };
   }
@@ -120,5 +137,5 @@ export class NetLadder {
 export function videoBpsFor(step: LadderStep, outKbps: number | null): number {
   if (outKbps === null || !(outKbps > 0)) return step.videoBps;
   const share = Math.floor(outKbps * 1000 * ADAPT.videoShareOfEstimate) - step.audioBps;
-  return Math.max(ADAPT.minVideoBps, Math.min(step.videoBps, share));
+  return Math.max(1_000, Math.min(step.videoBps, share));
 }

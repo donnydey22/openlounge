@@ -150,13 +150,16 @@ async function routeRpc(input) {
     // fallback (netAdapt floor / repeated UDP failure) on this same SFU instead of a different provider.
     const tcpOnly = payload.tcpOnly === true;
     if (tcpOnly && cfg.tcpPort === null) throw new Error("TCP transport not enabled");
+    // Server-only marker injected by calls/index.ts after checking the one-call native iPhone transport. The bounded
+    // bootstrap avoids a weak initial estimate without changing the established 600 kbps startup for other calls.
+    const nativeQualityBootstrap = payload.nativeQualityBootstrap === true;
     const transport = await router.createWebRtcTransport({
       webRtcServer,
       enableUdp: !tcpOnly,
       enableTcp: cfg.tcpPort !== null,
       preferUdp: !tcpOnly,
       iceConsentTimeout: 15,
-      initialAvailableOutgoingBitrate: 600_000,
+      initialAvailableOutgoingBitrate: nativeQualityBootstrap ? 850_000 : 600_000,
       appData: { direction, callId, userId, connectionId },
     });
     if (s.closed) {

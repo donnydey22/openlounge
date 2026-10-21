@@ -46,6 +46,15 @@ test("countersFromStats folds inbound audio and the selected pair", () => {
   assert.equal(c.availableOutgoingBitrate, 300_000);
 });
 
+test("native paired media uses only its send transport's outbound estimate", () => {
+  const r = new Map<string, Record<string, unknown>>([
+    ["send", { type: "candidate-pair", nominated: true, state: "succeeded", __olTransportDirection: "send", availableOutgoingBitrate: 1_500_000 }],
+    ["recv", { type: "candidate-pair", nominated: true, state: "succeeded", __olTransportDirection: "recv", availableOutgoingBitrate: 300_000 }],
+  ]);
+  assert.equal(countersFromStats([r], 1).availableOutgoingBitrate, 1_500_000);
+  assert.match(src("src/lib/calls/qualityGuard.ts"), /__olTransportDirection === undefined \|\| s\.__olTransportDirection === "send"/);
+});
+
 test("engine wires the quality guard to the LiveKit TCP fallback and keeps hard-failure fallback", () => {
   const e = src("src/lib/calls/engine.ts");
   assert.match(e, /startQualityGuard\(session\)/);

@@ -26,11 +26,13 @@ export interface QualityCounters {
   /** selected candidate-pair */
   currentRoundTripTimeSeconds?: number;
   availableOutgoingBitrate?: number;
+  /** current inbound audio jitter reported by WebRTC (seconds), where available */
+  audioJitterSeconds?: number;
 }
 
-export type QualityVerdict = { bad: boolean; reasons: string[]; lossPercent: number | null; rttMs: number | null; outKbps: number | null; inAudioKbps: number | null };
+export type QualityVerdict = { bad: boolean; reasons: string[]; lossPercent: number | null; rttMs: number | null; outKbps: number | null; inAudioKbps: number | null; jitterMs: number | null };
 
-export function judgeQuality(prev: QualityCounters | null, cur: QualityCounters, opts: { remoteMuted?: boolean } = {}): QualityVerdict {
+export function judgeQuality(prev: QualityCounters | null, cur: QualityCounters, opts: { remoteMuted?: boolean; maxJitterMs?: number } = {}): QualityVerdict {
   const reasons: string[] = [];
   let lossPercent: number | null = null;
   let inAudioKbps: number | null = null;
@@ -44,12 +46,14 @@ export function judgeQuality(prev: QualityCounters | null, cur: QualityCounters,
   }
   const rttMs = typeof cur.currentRoundTripTimeSeconds === "number" ? cur.currentRoundTripTimeSeconds * 1000 : null;
   const outKbps = typeof cur.availableOutgoingBitrate === "number" ? cur.availableOutgoingBitrate / 1000 : null;
+  const jitterMs = typeof cur.audioJitterSeconds === "number" ? cur.audioJitterSeconds * 1000 : null;
   if (lossPercent !== null && lossPercent > QUALITY_LIMITS.maxLossPercent) reasons.push("loss");
   if (rttMs !== null && rttMs > QUALITY_LIMITS.maxRttMs) reasons.push("rtt");
+  if (opts.maxJitterMs !== undefined && jitterMs !== null && jitterMs > opts.maxJitterMs) reasons.push("jitter");
   if (outKbps !== null && outKbps > 0 && outKbps < QUALITY_LIMITS.minOutgoingKbps) reasons.push("bandwidth");
   // Opus DTX still sends ~comfort-noise frames every 400 ms, so 0 bytes for a whole sample while unmuted = black hole.
   if (!opts.remoteMuted && inAudioKbps !== null && inAudioKbps < QUALITY_LIMITS.minInboundAudioKbps && prev?.audioBytesReceived) reasons.push("no-audio");
-  return { bad: reasons.length > 0, reasons, lossPercent, rttMs, outKbps, inAudioKbps };
+  return { bad: reasons.length > 0, reasons, lossPercent, rttMs, outKbps, inAudioKbps, jitterMs };
 }
 
 /** Rolling guard: returns the triggering verdict once QUALITY_BAD_SAMPLES consecutive samples were bad. */
@@ -57,7 +61,7 @@ export class QualityGuard {
   private prev: QualityCounters | null = null;
   private streak = 0;
   constructor(private readonly need = QUALITY_BAD_SAMPLES) {}
-  push(cur: QualityCounters, opts: { remoteMuted?: boolean } = {}): QualityVerdict | null {
+  push(cur: QualityCounters, opts: { remoteMuted?: boolean; maxJitterMs?: number } = {}): QualityVerdict | null {
     const v = judgeQuality(this.prev, cur, opts);
     this.prev = cur;
     this.streak = v.bad ? this.streak + 1 : 0;
@@ -78,9 +82,12 @@ export function countersFromStats(reports: Iterable<RTCStatsReport | Map<string,
         c.audioPacketsReceived! += Number(s.packetsReceived ?? 0);
         c.audioPacketsLost! += Math.max(0, Number(s.packetsLost ?? 0));
         c.audioBytesReceived! += Number(s.bytesReceived ?? 0);
+        if (typeof s.jitter === "number") c.audioJitterSeconds = Math.max(c.audioJitterSeconds ?? 0, s.jitter);
       } else if (s.type === "candidate-pair" && (s.nominated || s.selected) && s.state === "succeeded") {
         if (typeof s.currentRoundTripTime === "number") c.currentRoundTripTimeSeconds = Math.max(c.currentRoundTripTimeSeconds ?? 0, s.currentRoundTripTime);
-        if (typeof s.availableOutgoingBitrate === "number")
+        // Native controller stats carry their own direction. Only its send transport's estimate can cap this
+        // device's camera; untagged browser reports retain the established aggregate behavior.
+        if (typeof s.availableOutgoingBitrate === "number" && (s.__olTransportDirection === undefined || s.__olTransportDirection === "send"))
           c.availableOutgoingBitrate = Math.min(c.availableOutgoingBitrate ?? Infinity, s.availableOutgoingBitrate);
       }
     });

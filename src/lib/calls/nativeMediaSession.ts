@@ -127,6 +127,11 @@ export function resetAndroidNativeMedia() {
 export function iosNativeVideoGranted(media: CallMedia | null | undefined): boolean {
   return !!media?.iosNativeVideo && !nativeMediaIsAndroid() && nativeVideoAvailable();
 }
+/** Quality controls are opt-in with paired native video so older iOS audio-only wrappers keep their bridge contract. */
+export function iosNativeQualityAvailable(): boolean {
+  const b = bridge();
+  return !nativeMediaIsAndroid() && nativeVideoAvailable() && !!b?.capabilities?.includes("nativeQualityV1");
+}
 /** Audio-only calls in the native-media iOS app use app-owned media; iPhone video is allowed only by its grant.
  * Android stays behind its independent opt-in and never inherits the iPhone path. */
 export function useNativeMedia(video: boolean, media?: CallMedia | null): boolean {
@@ -294,8 +299,17 @@ export class NativeMediaSession {
     // the app also restarts ICE itself (network change / transport disconnected) — this is the page's nudge
     await nativeMediaCmd({ op: "restartIce" }).catch(() => {});
   }
-  async applyLadderStep(step: { audioBps: number }): Promise<boolean> {
-    return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps }).catch(() => false)) === true;
+  async applyLadderStep(step: { audioBps: number; videoBps?: number; videoFps?: number; videoScale?: number }): Promise<boolean> {
+    const nativeVideoQuality = this.opts.nativeVideo === true && iosNativeQualityAvailable();
+    return (await nativeMediaCmd({
+      op: "ladder",
+      // Older wrappers and native voice retain the prior audio-only payload. Paired native video adds camera sender
+      // parameters while enforcing the non-starving Opus floor from the app-owned controller.
+      audioBps: nativeVideoQuality ? Math.max(16_000, step.audioBps) : step.audioBps,
+      ...(nativeVideoQuality && Number.isFinite(step.videoBps) ? { videoBps: step.videoBps } : {}),
+      ...(nativeVideoQuality && Number.isFinite(step.videoFps) ? { videoFps: step.videoFps } : {}),
+      ...(nativeVideoQuality && Number.isFinite(step.videoScale) ? { videoScale: step.videoScale } : {}),
+    }).catch(() => false)) === true;
   }
   async getTransportStats(): Promise<RTCStatsReport[]> {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;

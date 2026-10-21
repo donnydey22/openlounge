@@ -8,7 +8,7 @@ import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Vi
 import { Avatar } from "@/components/Avatar";
 import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
-import { nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
+import { iosNativeQualityAvailable, nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
 import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
@@ -393,12 +393,18 @@ export function CallOverlay() {
   }, [active]);
 
   const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
+  // Only the updated wrapper understands the fixed App-owned self-view. Existing paired-video wrappers retain the
+  // DOM tile identities so their self-view remains visible after this page deployment.
+  const nativeQualityPresentation = s.nativeVideo && iosNativeQualityAvailable();
+  // The updated iPhone renderer uses remote full-screen and local rounded top-right PiP. When Keiko turns video off,
+  // every binary falls back to Donny's local camera full-screen rather than presenting an unavailable remote tile.
+  const presentedBigWhich: "local" | "remote" = nativeQualityPresentation && s.remoteCam ? "remote" : bigWhich;
   const showPip = s.remoteCam && s.camOn;
   const ctlHidden = video && !showCtl;
   const bigTile = useRef<HTMLDivElement | null>(null);
   const pipTile = useRef<HTMLDivElement | null>(null);
   const reportNativeLayout = useCallback(() => {
-    if (!s.nativeVideo || !s.call) return;
+    if (!nativeQualityPresentation || !s.call) return;
     const hidden = s.minimized || !video;
     if (hidden) {
       // BigVideo unmounts in these states, so the native stage must receive a valid hidden-only record.
@@ -425,10 +431,10 @@ export function CallOverlay() {
     const pip = showPip ? rect(pipTile.current) : null;
     // The app-owned iPhone call surface is phone-only. Keep its remote full tile aspect-filled exactly as this overlay
     // renders on phones; the native renderer preserves aspect ratio (no stretch) and the local PiP is cover as well.
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
-  }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: presentedBigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+  }, [bigWhich, nativeQualityPresentation, presentedBigWhich, s.call, s.facing, s.minimized, showPip, video]);
   useEffect(() => {
-    if (!s.nativeVideo || !s.call) return;
+    if (!nativeQualityPresentation || !s.call) return;
     const notify = () => requestAnimationFrame(reportNativeLayout);
     notify();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(notify);
@@ -439,19 +445,19 @@ export function CallOverlay() {
     window.visualViewport?.addEventListener("resize", notify);
     window.visualViewport?.addEventListener("scroll", notify);
     return () => { observer?.disconnect(); window.removeEventListener("resize", notify); window.removeEventListener("orientationchange", notify); window.visualViewport?.removeEventListener("resize", notify); window.visualViewport?.removeEventListener("scroll", notify); };
-  }, [reportNativeLayout, s.call, s.nativeVideo]);
+  }, [nativeQualityPresentation, reportNativeLayout, s.call]);
 
   if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
   if (!s.ui || !s.call) return null;
   if (s.minimized && s.ui !== "incoming" && s.ui !== "ended") return <MiniBar s={s} />;
   const p = peerOf(s);
   const ringing = s.ui === "outgoing" || s.ui === "incoming";
-  const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && video;
+  const nativeFullscreen = nativeQualityPresentation && !s.minimized && (s.ui === "connecting" || s.ui === "active") && video;
 
   return (
     <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
-      {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
-      {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {video ? <BigVideo which={presentedBigWhich} mirrored={presentedBigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
+      {showPip && !nativeQualityPresentation && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         {/* top bar */}

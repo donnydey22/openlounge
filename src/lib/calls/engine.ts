@@ -21,7 +21,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, iosNativeQualityAvailable, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { isAndroidApp } from "@/lib/notify";
 
@@ -1160,12 +1160,15 @@ export class CallEngine {
   private readonly netLadder = new NetLadder();
   private ladderCallId: string | null = null;
   private startNetLadder(session: CallMediaSession) {
-    // after a reconnect within the same call: conservative rung first, then climb on measured headroom
+    // The paired iPhone-native camera returns at the conservative shared reconnect rung after a successful direct-SFU
+    // reconnect. Its live estimate immediately governs further steps; Android and browser behavior are unchanged.
+    const nativeIosQuality = this.s.nativeVideo && !nativeMediaIsAndroid() && iosNativeQualityAvailable();
     const callId = this.s.call?.id ?? null;
     const startLevel = callId && this.ladderCallId === callId ? ADAPT.reconnectLevel : 0;
     this.ladderCallId = callId;
     this.netLadder.reset(startLevel);
     if (startLevel > 0) void session.applyLadderStep(LADDER[startLevel]);
+    else if (nativeIosQuality) void session.applyLadderStep(LADDER[0]);
     let lastVideoBps = 0;
     let prev: QualityCounters | null = null;
     const w = window as unknown as { __olNetLadder?: { level: number; changes: { t: number; level: number; dir: string }[] } };
@@ -1175,9 +1178,11 @@ export class CallEngine {
       void session.getTransportStats().then((reports) => {
         if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const cur = countersFromStats(reports);
-        const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
+        const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted, ...(nativeIosQuality ? { maxJitterMs: 150 } : {}) });
         prev = cur;
-        const a = this.netLadder.push(v);
+        const a = this.netLadder.push(v, nativeIosQuality
+          ? { inclusiveLossThreshold: true, goodJitterMs: 100 }
+          : {});
         if (a.type === "none" && this.s.camOn) {
           // track the live estimate within the current rung (only re-apply on a >25 % move: no setParameters churn)
           const step = LADDER[this.netLadder.level];
@@ -1190,13 +1195,12 @@ export class CallEngine {
         if (a.type === "step") {
           lastVideoBps = videoBpsFor(a.step, v.outKbps);
           a.step = { ...a.step, videoBps: lastVideoBps };
-          void this.diag("ladder", { level: a.level, dir: a.dir, loss: v.lossPercent ?? "", rtt: v.rttMs ?? "", outKbps: v.outKbps ?? "" });
-          this.netLog("ladder", { level: a.level, dir: a.dir, audio: a.step.audioBps, loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps });
+          this.netLog("ladder", { level: a.level, dir: a.dir, audio: a.step.audioBps, loss: v.lossPercent, rtt: v.rttMs, jitter: v.jitterMs, outKbps: v.outKbps, video: a.step.videoBps, nativeIosQuality });
           w.__olNetLadder = { level: a.level, changes: [...(w.__olNetLadder?.changes ?? []), { t: Date.now(), level: a.level, dir: a.dir }] };
           void session.applyLadderStep(a.step);
         } else if (a.type === "tcp") {
           this.stopQualityGuard();
-          this.netLog("ms-quality-fallback", { reasons: a.reasons.join(","), loss: v.lossPercent, rtt: v.rttMs, outKbps: v.outKbps, ladder: "floor" });
+          this.netLog("ms-quality-fallback", { reasons: a.reasons.join(","), loss: v.lossPercent, rtt: v.rttMs, jitter: v.jitterMs, outKbps: v.outKbps, ladder: "floor", nativeIosQuality });
           void this.requestTcpFallback().finally(() => {
             // call 3ae8ff34: a short blip at the floor while the transport stayed connected made recovery a no-op, but the
             // ladder was already stopped → 16 kbps for the remaining 9 min. Still connected and not recovering: resume
@@ -1817,7 +1821,9 @@ export class CallEngine {
     }
   }
   private netLog(ev: string, extra: Record<string, unknown> = {}) {
-    if (CallEngine.DIAG_EVENTS.has(ev)) this.diag(ev, extra);
+    // Ladder diagnostics are intentionally opt-in for app-owned media only; web calls retain their existing telemetry
+    // volume while native quality changes remain observable per call.
+    if (CallEngine.DIAG_EVENTS.has(ev) || (ev === "ladder" && nativeAdaptiveEnabled())) this.diag(ev, extra);
     try {
       const w = window as unknown as { __olCallNet?: { ev: string; t: number }[] };
       (w.__olCallNet ??= []).push({ ev, t: Date.now(), ...extra });

@@ -224,6 +224,15 @@ export class CallService {
     return c ? this.info(c) : null;
   }
 
+  /**
+   * Direct-SFU transport bootstrap is elevated only for the app-owned iPhone transport of a live server-granted
+   * video call. A page socket cannot opt itself in merely because it can observe the caller's media grant.
+   */
+  nativeVideoQualityBootstrap(callId: string, nativeConnection: boolean): boolean {
+    const c = this.calls.get(callId);
+    return nativeConnection && !!c && c.phase !== "ended" && c.video && c.iosNativeVideo === true;
+  }
+
   info(c: CallRec): CallInfo {
     const anon = (id: string): CallPeer => ({ id, name: "Open Lounge user", color: "#64748B", photoUrl: null });
     return {

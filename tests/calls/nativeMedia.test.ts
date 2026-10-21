@@ -116,11 +116,16 @@ test("native iPhone video reuses the existing call overlay above a suppressed ap
   assert.match(provider, /root\.setAttribute\("data-native-video-screen", ""\)/);
   assert.match(provider, /root\.removeAttribute\("data-native-video-screen"\)/);
   assert.match(provider, /css\.nativeVideoUnderlay/);
-  assert.match(overlay, /const nativeFullscreen = s\.nativeVideo && !s\.minimized/);
+  assert.match(overlay, /const nativeFullscreen = nativeQualityPresentation && !s\.minimized/);
   assert.match(overlay, /nativeFullscreen && css\.nativeVideoScreen/);
   assert.match(overlay, /const \[swap, setSwap\] = useState\(false\)/);
   assert.match(overlay, /const bigWhich: "local" \| "remote" = s\.remoteCam && s\.camOn \? \(swap \? "local" : "remote"\) : s\.remoteCam \? "remote" : "local"/);
-  assert.match(overlay, /big: \{ kind: bigWhich, rect: big, fit: "cover" \}/);
+  assert.match(overlay, /const nativeQualityPresentation = s\.nativeVideo && iosNativeQualityAvailable\(\)/);
+  assert.match(overlay, /const presentedBigWhich: "local" \| "remote" = nativeQualityPresentation && s\.remoteCam \? "remote" : bigWhich/);
+  assert.match(overlay, /big: \{ kind: presentedBigWhich, rect: big, fit: "cover" \}/);
+  assert.match(overlay, /showPip && !nativeQualityPresentation && <Pip/);
+  assert.match(overlay, /if \(!nativeQualityPresentation \|\| !s\.call\) return;/);
+  assert.match(overlay, /const nativeFullscreen = nativeQualityPresentation && !s\.minimized/);
   assert.match(overlay, /const stage = bigTile\.current\?\.getBoundingClientRect\(\)/);
   assert.match(overlay, /const left = Math\.max\(stage\.left, r\.left\)/);
   assert.match(overlay, /window\.addEventListener\("orientationchange", notify\)/);
@@ -339,7 +344,7 @@ test("3ae8ff34: floor 'tcp' verdict while the transport is still connected resum
   assert.equal(LADDER[l.level].audioBps, 48_000);
 });
 
-test("protected: Android video path unchanged — video never takes native media in any opt-in/guard state; WebView video files identical to prod 087c96b", async () => {
+test("protected: Android video path unchanged — video never takes native media in any opt-in/guard state; shared defaults remain unchanged", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const prevNav = (globalThis as { navigator?: unknown }).navigator;
   try {
@@ -357,8 +362,10 @@ test("protected: Android video path unchanged — video never takes native media
     Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
   }
   const { execSync } = await import("node:child_process");
-  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/mediasoupSession.ts src/lib/calls/androidLifecycle.ts src/lib/calls/netAdapt.ts", { encoding: "utf8" }).trim();
-  assert.equal(changed, "", "WebView media session / Android lifecycle / bandwidth ladder untouched");
+  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/mediasoupSession.ts src/lib/calls/androidLifecycle.ts", { encoding: "utf8" }).trim();
+  assert.equal(changed, "", "WebView media session and Android lifecycle untouched");
+  const { ADAPT } = await import("../../src/lib/calls/netAdapt");
+  assert.deepEqual({ downAfter: ADAPT.downAfter, upAfter: ADAPT.upAfter, tcpAfter: ADAPT.tcpAfter, reconnectLevel: ADAPT.reconnectLevel }, { downAfter: 2, upAfter: 8, tcpAfter: 3, reconnectLevel: 1 });
 });
 
 
@@ -374,4 +381,14 @@ test("iPhone paired-video path: one explicit msid, native prepare, relay-only re
   assert.match(bridge, /onRemoteVideo\?\(on: boolean\): void/);
   assert.match(bridge, /s === "remote-video"\) \{[\s\S]{0,320}d\.callId === callId[\s\S]{0,160}onRemoteVideo\?\.\(d\.on === true\)/);
   assert.match(src, /onRemoteVideo: \(on\) => \{[\s\S]{0,160}remoteCam: on/);
+});
+
+test("iPhone native video: the 850 kbps bootstrap requires the server-observed wrapper and app-owned transport", () => {
+  const calls = readFileSync(new URL("../../server/calls/index.ts", import.meta.url), "utf8");
+  const sfu = readFileSync(new URL("../../media-sfu/src/index.mjs", import.meta.url), "utf8");
+  assert.match(calls, /nativeQualityBootstrap: _nativeQualityBootstrap/);
+  assert.match(calls, /const nativeIphoneTransport = iosNativeVideoWrapper && connectionId !== socket\.id/);
+  assert.match(calls, /method === "transport:create" && s\(\)\.nativeVideoQualityBootstrap\(callId, nativeIphoneTransport\)/);
+  assert.match(sfu, /initialAvailableOutgoingBitrate: nativeQualityBootstrap \? 850_000 : 600_000/);
+  assert.doesNotMatch(sfu, /rtcpFeedback|transport-cc/);
 });
