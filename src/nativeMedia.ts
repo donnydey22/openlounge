@@ -8,7 +8,7 @@
 //   {op:'connect', callId, iceServers, video?, nativeVideo?, tcpOnly?, rebuild?} join + send/recv transports + paired native producers
 //   {op:'connectLiveKit', callId, url, token, iceServers, video?, nativeVideo?, streamId?} native fallback on one participant
 //   {op:'status'}  → {callId, kind, connected} | null    (a reloaded page re-attaches; connect on the same call = attach)
-//   {op:'mute', muted} | {op:'close'} | {op:'restartIce'} | {op:'stats'} | {op:'ladder', audioBps}
+//   {op:'mute', muted} | {op:'close'} | {op:'restartIce'} | {op:'stats'} | {op:'ladder', audioBps, videoBps?, videoFps?, videoScale?}
 //   {op:'consumerAvailable'}  SFU remote-track availability arrived on the page socket
 // App → page events (CustomEvent 'openlounge:native-media'): {state:'connected'|'disconnected'|'failed'|'remote-audio'|'remote-video', on?:boolean}
 // App-only video state is delivered directly to App.tsx; MediaStream values are never serialized into the WebView.
@@ -34,12 +34,17 @@ const cameraConstraints = (facing: 'user' | 'environment' = 'user') => ({
   height: { ideal: 1280 },
   frameRate: { ideal: 30, max: 30 },
 } as never);
+const audioConstraints = {
+  echoCancellation: { ideal: true },
+  noiseSuppression: { ideal: true },
+  autoGainControl: { ideal: true },
+} as never;
 /** Capture happens only when the native connection starts after CallKit activation; preparation is media-free. */
 async function takeStream(video: boolean): Promise<MediaStream | null> {
   ensureGlobals();
-  const paired = (await mediaDevices.getUserMedia({ audio: true, video: video ? cameraConstraints() : false }).catch(() => null)) as MediaStream | null;
+  const paired = (await mediaDevices.getUserMedia({ audio: audioConstraints, video: video ? cameraConstraints() : false }).catch(() => null)) as MediaStream | null;
   if (paired || !video) return paired;
-  return (await mediaDevices.getUserMedia({ audio: true, video: false }).catch(() => null)) as MediaStream | null;
+  return (await mediaDevices.getUserMedia({ audio: audioConstraints, video: false }).catch(() => null)) as MediaStream | null;
 }
 export type NativeVideoState = { callId: string; local: MediaStream | null; remote: MediaStream | null; facing: 'user' | 'environment' } | null;
 type NativeCapture = { callId: string; stream: MediaStream; nativeVideo: boolean; streamId: string | null; facing: 'user' | 'environment' };
@@ -58,6 +63,34 @@ type Transport = {
 };
 type Producer = { id: string; pause(): void; resume(): void; close(): void; replaceTrack?(o: { track: MediaStreamTrack }): Promise<void>; rtpSender?: { getParameters(): any; setParameters(p: any): Promise<void> } };
 type Consumer = { id: string; kind: string; track: MediaStreamTrack; close(): void };
+type NativeQualityStep = { audioBps: number; videoBps?: number; videoFps?: number; videoScale?: number };
+type H264Capability = { kind?: string; mimeType?: string; parameters?: Record<string, unknown> };
+type SenderEncoding = { maxBitrate?: number; maxFramerate?: number; scaleResolutionDownBy?: number };
+const NATIVE_CAMERA_LAYERS = [
+  { maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 4 },
+  { maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 2 },
+  { maxBitrate: 1_200_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+] as const;
+
+/** Prefer the router's packetization-mode=1 H.264 profile, but leave a VP8-compatible fallback for devices that
+ * cannot instantiate that exact hardware encoder. The direct 1:1 native session publishes q/h/f simulcast layers
+ * so the SFU can preserve sharp full quality on headroom and select a sustainable layer on a weak link. */
+function preferredH264(rtpCapabilities: unknown): H264Capability | undefined {
+  const codecs = (rtpCapabilities as { codecs?: unknown } | null)?.codecs;
+  if (!Array.isArray(codecs)) return undefined;
+  return codecs.find((candidate): candidate is H264Capability => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const codec = candidate as H264Capability;
+    return codec.kind === 'video' && codec.mimeType?.toLowerCase() === 'video/h264' && String(codec.parameters?.['packetization-mode'] ?? '') === '1';
+  });
+}
+function preferredVP8(rtpCapabilities: unknown): H264Capability | undefined {
+  const codecs = (rtpCapabilities as { codecs?: unknown } | null)?.codecs;
+  if (!Array.isArray(codecs)) return undefined;
+  return codecs.find((candidate): candidate is H264Capability =>
+    !!candidate && typeof candidate === 'object' && (candidate as H264Capability).kind === 'video' && (candidate as H264Capability).mimeType?.toLowerCase() === 'video/vp8',
+  );
+}
 
 const CONNECT_TIMEOUT_MS = 12_000;
 
@@ -77,6 +110,9 @@ export class NativeMediaSession {
   private syncing: Promise<void> | null = null;
   private syncAgain = false;
   private iceRestarted = new Set<string>();
+  /** At most one native setParameters transaction runs at a time; latest sample wins while it is in flight. */
+  private ladderTask: Promise<boolean> | null = null;
+  private pendingLadder: NativeQualityStep | null = null;
   /** rejects the moment close() runs, so a superseded connect never sits on a dead transport until the timeout */
   private abortRej: ((e: Error) => void) | null = null;
   private aborted = new Promise<never>((_, rej) => { this.abortRej = rej; });
@@ -182,17 +218,35 @@ export class NativeMediaSession {
     this.localVideo = null;
     const local = new MediaStream([track]);
     this.localVideo = local;
+    const options = {
+      track,
+      ...(this.streamId ? { streamId: this.streamId } : {}),
+      // Portrait q/h/f simulcast: the SFU chooses a sustainable layer for Keiko while the app keeps one camera and
+      // one shared msid. The ladder changes these sender parameters in place, never reacquiring the camera.
+      encodings: [
+        { rid: 'q', maxBitrate: 150_000, maxFramerate: 15, scaleResolutionDownBy: 4, priority: 'high', networkPriority: 'high' },
+        { rid: 'h', maxBitrate: 400_000, maxFramerate: 24, scaleResolutionDownBy: 2, priority: 'high', networkPriority: 'high' },
+        { rid: 'f', maxBitrate: 1_200_000, maxFramerate: 30, scaleResolutionDownBy: 1, priority: 'high', networkPriority: 'high' },
+      ] as never,
+      appData: { source: 'camera', native: true },
+    };
     try {
-      this.videoProducer = await this.send.produce({
-        track,
-        ...(this.streamId ? { streamId: this.streamId } : {}),
-        encodings: [{ maxBitrate: 1_800_000, maxFramerate: 30, priority: 'high', networkPriority: 'high' } as never],
-        appData: { source: 'camera', native: true },
-      });
+      const h264 = preferredH264(this.device?.rtpCapabilities);
+      try {
+        this.videoProducer = await this.send.produce({ ...options, ...(h264 ? { codec: h264 } : {}) });
+      } catch (error) {
+        // H.264 is a preference, never a reason to lose a working call. Explicitly retry the same q/h/f send plan
+        // with VP8 if available; Mediasoup has already disposed the rejected producer attempt before this retry.
+        const vp8 = preferredVP8(this.device?.rtpCapabilities);
+        if (!h264 || !vp8) throw error;
+        this.videoProducer = await this.send.produce({ ...options, codec: vp8 });
+      }
       this.emitVideoState();
     } catch (error) {
       if (this.localVideo === local) this.localVideo = null;
-      local.getTracks().forEach((t) => t.stop());
+      // `local` references the controller-owned capture track. Stop only the failed camera, never its paired mic.
+      this.capture.stream.removeTrack(track);
+      track.stop();
       this.emitVideoState();
       throw error;
     }
@@ -233,7 +287,11 @@ export class NativeMediaSession {
         await this.publishCamera(next.track);
       }
     } catch (error) {
-      next.stream.getTracks().forEach((t) => t.stop());
+      // `next.stream` is the paired controller-owned stream. A failed flip must not stop the microphone.
+      this.capture.stream.removeTrack(next.track);
+      next.track.stop();
+      this.localVideo = null;
+      this.emitVideoState();
       throw error;
     }
     return true;
@@ -359,27 +417,64 @@ export class NativeMediaSession {
     this.stream?.getAudioTracks().forEach((t) => { t.enabled = !muted; });
   }
 
-  async ladder(audioBps: number) {
-    const s = this.producer?.rtpSender;
-    if (!s) return false;
-    try {
-      const p = s.getParameters();
-      if (!p.encodings?.length) p.encodings = [{}];
-      p.encodings.forEach((e: { maxBitrate?: number }) => { e.maxBitrate = audioBps; });
-      await s.setParameters(p);
-      return true;
-    } catch {
-      return false;
-    }
+  /** Apply one sender's parameters without replacing a track or reopening either native capture device. */
+  private async setSenderParameters(producer: Producer | null, update: (encoding: SenderEncoding, index: number) => void) {
+    const sender = producer?.rtpSender;
+    if (!sender) return !producer;
+    const parameters = sender.getParameters();
+    if (!parameters.encodings?.length) parameters.encodings = [{}];
+    parameters.encodings.forEach((encoding: SenderEncoding, index: number) => update(encoding, index));
+    await sender.setParameters(parameters);
+    return true;
+  }
+
+  /** Coalesce the one-second page samples: native WebRTC rejects overlapping setParameters transactions. */
+  async ladder(step: NativeQualityStep) {
+    if (this.closed) return false;
+    this.pendingLadder = {
+      audioBps: Math.max(24_000, Math.round(step.audioBps || 48_000)),
+      ...(Number.isFinite(step.videoBps) ? { videoBps: Math.max(60_000, Math.round(step.videoBps!)) } : {}),
+      ...(Number.isFinite(step.videoFps) ? { videoFps: Math.max(8, Math.min(30, Math.round(step.videoFps!))) } : {}),
+      ...(Number.isFinite(step.videoScale) ? { videoScale: Math.max(1, Math.min(4, Number(step.videoScale))) } : {}),
+    };
+    if (this.ladderTask) return this.ladderTask;
+    this.ladderTask = (async () => {
+      let applied = false;
+      while (!this.closed && this.pendingLadder) {
+        const next = this.pendingLadder;
+        this.pendingLadder = null;
+        try {
+          const audio = await this.setSenderParameters(this.producer, (encoding) => { encoding.maxBitrate = next.audioBps; });
+          const video = await this.setSenderParameters(this.videoProducer, (encoding, index) => {
+            // `videoBps` is the f-layer cap from the shared ladder. Preserve q/h/f ratios instead of assigning that
+            // cap to each sender encoding (which would turn the 1.2 Mbps ceiling into 3.6 Mbps on a weak link).
+            const layer = NATIVE_CAMERA_LAYERS[Math.min(index, NATIVE_CAMERA_LAYERS.length - 1)];
+            if (next.videoBps !== undefined) {
+              const cap = Math.round(next.videoBps * layer.maxBitrate / NATIVE_CAMERA_LAYERS[2].maxBitrate);
+              encoding.maxBitrate = Math.min(layer.maxBitrate, Math.max(60_000, cap));
+            }
+            if (next.videoFps !== undefined) encoding.maxFramerate = Math.min(layer.maxFramerate, next.videoFps);
+            if (next.videoScale !== undefined) encoding.scaleResolutionDownBy = Math.max(layer.scaleResolutionDownBy, next.videoScale);
+          });
+          applied = audio && video;
+        } catch {
+          applied = false;
+        }
+      }
+      return applied;
+    })().finally(() => { this.ladderTask = null; });
+    return this.ladderTask;
   }
 
   /** plain stats objects per transport (the page rebuilds Maps for its quality guard) */
   async stats(): Promise<Array<Array<Record<string, unknown>>>> {
     const out: Array<Array<Record<string, unknown>>> = [];
-    for (const t of [this.send, this.recv]) {
+    for (const [direction, t] of [['send', this.send], ['recv', this.recv]] as const) {
       if (!t) continue;
       const m = await t.getStats().catch(() => new Map());
-      out.push([...m.values()].map((v) => ({ ...v })));
+      // `availableOutgoingBitrate` belongs to the send transport. Preserve the marker internally so the page does
+      // not take the minimum of two unrelated candidate-pair estimates and pin the native camera around 300 kbps.
+      out.push([...m.values()].map((v) => ({ ...v, __olTransportDirection: direction })));
     }
     return out;
   }
@@ -387,6 +482,7 @@ export class NativeMediaSession {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.pendingLadder = null;
     this.aborted.catch(() => {});
     this.abortRej?.(new Error('native media closed'));
     if (this.joined) void this.r('ms:leave').catch(() => {});
@@ -635,7 +731,12 @@ export class NativeMediaController {
         await this.session?.restartIceAll();
         return true;
       case 'ladder':
-        return (await this.session?.ladder(Number(cmd.audioBps) || 48_000)) ?? false;
+        return (await this.session?.ladder({
+          audioBps: Number(cmd.audioBps) || 48_000,
+          ...(typeof cmd.videoBps === 'number' ? { videoBps: cmd.videoBps } : {}),
+          ...(typeof cmd.videoFps === 'number' ? { videoFps: cmd.videoFps } : {}),
+          ...(typeof cmd.videoScale === 'number' ? { videoScale: cmd.videoScale } : {}),
+        })) ?? false;
       case 'stats':
         return (await this.session?.stats()) ?? [];
       case 'camera': {
