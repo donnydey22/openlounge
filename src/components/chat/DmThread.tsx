@@ -1808,6 +1808,8 @@ const MessageRow = memo(function MessageRow({
               : cn("px-3.5 py-2", shape, mine ? "bg-emerald-500 text-on-accent" : "dm-theirs bg-zinc-800 text-zinc-100"),
             m.state === "sending" && "opacity-70",
             m.state === "failed" && "opacity-60",
+            // A reply quote widens the bubble; keep my sticker / big emoji on the right edge as before swipe-to-reply.
+            (sticker || parts) && m.replyTo && mine && "flex flex-col items-end",
           )}
         >
           {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={onJumpToReply} />}
