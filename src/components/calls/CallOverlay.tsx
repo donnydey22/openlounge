@@ -322,7 +322,6 @@ function Controls({ s }: { s: CallSnapshot }) {
     <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:flex-1 [&>*]:max-w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:max-w-[calc((100%-0.75rem)/4)]">
       {s.speakerSupported ? (
         <RoundBtn label={s.speaker ? "Speaker" : "Phone"} active={s.speaker} onClick={() => void callEngine.toggleSpeaker()} testId="call-speaker">
-          {/* distinct mode icons: loudspeaker vs held-to-ear phone (earpiece); active = filled white like the other toggles */}
           {s.speaker ? <Volume2 className="h-6 w-6" data-route="speaker" /> : <Ear className="h-6 w-6" data-route="phone" />}
         </RoundBtn>
       ) : null}
