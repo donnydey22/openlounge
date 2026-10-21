@@ -2006,6 +2006,13 @@ export class CallEngine {
     if (this.nativeAudioWatched || typeof window === "undefined") return;
     this.nativeAudioWatched = true;
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
+    // iOS app: the route iOS actually chose after a Speaker/Phone tap or a device change; the button follows the real
+    // output (builtInSpeaker = Speaker, receiver = Phone). Headset routes leave the toggle alone.
+    window.addEventListener("openlounge:native-audio-route", (e) => {
+      const d = (e as CustomEvent<{ speaker?: boolean; headset?: boolean }>).detail;
+      if (!this.busy || !d || d.headset || typeof d.speaker !== "boolean") return;
+      if (this.s.speaker !== d.speaker) this.set({ speaker: d.speaker });
+    });
     window.addEventListener("openlounge:native-audio-resume", (e) => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
       const reason = String((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "");

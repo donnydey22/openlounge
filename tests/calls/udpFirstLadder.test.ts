@@ -96,7 +96,7 @@ test("apps: native voice stays camera-free while an explicit native-video grant 
 
 test("speaker (6:20): toggle offered on web-path calls, default route video=speaker/voice=earpiece, Flip kept beside it; audio telemetry", () => {
   const ov = readFileSync("src/components/calls/CallOverlay.tsx", "utf8");
-  assert.match(ov, /s\.speakerSupported \? \(\s*<RoundBtn label="Speaker"[\s\S]{0,300}\) : null\}\s*\{s\.camOn \? \(\s*<RoundBtn label="Flip"/);
+  assert.match(ov, /s\.speakerSupported \? \(\s*<RoundBtn label=\{s\.speaker \? "Speaker" : "Phone"\}[\s\S]{0,300}\) : null\}\s*\{s\.camOn \? \(\s*<RoundBtn label="Flip"/);
   assert.match(eng, /if \(firstMediaOk\) this\.initCallRoute\(\);/);
   assert.match(eng, /const speaker = !!\(this\.s\.camOn \|\| this\.s\.call\?\.video\);[\s\S]{0,120}postNative\(\{ type: "call:audioRoute", speaker \}\)/);
   assert.match(eng, /this\.diag\("remote-audio-play-failed"/);
