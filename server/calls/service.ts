@@ -224,6 +224,16 @@ export class CallService {
     return c ? this.info(c) : null;
   }
 
+  /**
+   * Direct-SFU transport bootstrap is elevated only while this call retains the server-issued iPhone native-video
+   * grant. This is intentionally call-scoped, not a browser payload or a participant media grant: both directions
+   * need a healthy initial estimate, while only the iPhone caller receives the native camera entitlement.
+   */
+  nativeVideoQualityBootstrap(callId: string): boolean {
+    const c = this.calls.get(callId);
+    return !!c && c.phase !== "ended" && c.video && c.iosNativeVideo === true;
+  }
+
   info(c: CallRec): CallInfo {
     const anon = (id: string): CallPeer => ({ id, name: "Open Lounge user", color: "#64748B", photoUrl: null });
     return {

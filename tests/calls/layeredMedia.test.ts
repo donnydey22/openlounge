@@ -89,6 +89,26 @@ test("layered fallback fails closed when the durable LiveKit path is unavailable
   }
 });
 
+test("only an active server-issued iPhone native-video call enables the shared transport bootstrap", async () => {
+  const { service } = setup();
+  try {
+    const plain = await service.start("a", "b", true);
+    assert.equal(plain.ok, true);
+    if (!plain.ok) return;
+    assert.equal(service.nativeVideoQualityBootstrap(plain.call.id), false);
+    service.hangup(plain.call.id, "a");
+
+    const native = await service.start("a", "b", true, undefined, true);
+    assert.equal(native.ok, true);
+    if (!native.ok) return;
+    assert.equal(service.nativeVideoQualityBootstrap(native.call.id), true);
+    service.hangup(native.call.id, "a");
+    assert.equal(service.nativeVideoQualityBootstrap(native.call.id), false);
+  } finally {
+    service.dispose();
+  }
+});
+
 test("called parties cannot obtain or relay direct media before explicitly accepting", async () => {
   const { service, events } = setup();
   try {

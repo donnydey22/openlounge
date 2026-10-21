@@ -393,6 +393,9 @@ export function CallOverlay() {
   }, [active]);
 
   const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
+  // The granted iPhone renderer owns the actual video tiles outside WKWebView. Keep the established display pattern
+  // deterministic there: remote full-screen, local rounded top-right PiP. Drag/swap remains unchanged elsewhere.
+  const presentedBigWhich: "local" | "remote" = s.nativeVideo ? "remote" : bigWhich;
   const showPip = s.remoteCam && s.camOn;
   const ctlHidden = video && !showCtl;
   const bigTile = useRef<HTMLDivElement | null>(null);
@@ -425,8 +428,8 @@ export function CallOverlay() {
     const pip = showPip ? rect(pipTile.current) : null;
     // The app-owned iPhone call surface is phone-only. Keep its remote full tile aspect-filled exactly as this overlay
     // renders on phones; the native renderer preserves aspect ratio (no stretch) and the local PiP is cover as well.
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
-  }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: presentedBigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+  }, [bigWhich, presentedBigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
   useEffect(() => {
     if (!s.nativeVideo || !s.call) return;
     const notify = () => requestAnimationFrame(reportNativeLayout);
@@ -450,8 +453,8 @@ export function CallOverlay() {
 
   return (
     <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
-      {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
-      {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {video ? <BigVideo which={presentedBigWhich} mirrored={presentedBigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
+      {showPip && !s.nativeVideo && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         {/* top bar */}
