@@ -12,16 +12,10 @@ const RECONNECT_DELAYS = [500, 1_000, 2_000, 5_000, 10_000];
 // (the close handler reconnects with backoff).
 const GATEWAY_PING_MS = Number(process.env.MEDIASOUP_GATEWAY_PING_MS) || 10_000;
 const GATEWAY_DEAD_MS = Number(process.env.MEDIASOUP_GATEWAY_DEAD_MS) || 25_000;
-const VIDEO_RTCP_FEEDBACK = [
-  { type: "nack" },
-  { type: "nack", parameter: "pli" },
-  { type: "ccm", parameter: "fir" },
-  { type: "transport-cc" },
-];
 const ROUTER_CODECS = [
   { kind: "audio", mimeType: "audio/opus", clockRate: 48_000, channels: 2, parameters: { minptime: 10, useinbandfec: 1, usedtx: 1 } },
-  { kind: "video", mimeType: "video/VP8", clockRate: 90_000, parameters: {}, rtcpFeedback: VIDEO_RTCP_FEEDBACK },
-  { kind: "video", mimeType: "video/H264", clockRate: 90_000, parameters: { "packetization-mode": 1, "profile-level-id": "42e01f", "level-asymmetry-allowed": 1 }, rtcpFeedback: VIDEO_RTCP_FEEDBACK },
+  { kind: "video", mimeType: "video/VP8", clockRate: 90_000, parameters: {} },
+  { kind: "video", mimeType: "video/H264", clockRate: 90_000, parameters: { "packetization-mode": 1, "profile-level-id": "42e01f", "level-asymmetry-allowed": 1 } },
 ];
 
 const safeLog = (event, extra = {}) => console.log(JSON.stringify({ service: "openlounge-mediasoup", event, ...extra }));
@@ -156,9 +150,8 @@ async function routeRpc(input) {
     // fallback (netAdapt floor / repeated UDP failure) on this same SFU instead of a different provider.
     const tcpOnly = payload.tcpOnly === true;
     if (tcpOnly && cfg.tcpPort === null) throw new Error("TCP transport not enabled");
-    // Server-only marker injected by calls/index.ts after checking the one-call iPhone native-video grant. The higher
-    // bootstrap lets transport-cc climb to the native 720p sender cap instead of lingering near 300 kbps; all other
-    // calls keep the existing 600 kbps conservative startup.
+    // Server-only marker injected by calls/index.ts after checking the one-call native iPhone transport. The bounded
+    // bootstrap avoids a weak initial estimate without changing the established 600 kbps startup for other calls.
     const nativeQualityBootstrap = payload.nativeQualityBootstrap === true;
     const transport = await router.createWebRtcTransport({
       webRtcServer,
@@ -166,7 +159,7 @@ async function routeRpc(input) {
       enableTcp: cfg.tcpPort !== null,
       preferUdp: !tcpOnly,
       iceConsentTimeout: 15,
-      initialAvailableOutgoingBitrate: nativeQualityBootstrap ? 1_200_000 : 600_000,
+      initialAvailableOutgoingBitrate: nativeQualityBootstrap ? 850_000 : 600_000,
       appData: { direction, callId, userId, connectionId },
     });
     if (s.closed) {

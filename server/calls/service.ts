@@ -225,13 +225,12 @@ export class CallService {
   }
 
   /**
-   * Direct-SFU transport bootstrap is elevated only while this call retains the server-issued iPhone native-video
-   * grant. This is intentionally call-scoped, not a browser payload or a participant media grant: both directions
-   * need a healthy initial estimate, while only the iPhone caller receives the native camera entitlement.
+   * Direct-SFU transport bootstrap is elevated only for the app-owned iPhone transport of a live server-granted
+   * video call. A page socket cannot opt itself in merely because it can observe the caller's media grant.
    */
-  nativeVideoQualityBootstrap(callId: string): boolean {
+  nativeVideoQualityBootstrap(callId: string, nativeConnection: boolean): boolean {
     const c = this.calls.get(callId);
-    return !!c && c.phase !== "ended" && c.video && c.iosNativeVideo === true;
+    return nativeConnection && !!c && c.phase !== "ended" && c.video && c.iosNativeVideo === true;
   }
 
   info(c: CallRec): CallInfo {

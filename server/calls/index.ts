@@ -301,11 +301,12 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   const relay = (method: string) => (input: { callId?: string; [key: string]: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
       // Browser payloads cannot choose a transport estimate. Drop any attempted hint and inject the bounded
-      // bootstrap only for an active call that already has the server-issued iPhone native-video grant.
+      // bootstrap only for an active server-granted iPhone call on its app-owned media connection.
       const { callId, nativeConn, nativeQualityBootstrap: _nativeQualityBootstrap, ...payload } = input ?? {};
       if (typeof callId !== "string") return ack({ ok: false, error: "callId required" });
       const connectionId = nativeConnectionFor(socket.id, uid, nativeConn);
       if (!connectionId) return ack({ ok: false, error: "bad native connection" });
+      const nativeIphoneTransport = iosNativeVideoWrapper && connectionId !== socket.id;
       callUser = uid;
       if (method === "leave" && connectionId !== socket.id) nativeConnLeft(connectionId);
       // Leaving a call that already ended is idempotent: the call's media was closed by finish(). Ack ok instead of
@@ -313,7 +314,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       // (No connection teardown here: the same socket may already be in the next call.)
       if (method === "leave" && s().leaveIsNoop(callId, uid)) return ack({ ok: true, alreadyLeft: true });
       void s()
-        .mediaRequest(callId, uid, connectionId, method, method === "transport:create" && s().nativeVideoQualityBootstrap(callId)
+        .mediaRequest(callId, uid, connectionId, method, method === "transport:create" && s().nativeVideoQualityBootstrap(callId, nativeIphoneTransport)
           ? { ...payload, nativeQualityBootstrap: true }
           : payload)
         .then((r) => {

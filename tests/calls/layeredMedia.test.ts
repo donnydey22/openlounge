@@ -95,15 +95,17 @@ test("only an active server-issued iPhone native-video call enables the shared t
     const plain = await service.start("a", "b", true);
     assert.equal(plain.ok, true);
     if (!plain.ok) return;
-    assert.equal(service.nativeVideoQualityBootstrap(plain.call.id), false);
+    assert.equal(service.nativeVideoQualityBootstrap(plain.call.id, false), false);
+    assert.equal(service.nativeVideoQualityBootstrap(plain.call.id, true), false);
     service.hangup(plain.call.id, "a");
 
     const native = await service.start("a", "b", true, undefined, true);
     assert.equal(native.ok, true);
     if (!native.ok) return;
-    assert.equal(service.nativeVideoQualityBootstrap(native.call.id), true);
+    assert.equal(service.nativeVideoQualityBootstrap(native.call.id, false), false, "browser transport cannot receive the bootstrap");
+    assert.equal(service.nativeVideoQualityBootstrap(native.call.id, true), true);
     service.hangup(native.call.id, "a");
-    assert.equal(service.nativeVideoQualityBootstrap(native.call.id), false);
+    assert.equal(service.nativeVideoQualityBootstrap(native.call.id, true), false);
   } finally {
     service.dispose();
   }

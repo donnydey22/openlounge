@@ -1160,11 +1160,11 @@ export class CallEngine {
   private readonly netLadder = new NetLadder();
   private ladderCallId: string | null = null;
   private startNetLadder(session: CallMediaSession) {
-    // The paired iPhone-native camera returns to its normal 720p/30 sender caps after a successful direct-SFU
-    // reconnect. Its live estimate immediately governs further steps; Android and browser behavior is unchanged.
+    // The paired iPhone-native camera returns at the conservative shared reconnect rung after a successful direct-SFU
+    // reconnect. Its live estimate immediately governs further steps; Android and browser behavior are unchanged.
     const nativeIosQuality = this.s.nativeVideo && !nativeMediaIsAndroid() && iosNativeQualityAvailable();
     const callId = this.s.call?.id ?? null;
-    const startLevel = nativeIosQuality ? 0 : callId && this.ladderCallId === callId ? ADAPT.reconnectLevel : 0;
+    const startLevel = callId && this.ladderCallId === callId ? ADAPT.reconnectLevel : 0;
     this.ladderCallId = callId;
     this.netLadder.reset(startLevel);
     if (startLevel > 0) void session.applyLadderStep(LADDER[startLevel]);
@@ -1181,7 +1181,7 @@ export class CallEngine {
         const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted, ...(nativeIosQuality ? { maxJitterMs: 150 } : {}) });
         prev = cur;
         const a = this.netLadder.push(v, nativeIosQuality
-          ? { audioFloorBps: 24_000, inclusiveLossThreshold: true, goodJitterMs: 100, downAfter: 3, upAfter: 5, tcpAfter: 4 }
+          ? { inclusiveLossThreshold: true, goodJitterMs: 100 }
           : {});
         if (a.type === "none" && this.s.camOn) {
           // track the live estimate within the current rung (only re-apply on a >25 % move: no setParameters churn)
@@ -1806,7 +1806,7 @@ export class CallEngine {
   }
 
   /** failure-reason telemetry to the server log (fire-and-forget; never affects the call) */
-  private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting", "net-change", "ladder"]);
+  private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting", "net-change"]);
   private diag(ev: string, extra: Record<string, unknown> = {}) {
     try {
       const callId = this.s.call?.id;
@@ -1821,7 +1821,9 @@ export class CallEngine {
     }
   }
   private netLog(ev: string, extra: Record<string, unknown> = {}) {
-    if (CallEngine.DIAG_EVENTS.has(ev)) this.diag(ev, extra);
+    // Ladder diagnostics are intentionally opt-in for app-owned media only; web calls retain their existing telemetry
+    // volume while native quality changes remain observable per call.
+    if (CallEngine.DIAG_EVENTS.has(ev) || (ev === "ladder" && nativeAdaptiveEnabled())) this.diag(ev, extra);
     try {
       const w = window as unknown as { __olCallNet?: { ev: string; t: number }[] };
       (w.__olCallNet ??= []).push({ ev, t: Date.now(), ...extra });

@@ -34,10 +34,10 @@ test("ramp up: one rung per 8 steady seconds from the conservative reconnect run
   assert.equal(l.level, 0);
 });
 
-test("video bitrate tracks availableOutgoingBitrate within the rung, never below the floor, audio first", () => {
+test("video bitrate tracks availableOutgoingBitrate within the rung with Opus reserved first", () => {
   assert.equal(videoBpsFor(LADDER[0], null), LADDER[0].videoBps);
   assert.equal(videoBpsFor(LADDER[0], 600), Math.floor(600_000 * 0.85) - LADDER[0].audioBps);
-  assert.equal(videoBpsFor(LADDER[0], 50), ADAPT.minVideoBps);
+  assert.equal(videoBpsFor(LADDER[0], 50), 1_000);
   assert.equal(videoBpsFor(LADDER[0], 100_000), LADDER[0].videoBps);
 });
 

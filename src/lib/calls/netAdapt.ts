@@ -44,7 +44,8 @@ export const LADDER: readonly LadderStep[] = [
  *  - RECONNECT (main SFU only: ICE restart → rebuild; ICE-TCP 40443 and TURNS 443 are offered in every transport)
  *    when the floor is still severe for 3 more samples: ~5 s of > 15 % loss in total
  *  - after a reconnect the ladder starts at rung 1 (conservative) and climbs only on measured headroom
- *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), never below 60 kbps
+ *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), leaving
+ *    Opus its floor before camera traffic instead of forcing video above a weak link's remaining budget
  *  - audio is never starved: the mic encoding is priority/networkPriority "high"; Opus floor is 16 kbps, never paused
  */
 export const ADAPT = {
@@ -136,5 +137,5 @@ export class NetLadder {
 export function videoBpsFor(step: LadderStep, outKbps: number | null): number {
   if (outKbps === null || !(outKbps > 0)) return step.videoBps;
   const share = Math.floor(outKbps * 1000 * ADAPT.videoShareOfEstimate) - step.audioBps;
-  return Math.max(ADAPT.minVideoBps, Math.min(step.videoBps, share));
+  return Math.max(1_000, Math.min(step.videoBps, share));
 }

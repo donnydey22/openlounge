@@ -305,7 +305,7 @@ export class NativeMediaSession {
       op: "ladder",
       // Older wrappers and native voice retain the prior audio-only payload. Paired native video adds camera sender
       // parameters while enforcing the non-starving Opus floor from the app-owned controller.
-      audioBps: nativeVideoQuality ? Math.max(24_000, step.audioBps) : step.audioBps,
+      audioBps: nativeVideoQuality ? Math.max(16_000, step.audioBps) : step.audioBps,
       ...(nativeVideoQuality && Number.isFinite(step.videoBps) ? { videoBps: step.videoBps } : {}),
       ...(nativeVideoQuality && Number.isFinite(step.videoFps) ? { videoFps: step.videoFps } : {}),
       ...(nativeVideoQuality && Number.isFinite(step.videoScale) ? { videoScale: step.videoScale } : {}),
