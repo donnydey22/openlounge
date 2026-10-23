@@ -14,7 +14,7 @@ FX-012,2026-10-14,calls/udp,Mid-call UDP drop never returned to UDP (or flapped)
 FX-013,2026-10-23,calls/udp,Relay picked before direct UDP; TURN list order wrong,TURN over UDP 3478 not offered first,8299078,tests/calls/udpFirstTurn.test.ts,
 FX-014,2026-10-23,calls/udp,Bandwidth ladder lost with route picker,netAdapt ladder overwritten,dfd54ac,tests/calls/udpFirstLadder.test.ts,
 FX-015,2026-10-14,calls/video,Black frame / poster / gradient filler flashes in video calls,srcObject cleared mid-call; placeholder poster; filler backdrop,cf1430d,tests/calls/videoEdgeRing.test.ts,
-FX-016,2026-10-23,calls/video,Black/theme flash at video call start; frozen or black frame at call end (iPhone<->Keiko Android),Stage shown before first frame; tracks stopped before UI changed; native stage painted black at end,3d5258a,tests/e2e/call-start-end.render.mts,
+FX-016,2026-10-23,calls/video,Black/theme flash at video call start; frozen or black frame at call end (iPhone<->Keiko Android),Stage shown before first frame; tracks stopped before UI changed; native stage painted black at end,0e64203,tests/e2e/call-start-end.render.mts,
 FX-017,2026-10-19,calls/native,Chat visible / layout shift under native iPhone video,App-shell wrapper not layout-neutral,35eb8f3,tests/calls/nativeMedia.test.ts,
 FX-018,2026-10-18,calls/android,Android video quality regressed when native media changed,Android path not pinned,02fec14,tests/calls/androidVideoFrozen.test.ts,
 FX-019,2026-10-23,chat/retention,DM history over 1000 messages trimmed on new send,In-memory cap trimmed and sweeper deleted rows beyond 1000,43d0b44,tests/history/retention.test.ts,
