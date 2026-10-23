@@ -156,6 +156,67 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
     }
   };
 
+  // Trackpad: a two-finger horizontal swipe over the bubble works like the drag (macOS / Windows precision touchpads
+  // send it as horizontal wheel deltas). Non-passive only so the browser's back-swipe doesn't fire while we own it;
+  // vertical / diagonal scrolling and pinch-zoom (ctrlKey) pass straight through.
+  const wheel = useRef<{ x: number; armed: boolean; timer: ReturnType<typeof setTimeout> | null }>({ x: 0, armed: false, timer: null });
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    // Once a swipe starts, the bubble slides out from under the pointer, so the rest of the swipe is followed from a
+    // window listener that only exists while the swipe is live (no global non-passive wheel listener otherwise).
+    const finish = () => {
+      const w = wheel.current;
+      const complete = w.armed;
+      window.removeEventListener("wheel", onFollow, { capture: true });
+      wheel.current = { x: 0, armed: false, timer: null };
+      springHome(0);
+      if (complete) {
+        haptic("medium");
+        onReplyRef.current();
+      }
+    };
+    const step = (e: WheelEvent) => {
+      const w = wheel.current;
+      e.preventDefault();
+      const px = e.deltaMode === 1 ? e.deltaX * 16 : e.deltaMode === 2 ? e.deltaX * 400 : e.deltaX;
+      w.x = Math.max(0, w.x - px);
+      stopSpring();
+      const armed = w.x >= REPLY_THRESHOLD;
+      if (armed !== w.armed) {
+        w.armed = armed;
+        if (armed) {
+          haptic("light");
+          animate(icon.current?.firstElementChild, [{ transform: "scale(1)" }, { transform: "scale(1.22)" }, { transform: "scale(1)" }], { spring: SPRING_POP });
+        }
+      }
+      paint(rubberBand(w.x), armed);
+      if (w.timer) clearTimeout(w.timer);
+      w.timer = setTimeout(finish, 140); // the swipe ends when the deltas stop (incl. momentum tail)
+    };
+    function onFollow(e: WheelEvent) {
+      if (e.ctrlKey) return;
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5) return; // vertical inertia mid-swipe: ignore, the timer ends it
+      step(e);
+    }
+    const onWheel = (e: WheelEvent) => {
+      if (wheel.current.timer || disabledRef.current || e.ctrlKey || gesture.current.id !== -1) return;
+      const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.5;
+      if (!horizontal || e.deltaX >= 0) return; // starts only with a rightward swipe
+      if (replyGestureBlocked(e.target, Number.MAX_SAFE_INTEGER)) return;
+      window.addEventListener("wheel", onFollow, { capture: true, passive: false });
+      step(e);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.removeEventListener("wheel", onFollow, { capture: true });
+      if (wheel.current.timer) clearTimeout(wheel.current.timer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(
     () => () => {
       stopSpring();
@@ -165,7 +226,21 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
   );
 
   return (
-    <div className="group/reply relative" data-testid={testId} data-reply-message={messageId}>
+    <div
+      className="group/reply relative"
+      data-testid={testId}
+      data-reply-message={messageId}
+      onKeyDown={(e) => {
+        // keyboard fallback: Alt+R while anything inside the message has focus (its reply button, a link, media)
+        if (disabled || e.defaultPrevented || e.metaKey || e.ctrlKey) return;
+        const t = e.target as HTMLElement;
+        const typing = t.closest('input, textarea, [contenteditable="true"]');
+        if (typing || !e.altKey || (e.code !== "KeyR" && e.key.toLowerCase() !== "r")) return;
+        e.preventDefault();
+        haptic("medium");
+        onReplyRef.current();
+      }}
+    >
       <span ref={icon} className="pointer-events-none absolute inset-y-0 left-2 flex items-center will-change-transform" aria-hidden style={{ opacity: 0, transform: "scale(0.35)" }} data-testid="reply-swipe-icon">
         <span className="grid h-8 w-8 place-items-center rounded-full bg-zinc-800/90 text-emerald-400 shadow ring-1 ring-white/10">
           <MessageSquareReply className="h-4 w-4" />
@@ -177,7 +252,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           haptic("medium");
           onReply();
         }}
-        className="absolute top-1/2 left-1 hidden -translate-y-1/2 rounded-full bg-zinc-800 p-1.5 text-zinc-400 shadow ring-1 ring-white/10 transition hover:bg-zinc-700 hover:text-emerald-400 [@media(hover:hover)_and_(pointer:fine)]:group-hover/reply:flex"
+        className="pointer-events-none absolute top-1/2 left-1 flex -translate-y-1/2 rounded-full bg-zinc-800 p-1.5 text-zinc-400 opacity-0 shadow ring-1 ring-white/10 transition hover:bg-zinc-700 hover:text-emerald-400 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-emerald-500/70 [@media(hover:hover)_and_(pointer:fine)]:group-hover/reply:pointer-events-auto [@media(hover:hover)_and_(pointer:fine)]:group-hover/reply:opacity-100"
         aria-label="Reply to message"
         data-testid="reply-desktop"
         disabled={disabled}

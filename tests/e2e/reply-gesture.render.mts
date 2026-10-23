@@ -119,7 +119,91 @@ for (const engine of ENGINES) {
     assert.ok(selected.length >= 5, `${tag}: text drag still selects text ("${selected}")`);
     assert.ok(!(await replyLog(mpage)).includes("select"), `${tag}: text drag does not reply`);
     await mpage.evaluate(() => window.getSelection()?.removeAllRanges());
+
+    // Links and reaction chips keep their clicks; a drag that starts on them never replies.
+    await mpage.locator("#link-target").click();
+    await mpage.locator("#reaction-target").click();
+    log = await replyLog(mpage);
+    assert.ok(log.endsWith("link-click,reaction-click"), `${tag}: link + reaction clicks pass through (${log})`);
+    for (const sel of ["#link-target", "#reaction-target"]) {
+      const b = (await mpage.locator(sel).boundingBox())!;
+      await mpage.mouse.move(b.x + 4, b.y + b.height / 2);
+      await mpage.mouse.down();
+      await mpage.mouse.move(b.x + 90, b.y + b.height / 2, { steps: 8 });
+      await mpage.mouse.up();
+      await mpage.evaluate(() => window.getSelection()?.removeAllRanges());
+    }
+    log = await replyLog(mpage);
+    assert.ok(!/(^|,)(link|reaction)(,|$)/.test(log), `${tag}: drags starting on a link/reaction never reply (${log})`);
+
+    // Own (right-aligned) messages swipe the same way.
+    p = await start("#own-target");
+    await mpage.mouse.move(p.x, p.y);
+    await mpage.mouse.down();
+    await mpage.mouse.move(p.x + 75, p.y, { steps: 8 });
+    await mpage.mouse.up();
+    assert.ok((await replyLog(mpage)).endsWith(",own"), `${tag}: own message swipe replies`);
+    await mpage.waitForTimeout(450);
+
+    // Trackpad: a horizontal two-finger swipe (wheel deltaX < 0) replies once; vertical scrolling never does.
+    await mpage.locator("#wheel-target").scrollIntoViewIfNeeded();
+    let wb = (await mpage.locator("#wheel-target").boundingBox())!;
+    await mpage.mouse.move(wb.x + 40, wb.y + wb.height / 2);
+    const offs: number[] = [];
+    for (let i = 0; i < 8; i++) { await mpage.mouse.wheel(-12, 0); await mpage.waitForTimeout(16); offs.push(Math.round(await offsetOf("#wheel-target"))); }
+    if (process.env.DBG) console.log("wheel offsets", offs.join(","));
+    const wheelMid = await offsetOf("#wheel-target");
+    assert.ok(wheelMid > 20, `${tag}: trackpad swipe moves the bubble (${wheelMid})`);
+    await mpage.waitForTimeout(600);
+    log = await replyLog(mpage);
+    assert.ok(log.endsWith(",wheel"), `${tag}: trackpad swipe past the threshold replies once (${log})`);
+    assert.ok(Math.abs(await offsetOf("#wheel-target")) < 0.6, `${tag}: trackpad swipe springs home`);
+    wb = (await mpage.locator("#wheel-vert-target").boundingBox())!;
+    await mpage.mouse.move(wb.x + 40, wb.y + wb.height / 2);
+    const y0 = await mpage.evaluate(() => scrollY);
+    for (let i = 0; i < 8; i++) { await mpage.mouse.wheel(-3, 40); await mpage.waitForTimeout(16); }
+    await mpage.waitForTimeout(600);
+    assert.ok(!(await replyLog(mpage)).includes("wheel-vert"), `${tag}: vertical trackpad scroll never replies`);
+    assert.ok((await mpage.evaluate(() => scrollY)) > y0, `${tag}: vertical trackpad scroll still scrolls the page`);
+    // Leftward horizontal swipe (browser-back direction) is ignored.
+    await mpage.locator("#wheel-target").scrollIntoViewIfNeeded();
+    wb = (await mpage.locator("#wheel-target").boundingBox())!;
+    await mpage.mouse.move(wb.x + 40, wb.y + wb.height / 2);
+    const before = await replyLog(mpage);
+    for (let i = 0; i < 8; i++) { await mpage.mouse.wheel(12, 0); await mpage.waitForTimeout(16); }
+    await mpage.waitForTimeout(600);
+    assert.equal(await replyLog(mpage), before, `${tag}: leftward trackpad swipe ignored`);
+
+    // Keyboard: Tab reaches each message's Reply button (visible on focus); Enter replies. Alt+R from a focused link replies.
+    await mpage.locator("#text-gesture [data-testid=reply-desktop]").focus();
+    await mpage.keyboard.press("Tab");
+    const focusedId = await mpage.evaluate(() => document.activeElement?.closest("[data-gesture]")?.getAttribute("data-gesture"));
+    assert.equal(focusedId, "visual", `${tag}: Tab moves on through messages (${focusedId})`);
+    await mpage.keyboard.press("Shift+Tab");
+    const btnOpacity = await mpage.evaluate(() => getComputedStyle(document.activeElement!).opacity);
+    assert.equal(btnOpacity, "1", `${tag}: focused Reply button is visible`);
+    await mpage.keyboard.press("Enter");
+    assert.ok((await replyLog(mpage)).endsWith(",text"), `${tag}: Enter on the focused Reply button replies`);
+    await mpage.locator("#link-target").focus();
+    await mpage.keyboard.press("Alt+KeyR");
+    assert.ok((await replyLog(mpage)).endsWith(",link"), `${tag}: Alt+R inside a message replies to it`);
     await mcontext.close();
+
+    // prefers-reduced-motion: still replies, no spring animation (home immediately).
+    const rcontext = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });
+    const rpage = await rcontext.newPage();
+    rpage.on("pageerror", (error) => errors.push(error.message));
+    await rpage.setContent(html);
+    const rb = (await rpage.locator("#mouse-target").boundingBox())!;
+    await rpage.mouse.move(rb.x + 30, rb.y + rb.height / 2);
+    await rpage.mouse.down();
+    await rpage.mouse.move(rb.x + 120, rb.y + rb.height / 2, { steps: 8 });
+    await rpage.mouse.up();
+    await rpage.waitForTimeout(60);
+    assert.equal(await replyLog(rpage), "mouse", `${tag}: reduced motion still replies`);
+    const rOff = await rpage.locator("#mouse-target").evaluate((el) => new DOMMatrix(getComputedStyle(el.closest("[data-testid=reply-swipe-body]")!).transform).m41);
+    assert.ok(Math.abs(rOff) < 0.6, `${tag}: reduced motion snaps home without a spring (${rOff})`);
+    await rcontext.close();
     assert.equal(errors.length, 0, `${tag}: no page errors`);
     passed++;
     await context.close();
