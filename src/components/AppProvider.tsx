@@ -1,5 +1,7 @@
 "use client";
 
+import { wipeChatCache } from "@/lib/chat/historyCache";
+import { prefetchTopChats } from "@/lib/chat/prefetch";
 import { markDeleted } from "@/lib/userDisplay";
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
@@ -233,6 +235,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const dropSession = useCallback(() => {
+    void wipeChatCache(); // cached chats belong to the account that signed out (shared devices)
     clearToken();
     setToken(null);
     setMe(null);
@@ -312,15 +315,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .then((r) => r?.now && (syncedAt = Math.max(syncedAt, r.now)))
         .catch(() => {});
     const catchUp = async () => {
-      if (!syncedAt) return void markSynced(); // first session on this page: nothing to catch up on
+      if (!syncedAt) {
+        // first session on this page: nothing to catch up on; still warm the top chats
+        const uid = meRef.current?.id;
+        if (uid) setTimeout(() => void prefetchTopChats((ev, p, t) => s.request(ev, p, t), uid), 1500);
+        return void markSynced();
+      }
       const after = syncedAt - 2_000; // small overlap for clock/ordering jitter; dedup by id below
       try {
-        const r = await s.request<{ ok: boolean; messages?: DirectMessage[] }>("dm:since", { after });
-        for (const m of r?.messages ?? []) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+        // page forward through the whole gap (oldest first) — a long offline stretch never loses its middle
+        // exact (createdAt, id) cursor: no gap and no repeat at a page boundary, even when timestamps tie
+        let cursor = after;
+        let cursorId: string | undefined;
+        for (let page = 0; page < 25; page++) {
+          const r = await s.request<{ ok: boolean; messages?: DirectMessage[]; hasMore?: boolean }>("dm:since", { after: cursor, afterId: cursorId, order: "asc" });
+          const list = r?.messages ?? [];
+          for (const m of list) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+          if (!r?.hasMore || !list.length) break;
+          const last = list[list.length - 1];
+          cursor = last.createdAt;
+          cursorId = last.id;
+          await new Promise((res) => setTimeout(res, 80)); // stay well inside the socket's rate limit
+        }
       } catch {
         /* dropped again — next reconnect retries from the same point */
       }
       void markSynced();
+      // warm the top inbox chats' cache (app open + every reconnect) so the next tap opens instantly
+      const uid = meRef.current?.id;
+      if (uid) setTimeout(() => void prefetchTopChats((ev, p, t) => s.request(ev, p, t), uid), 1500);
     };
     const syncTimer = setInterval(() => {
       if (s.connected && meRef.current && appVisible()) void markSynced();
