@@ -890,6 +890,8 @@ export function DmThread({
       stickToBottom.current = false;
       if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
       setMessages((list) => reconcileOlder<Item>(list ?? [], r.messages as Item[]));
+      // the new page renders (the DOM window grows by exactly what was added, so nothing already hidden reappears)
+      setRenderWindow((w) => (w >= Number.MAX_SAFE_INTEGER - r.messages.length ? w : w + r.messages.length));
       setHasMore(r.hasMore);
       chatStats.olderMs.push(Math.round(performance.now() - t0));
       if (r.hasMore && r.messages.length) prefetchOlder(r.messages[0].id);
@@ -1206,6 +1208,20 @@ export function DmThread({
   const [renderWindow, setRenderWindow] = useState(RENDER_WINDOW);
   const rowOffset = Math.max(0, rows.length - renderWindow);
   const visibleRows = rowOffset ? rows.slice(rowOffset) : rows;
+  // growing the DOM window prepends rows: keep the reader's place (same anchor as an older page)
+  const growWindow = () => {
+    const el = listRef.current;
+    if (el && !anchor.current) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+    stickToBottom.current = false;
+    setRenderWindow((w) => w + RENDER_WINDOW);
+  };
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    const a = anchor.current;
+    if (!el || !a) return;
+    anchor.current = null;
+    el.scrollTop = a.top + (el.scrollHeight - a.height);
+  }, [renderWindow]);
 
   // tap a quote → jump to and highlight the original; if it isn't loaded yet, page back (contiguously, by id cursor)
   // until it is, then jump. Bounded; a deleted original says so.
@@ -1510,7 +1526,12 @@ export function DmThread({
             stickToBottom.current = near;
             if (near && unseenBelow) setUnseenBelow(0);
             // infinite scroll upward: the next older page (usually already prefetched) loads before the top is reached
-            if (hasMore && !loadingMore && el.scrollTop < Math.max(PREFETCH_TOP_PX, el.clientHeight * 1.5) && fromServer.current) void loadEarlier();
+            // rows already loaded but outside the DOM window are revealed first; only then is the next page fetched
+            if (el.scrollTop < Math.max(PREFETCH_TOP_PX, el.clientHeight * 1.5)) {
+              if (rowOffset > 0) {
+                if (!anchor.current) growWindow();
+              } else if (hasMore && !loadingMore && fromServer.current) void loadEarlier();
+            }
             // remember the reading position (first visible message) so the chat reopens there
             if (posTimer.current) clearTimeout(posTimer.current);
             posTimer.current = setTimeout(() => {
@@ -1552,7 +1573,7 @@ export function DmThread({
                 </div>
               )}
               {rowOffset > 0 && (
-                <button type="button" onClick={() => setRenderWindow((w) => w + RENDER_WINDOW)} className="mx-auto my-2 block rounded-full px-3 py-1 text-xs font-semibold text-zinc-400 hover:bg-white/5">
+                <button type="button" onClick={growWindow} className="mx-auto my-2 block rounded-full px-3 py-1 text-xs font-semibold text-zinc-400 hover:bg-white/5">
                   Show earlier messages
                 </button>
               )}
