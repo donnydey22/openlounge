@@ -60,6 +60,10 @@ export class RealtimeClient {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private wakeBound = false;
   private checking = false;
+  /** last time any frame arrived (liveness: a socket that is delivering data isn't dead, even if a ping is slow) */
+  private lastRx = 0;
+  /** smoothed ping RTT (ms) — scales the dead-socket timeout to the link (300 ms + loss on a far mobile network) */
+  private srtt = 0;
   connected = false;
 
   constructor(private url: string = defaultUrl()) {}
@@ -85,6 +89,7 @@ export class RealtimeClient {
       void this.check(HEARTBEAT_TIMEOUT_MS); // first clock-skew sample right away
     };
     ws.onmessage = (e) => {
+      this.lastRx = Date.now();
       let msg: { t: string; id?: number; ev?: string; data?: unknown };
       try {
         msg = JSON.parse(String(e.data));
@@ -169,11 +174,17 @@ export class RealtimeClient {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN || this.checking) return;
     this.checking = true;
+    const t0 = Date.now();
     try {
-      const t0 = Date.now();
-      const r = await this.request<{ now?: number }>("ping", {}, timeoutMs);
+      // far / lossy links: give the pong at least ~8 smoothed RTTs (TCP retransmits after a radio wake), capped
+      const wait = Math.min(Math.max(timeoutMs, this.srtt * 8), HEARTBEAT_TIMEOUT_MS * 1.5);
+      const r = await this.request<{ now?: number }>("ping", {}, wait);
+      const rtt = Date.now() - t0;
+      this.srtt = this.srtt ? this.srtt * 0.8 + rtt * 0.2 : rtt;
       recordClockSample(t0, r?.now, Date.now());
     } catch {
+      // the pong is late but frames are still arriving: the socket is alive (slow), not half-open — keep it
+      if (this.ws === ws && ws.readyState === WebSocket.OPEN && this.lastRx > t0) return;
       this.drop(ws);
     } finally {
       this.checking = false;

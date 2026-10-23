@@ -201,7 +201,17 @@ class Broadcast {
 export class WsHub {
   /** the most recently created hub (one per process): lets modules outside realtime.ts broadcast (account deletion) */
   static latest: WsHub | null = null;
-  private wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  // permessage-deflate (WS_DEFLATE=1): history pages / inbox lists are repetitive JSON and shrink ~5–8× — what matters on
+  // a 300 ms / few-hundred-kbps mobile link. No context takeover either way (bounded memory per socket), small frames
+  // (typing, acks, presence) are sent raw, and zlib work is capped. Off unless enabled, so rollback is an env flip.
+  private wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_FRAME_BYTES,
+    perMessageDeflate:
+      process.env.WS_DEFLATE === "1"
+        ? { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true, zlibDeflateOptions: { level: 6, memLevel: 7 }, concurrencyLimit: 10 }
+        : false,
+  });
   private conns = new Map<string, Conn>();
   private channels = new Map<string, Set<Conn>>();
   private connectionHandler: (c: Conn, req: IncomingMessage) => void = () => {};
