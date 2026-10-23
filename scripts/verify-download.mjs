@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ANDROID_FALLBACK, ANDROID_RELEASE, ANDROID_SIGNER_SHA256, IOS_RELEASE, releaseLabel } from "../src/lib/releases.ts";
+import { ANDROID_FALLBACK, ANDROID_RELEASE, ANDROID_SIGNER_SHA256, IOS_FALLBACK, IOS_RELEASE, binaryUrl, releaseLabel } from "../src/lib/releases.ts";
 
 const base = process.argv[2] || "https://openlounge.app";
 let fail = 0;
@@ -20,7 +20,7 @@ for (const [k, ua] of Object.entries(UAS)) {
   ok(r.status === 200 && html.includes(releaseLabel(ANDROID_RELEASE)) && html.includes(releaseLabel(IOS_RELEASE)), `/download (${k}) ${r.status}, labels Android ${releaseLabel(ANDROID_RELEASE)} / iOS ${releaseLabel(IOS_RELEASE)}`);
 }
 const tmp = mkdtempSync(path.join(tmpdir(), "oldl-"));
-for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK]) {
+for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK, IOS_RELEASE, IOS_FALLBACK]) {
   const r = await fetch(`${base}${rel.file}`, { redirect: "follow" });
   const h = createHash("sha256");
   const out = path.join(tmp, path.basename(rel.file));
@@ -31,11 +31,16 @@ for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK]) {
   const sha = h.digest("hex");
   ok(r.status === 200 && sha === rel.sha256, `${rel.file} ${r.status}, ${n} B, sha256 ${sha.slice(0, 16)}… ${sha === rel.sha256 ? "matches" : `!= ${rel.sha256.slice(0, 16)}…`}`);
   const as = process.env.APKSIGNER;
-  if (as) {
+  if (as && rel.file.endsWith(".apk")) {
     const v = spawnSync(as, ["verify", "--print-certs", out], { encoding: "utf8" });
     const d = (v.stdout.match(/Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})/) || [])[1];
     ok(d === ANDROID_SIGNER_SHA256, `${rel.file} signer ${d ? d.slice(0, 16) + "…" : "?"} ${d === ANDROID_SIGNER_SHA256 ? "= release key" : "!= release key"}`);
   }
+}
+{
+  const r = await fetch(`${base}/downloads/openlounge-ios.plist`);
+  const xml = await r.text();
+  ok(r.status === 200 && xml.includes(binaryUrl(IOS_RELEASE.file)) && xml.includes(`<string>${IOS_RELEASE.bundleId}</string>`), `/downloads/openlounge-ios.plist ${r.status} -> ${binaryUrl(IOS_RELEASE.file).split("/").pop()}`);
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `verify-download FAILED (${fail})` : "verify-download PASSED");
