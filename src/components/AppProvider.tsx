@@ -1,5 +1,6 @@
 "use client";
 
+import { wipeMediaCache } from "@/lib/storage/mediaCache";
 import { wipeChatCache } from "@/lib/chat/historyCache";
 import { prefetchTopChats } from "@/lib/chat/prefetch";
 import { markDeleted } from "@/lib/userDisplay";
@@ -236,6 +237,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const dropSession = useCallback(() => {
     void wipeChatCache(); // cached chats belong to the account that signed out (shared devices)
+    void wipeMediaCache(); // and their cached media bytes
     clearToken();
     setToken(null);
     setMe(null);

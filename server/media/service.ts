@@ -12,6 +12,7 @@
 // bubble becomes "Photo expired", and pushes "media:update" to both sides. Reconnecting clients reconcile.
 import { applyValidators, notModifiedHeaders } from "./conditional";
 import { conversationId as convKey, isGroupId } from "../conversation";
+import { ALLOWANCE_DEFAULTS, allowance } from "./allowance";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -200,6 +201,35 @@ export class MediaService {
   // ---------- membership & access ----------
 
   /** members of a conversation (DMs: "<a>|<b>"; groups via the resolver) */
+  /**
+   * Settings → Storage & data: media in the chats this user can see, per chat (bytes on the server, how many items,
+   * how much of it they sent), plus their allowance under the report-only formula in allowance.ts. Read only.
+   */
+  usage(uid: string) {
+    const chats = new Map<string, { conv: string; bytes: number; items: number; mine: number }>();
+    const senders = new Set<string>();
+    const since = Date.now() - 30 * 86_400_000;
+    let mine = 0;
+    for (const r of this.rows.values()) {
+      if (!r.messageId) continue;
+      if ((r.createdAt ?? 0) >= since) senders.add(r.ownerId);
+      if (!this.canView(uid, r)) continue;
+      const bytes = Object.values(r.files).reduce((n, f) => n + (f?.size ?? 0), 0);
+      const cid = r.conversationId ?? "";
+      const conv = isGroupId(cid) ? cid : cid.split("|").find((x) => x !== uid) ?? uid;
+      const c = chats.get(conv) ?? { conv, bytes: 0, items: 0, mine: 0 };
+      c.bytes += bytes;
+      c.items++;
+      if (r.ownerId === uid) {
+        c.mine += bytes;
+        mine += bytes;
+      }
+      chats.set(conv, c);
+    }
+    const a = allowance({ volumeBytes: ALLOWANCE_DEFAULTS.volumeBytes, activeSenders: senders.size });
+    return { chats: [...chats.values()].sort((x, y) => y.bytes - x.bytes), sentBytes: mine, ...a };
+  }
+
   members(conversationId: string | null): string[] {
     if (!conversationId) return [];
     const viaResolver = this.resolver?.(conversationId);

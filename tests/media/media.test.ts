@@ -706,3 +706,30 @@ test("Download original: transcoded video keeps its own streams (no re-encode) w
   const tags = execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json", f("geo-src.webm")]).toString();
   assert.doesNotMatch(tags, /location|33\.44|TestPhone/);
 });
+
+test("Storage & data: per-chat server usage is read-only, scoped to chats you're in, and reports the (unenforced) allowance", async () => {
+  const u = await upload(A, f("gps.jpg"), "photo");
+  const mid = u.done!.data.media.id;
+  await sendMedia(A, B, mid);
+  const before = await sign(B, mid);
+  const ua = await api(base, "/api/media/usage", undefined, { token: tok(A) });
+  assert.equal(ua.status, 200);
+  const chat = ua.data.chats.find((c: { conv: string }) => c.conv === id(B));
+  assert.ok(chat && chat.bytes > 0 && chat.items >= 1 && chat.mine > 0, JSON.stringify(ua.data.chats));
+  assert.equal(ua.data.enforced, false);
+  assert.ok(ua.data.allowance > 0);
+  const ub = await api(base, "/api/media/usage", undefined, { token: tok(B) });
+  const chatB = ub.data.chats.find((c: { conv: string }) => c.conv === id(A));
+  assert.ok(chatB && chatB.bytes === chat.bytes);
+  assert.equal(chatB.mine >= 0, true);
+  // a stranger (fresh account, in no chats) sees nothing of A↔B
+  const D = await phoneLogin(wsUrl, phone(), { firstName: "Dee", username: `dee_${uniq()}` });
+  const ud = await api(base, "/api/media/usage", undefined, { token: tok(D) });
+  assert.equal(ud.status, 200);
+  assert.deepEqual(ud.data.chats, [], "strangers see nothing");
+  assert.equal(ud.data.sentBytes, 0);
+  D.client.close();
+  assert.equal((await api(base, "/api/media/usage")).status, 401);
+  // reading usage changed nothing: same file still served
+  assert.equal((await fetch(base + before.full)).status, 200);
+});
