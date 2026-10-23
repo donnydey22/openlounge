@@ -238,7 +238,8 @@ export class MediaService {
       ...(r.files.poster ? { poster: true } : {}),
       ...(r.files.hls?.rungs?.length ? { hls: r.files.hls.rungs } : {}),
       ...(r.files.thumbS ? { srcset: true } : {}),
-      ...(r.files.source ? { orig: { size: r.files.source.size, mime: r.files.source.mime } } : {}),
+      // "Download original" is never offered for self-destructing / view-once media
+      ...(r.files.source && !(r.expiresAt || r.viewOnce || r.ttlSeconds) ? { orig: { size: r.files.source.size, mime: r.files.source.mime } } : {}),
       label: r.label,
       ...(r.ttlSeconds ? { ttl: r.ttlSeconds } : {}),
       ...(r.viewOnce ? { viewOnce: true } : {}),

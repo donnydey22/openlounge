@@ -631,6 +631,7 @@ test("Download original (Telegram-style): big photo keeps a lossless, metadata-f
   const s = await sendMedia(A, B, t.id, { ttlSeconds: 60 });
   assert.equal(s.status, 200, JSON.stringify(s.data));
   assert.equal((await sign(B, t.id, ["full", "source"])).source, undefined);
+  assert.equal(s.data.message.media.orig, undefined, "no Download original offered on timed media");
 });
 
 test("Download original: transcoded video keeps its own streams (no re-encode) with location/device tags stripped", async () => {
