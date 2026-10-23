@@ -18,11 +18,13 @@ export const CALL_AUDIO_CONSTRAINTS = {
 export const OPUS_VOICE_CODEC_OPTIONS = {
   opusFec: true,
   // DTX off: it clipped word onsets and dropped to comfort noise between phrases, which read as "quiet/cutting out".
-  // Voice at 48 kbps is still tiny next to video; FEC stays on for loss.
+  // Voice at 64 kbps is still tiny next to video; FEC stays on for loss.
   opusDtx: false,
   opusStereo: false,
   opusMaxPlaybackRate: 48_000,
-  opusMaxAverageBitrate: 48_000,
+  // 64 kbps mono fullband (Oct 23, clarity): headroom for in-band FEC on lossy links without starving the primary
+  // encode. The browser's bandwidth estimator still sets the real rate below this cap on a congested link.
+  opusMaxAverageBitrate: 64_000,
   // 20 ms frames: Opus' standard voice packetization, the best balance of header overhead and loss recovery.
   opusPtime: 20,
 } as const;
@@ -32,7 +34,7 @@ export const OPUS_VOICE_CODEC_OPTIONS = {
  * the browser's bandwidth allocator and DSCP network priority; it stays independent of every video bitrate cap.
  */
 export const MIC_AUDIO_ENCODING = {
-  maxBitrate: 48_000,
+  maxBitrate: 64_000,
   priority: "high",
   networkPriority: "high",
 } as const satisfies RTCRtpEncodingParameters & { networkPriority?: RTCPriorityType };
@@ -82,10 +84,15 @@ export async function resumePausedCallAudio(els: readonly Pick<HTMLMediaElement,
 }
 
 /**
- * Voice floor for the audio ladder on Android (85a16932: three loss steps took Keiko's Opus to 16 kbps). 24 kbps is
- * still a normal wideband voice rate and keeps Opus FEC effective; the ladder's upper steps are unchanged.
+ * Voice floor for the audio ladder, every platform (Oct 23; was Android-only 24 kbps after 85a16932). On loss the
+ * ladder used to cut Opus to 16 kbps exactly when FEC needs headroom: random loss on a Kenya–US path is not congestion,
+ * and a lower cap does not reduce it — it only made voice muffled. Congestion is still handled: maxBitrate is a cap,
+ * and the browser/libwebrtc bandwidth estimator sends less than it whenever the link can't carry it.
  */
-export const ANDROID_VOICE_FLOOR_BPS = 24_000;
-export function voiceLadderBps(stepBps: number, ua = ""): number {
-  return /Android/i.test(ua) ? Math.max(stepBps, ANDROID_VOICE_FLOOR_BPS) : stepBps;
+export const VOICE_FLOOR_BPS = 32_000;
+/** @deprecated kept for older imports; the floor now applies on every platform */
+export const ANDROID_VOICE_FLOOR_BPS = VOICE_FLOOR_BPS;
+export function voiceLadderBps(stepBps: number, _ua = ""): number {
+  void _ua;
+  return Math.max(stepBps, VOICE_FLOOR_BPS);
 }

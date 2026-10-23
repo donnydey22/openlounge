@@ -4,6 +4,7 @@
 // Audio calls stay native as before; iPhone video is native only when its individual server media grant says so.
 // Safari and Android WebView paths never take the iPhone video branch.
 import type { CallMedia } from "@/lib/types";
+import { voiceLadderBps } from "./audioPolicy";
 import type { RealtimeClient } from "@/lib/realtime";
 import type { MediasoupRemoteTrack } from "./mediasoupSession";
 
@@ -295,7 +296,7 @@ export class NativeMediaSession {
     await nativeMediaCmd({ op: "restartIce" }).catch(() => {});
   }
   async applyLadderStep(step: { audioBps: number }): Promise<boolean> {
-    return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps }).catch(() => false)) === true;
+    return (await nativeMediaCmd({ op: "ladder", audioBps: voiceLadderBps(step.audioBps) }).catch(() => false)) === true;
   }
   async getTransportStats(): Promise<RTCStatsReport[]> {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;

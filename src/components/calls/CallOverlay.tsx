@@ -4,7 +4,7 @@
 // Ringing…), in-call audio + video (draggable self-view PiP that snaps to corners, tap to swap), weak connection +
 // reconnecting banners, call timer, and the minimized green bar.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Ear, Video, VideoOff, Volume2, X } from "lucide-react";
+import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
@@ -12,6 +12,7 @@ import { nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
 import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
+import { AudioRouteButton, RouteNotice } from "./AudioRouteButton";
 import css from "./calls.module.css";
 
 const QUICK_REPLIES = ["Can't talk now. What's up?", "I'll call you right back.", "I'll call you later.", "Can't talk now. Call me later?"];
@@ -320,11 +321,7 @@ function Incoming({ s }: { s: CallSnapshot }) {
 function Controls({ s }: { s: CallSnapshot }) {
   return (
     <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:flex-1 [&>*]:max-w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:max-w-[calc((100%-0.75rem)/4)]">
-      {s.speakerSupported ? (
-        <RoundBtn label={s.speaker ? "Speaker" : "Phone"} active={s.speaker} onClick={() => void callEngine.toggleSpeaker()} testId="call-speaker">
-          {s.speaker ? <Volume2 className="h-6 w-6" data-route="speaker" /> : <Ear className="h-6 w-6" data-route="phone" />}
-        </RoundBtn>
-      ) : null}
+      {s.speakerSupported ? <AudioRouteButton s={s} Btn={RoundBtn} /> : null}
       {s.camOn ? (
         <RoundBtn label="Flip" onClick={() => void callEngine.flip()} testId="call-flip">
           <RefreshCw className="h-6 w-6" />
@@ -558,7 +555,10 @@ export function CallOverlay() {
               <div className="h-14" />
             )
           ) : (
-            <Controls s={s} />
+            <>
+              <RouteNotice text={s.routeNotice} />
+              <Controls s={s} />
+            </>
           )}
         </div>
       </div>

@@ -29,10 +29,11 @@ export interface LadderStep {
 }
 
 export const LADDER: readonly LadderStep[] = [
-  { audioBps: 48_000, videoScale: 1, videoFps: 30, videoBps: 1_200_000 },
-  { audioBps: 32_000, videoScale: 2, videoFps: 24, videoBps: 400_000 },
-  { audioBps: 24_000, videoScale: 4, videoFps: 15, videoBps: 150_000 },
-  { audioBps: 16_000, videoScale: 4, videoFps: 8, videoBps: 60_000 },
+  // voice holds 32 kbps+ on every rung (Oct 23): video is what gets shed; Opus caps stay where FEC still works
+  { audioBps: 64_000, videoScale: 1, videoFps: 30, videoBps: 1_200_000 },
+  { audioBps: 48_000, videoScale: 2, videoFps: 24, videoBps: 400_000 },
+  { audioBps: 40_000, videoScale: 4, videoFps: 15, videoBps: 150_000 },
+  { audioBps: 32_000, videoScale: 4, videoFps: 8, videoBps: 60_000 },
 ] as const;
 
 /**
@@ -45,7 +46,7 @@ export const LADDER: readonly LadderStep[] = [
  *    when the floor is still severe for 3 more samples: ~5 s of > 15 % loss in total
  *  - after a reconnect the ladder starts at rung 1 (conservative) and climbs only on measured headroom
  *  - video bitrate also tracks the live estimate: min(rung cap, 0.85 x availableOutgoingBitrate - audio), never below 60 kbps
- *  - audio is never starved: the mic encoding is priority/networkPriority "high"; Opus floor is 16 kbps, never paused
+ *  - audio is never starved: the mic encoding is priority/networkPriority "high"; Opus cap floor is 32 kbps, never paused
  */
 export const ADAPT = {
   sampleMs: 1_000,
