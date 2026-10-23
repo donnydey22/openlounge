@@ -10,7 +10,6 @@ import { Switch } from "@/components/Switch";
 import { useApp } from "@/components/AppProvider";
 import { formatBytes } from "@/lib/media/types";
 import { getMediaUsage, type MediaUsage } from "@/lib/media/client";
-import { readInbox } from "@/lib/chat/historyCache";
 import { AUTO_DOWNLOAD_EVENT, autoPrefs, currentNetwork, setAutoPref, type AutoKind, type NetKind } from "@/lib/storage/autoDownload";
 import { CAP_CHOICES, DEFAULT_CAP, MEDIA_CACHE_EVENT, cacheCap, clearMedia, readIndex, setCacheCap, usageByConv } from "@/lib/storage/mediaCache";
 import type { ConversationSummary } from "@/lib/types";
@@ -26,7 +25,7 @@ const KINDS: { kind: AutoKind; label: string; icon: typeof ImageIcon }[] = [
 ];
 
 export default function StorageSettingsPage() {
-  const { me, reportError } = useApp();
+  const { me, reportError, request } = useApp();
   const [prefs, setPrefs] = useState(autoPrefs);
   const [cap, setCap] = useState(DEFAULT_CAP);
   const [local, setLocal] = useState<Map<string, { bytes: number; items: number }>>(new Map());
@@ -52,8 +51,11 @@ export default function StorageSettingsPage() {
   useEffect(() => {
     if (!me) return;
     getMediaUsage().then(setServer).catch(reportError);
-    void readInbox<ConversationSummary>(me.id).then((cs) => setNames(Object.fromEntries((cs ?? []).map((c) => [c.peer.id, c.peer.name]))));
-  }, [me, reportError]);
+    // chat names for the per-chat rows (server inbox list; the device chat cache is held with item 5)
+    request<{ conversations: ConversationSummary[] }>("dm:list")
+      .then((r) => setNames(Object.fromEntries((r.conversations ?? []).map((c) => [c.peer.id, c.peer.name]))))
+      .catch(() => {});
+  }, [me, reportError, request]);
 
   const localTotal = [...local.values()].reduce((n, v) => n + v.bytes, 0);
   const convs = new Set<string>([...local.keys(), ...(server?.chats.map((c) => c.conv) ?? [])]);

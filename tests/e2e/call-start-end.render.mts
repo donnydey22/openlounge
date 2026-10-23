@@ -47,7 +47,10 @@ function classify(rgb: number[]): Cls {
 }
 
 const results: Record<string, { timeline: string; counts: Record<string, number>; startGapFrames: number; endFrames: number; end: Record<string, number> }> = {};
-const browser = await pw.chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
+// ENG=chromium|firefox|webkit, DEVICE="iPhone 13"|"Pixel 7" (touch + mobile UA; viewport stays W×H so frames compare)
+const ENG = (process.env.ENG || "chromium") as "chromium" | "firefox" | "webkit";
+const DEV = process.env.DEVICE ? pw.devices[process.env.DEVICE] : null;
+const browser = await pw[ENG].launch(ENG === "chromium" ? { args: ["--autoplay-policy=no-user-gesture-required"] } : ENG === "firefox" ? { firefoxUserPrefs: { "media.autoplay.default": 0, "media.autoplay.blocking_policy": 0 } } : {});
 // END variants (who hangs up / how): local = I hang up (engine stops tracks, then ended snapshot); remote = the other
 // side hangs up (their track ends first, ended arrives ~150 ms later); drop = network drop (remote freezes, 1.5 s of
 // "Reconnecting…", then the call ends). web = Android / desktop browser + Android WebView wrapper (same DOM video
@@ -59,7 +62,8 @@ for (const scenario of SCEN) {
   const role = scenario.includes("callee") ? "callee" : "caller";
   const vdir = `${OUT}/vid-${scenario}`;
   rmSync(vdir, { recursive: true, force: true });
-  const ctx = await browser.newContext({ viewport: { width: W, height: H }, recordVideo: { dir: vdir, size: { width: W, height: H } } });
+  const devOpts = DEV ? { userAgent: DEV.userAgent, hasTouch: true, ...(ENG !== "firefox" ? { isMobile: DEV.isMobile, deviceScaleFactor: 1 } : {}) } : {};
+  const ctx = await browser.newContext({ ...devOpts, viewport: { width: W, height: H }, recordVideo: { dir: vdir, size: { width: W, height: H } } });
   const page = await ctx.newPage();
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));

@@ -2,7 +2,6 @@
 
 import { wipeMediaCache } from "@/lib/storage/mediaCache";
 import { wipeChatCache } from "@/lib/chat/historyCache";
-import { prefetchTopChats } from "@/lib/chat/prefetch";
 import { markDeleted } from "@/lib/userDisplay";
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
@@ -317,12 +316,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .then((r) => r?.now && (syncedAt = Math.max(syncedAt, r.now)))
         .catch(() => {});
     const catchUp = async () => {
-      if (!syncedAt) {
-        // first session on this page: nothing to catch up on; still warm the top chats
-        const uid = meRef.current?.id;
-        if (uid) setTimeout(() => void prefetchTopChats((ev, p, t) => s.request(ev, p, t), uid), 1500);
-        return void markSynced();
-      }
+      if (!syncedAt) return void markSynced(); // first session on this page: nothing to catch up on
       const after = syncedAt - 2_000; // small overlap for clock/ordering jitter; dedup by id below
       try {
         // page forward through the whole gap (oldest first) — a long offline stretch never loses its middle
@@ -343,9 +337,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         /* dropped again — next reconnect retries from the same point */
       }
       void markSynced();
-      // warm the top inbox chats' cache (app open + every reconnect) so the next tap opens instantly
-      const uid = meRef.current?.id;
-      if (uid) setTimeout(() => void prefetchTopChats((ev, p, t) => s.request(ev, p, t), uid), 1500);
     };
     const syncTimer = setInterval(() => {
       if (s.connected && meRef.current && appVisible()) void markSynced();

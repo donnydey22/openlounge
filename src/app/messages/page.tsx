@@ -11,7 +11,6 @@ import type { ChatStateEvent, ConversationSummary, DirectMessage, DmReadStateEve
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
 import { applyOwnDirectReadState } from "@/lib/chat/readState";
-import { readInbox, writeInbox } from "@/lib/chat/historyCache";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -30,31 +29,10 @@ export default function MessagesPage() {
   const meId = me?.id;
   const groupInbox = useGroupInbox(); // group rows (conv:list), merged by recency below
 
-  // device cache first (instant inbox, offline too), then the server list replaces it
-  const fresh = useRef(false);
-  useEffect(() => {
-    if (!meId) return;
-    let live = true;
-    void readInbox<ConversationSummary>(meId).then((cached) => {
-      if (live && cached && !fresh.current) setConversations((c) => c ?? cached);
-    });
-    return () => {
-      live = false;
-    };
-  }, [meId]);
-  useEffect(() => {
-    if (!meId || !conversations || !fresh.current) return;
-    const t = setTimeout(() => void writeInbox(meId, conversations), 400);
-    return () => clearTimeout(t);
-  }, [meId, conversations]);
-
   // one-shot fetch on open and after a reconnect; everything else is applied from pushed events
   const load = useCallback(() => {
     request<{ conversations: ConversationSummary[] }>("dm:list")
-      .then((r) => {
-        fresh.current = true;
-        setConversations(r.conversations);
-      })
+      .then((r) => setConversations(r.conversations))
       .catch(() => setConversations((c) => c ?? []));
   }, [request]);
 
