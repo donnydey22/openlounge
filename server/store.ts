@@ -148,7 +148,8 @@ export const DROPIN_EMPTY_TTL_MS = Number(process.env.DROPIN_EMPTY_TTL_MS || 20_
 const INVITE_MAX_PER_10MIN = Number(process.env.ROOM_INVITE_MAX_PER_10MIN || 40);
 const DROPIN_MAX_PER_10MIN = Number(process.env.DROPIN_MAX_PER_10MIN || 6);
 const MAX_BOT_SPEAKERS = 4;
-const DM_HISTORY_PER_CONVERSATION = 1000;
+// Retention: chat history is never trimmed. (A 1000-per-conversation cap used to splice the in-memory list,
+// and the snapshot diff then DELETEd those rows from Postgres + the media sweeper removed their files.)
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
 export const DELETED_USER_ID = "u_deleted";
 const DELETED_NAME = "Deleted Account";
@@ -414,7 +415,6 @@ export class Store {
   pushConversationMessage(key: string, msg: DirectMessage) {
     const list = this.dms.get(key) ?? [];
     list.push(msg);
-    if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
     this.events?.dmMessage(msg);
@@ -2248,7 +2248,6 @@ export class Store {
     };
     if (extra?.read) msg.readAt = msg.createdAt; // answered / declined calls never count as unread
     list.push(msg);
-    if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
     this.events?.dmMessage(msg);
