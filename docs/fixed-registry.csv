@@ -1,0 +1,36 @@
+id,date,area,symptom,root_cause,fix_commit,verifying_test,test_name_pattern
+FX-001,2026-10-07,calls/ring,Outgoing ringback silent when callee offline; incoming ringtone silent on Safari/iOS/Firefox/WebView,Ringback started only after callee ack; ringtone AudioContext born outside a gesture (suspended),7417058,tests/calls/ringbackAck.test.ts,
+FX-002,2026-10-16,calls/ring,Incoming ringtone too quiet,Tone peak far below 0 dBFS; native ring audio session not re-prepared,7ebbd4f,tests/calls/ringtoneLevel.test.ts,
+FX-003,2026-10-15,calls/ring,iOS native ringback died after CallKit activation,Native ringback trusted unconditionally,bb15ebe,tests/calls/nativeRingbackMode.test.ts,
+FX-004,2026-10-17,calls/ring,Pushed call never rang (un-acked push) / next dial wrongly busy,Stale live-map entries and lost ring timers; no ring retry,9db5b12,tests/calls/harden1017.test.ts,
+FX-005,2026-10-18,calls/ring,Ring kept going after caller page closed while caller online elsewhere,Half-open caller page not detected,59022e1,tests/calls/halfOpenCleanup.test.ts,
+FX-006,2026-10-15,calls/ring,Both tap Call (glare) -> ring back forever,start() did not answer the peer's ringing call,fcc8e60,tests/calls/keikoFixes.test.ts,glare
+FX-007,2026-10-08,calls/ring,Decline from CallKit/Android call screen failed with expired session,Decline required a live session,9ffe52b,tests/calls/declineToken.test.ts,
+FX-008,2026-10-15,calls/reload,Answered call dropped on native WebView reload,pagehide hangup in wrappers; callee not rejoining,881edad,tests/calls/keikoFixes.test.ts,
+FX-009,2026-10-08,calls/reconnect,Short network drop ended the call,No server reconnect grace,71271d0,tests/calls/reconnect.test.ts,
+FX-010,2026-10-11,calls/turn,Long relayed calls dropped at coturn allocation refresh,TURN credential lifetime too short,2ea7469,tests/calls/turnCredentials.test.ts,
+FX-011,2026-10-15,calls/udp,Calls stuck on TCP / no TLS fallback on blocked UDP networks,No same-SFU TCP and TURNS/443 relay ladder,81a38b8,tests/calls/msTcpFallback.test.ts,
+FX-012,2026-10-14,calls/udp,Mid-call UDP drop never returned to UDP (or flapped),No backoff/hysteresis on UDP restore,aa36e3e,tests/calls/udpRecovery.test.ts,
+FX-013,2026-10-23,calls/udp,Relay picked before direct UDP; TURN list order wrong,TURN over UDP 3478 not offered first,8299078,tests/calls/udpFirstTurn.test.ts,
+FX-014,2026-10-23,calls/udp,Bandwidth ladder lost with route picker,netAdapt ladder overwritten,dfd54ac,tests/calls/udpFirstLadder.test.ts,
+FX-015,2026-10-14,calls/video,Black frame / poster / gradient filler flashes in video calls,srcObject cleared mid-call; placeholder poster; filler backdrop,cf1430d,tests/calls/videoEdgeRing.test.ts,
+FX-016,2026-10-23,calls/video,Black/theme flash at video call start; frozen or black frame at call end (iPhone<->Keiko Android),Stage shown before first frame; tracks stopped before UI changed; native stage painted black at end,3d5258a,tests/e2e/call-start-end.render.mts,
+FX-017,2026-10-19,calls/native,Chat visible / layout shift under native iPhone video,App-shell wrapper not layout-neutral,35eb8f3,tests/calls/nativeMedia.test.ts,
+FX-018,2026-10-18,calls/android,Android video quality regressed when native media changed,Android path not pinned,02fec14,tests/calls/androidVideoFrozen.test.ts,
+FX-019,2026-10-23,chat/retention,DM history over 1000 messages trimmed on new send,In-memory cap trimmed and sweeper deleted rows beyond 1000,43d0b44,tests/history/retention.test.ts,
+FX-020,2026-10-23,media,Self-destructing video caused a 404 retry storm,Timed video advertised HLS that is never built; hls.js retried 4xx,8f47676,tests/media/media.test.ts,
+FX-021,2026-10-08,media,Stale video served from cache after reprocess,Old /media/<id>/v<rev>/ prefix not purged,540ddbb,tests/media/media.test.ts,
+FX-022,2026-10-23,media/cdn,View-once/timed media cached at the edge,Cache headers not per kind,80c7fc6,tests/media/edgeCache.test.ts,
+FX-023,2026-10-19,chat/reply,Swipe-to-reply missing / stiff spring / overshoot,No gesture; spring not critically damped,b178ee5,tests/e2e/reply-gesture.render.mts,
+FX-024,2026-10-23,chat/reply,Reply spring overshoot and velocity from stale samples,Velocity over whole drag,9685d14,tests/chat/replySpring.test.ts,
+FX-025,2026-10-20,chat/reply,My sticker/big-emoji replies jumped to the left (PR #55 regression),Reply quote widened bubble without right alignment,9401470,tests/fixed/guards.test.ts,FX-chat-sticker-reply-right
+FX-026,2026-10-07,auth/captcha,reCAPTCHA image challenge clipped/behind modal; SMS send aborted at 25 s,Host inside transformed modal layer; hard abort while solving,fd031ff,tests/fixed/guards.test.ts,FX-auth-recaptcha-host
+FX-027,2026-10-07,auth/captcha,Phone sign-in failures invisible,No client outcome diagnostics,361cfb7,tests/unified-auth/phone-event.test.ts,
+FX-028,2026-10-07,auth,Users logged out after storage wipe / stale token,Refresh not cookie-backed and sliding,a60c00d,tests/unified-auth/persistent-session.test.ts,
+FX-029,2026-10-08,auth,Google sign-in shown inside iOS app,Platform detection trusted UA heuristics,45b28c1,tests/auth-platform/platform.test.ts,
+FX-030,2026-10-14,presence,False 'in the hallway' after reconnect,Reconnect announced presence before visibility confirmed,34afbca,tests/presence/presence.test.ts,
+FX-031,2026-10-15,presence,Mute/raised-hand badges covered presence dot,Badge placement,65fca1b,tests/presence/tile-badges.test.ts,
+FX-032,2026-10-08,web/safari,App blank on Safari < 16.4,Lookbehind regex literal in client chunk,143e8ff,tests/fixed/guards.test.ts,FX-safari-lookbehind
+FX-033,2026-10-07,web/android,App blank on old Android WebViews,Modern syntax/runtime not lowered,d61418e,tests/browser-floor/floor.test.ts,
+FX-034,2026-10-15,web,Plain 404s for /rooms and /profile,No aliases / unstyled 404,c08fab4,tests/fixed/guards.test.ts,FX-web-404
+FX-035,2026-10-11,rooms,Co-host could act against the host,No server-side host protection,a128e26,tests/monet/creator.test.ts,
