@@ -30,7 +30,7 @@ export type MediaStatus = "processing" | "ready" | "failed";
 export type MediaGoneReason = "expired" | "viewed" | "deleted";
 
 /** Signed-URL variants a client can ask for. */
-export type MediaVariant = "full" | "thumb" | "poster" | "original" | "hls" | "hlsLow" | "thumbS" | "thumbAvif" | "thumbSAvif";
+export type MediaVariant = "full" | "thumb" | "poster" | "original" | "hls" | "hlsLow" | "thumbS" | "thumbAvif" | "thumbSAvif" | "source";
 
 export interface MediaAttachment {
   id: string;
@@ -58,6 +58,8 @@ export interface MediaAttachment {
   hls?: number[];
   /** photos: responsive thumbnails exist (thumbS 320 WebP, thumbAvif 640 / thumbSAvif 320 AVIF) */
   srcset?: boolean;
+  /** a lossless, metadata-stripped original is available for "Download original" (bytes + type) */
+  orig?: { size: number; mime: string };
   /** the message text is the auto label ("📷 Photo"), not a caption the sender typed */
   label?: boolean;
   /** self-destruct */

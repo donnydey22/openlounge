@@ -15,6 +15,8 @@ import { mediaNative, prefersReducedMotion, saveData } from "@/lib/media/capabil
 import { closeViewer, type ViewerTarget } from "./viewerStore";
 import { useTick } from "./hooks";
 
+const origExt = (mime: string) => (mime === "image/png" ? "png" : mime === "image/jpeg" ? "jpg" : mime === "video/quicktime" ? "mov" : mime === "video/webm" ? "webm" : "mp4");
+
 /**
  * Telegram-style video start: the frozen poster is the ONLY placeholder until the first frame renders, then it
  * cross-fades to playback. No spinner ever (start, buffering or stalls; a stall just holds the last frame).
@@ -183,7 +185,7 @@ export function MediaViewer({ target, messages, me, peer }: { target: ViewerTarg
   const share = async () => {
     try {
       const u = await getUrls(a, true);
-      const href = u.full ?? u.original;
+      const href = u.source ?? u.full ?? u.original;
       if (!href) return;
       const blob = await (await fetch(href)).blob();
       const file = new File([blob], a.name || (isVideo ? "video.mp4" : "photo.jpg"), { type: blob.type || a.mime });
@@ -202,14 +204,17 @@ export function MediaViewer({ target, messages, me, peer }: { target: ViewerTarg
 
   const download = async () => {
     const u = await getUrls(a, true);
-    const href = u.full ?? u.original;
+    // Telegram-style: Save hands out the sender's original (lossless, metadata stripped) when one exists
+    const href = u.source ?? u.full ?? u.original;
     if (!href) return;
     const n = mediaNative();
     const dl = href + "&dl=1";
-    if (n?.openFile) return n.openFile(new URL(dl, location.href).href, a.name || "photo.jpg", a.mime);
+    const ext = u.source && a.orig ? origExt(a.orig.mime) : null;
+    const fname = a.name || (ext ? `${isVideo ? "video" : "photo"}.${ext}` : isVideo ? "video.mp4" : "photo.jpg");
+    if (n?.openFile) return n.openFile(new URL(dl, location.href).href, fname, u.source && a.orig ? a.orig.mime : a.mime);
     const link = document.createElement("a");
     link.href = dl;
-    link.download = a.name || (isVideo ? "video.mp4" : "photo.jpg");
+    link.download = fname;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -269,7 +274,7 @@ export function MediaViewer({ target, messages, me, peer }: { target: ViewerTarg
           </button>
         )}
         {canSave && (
-          <button onClick={download} className="rounded-full p-2 hover:bg-white/10" aria-label="Save" data-testid="viewer-save">
+          <button onClick={download} className="rounded-full p-2 hover:bg-white/10" aria-label={a.orig ? `Save original (${formatBytes(a.orig.size)})` : "Save"} title={a.orig ? `Download original · ${formatBytes(a.orig.size)}` : undefined} data-testid="viewer-save">
             <Download className="h-5 w-5" />
           </button>
         )}
