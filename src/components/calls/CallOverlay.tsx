@@ -428,8 +428,9 @@ export function CallOverlay() {
   useEffect(() => {
     if (curtain === "fading" && prefersReducedMotion()) setCurtain("off");
   }, [curtain]);
-  // A connected video call that ended: hold its last frame (same tile) and fade out, no audio-style "Call ended" card.
-  // iPhone app video has no page-side frame to hold (the app removes its RTCViews on call:ended) → fade at once.
+  // A connected video call that ended: the same screen (same tiles, same layout) fades out at once, no audio-style
+  // "Call ended" card. iPhone app video: the page stays transparent while its controls fade (the app removes its
+  // RTCViews on call:ended), so nothing black or dark is painted where the video was.
   const endedVideo = s.ui === "ended" && s.endedVideo;
   const showStage = video || endedVideo;
   const lastBig = useRef<"local" | "remote">("remote");
@@ -453,9 +454,15 @@ export function CallOverlay() {
   }, [active]);
 
   const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
-  if (video) lastBig.current = bigWhich;
-  const stageWhich = endedVideo ? lastBig.current : bigWhich;
   const showPip = s.remoteCam && s.camOn;
+  // the ended screen keeps exactly the tiles it had (no tile popping out or swapping while it fades)
+  const lastPip = useRef(false);
+  if (video) {
+    lastBig.current = bigWhich;
+    lastPip.current = showPip;
+  }
+  const stageWhich = endedVideo ? lastBig.current : bigWhich;
+  const stagePip = video ? showPip : endedVideo && lastPip.current;
   const ctlHidden = video && !showCtl;
   const bigTile = useRef<HTMLDivElement | null>(null);
   const pipTile = useRef<HTMLDivElement | null>(null);
@@ -505,15 +512,15 @@ export function CallOverlay() {
 
   if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
   if (!s.ui || !s.call) return null;
-  if (s.minimized && s.ui !== "incoming" && s.ui !== "ended") return <MiniBar s={s} />;
+  if (s.minimized && s.ui !== "incoming" && (s.ui !== "ended" || s.endedVideo)) return <MiniBar s={s} />;
   const p = peerOf(s);
   const ringing = s.ui === "outgoing" || s.ui === "incoming";
   const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && video;
 
   return (
-    <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? css.endFadeNow : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
+    <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? cn(css.endFadeNow, css.endNative) : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
       {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} /> : <Background s={s} />}
-      {showPip && video && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {stagePip && <Pip which={stageWhich === "local" ? "remote" : "local"} mirrored={stageWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
       {video && curtain !== "off" && <Curtain s={s} fading={curtain === "fading"} onGone={() => setCurtain("off")} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">

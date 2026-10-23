@@ -48,7 +48,9 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
   let liveRun = 0;
   const tracked = new Set<MediaStreamTrack>();
 
+  let pinned = false; // call ending: the hold stays until unmount, whatever frames still arrive
   const setHeld = (on: boolean) => {
+    if (pinned && !on) return;
     on = on && hasFrame; // nothing captured yet → nothing to hold; the element's own background stays
     if (on) liveRun = 0;
     if (held === on) return;
@@ -137,7 +139,11 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     resumeVideo(video);
   };
   for (const ev of stallEvents) video.addEventListener(ev, onStall);
-  video.addEventListener("olcall:freeze", freeze); // engine: video call ending, hold the last frame now
+  const endFreeze = () => {
+    freeze();
+    pinned = held;
+  };
+  video.addEventListener("olcall:freeze", endFreeze); // engine: video call ending, hold the last frame now (pinned)
   video.addEventListener("loadedmetadata", onMeta);
   video.addEventListener("loadstart", onMeta);
   if (typeof v.requestVideoFrameCallback === "function") rvfc = v.requestVideoFrameCallback(loop);
@@ -159,7 +165,7 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     window.clearInterval(dog);
     if (rvfc && v.cancelVideoFrameCallback) v.cancelVideoFrameCallback(rvfc);
     for (const ev of stallEvents) video.removeEventListener(ev, onStall);
-    video.removeEventListener("olcall:freeze", freeze);
+    video.removeEventListener("olcall:freeze", endFreeze);
     video.removeEventListener("loadedmetadata", onMeta);
     video.removeEventListener("loadstart", onMeta);
     video.removeEventListener("timeupdate", onFrame);
