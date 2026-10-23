@@ -542,6 +542,64 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   assert.equal((await fetch(base + urls.hls)).status, 404);
 });
 
+test("self-destructing video: HLS never advertised or signed, plays the no-store origin MP4, never via the CDN path", async () => {
+  const v = await upload(A, f("hd.mp4"), "video", { chunk: 512 * 1024 });
+  const m = v.done!.data.media;
+  const row = media.rows.get(m.id);
+  await waitFor(() => row.files.hls?.final, 120_000); // ladder built at upload, before anyone knew it would be timed
+  const s = await sendMedia(A, B, m.id, { ttlSeconds: 3600 });
+  assert.equal(s.data.message.media.hls, undefined, "no HLS rungs on a timed attachment");
+  const urls = await sign(B, m.id, ["hls", "hlsLow", "full", "poster"]);
+  assert.equal(urls.hls, undefined);
+  assert.equal(urls.hlsLow, undefined);
+  // timed media is signed for the app origin (relative URL), never the CDN host (MEDIA_CDN_BASE)
+  assert.ok(urls.full && !/^https?:/.test(urls.full), `timed media stays on the app origin, never the CDN host (${urls.full})`);
+  const { signedUrl } = await import("../../server/media/origin");
+  assert.ok(urls.full.startsWith(signedUrl(m.id, row.rev ?? 1, "x", id(B), 1, { origin: true }).split("x?")[0]));
+  const r = await fetch(base + urls.full);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("cache-control"), "no-store");
+  assert.equal(r.headers.get("pragma"), "no-cache");
+  await r.arrayBuffer();
+  const hist = await B.client.req("dm:history", { peerId: id(A) });
+  assert.equal(hist.messages.find((x: any) => x.id === s.data.message.id).media.hls, undefined);
+});
+
+test("sweep guards: dry-run deletes nothing; orphan deletion pauses when too many would go at once; expiries still run", async () => {
+  const { store } = await import("../../server/store");
+  const u1 = await upload(A, f("gps.jpg"), "photo");
+  const s1 = await sendMedia(A, B, u1.done!.data.media.id); // normal photo
+  const u2 = await upload(A, f("gps.jpg"), "photo");
+  const s2 = await sendMedia(A, B, u2.done!.data.media.id, { ttlSeconds: 5 }); // timed
+  const dirOf = async (mid: string) => (await import("../../server/media/config")).MEDIA_DIR + `/${mid.slice(0, 2)}/${mid}`;
+  const d1 = await dirOf(u1.done!.data.media.id);
+  const d2 = await dirOf(u2.done!.data.media.id);
+  // simulate a message that vanished from a half-loaded / buggy store (the normal photo becomes an "orphan")
+  const conv = [id(A), id(B)].sort().join("|");
+  const list = store.dms.get(conv)!;
+  const at = list.findIndex((x) => x.id === s1.data.message.id);
+  const [gone] = list.splice(at, 1);
+  try {
+    process.env.MEDIA_SWEEP_DRY_RUN = "1";
+    const plan = await media.sweep(Date.now() + 60_000);
+    assert.ok(plan.some((p: any) => p.id === u1.done!.data.media.id && p.reason === "orphan" && !p.timed && p.bytes > 0));
+    assert.ok(plan.some((p: any) => p.id === u2.done!.data.media.id && p.reason === "expired" && p.timed));
+    assert.ok(plan.every((p: any) => !("url" in p) && !("text" in p)), "plan is media-free");
+    assert.ok(fs.existsSync(d1) && fs.existsSync(d2), "dry-run deleted nothing");
+    delete process.env.MEDIA_SWEEP_DRY_RUN;
+    process.env.MEDIA_ORPHAN_SWEEP_MAX = "0";
+    await media.sweep(Date.now() + 60_000);
+    assert.ok(fs.existsSync(d1), "circuit breaker: the normal photo survives");
+    assert.ok(!fs.existsSync(d2), "the due self-destruct still ran");
+  } finally {
+    delete process.env.MEDIA_SWEEP_DRY_RUN;
+    delete process.env.MEDIA_ORPHAN_SWEEP_MAX;
+    list.splice(at, 0, gone);
+  }
+  assert.ok(fs.existsSync(d1));
+  void s2;
+});
+
 test("photos get srcset thumbnails (320 WebP, 640/320 AVIF) on the same signed directory", async () => {
   const p = await upload(A, f("gps.jpg"), "photo");
   const m = p.done!.data.media;
