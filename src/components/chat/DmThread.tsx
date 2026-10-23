@@ -54,6 +54,8 @@ import { retryMedia, type QueueCallbacks } from "@/lib/media/outbox";
 import { ReplyGesture } from "./ReplyGesture";
 import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
 import { replyReference } from "@/lib/chat/reply";
+import { readThread, writeThread } from "@/lib/chat/historyCache";
+import { HISTORY_PAGE, PREFETCH_TOP_PX, reconcileNewest, reconcileOlder } from "@/lib/chat/historyReconcile";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -263,6 +265,11 @@ export function DmThread({
   const loadedFor = useRef<string | null>(null);
   const messagesRef = useRef<Item[] | null>(null);
   messagesRef.current = messages;
+  // device cache (instant open, offline too) + cursor paging state
+  const fromServer = useRef(false); // the newest page came from the server (cache must not overwrite it)
+  const prefetched = useRef<{ beforeId: string; messages: DirectMessage[]; hasMore: boolean } | null>(null);
+  const prefetching = useRef<string | null>(null);
+  const anchor = useRef<{ height: number; top: number } | null>(null); // keep the reader's place when older pages land
   const isSelf = me?.id === peerId;
   const presence = usePresence(peerId, peer?.lastSeenAt);
 
@@ -549,18 +556,41 @@ export function DmThread({
     setError(null);
     setUnseenBelow(0);
     stickToBottom.current = true;
+    fromServer.current = false;
+    prefetched.current = null;
+    prefetching.current = null;
+    anchor.current = null;
   }, [peerId]);
+
+  // cached copy first: the thread paints from this device instantly (even offline), the server page reconciles it
+  const meId = me?.id;
+  useEffect(() => {
+    if (!meId || isSelf) return;
+    let live = true;
+    void readThread<Item>(meId, peerId).then((rec) => {
+      if (!live || !rec || fromServer.current || messagesRef.current?.length) return;
+      if (rec.peer) setPeer((p) => p ?? (rec.peer as PublicUser));
+      if (rec.group) setGroup((g) => g ?? (rec.group as GroupInfo));
+      setMessages((list) => (list?.length ? list : rec.messages));
+      setHasMore(rec.hasMore || rec.messages.length > 0);
+      stickToBottom.current = true;
+    });
+    return () => {
+      live = false;
+    };
+  }, [meId, peerId, isSelf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // history: one fetch when the thread opens (live updates + reconnect catch-up arrive as events)
   useEffect(() => {
     if (!connected || isSelf || loadedFor.current === peerId) return;
     loadedFor.current = peerId;
-    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
+    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId, limit: HISTORY_PAGE })
       .then((r) => {
+        fromServer.current = true;
         setPeer(r.peer);
         if (r.group) setGroup(r.group);
-        // keep anything that arrived live / was sent while the fetch was in flight
-        setMessages((list) => mergeMessages(r.messages, list ?? []));
+        // server page wins inside its range (edits / deletes since the cache was written); live + pending sends stay
+        setMessages((list) => mergeMessages(reconcileNewest<Item>(list ?? [], r.messages as Item[], r.hasMore), list ?? []));
         setHasMore(r.hasMore);
         stickToBottom.current = true;
       })
@@ -732,7 +762,7 @@ export function DmThread({
     const was = wasConnected.current;
     wasConnected.current = connected;
     if (!connected || was || loadedFor.current !== peerId) return;
-    request<{ messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
+    request<{ messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId, limit: HISTORY_PAGE })
       .then((r) => {
         if (r.group) setGroup(r.group);
         setMessages((list) => mergeMessages(list ?? [], r.messages));
@@ -745,6 +775,13 @@ export function DmThread({
   // Pin to the newest message before paint (no visible jump) unless the user scrolled up.
   useLayoutEffect(() => {
     const el = listRef.current;
+    const a = anchor.current;
+    if (el && a) {
+      // older page prepended: restore the reader's place before paint (no one-frame jump)
+      anchor.current = null;
+      el.scrollTop = a.top + (el.scrollHeight - a.height);
+      return;
+    }
     if (!el || !stickToBottom.current) return;
     if (smoothNext.current && "scrollTo" in el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     else el.scrollTop = el.scrollHeight;
@@ -770,27 +807,55 @@ export function DmThread({
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
+  // older page by message-id cursor (exact, tie-safe); the next one is prefetched so infinite scroll never waits
+  const oldestId = () => (messagesRef.current ?? []).find((m) => !m.state && !m.id.startsWith("tmp"))?.id ?? null;
+  const prefetchOlder = useCallback(
+    (beforeId: string | null) => {
+      if (!beforeId || prefetching.current === beforeId || prefetched.current?.beforeId === beforeId) return;
+      prefetching.current = beforeId;
+      request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: HISTORY_PAGE })
+        .then((r) => {
+          if (prefetching.current === beforeId) prefetched.current = { beforeId, messages: r.messages, hasMore: r.hasMore };
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (prefetching.current === beforeId) prefetching.current = null;
+        });
+    },
+    [peerId, request],
+  );
   const loadEarlier = async () => {
     if (!messages?.length || loadingMore) return;
+    const beforeId = oldestId();
+    if (!beforeId) return;
     setLoadingMore(true);
     const el = listRef.current;
-    const prevHeight = el?.scrollHeight ?? 0;
-    const prevTop = el?.scrollTop ?? 0;
     try {
-      const oldest = messages.find((m) => !m.state)?.createdAt ?? messages[0].createdAt;
-      const r = await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, before: oldest });
+      const pre = prefetched.current?.beforeId === beforeId ? prefetched.current : null;
+      prefetched.current = null;
+      const r = pre ?? (await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: HISTORY_PAGE }));
       stickToBottom.current = false;
-      setMessages((list) => mergeMessages(list ?? [], r.messages));
+      if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+      setMessages((list) => reconcileOlder<Item>(list ?? [], r.messages as Item[]));
       setHasMore(r.hasMore);
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-      });
+      if (r.hasMore && r.messages.length) prefetchOlder(r.messages[0].id);
     } catch {
       /* stays loadable */
     } finally {
       setLoadingMore(false);
     }
   };
+  // after the newest page lands: prefetch one older page in the background
+  useEffect(() => {
+    if (hasMore && connected && fromServer.current && messages?.length && !prefetched.current) prefetchOlder(oldestId());
+  }, [hasMore, connected, messages === null, prefetchOlder]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // write-through to the device cache (debounced; confirmed messages only, newest window)
+  useEffect(() => {
+    if (!meId || isSelf || !messages || !fromServer.current) return;
+    const t = setTimeout(() => void writeThread(meId, peerId, messages, { hasMore, peer, group: group ?? undefined }), 400);
+    return () => clearTimeout(t);
+  }, [messages, hasMore, peer, group, meId, peerId, isSelf]);
 
   // ---- optimistic send: bubble appears instantly, swaps in place when the server confirms ----
   // A send that hasn't been acked after SEND_STALL_MS turns into a quiet "Not delivered · Retry" (never a
@@ -1351,6 +1416,8 @@ export function DmThread({
             const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
             stickToBottom.current = near;
             if (near && unseenBelow) setUnseenBelow(0);
+            // infinite scroll upward: the next older page (usually already prefetched) loads before the top is reached
+            if (hasMore && !loadingMore && el.scrollTop < PREFETCH_TOP_PX && fromServer.current) void loadEarlier();
           }}
           className="flex h-full flex-col overflow-y-auto overscroll-contain px-3 pt-3 pb-2 [overflow-anchor:none]"
           data-testid="dm-list"

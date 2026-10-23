@@ -4,6 +4,7 @@
 // that operates on a conversation's message list (reactions, invite cards, stickers, expiring files, moderation,
 // persistence) applies to groups. This service owns membership, roles, pins, invite links, service messages,
 // read cursors and the per-member fan-out / push. See /workspace/groups/MODEL.md.
+import { pageBefore, type PageQuery } from "../chat/paging";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DirectMessage, DmReadReceipt, PublicUser } from "../../src/lib/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH } from "../../src/lib/types";
@@ -742,11 +743,12 @@ export class GroupService {
     }
   }
 
-  history(userId: string, gid: string, before?: number, limit = 60) {
+  /** every member pages the same full history back to message #1 (no join-time cutoff, no cap) */
+  history(userId: string, gid: string, before?: number | PageQuery, limit?: number) {
     if (!this.canAccess(userId, gid)) return null;
-    const list = this.store.dms.get(gid) ?? [];
-    const older = before ? list.filter((m) => m.createdAt < before) : list;
-    return { messages: older.slice(-limit).map((m) => this.decorate(m)), hasMore: older.length > limit };
+    const q: PageQuery = typeof before === "object" && before ? before : { before: before as number | undefined, limit };
+    const page = pageBefore(this.store.dms.get(gid) ?? [], q);
+    return { messages: page.messages.map((m) => this.decorate(m)), hasMore: page.hasMore };
   }
 
   since(userId: string, after: number): ConvMessage[] {

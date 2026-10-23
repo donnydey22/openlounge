@@ -645,17 +645,20 @@ export function registerRealtime(io: WsHub) {
     // ----- direct messages -----
     socket.on("dm:list", (_: unknown, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const conversations = store.conversations(userId).map((c) => ({ ...c, peer: withOnline(c.peer) }));
-        ack({ ok: true, conversations, unread: store.unreadDmCount(userId) });
+        const convs = store.conversations(userId); // computed once (the unread total used to rebuild it a second time)
+        const conversations = convs.map((c) => ({ ...c, peer: withOnline(c.peer) }));
+        ack({ ok: true, conversations, unread: store.unreadDmCount(userId, convs) });
       }),
     );
 
-    socket.on("dm:history", ({ peerId, before }: { peerId: string; before?: number }, ack: AckFn = noop) =>
+    // cursor paging: beforeId (message id, exact) or before (ms, legacy); limit 1..200 (default 60 for older clients)
+    socket.on("dm:history", ({ peerId, before, beforeId, limit }: { peerId: string; before?: number; beforeId?: string; limit?: number }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        if (isGroupId(peerId)) return ack(groupHistory(userId, peerId, before));
+        const q = { before: typeof before === "number" ? before : undefined, beforeId: typeof beforeId === "string" ? beforeId : undefined, limit };
+        if (isGroupId(peerId)) return ack(groupHistory(userId, peerId, q));
         const peer = store.publicUser(peerId);
         if (!peer) return ack({ ok: false, error: "User not found" });
-        ack({ ok: true, peer: withOnline(peer), ...store.dmHistory(userId, peerId, before) });
+        ack({ ok: true, peer: withOnline(peer), ...store.dmHistory(userId, peerId, q) });
       }),
     );
 
@@ -670,9 +673,9 @@ export function registerRealtime(io: WsHub) {
     );
 
     // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
-    socket.on("dm:since", ({ after }: { after?: number }, ack: AckFn = noop) =>
+    socket.on("dm:since", ({ after, order }: { after?: number; order?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const r = store.dmsSince(userId, Number(after) || 0);
+        const r = store.dmsSince(userId, Number(after) || 0, 200, order === "asc" ? "asc" : "latest");
         ack({ ok: true, messages: r.messages.map(withSenderPhoto), hasMore: r.hasMore });
       }),
     );

@@ -1,5 +1,6 @@
 // Wiring for the generic conversation layer: the GroupService singleton, its WebSocket handlers (group:* + conv:*),
 // the per-member fan-out and the HTTP routes (/api/groups/<id>/photo, /api/groups/invite/<token>).
+import type { PageQuery } from "../chat/paging";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Ack, PublicUser } from "../../src/lib/types";
 import type { InboxItem } from "../../src/lib/groups";
@@ -85,7 +86,7 @@ export function groupTyping(userId: string, gid: string, ev: "dm:typing" | "dm:t
 }
 
 /** dm:history with peerId = group id */
-export function groupHistory(userId: string, gid: string, before?: number) {
+export function groupHistory(userId: string, gid: string, before?: number | PageQuery) {
   const h = groups.history(userId, gid, before);
   const info = groups.info(userId, gid);
   const conv = groups.convs.get(gid);

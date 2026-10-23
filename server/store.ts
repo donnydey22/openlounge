@@ -27,6 +27,8 @@ import { DM_REACTION_MAX_EMOJI, MESSAGE_EDIT_WINDOW_MS, type MessageEditedEvent 
 import { parseSticker } from "../src/lib/stickers/token";
 import { replyReference } from "../src/lib/chat/reply";
 import type { MediaAttachment } from "../src/lib/media/types";
+import { ConversationMap } from "./chat/convIndex";
+import { pageBefore, type PageQuery } from "./chat/paging";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -148,7 +150,9 @@ export const DROPIN_EMPTY_TTL_MS = Number(process.env.DROPIN_EMPTY_TTL_MS || 20_
 const INVITE_MAX_PER_10MIN = Number(process.env.ROOM_INVITE_MAX_PER_10MIN || 40);
 const DROPIN_MAX_PER_10MIN = Number(process.env.DROPIN_MAX_PER_10MIN || 6);
 const MAX_BOT_SPEAKERS = 4;
-const DM_HISTORY_PER_CONVERSATION = 1000;
+// History retention: every message is kept (no per-conversation cap). The old 1000-message cap trimmed the oldest
+// messages in memory, and the Postgres snapshot diff turned each trim into DELETE FROM dms (+ reactions, and the media
+// sweeper then erased their attachments as orphans). Messages leave only by an explicit delete or account deletion.
 const AVATAR_DIR = path.join(DATA_DIR, "avatars");
 export const DELETED_USER_ID = "u_deleted";
 const DELETED_NAME = "Deleted Account";
@@ -210,7 +214,7 @@ export class Store {
   }
   follows = new Map<string, Set<string>>(); // followerId -> followeeIds
   rooms = new Map<string, RoomRecord>();
-  dms = new Map<string, DirectMessage[]>(); // conversationId -> messages (oldest first)
+  dms = new ConversationMap(); // conversationId -> messages (oldest first), indexed per user (inbox without a full scan)
   dmReads = new Map<string, Map<string, number>>(); // userId -> peerId -> last read ts
   /** per-user inbox state for 1:1 chats (pinned, "Delete chat for me"): server/chatPrefs.ts */
   chatPrefs = new ChatPrefs();
@@ -414,7 +418,6 @@ export class Store {
   pushConversationMessage(key: string, msg: DirectMessage) {
     const list = this.dms.get(key) ?? [];
     list.push(msg);
-    if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
     this.events?.dmMessage(msg);
@@ -2074,14 +2077,15 @@ export class Store {
     return { ok: true as const, ...state, unread: this.unreadDmCount(userId) };
   }
 
-  unreadDmCount(userId: string) {
-    return this.conversations(userId).reduce((n, c) => n + c.unread, 0) + (this.groups?.unreadTotal(userId) ?? 0);
+  unreadDmCount(userId: string, convs?: ConversationSummary[]) {
+    return (convs ?? this.conversations(userId)).reduce((n, c) => n + c.unread, 0) + (this.groups?.unreadTotal(userId) ?? 0);
   }
 
   conversations(userId: string): ConversationSummary[] {
     const out: ConversationSummary[] = [];
-    for (const [key, list] of this.dms) {
-      if (!list.length) continue;
+    for (const key of this.dms.keysOf(userId)) {
+      const list = this.dms.get(key);
+      if (!list?.length) continue;
       const [a, b] = key.split("|");
       if (a !== userId && b !== userId) continue;
       const peerId = a === userId ? b : a;
@@ -2097,21 +2101,22 @@ export class Store {
       // deleted accounts never count as unread (inbox counters, tab badge, push badge all come from here)
       // a message carrying readAt was seen (or born read: answered / declined call entries) and never counts,
       // so the server total, the inbox row and every push badge agree on call entries too
-      const unread = peer.deleted ? 0 : mine.filter((m) => m.toId === userId && m.createdAt > read && !m.readAt).length;
+      let unread = 0;
+      if (!peer.deleted) for (let i = mine.length - 1; i >= 0 && mine[i].createdAt > read; i--) if (mine[i].toId === userId && !mine[i].readAt) unread++;
       out.push({ peer, lastMessage: mine[mine.length - 1], unread, ...(pref?.pinnedAt ? { pinnedAt: pref.pinnedAt } : {}) });
     }
     // pinned chats first (most recently pinned on top), then by last message
     return out.sort((x, y) => (y.pinnedAt ?? 0) - (x.pinnedAt ?? 0) || y.lastMessage.createdAt - x.lastMessage.createdAt);
   }
 
-  dmHistory(userId: string, peerId: string, before?: number, limit = 60) {
-    if (isGroupId(peerId)) return this.groups?.history(userId, peerId, before, limit) ?? { messages: [], hasMore: false };
+  dmHistory(userId: string, peerId: string, before?: number | PageQuery, limit?: number) {
+    const q: PageQuery = typeof before === "object" && before ? before : { before: before as number | undefined, limit };
+    if (isGroupId(peerId)) return this.groups?.history(userId, peerId, q) ?? { messages: [], hasMore: false };
     if (this.isBlocked(userId, peerId)) return { messages: [], hasMore: false };
     const hiddenAt = this.chatPrefs.hiddenAt(userId, peerId);
     const all = this.visibleTo(userId, this.dms.get(conversationId(userId, peerId)) ?? []);
     const list = hiddenAt ? all.filter((m) => m.createdAt > hiddenAt) : all;
-    const older = before ? list.filter((m) => m.createdAt < before) : list;
-    return { messages: older.slice(-limit), hasMore: older.length > limit };
+    return pageBefore(list, q);
   }
 
   /** a 1:1 list minus the messages this viewer deleted "for me" (same array when there are none) */
@@ -2182,19 +2187,21 @@ export class Store {
   private editRate = new Map<string, number[]>();
 
   /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
-  dmsSince(userId: string, after: number, limit = 200) {
+  dmsSince(userId: string, after: number, limit = 200, order: "latest" | "asc" = "latest") {
     const out: DirectMessage[] = [];
-    for (const [key, list] of this.dms) {
+    for (const key of this.dms.keysOf(userId)) {
+      const list = this.dms.get(key) ?? [];
       const [a, b] = key.split("|");
-      if (a !== userId && b !== userId) continue;
       if (this.isBlockedEither(a, b)) continue;
       const hiddenAt = this.chatPrefs.hiddenAt(userId, a === userId ? b : a);
       const hid = this.dmActions.hiddenFor(userId);
       for (let i = list.length - 1; i >= 0 && list[i].createdAt >= after; i--) if (list[i].createdAt > hiddenAt && !hid?.has(list[i].id)) out.push(list[i]);
     }
     if (this.groups) out.push(...this.groups.since(userId, after));
-    out.sort((x, y) => x.createdAt - y.createdAt);
-    return { messages: out.slice(-limit), hasMore: out.length > limit };
+    out.sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    // "asc": the oldest `limit` first, so a client can page forward (after = last createdAt) until hasMore is false
+    // and never miss the middle of a long offline gap. "latest" (default) keeps the old reply for older clients.
+    return { messages: order === "asc" ? out.slice(0, limit) : out.slice(-limit), hasMore: out.length > limit };
   }
 
   sendDm(fromId: string, toId: string, rawText: unknown, clientId?: unknown, replyToId?: unknown) {
@@ -2210,8 +2217,10 @@ export class Store {
     const cid = typeof clientId === "string" && /^[\w-]{1,64}$/.test(clientId) ? clientId : undefined;
     if (cid) {
       // retried send (ack lost on a dropped connection): return the stored message instead of a duplicate
+      // window: the last 50 messages or anything from the last 48 h, whichever reaches further (long offline retries)
       const recent = this.dms.get(conversationId(fromId, toId)) ?? [];
-      for (let i = recent.length - 1; i >= Math.max(0, recent.length - 50); i--)
+      const since = Date.now() - 48 * 3_600_000;
+      for (let i = recent.length - 1; i >= 0 && (i >= recent.length - 50 || recent[i].createdAt >= since); i--)
         if (recent[i].clientId === cid && recent[i].fromId === fromId) return { ok: true as const, message: recent[i] };
     }
     if (this.rateLimited(fromId)) return { ok: false as const, error: "Slow down a little 🙂" };
@@ -2248,7 +2257,6 @@ export class Store {
     };
     if (extra?.read) msg.readAt = msg.createdAt; // answered / declined calls never count as unread
     list.push(msg);
-    if (list.length > DM_HISTORY_PER_CONVERSATION) list.splice(0, list.length - DM_HISTORY_PER_CONVERSATION);
     this.dms.set(key, list);
     this.scheduleSave();
     this.events?.dmMessage(msg);

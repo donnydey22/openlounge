@@ -1,5 +1,6 @@
 "use client";
 
+import { wipeChatCache } from "@/lib/chat/historyCache";
 import { markDeleted } from "@/lib/userDisplay";
 import { applyDeviceClass } from "@/lib/device";
 import { initPushRegistration, unregisterPush } from "@/lib/push";
@@ -233,6 +234,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const dropSession = useCallback(() => {
+    void wipeChatCache(); // cached chats belong to the account that signed out (shared devices)
     clearToken();
     setToken(null);
     setMe(null);
@@ -315,8 +317,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!syncedAt) return void markSynced(); // first session on this page: nothing to catch up on
       const after = syncedAt - 2_000; // small overlap for clock/ordering jitter; dedup by id below
       try {
-        const r = await s.request<{ ok: boolean; messages?: DirectMessage[] }>("dm:since", { after });
-        for (const m of r?.messages ?? []) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+        // page forward through the whole gap (oldest first) — a long offline stretch never loses its middle
+        let cursor = after;
+        for (let page = 0; page < 25; page++) {
+          const r = await s.request<{ ok: boolean; messages?: DirectMessage[]; hasMore?: boolean }>("dm:since", { after: cursor, order: "asc" });
+          const list = r?.messages ?? [];
+          for (const m of list) if (!seenDms.has(m.id)) s.dispatch("dm:message", { ...m, catchUp: true });
+          if (!r?.hasMore || !list.length) break;
+          const last = list[list.length - 1].createdAt;
+          if (last <= cursor && page > 0) break; // > 200 messages in one millisecond: the thread refetch covers it
+          cursor = last;
+          await new Promise((res) => setTimeout(res, 80)); // stay well inside the socket's rate limit
+        }
       } catch {
         /* dropped again — next reconnect retries from the same point */
       }
