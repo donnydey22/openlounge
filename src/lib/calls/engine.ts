@@ -6,7 +6,8 @@
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
-import { anyOnTcp, udpProbeDelay } from "./udpProbe";
+import { anyOnTcp, selectedPath, udpProbeDelay, UDP_WATCH_MS } from "./udpProbe";
+import { defaultRoute, isHeadsetKind, routeAnnouncement, routeFromNative, routesFromNative, routesFromWebOutputs, sortRoutes, type AudioRoute, type NativeRouteDetail } from "./audioRoute";
 import { watchVideoResilience } from "./videoResilience";
 import { ensureCallReady } from "./permissions";
 import { nextElsewhere, type ElsewhereCall } from "./elsewhere";
@@ -53,6 +54,14 @@ export interface CallSnapshot {
   remoteMuted: boolean;
   speaker: boolean;
   speakerSupported: boolean;
+  /** where call audio plays right now (Speaker / Phone / Headphones / AirPods …); null until known */
+  route: AudioRoute | null;
+  /** outputs the user can pick from (picker sheet); [] = none known */
+  routes: AudioRoute[];
+  /** false = this browser cannot switch outputs (iOS Safari, Firefox): the button explains instead of switching */
+  routeSwitchable: boolean;
+  /** short "Audio on AirPods" announcement after an automatic route change (device connected/removed) */
+  routeNotice: string | null;
   quality: Quality;
   reconnecting: boolean;
   /** the other person lost their connection (server call:peer / LiveKit): "Bea is reconnecting…" */
@@ -95,6 +104,10 @@ const initial = (): CallSnapshot => ({
   remoteMuted: false,
   speaker: false,
   speakerSupported: false,
+  route: null,
+  routes: [],
+  routeSwitchable: false,
+  routeNotice: null,
   quality: "unknown",
   reconnecting: false,
   peerReconnecting: false,
@@ -136,6 +149,13 @@ export function acceptedBefore(callId: string): boolean {
 }
 
 /** Native wrappers (build 18 / 0.3.1) opt in with window.__olNativeCalls = 1; older apps never get these messages. */
+/** App routes when the wrapper sends no list (iOS build ≤61, Android ≤0.3.19): Phone + Speaker, plus the current device. */
+function nativeBuiltins(current: AudioRoute | null, known: AudioRoute[] = []): AudioRoute[] {
+  const base: AudioRoute[] = [{ id: "earpiece", kind: "earpiece", name: "" }, { id: "speaker", kind: "speaker", name: "" }];
+  const devices = known.filter((r) => isHeadsetKind(r.kind));
+  return sortRoutes([...base, ...devices, ...(current ? [current] : [])]);
+}
+
 function postNative(msg: Record<string, unknown>) {
   if (typeof window === "undefined" || !(window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls) return;
   const s = JSON.stringify(msg);
@@ -221,7 +241,12 @@ export class CallEngine {
   private metricSent = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
-  private sinkIds: string[] = [];
+  /** web: the audiooutput deviceId the user picked ("" = follow the system default) */
+  private webSinkId = "";
+  /** the user picked a route by hand this call: device changes still auto-switch, but never silently undo the pick */
+  private routeUserPick = false;
+  private routeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopWebRouteWatch: (() => void) | null = null;
   private lastPeer: { id: string; video: boolean } | null = null;
 
   // ---------- store plumbing ----------
@@ -1067,6 +1092,7 @@ export class CallEngine {
       el.srcObject = new MediaStream([track]);
       document.body.appendChild(el);
       this.audioEls.push(el);
+      if (this.webSinkId) this.applyWebSink(el);
       document.addEventListener("visibilitychange", this.onVisibleCallAudio);
       const onPlay = () => {
         this.releaseParked();
@@ -1433,7 +1459,7 @@ export class CallEngine {
           el.autoplay = true;
           document.body.appendChild(el);
           this.audioEls.push(el);
-          if (this.s.speaker && this.sinkIds[1]) void (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(this.sinkIds[1]).catch(() => {});
+          this.applyWebSink(el);
           const onPlay = () => {
         this.releaseParked();
         this.firstAudio();
@@ -1608,9 +1634,12 @@ export class CallEngine {
     if (this.udpProbeTimer) clearTimeout(this.udpProbeTimer);
     this.udpProbeTimer = null;
   }
-  /** Landed on the SFU's ICE-TCP pair (UDP blocked at connect, or a recovery chose TCP): probe UDP with an in-place
-   *  ICE restart on a backoff, never giving up while on TCP. The TCP pair carries audio until ICE nominates UDP, so
-   *  the switch back has no teardown and no gap. Explicit tcpOnly transports (no UDP candidates) use udpRecovery. */
+  /** Landed on a TCP-class pair — the SFU's ICE-TCP port or TURN over TLS/TCP :443 (UDP blocked at connect, or a
+   *  recovery/network change chose it): probe UDP with an in-place ICE restart on a backoff, never giving up while on
+   *  TCP. The TCP pair carries audio until ICE nominates UDP, so the switch back has no teardown and no gap.
+   *  Once back on (or always on) UDP it keeps WATCHING every UDP_WATCH_MS for the whole call, so a later fall to
+   *  TURNS:443 (consent loss, NAT rebinding, network change) is noticed and climbed out of too. Explicit tcpOnly
+   *  transports (no UDP candidates) use udpRecovery. */
   private startUdpProbe(session: CallMediaSession, attempt = 0) {
     this.stopUdpProbe();
     if (this.msTcp) return;
@@ -1622,9 +1651,11 @@ export class CallEngine {
       if (this.mediasoup !== session) return;
       if (!anyOnTcp(reports as unknown as Parameters<typeof anyOnTcp>[0])) {
         if (attempt) this.netLog("udp-restored", { attempt });
+        // persistent: keep watching (cheap getStats) for the rest of the call
+        this.udpProbeTimer = setTimeout(() => this.startUdpProbe(session, 0), UDP_WATCH_MS);
         return;
       }
-      this.netLog("udp-probe", { attempt });
+      this.netLog("udp-probe", { attempt, path: reports.map((r) => selectedPath(r as unknown as Parameters<typeof selectedPath>[0])).join(",") });
       await session.restartIceAll().catch(() => {});
       this.startUdpProbe(session, attempt + 1);
     }, attempt === 0 ? 1_500 : udpProbeDelay(attempt - 1));
@@ -2020,11 +2051,9 @@ export class CallEngine {
     // iOS wrapper: CallKit (de)activated the AVAudioSession → replay remote voice WebKit paused on the swap.
     // iOS app: the route iOS actually chose after a Speaker/Phone tap or a device change; the button follows the real
     // output (builtInSpeaker = Speaker, receiver = Phone). Headset routes leave the toggle alone.
-    window.addEventListener("openlounge:native-audio-route", (e) => {
-      const d = (e as CustomEvent<{ speaker?: boolean; headset?: boolean }>).detail;
-      if (!this.busy || !d || d.headset || typeof d.speaker !== "boolean") return;
-      if (this.s.speaker !== d.speaker) this.set({ speaker: d.speaker });
-    });
+    // Every route the app reports — speaker, earpiece, wired, Bluetooth (with its name), USB, car — drives the button
+    // and the picker; an automatic change (device connected/removed) is announced ("Audio on AirPods").
+    window.addEventListener("openlounge:native-audio-route", (e) => this.onNativeRoute((e as CustomEvent<NativeRouteDetail>).detail));
     window.addEventListener("openlounge:native-audio-resume", (e) => {
       if (this.audioEls.length) void resumePausedCallAudio(this.audioEls).then((blocked) => blocked && this.set({ needsGesture: true }));
       const reason = String((e as CustomEvent<{ reason?: string }>).detail?.reason ?? "");
@@ -2060,8 +2089,11 @@ export class CallEngine {
           // If it doesn't reconnect, the existing disconnected-grace timer still moves the call to TCP.
           this.onNetworkChange();
         } else if (this.mediasoup) {
-          // Direct UDP cannot safely migrate itself after an interface change. Select the proven TCP backend instead.
-          void this.requestTcpFallback();
+          // Web too: UDP first after Wi-Fi ⇄ cellular / new IP — an in-place ICE restart gathers fresh candidates on
+          // the new interface and nominates UDP when it works (TURNS:443 only if UDP fails). Was requestTcpFallback(),
+          // which became a no-op while connected (Oct 17), so the old path lingered until consent timeout.
+          this.netLog("net-change-ice-restart", { why });
+          void this.mediasoup.restartIceAll().catch(() => {});
         } else if (!room) {
           if (this.rejoining) this.wake?.();
           else void this.rejoin(why);
@@ -2173,16 +2205,111 @@ export class CallEngine {
    *  Android/iOS app calls had none) and set the default route — video calls on speaker, voice on earpiece. */
   private initCallRoute() {
     const callId = this.s.call?.id;
-    const speaker = !!(this.s.camOn || this.s.call?.video);
-    this.set({ speaker });
-    postNative({ type: "call:audioRoute", speaker });
+    const video = !!(this.s.camOn || this.s.call?.video);
+    this.routeUserPick = false;
     this.startLevelTelemetry();
-    void this.detectSpeaker().then((speakerSupported) => {
+    if (this.inApp()) {
+      // Default: video → Speaker, voice → Phone (earpiece). A connected headset/Bluetooth device always wins — the app
+      // keeps it and reports the real route back (openlounge:native-audio-route), which replaces this first guess.
+      const guess: AudioRoute = video ? { id: "speaker", kind: "speaker", name: "" } : { id: "earpiece", kind: "earpiece", name: "" };
+      const keep = this.s.route && isHeadsetKind(this.s.route.kind) ? this.s.route : null;
+      this.set({ speaker: !keep && video, speakerSupported: true, routeSwitchable: true, route: keep ?? guess, routes: this.s.routes.length ? this.s.routes : nativeBuiltins(keep) });
+      postNative({ type: "call:audioRoute", speaker: video, route: video ? "speaker" : "earpiece", auto: true });
+      return;
+    }
+    // Web: audio follows the system output (a plugged/paired headset already wins there); list the outputs so the
+    // button names the real device, and offer a picker where the browser can switch (setSinkId).
+    void this.refreshWebRoutes(false).then(() => {
       if (this.s.call?.id !== callId) return;
-      this.set({ speakerSupported });
-      const id = speaker ? this.sinkIds[1] : undefined;
-      if (id) for (const el of this.audioEls) void (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(id).catch(() => {});
+      this.watchWebRoutes();
     });
+  }
+
+  private inApp() {
+    return typeof window !== "undefined" && !!(window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls;
+  }
+
+  private announceRoute(text: string | null) {
+    if (this.routeNoticeTimer) clearTimeout(this.routeNoticeTimer);
+    this.routeNoticeTimer = null;
+    if (!text) return;
+    this.set({ routeNotice: text });
+    this.routeNoticeTimer = setTimeout(() => this.s.routeNotice && this.set({ routeNotice: null }), 3_000);
+  }
+
+  /** App (iOS/Android) reported the route it actually uses (after our command, or a device connect/remove). */
+  private onNativeRoute(d: NativeRouteDetail | null | undefined) {
+    if (!d || typeof d !== "object") return;
+    const route = routeFromNative(d);
+    if (!route) return;
+    const listed = routesFromNative(d.routes);
+    const routes = listed.length ? listed : nativeBuiltins(route, this.s.routes);
+    const prev = this.s.route;
+    if (!this.busy) {
+      // remember between calls (headset already connected when the next call starts)
+      this.s = { ...this.s, route, routes };
+      return;
+    }
+    const auto = d.user !== true && d.reason !== "override" && (d as { source?: unknown }).source !== "override";
+    // a device appeared/disappeared: that is a new situation, so automatic routing takes over again
+    if (auto && prev && (isHeadsetKind(route.kind) || isHeadsetKind(prev.kind)) && prev.id !== route.id) this.routeUserPick = false;
+    this.set({ route, routes, speaker: route.kind === "speaker", speakerSupported: true, routeSwitchable: true });
+    if (auto && prev && this.s.ui === "active") this.announceRoute(routeAnnouncement(prev, route));
+  }
+
+  /** Web: enumerate audio outputs → routes; the current one is the picked sinkId, else the system default. */
+  private async refreshWebRoutes(announce: boolean) {
+    const canSwitch = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+    let outs: { deviceId: string; label: string }[] = [];
+    try {
+      outs = ((await navigator.mediaDevices?.enumerateDevices?.()) ?? []).filter((d) => d.kind === "audiooutput").map((d) => ({ deviceId: d.deviceId, label: d.label }));
+    } catch {
+      /* no device list */
+    }
+    const { routes, current } = routesFromWebOutputs(outs);
+    let route = current;
+    if (this.webSinkId) {
+      const picked = routes.find((r) => r.id === this.webSinkId);
+      if (picked) route = picked;
+      else {
+        // the picked device went away (AirPods out of range / unplugged): back to the system default, and say so
+        this.webSinkId = "";
+        for (const el of this.audioEls) this.applyWebSink(el);
+      }
+    }
+    const prev = this.s.route;
+    // Safari/Firefox/most phones: no output list or no setSinkId — say what plays and where to change it
+    route ??= { id: "default", kind: "system", name: "" };
+    const switchable = canSwitch && routes.length > 1;
+    this.set({ route, routes: switchable ? routes : [], routeSwitchable: switchable, speakerSupported: true, speaker: route.kind === "speaker" });
+    if (announce && prev && this.s.ui === "active") this.announceRoute(routeAnnouncement(prev, route));
+  }
+
+  private watchWebRoutes() {
+    this.stopWebRouteWatch?.();
+    const md = navigator.mediaDevices;
+    if (!md?.addEventListener) return;
+    const callId = this.s.call?.id;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const on = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        if (this.s.call?.id === callId && this.busy) void this.refreshWebRoutes(true);
+      }, 400);
+    };
+    md.addEventListener("devicechange", on);
+    this.stopWebRouteWatch = () => {
+      if (t) clearTimeout(t);
+      md.removeEventListener("devicechange", on);
+      this.stopWebRouteWatch = null;
+    };
+  }
+
+  private applyWebSink(el: HTMLMediaElement) {
+    const set = (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId;
+    if (!set) return;
+    // "" = system default (follows a newly connected headset by itself)
+    void set.call(el, this.webSinkId).catch(() => {});
   }
 
   /** audio-level telemetry (Donny, 6:22): every 5 s while the call runs, log-only via call:diag */
@@ -2225,7 +2352,8 @@ export class CallEngine {
       const w = window as unknown as { __olNativeCalls?: unknown };
       this.diag("audio-levels", {
         ...r,
-        route: this.s.speaker ? "speaker" : "earpiece",
+        route: this.s.route?.kind ?? (this.s.speaker ? "speaker" : "earpiece"),
+        path: reports.map((rep) => selectedPath(rep as unknown as Parameters<typeof selectedPath>[0])).filter(Boolean).join(","),
         vol: el ? el.volume : "",
         muted: el ? String(el.muted) : "",
         paused: el ? String(el.paused) : "",
@@ -2239,21 +2367,21 @@ export class CallEngine {
   }
 
   private async detectSpeaker() {
-    // in-app (build 18+) the wrapper routes audio; on the web only browsers with setSinkId + several outputs can switch
-    if ((window as unknown as { __olNativeCalls?: unknown }).__olNativeCalls) return true;
-    try {
-      if (!("setSinkId" in HTMLMediaElement.prototype) || !navigator.mediaDevices?.enumerateDevices) return false;
-      const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId);
-      this.sinkIds = outs.map((d) => d.deviceId);
-      return outs.length > 1;
-    } catch {
-      return false;
-    }
+    // in-app (build 18+) the wrapper routes audio; on the web the audio button always shows where audio plays (and
+    // switches outputs where the browser supports setSinkId)
+    if (this.inApp()) return true;
+    await this.refreshWebRoutes(false);
+    return true;
   }
 
   private teardownMedia() {
     stopTones();
     this.msTcp = false;
+    this.stopWebRouteWatch?.();
+    this.webSinkId = "";
+    this.routeUserPick = false;
+    if (this.routeNoticeTimer) clearTimeout(this.routeNoticeTimer);
+    this.routeNoticeTimer = null;
     this.iosMicWatch?.stop();
     this.iosMicWatch = null;
     this.releaseParked();
@@ -2389,14 +2517,32 @@ export class CallEngine {
     }
   }
 
+  /** Speaker ⇄ Phone (two built-in routes only). With a headset/Bluetooth device present the UI opens the picker. */
   async toggleSpeaker() {
+    const to = this.s.route?.kind === "speaker" ? this.s.routes.find((r) => r.kind === "earpiece") ?? this.s.routes.find((r) => r.kind !== "speaker") : this.s.routes.find((r) => r.kind === "speaker");
+    if (to) return this.selectRoute(to.id);
+    // legacy fallback (no route list yet)
     const speaker = !this.s.speaker;
-    this.set({ speaker });
+    this.set({ speaker, route: speaker ? { id: "speaker", kind: "speaker", name: "" } : { id: "earpiece", kind: "earpiece", name: "" } });
     buzz("light");
-    postNative({ type: "call:audioRoute", speaker });
-    const id = speaker ? this.sinkIds[1] : this.sinkIds[0];
-    if (!id) return;
-    for (const el of this.audioEls) await (el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(id).catch(() => {});
+    postNative({ type: "call:audioRoute", speaker, route: speaker ? "speaker" : "earpiece", user: true });
+  }
+
+  /** User picked an output in the route sheet (Speaker / Phone / Headphones / AirPods …). */
+  async selectRoute(id: string) {
+    const r = this.s.routes.find((x) => x.id === id);
+    if (!r) return;
+    buzz("light");
+    this.routeUserPick = true;
+    this.announceRoute(null);
+    this.set({ route: r, speaker: r.kind === "speaker", routeNotice: null });
+    if (this.inApp()) {
+      // speaker stays for app builds that only understand Speaker on/off; newer builds route by kind + device id
+      postNative({ type: "call:audioRoute", speaker: r.kind === "speaker", route: r.kind, deviceId: r.id, user: true });
+      return;
+    }
+    this.webSinkId = r.id === "default" ? "" : r.id;
+    for (const el of this.audioEls) this.applyWebSink(el);
   }
 
   setMinimized(minimized: boolean) {

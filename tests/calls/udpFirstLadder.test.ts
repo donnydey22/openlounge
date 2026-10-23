@@ -45,7 +45,9 @@ test("path order: SFU ICE-TCP candidates stripped (UDP direct first), our TURNS 
   const r = udpOnlyResult("transport:create", { transport: { id: "t", iceCandidates: [{ protocol: "udp" }, { protocol: "tcp" }] } }) as { transport: { iceCandidates: unknown[] } };
   assert.deepEqual(r.transport.iceCandidates, [{ protocol: "udp" }]);
   assert.deepEqual(udpOnlyResult("produce", { id: "p" }), { id: "p" });
-  assert.match(srv, /mintTurnIceServers\(callId, userId\)\?\.map[\s\S]{0,200}startsWith\("turns:"\)/);
+  // Oct 23 (UDP first, always): TURN-UDP 3478 then TURNS 443 via mediasoupTurnUrls; turn:?transport=tcp still not offered
+  assert.ok(srv.includes("mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) }))"));
+  assert.ok(srv.includes('u.startsWith("turn:") && /transport=udp/.test(u)') && srv.includes('u.startsWith("turns:")'));
 });
 
 test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting UI, transient states ignored, then silent LiveKit", () => {
@@ -96,9 +98,10 @@ test("apps: native voice stays camera-free while an explicit native-video grant 
 
 test("speaker (6:20): toggle offered on web-path calls, default route video=speaker/voice=earpiece, Flip kept beside it; audio telemetry", () => {
   const ov = readFileSync("src/components/calls/CallOverlay.tsx", "utf8");
-  assert.match(ov, /s\.speakerSupported \? \(\s*<RoundBtn label=\{s\.speaker \? "Speaker" : "Phone"\}[\s\S]{0,300}\) : null\}\s*\{s\.camOn \? \(\s*<RoundBtn label="Flip"/);
+  assert.ok(/\{s\.speakerSupported \? <AudioRouteButton s=\{s\} Btn=\{RoundBtn\} \/> : null\}\s*\{s\.camOn \? \(\s*<RoundBtn label="Flip"/.test(ov));
   assert.match(eng, /if \(firstMediaOk\) this\.initCallRoute\(\);/);
-  assert.match(eng, /const speaker = !!\(this\.s\.camOn \|\| this\.s\.call\?\.video\);[\s\S]{0,120}postNative\(\{ type: "call:audioRoute", speaker \}\)/);
+  assert.ok(eng.includes("const video = !!(this.s.camOn || this.s.call?.video);"));
+  assert.ok(eng.includes('postNative({ type: "call:audioRoute", speaker: video, route: video ? "speaker" : "earpiece", auto: true });'));
   assert.match(eng, /this\.diag\("remote-audio-play-failed"/);
   assert.match(eng, /this\.diag\("audio-levels"/);
 });
