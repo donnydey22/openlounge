@@ -311,3 +311,23 @@ export async function processVoice(src: string, outDir: string): Promise<VoiceOu
   const durationMs = Math.round((pcm.out.length / 2 / 8000) * 1000) || (await probe(out)).durationMs;
   return { durationMs, waveform: peaks(pcm.out).toString("base64") };
 }
+
+/**
+ * Lossless "original" for videos we had to transcode (HEVC from iPhones, VP9, 4K, rotated clips): the same streams,
+ * stream-copied into `source.<ext>` with global metadata (GPS / ©xyz / device), chapters and data tracks dropped.
+ * Returns the file name, or null if the copy fails (then the transcoded MP4 stays the download, as before).
+ */
+export async function keepOriginalVideo(src: string, outDir: string, ext: string): Promise<string | null> {
+  const file = `source.${ext === "mov" ? "mov" : ext === "webm" ? "webm" : "mp4"}`;
+  const dst = path.join(outDir, file);
+  const r = await ffQueue
+    .run(() =>
+      run(FFMPEG, ["-y", "-v", "error", "-i", src, "-map", "0:v", "-map", "0:a?", "-dn", "-sn", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", ...(file.endsWith(".webm") ? [] : ["-movflags", "+faststart"]), dst], { timeoutMs: 5 * 60_000 }),
+    )
+    .catch(() => null);
+  if (!r || r.code !== 0 || !fs.existsSync(dst)) {
+    fs.rmSync(dst, { force: true });
+    return null;
+  }
+  return file;
+}

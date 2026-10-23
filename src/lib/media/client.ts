@@ -157,8 +157,10 @@ function notifyCachedUrls(id: string) {
 }
 
 export function variantsFor(m: MediaAttachment): MediaVariant[] {
-  if (m.kind === "photo") return m.srcset ? ["thumb", "thumbS", "thumbAvif", "thumbSAvif", "full"] : ["thumb", "full"];
-  if (m.kind === "video") return m.hls?.length ? ["poster", "full", "hls", "hlsLow"] : ["poster", "full"];
+  // "source" (lossless original, metadata stripped) is signed alongside only when the server says one exists
+  const src: MediaVariant[] = m.orig ? ["source"] : [];
+  if (m.kind === "photo") return [...(m.srcset ? (["thumb", "thumbS", "thumbAvif", "thumbSAvif", "full"] as MediaVariant[]) : (["thumb", "full"] as MediaVariant[])), ...src];
+  if (m.kind === "video") return [...(m.hls?.length ? (["poster", "full", "hls", "hlsLow"] as MediaVariant[]) : (["poster", "full"] as MediaVariant[])), ...src];
   if (m.kind === "voice") return ["full"];
   return m.thumb ? ["thumb", "full"] : ["full"];
 }

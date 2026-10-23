@@ -648,3 +648,61 @@ test("forward (Telegram-style): received photo + text to several chats; new copi
   // limits
   assert.equal((await api(base, "/api/media/forward", { chatId: id(A), messageId: s2.data.message.id, to: [] }, { token: tok(B) })).status, 400);
 });
+
+test("Download original (Telegram-style): big photo keeps a lossless, metadata-free original on the same signed route; small/timed ones don't", async () => {
+  const sharp = (await import("sharp")).default;
+  const raw = Buffer.alloc(3200 * 2400 * 3);
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+  const big = f("big-gps.jpg");
+  await sharp(raw, { raw: { width: 3200, height: 2400, channels: 3 } })
+    .jpeg({ quality: 90 })
+    .withExif({ IFD0: { Make: "TestPhone", Model: "X1" }, IFD3: { GPSLatitudeRef: "N", GPSLatitude: "33/1 26/1 0/1", GPSLongitudeRef: "W", GPSLongitude: "112/1 4/1 0/1" } })
+    .toFile(big);
+  const u = await upload(A, big, "photo");
+  const m = u.done!.data.media;
+  assert.equal(m.w, 2560, "inline full stays capped at PHOTO_MAX_EDGE");
+  assert.ok(m.orig && m.orig.mime === "image/jpeg" && m.orig.size > 0, JSON.stringify(m.orig));
+  await sendMedia(A, B, m.id);
+  const urls = await sign(B, m.id, ["full", "source"]);
+  assert.ok(urls.source, "source signed");
+  const r = await fetch(base + urls.source);
+  assert.equal(r.status, 200);
+  assertEdgeCache(r.headers.get("cache-control"));
+  const bytes = Buffer.from(await r.arrayBuffer());
+  assert.equal(bytes.length, m.orig.size);
+  assert.equal(bytes.includes(Buffer.from("TestPhone")), false, "camera/GPS EXIF stripped from the original");
+  const meta = await sharp(bytes).metadata();
+  assert.equal(meta.width, 3200);
+  assert.equal(meta.height, 2400);
+  assert.equal(meta.exif, undefined);
+  const [a, b] = await Promise.all([sharp(big).raw().toBuffer(), sharp(bytes).raw().toBuffer()]);
+  assert.ok(a.equals(b), "original pixels identical (no re-encode)");
+  assert.match(r.headers.get("content-disposition") ?? "", /^attachment; filename="big-gps\.jpg"/, "original always downloads (path-keyed edge cache)");
+  assert.equal((await fetch(base + urls.source.replace(`u=${id(B)}`, `u=${id(C)}`))).status, 403);
+
+  // fixture-sized photo (≤ max edge, recompression not much smaller): no extra copy kept, behaviour unchanged
+  const small = (await upload(A, f("gps.jpg"), "photo")).done!.data.media;
+  assert.equal(small.orig, undefined);
+
+  // self-destructing photo: original never signed
+  const t = (await upload(A, big, "photo")).done!.data.media;
+  const s = await sendMedia(A, B, t.id, { ttlSeconds: 60 });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  assert.equal((await sign(B, t.id, ["full", "source"])).source, undefined);
+  assert.equal(s.data.message.media.orig, undefined, "no Download original offered on timed media");
+});
+
+test("Download original: transcoded video keeps its own streams (no re-encode) with location/device tags stripped", async () => {
+  const src = f("geo.webm");
+  execFileSync("ffmpeg", ["-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=1", "-c:v", "libvpx-vp9", "-b:v", "200k", "-metadata", "location=+33.4484-112.0740/", "-metadata", "encoder=TestPhone", src]);
+  const w = (await upload(A, src, "video")).done!.data.media;
+  await sendMedia(A, B, w.id);
+  const upd = await waitFor(() => events[id(B)].find((e) => e.ev === "media:update" && e.data.media.id === w.id && e.data.media.orig), 60_000);
+  assert.equal(upd.data.media.orig.mime, "video/webm");
+  const u = await sign(B, w.id, ["full", "source"]);
+  assert.ok(u.source);
+  fs.writeFileSync(f("geo-src.webm"), Buffer.from(await (await fetch(base + u.source)).arrayBuffer()));
+  assert.match(execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", f("geo-src.webm")]).toString(), /vp9/);
+  const tags = execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json", f("geo-src.webm")]).toString();
+  assert.doesNotMatch(tags, /location|33\.44|TestPhone/);
+});

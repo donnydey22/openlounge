@@ -54,7 +54,8 @@ import {
 import { configureOrigin, purgeCache, signedUrl, startInternalOrigin, setFallbackSecret, type OriginFile } from "./origin";
 import { encodeRungs, hlsQueue, ladderFor, probe as probeVideo, rungInfo, writeMasters, type RungInfo } from "./hls";
 import { INLINE_SAFE, safeName, sniff } from "./sniff";
-import { MediaError, ffmpegAvailable, gifFrames, processImage, processVideo, processVoice, transcodeVideo, placeholderFrom } from "./process";
+import { MediaError, ffmpegAvailable, gifFrames, keepOriginalVideo, processImage, processVideo, processVoice, transcodeVideo, placeholderFrom } from "./process";
+import { keepOriginalPhoto } from "./original";
 import { MemoryMediaRepo, PgMediaRepo, type MediaRepo, type MediaRow, type Tombstone } from "./repo";
 
 type Hub = { to(channel: string): { emit(ev: string, data: unknown): void } };
@@ -73,9 +74,11 @@ interface UploadSession {
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
-const VARIANTS: MediaVariant[] = ["full", "thumb", "poster", "original", "hls", "hlsLow", "thumbS", "thumbAvif", "thumbSAvif"];
+const VARIANTS: MediaVariant[] = ["full", "thumb", "poster", "original", "hls", "hlsLow", "thumbS", "thumbAvif", "thumbSAvif", "source"];
 /** Self-destructing (timer or view once): served no-store from the origin only, never edge-cached, never HLS. */
 const isTimed = (r: { expiresAt?: number | null; viewOnce?: boolean; ttlSeconds?: number | null }) => !!(r.expiresAt || r.viewOnce || r.ttlSeconds);
+/** keep a lossless, metadata-stripped original for "Download original" (MEDIA_KEEP_ORIGINALS=0 turns it off) */
+const KEEP_ORIGINALS = process.env.MEDIA_KEEP_ORIGINALS !== "0";
 const HLS_PATH_RE = /^hls\/r(\d{2,4})\/(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$/;
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -239,6 +242,8 @@ export class MediaService {
       // refuses timed HLS, and an advertised ladder made players retry 404s in a loop)
       ...(r.files.hls?.rungs?.length && !isTimed(r) ? { hls: r.files.hls.rungs } : {}),
       ...(r.files.thumbS ? { srcset: true } : {}),
+      // "Download original" is never offered for self-destructing / view-once media
+      ...(r.files.source && !(r.expiresAt || r.viewOnce || r.ttlSeconds) ? { orig: { size: r.files.source.size, mime: r.files.source.mime } } : {}),
       label: r.label,
       ...(r.ttlSeconds ? { ttl: r.ttlSeconds } : {}),
       ...(r.viewOnce ? { viewOnce: true } : {}),
@@ -559,14 +564,24 @@ export class MediaService {
         });
         return;
       }
+      const srcMeta = KEEP_ORIGINALS && (mime === "image/jpeg" || mime === "image/png") ? await (await import("sharp")).default(src, { failOn: "none" }).metadata().catch(() => null) : null;
       const out = await processImage(src, dir, mime);
+      // Telegram-style original download: the sender's pixels, metadata stripped losslessly (see original.ts)
+      let source: { file: string; mime: string; size: number } | null = null;
+      if (srcMeta?.width && srcMeta.height) {
+        try {
+          source = keepOriginalPhoto(src, dir, mime, { orientation: srcMeta.orientation, srcW: srcMeta.width, srcH: srcMeta.height, fullW: out.width, fullH: out.height, fullBytes: fs.statSync(path.join(dir, `full.${out.ext}`)).size });
+        } catch {
+          source = null;
+        }
+      }
       fs.rmSync(src, { force: true });
       Object.assign(row, {
         mime: out.mime,
         width: out.width,
         height: out.height,
         placeholder: out.placeholder,
-        files: { full: this.fileEntry(dir, `full.${out.ext}`, out.mime), thumb: this.fileEntry(dir, "thumb.webp", "image/webp"), ...this.extraThumbs(dir) },
+        files: { full: this.fileEntry(dir, `full.${out.ext}`, out.mime), thumb: this.fileEntry(dir, "thumb.webp", "image/webp"), ...this.extraThumbs(dir), ...(source ? { source } : {}) },
       });
       return;
     }
@@ -621,8 +636,11 @@ export class MediaService {
       if (!this.rows.has(row.id)) return;
       const out = await transcodeVideo(path.join(dir, orig.file), dir, { gif: row.gif });
       if (!this.rows.has(row.id)) return fs.rmSync(dir, { recursive: true, force: true }); // expired/deleted meanwhile
+      // keep the sender's original streams (stream copy, metadata stripped) as the "Download original" file
+      const ext = orig.file.split(".").pop() ?? "mp4";
+      const srcFile = KEEP_ORIGINALS && !row.gif ? await keepOriginalVideo(path.join(dir, orig.file), dir, ext) : null;
       fs.rmSync(path.join(dir, orig.file), { force: true });
-      const files = { ...row.files, full: this.fileEntry(dir, "full.mp4", "video/mp4") };
+      const files = { ...row.files, full: this.fileEntry(dir, "full.mp4", "video/mp4"), ...(srcFile ? { source: this.fileEntry(dir, srcFile, orig.mime) } : {}) };
       delete (files as Record<string, unknown>).original;
       Object.assign(row, { files, status: "ready", mime: "video/mp4", width: out.width, height: out.height, durationMs: out.durationMs || row.durationMs });
       await this.repo!.update(row.id, { files: row.files, status: row.status, mime: row.mime, width: row.width, height: row.height, durationMs: row.durationMs });
@@ -748,6 +766,7 @@ export class MediaService {
         if (!r.files[variant]) continue;
         if (r.viewOnce) continue; // view once: nothing loads until the recipient opens it
         if ((variant === "hls" || variant === "hlsLow") && isTimed(r)) continue; // timed: MP4 from the origin only
+        if (variant === "source" && isTimed(r)) continue; // self-destructing media is never saved
         const u = this.fileUrl(r, variant, viewerId, now);
         if (u) urls[v as MediaVariant] = u;
       }
@@ -788,7 +807,9 @@ export class MediaService {
     }
     const inlineOk = INLINE_SAFE.has(f.mime) || f.mime === "image/webp" || f.mime === "image/avif" || f.mime === "video/webm" || f.mime === "video/quicktime";
     const name = r.name || `${r.kind}-${id.slice(0, 8)}.${f.file.split(".").pop()}`;
-    const dl = !inlineOk || (r.kind === "document" && !(f.mime === "application/pdf" || f.mime.startsWith("image/")) && variant === "full");
+    // "source" (Download original) is only ever a download: always attachment. Disposition can't follow ?dl=1 here,
+    // the edge caches by path only.
+    const dl = variant === "source" || !inlineOk || (r.kind === "document" && !(f.mime === "application/pdf" || f.mime.startsWith("image/")) && variant === "full");
     return {
       file: path.join(dir, f.file),
       mime: inlineOk ? f.mime : "application/octet-stream",
