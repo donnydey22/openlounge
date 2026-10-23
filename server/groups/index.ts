@@ -154,7 +154,7 @@ export async function handleGroupsApi(req: IncomingMessage, res: ServerResponse,
       res.writeHead(404, { "Cache-Control": "no-store" }).end();
       return true;
     }
-    res.writeHead(200, { "Content-Type": p.mime, "Content-Length": p.bytes.length, "Cache-Control": "public, max-age=31536000, immutable" });
+    res.writeHead(200, { "Content-Type": p.mime, "Content-Length": p.bytes.length, "Cache-Control": "public, max-age=31536000, s-maxage=600, immutable" }); // edge: 10 min (no per-URL purge)
     res.end(req.method === "HEAD" ? undefined : p.bytes);
     return true;
   }

@@ -12,6 +12,14 @@ import "./env";
 import { setTestEnv, wipeDb, api, phoneLogin, sql } from "../unified-auth/harness";
 import { makeFixtures } from "./fixtures";
 
+/** public port: shared caches may hold a signed media response only while its link is valid, never more than 10 min */
+function assertEdgeCache(v: string | null) {
+  const m = /^public, max-age=(\d+), s-maxage=(\d+)$/.exec(v ?? "");
+  assert.ok(m, `edge-bounded cache-control, got ${v}`);
+  assert.equal(m[1], m[2]);
+  assert.ok(Number(m[1]) > 0 && Number(m[1]) <= 600, `ttl ${m[1]} within (0, 600]`);
+}
+
 setTestEnv({ providers: false });
 type L = Awaited<ReturnType<typeof phoneLogin>>;
 let A: L, B: L, C: L;
@@ -130,7 +138,8 @@ test("photo: chunked upload, EXIF/GPS stripped, thumb + placeholder, signed URL 
   const full = await fetch(base + urls.full);
   assert.equal(full.status, 200);
   assert.equal(full.headers.get("content-type"), "image/jpeg");
-  assert.match(full.headers.get("cache-control") ?? "", /public, max-age=31536000, immutable/);
+  assertEdgeCache(full.headers.get("cache-control"));
+  assert.equal(full.headers.get("set-cookie"), null, "media responses never set cookies (the edge would refuse to cache them)");
   const bytes = Buffer.from(await full.arrayBuffer());
   const after = await sharp(bytes).metadata();
   assert.equal(after.exif, undefined, "GPS / camera EXIF must be stripped");
@@ -454,7 +463,7 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   const mr = await fetch(base + urls.hls, { headers: { "accept-encoding": "identity" } });
   assert.equal(mr.status, 200);
   assert.equal(mr.headers.get("content-type"), "application/vnd.apple.mpegurl");
-  assert.equal(mr.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assertEdgeCache(mr.headers.get("cache-control"));
   assert.equal(mr.headers.get("access-control-allow-origin"), "*");
   const master = await mr.text();
   assert.match(master, /#EXT-X-STREAM-INF:BANDWIDTH=\d+,AVERAGE-BANDWIDTH=\d+,RESOLUTION=640x360,CODECS="avc1\.4d401f,mp4a\.40\.2"/);
@@ -468,7 +477,7 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   // rendition playlist: short first segment, ~4 s after, init + segments with the token
   const prefix = urls.hls.split("?")[0].replace(/master\.m3u8$/, "");
   const pl = await fetch(`${base}${prefix}r240/index.m3u8?${q}`);
-  assert.equal(pl.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assertEdgeCache(pl.headers.get("cache-control"));
   const plText = await pl.text();
   assert.match(plText, new RegExp(`#EXT-X-MAP:URI="init\\.mp4\\?${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
   const durs = [...plText.matchAll(/#EXTINF:([\d.]+)/g)].map((x) => Number(x[1]));
@@ -477,7 +486,7 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   const seg = await fetch(`${base}${prefix}r240/seg_00001.m4s?${q}`, { headers: { range: "bytes=0-99" } });
   assert.equal(seg.status, 206);
   assert.equal(seg.headers.get("content-type"), "video/iso.segment");
-  assert.equal(seg.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assertEdgeCache(seg.headers.get("cache-control"));
   assert.match(seg.headers.get("content-range") ?? "", /^bytes 0-99\/\d+$/);
   const init = await fetch(`${base}${prefix}r720/init.mp4?${q}`);
   assert.equal(init.headers.get("content-type"), "video/mp4");
@@ -485,7 +494,7 @@ test("adaptive video: 240p first then the full ladder; master/rendition playlist
   const gz = await fetch(base + urls.hls, { headers: { "accept-encoding": "gzip" } });
   assert.equal(gz.headers.get("vary"), "Accept-Encoding");
   // one token covers the directory, but not another media, not a tampered uid, not after expiry
-  assert.equal((await fetch(base + urls.poster)).headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assertEdgeCache((await fetch(base + urls.poster)).headers.get("cache-control"));
   assert.equal((await fetch(`${base}${prefix}r240/index.m3u8?${q.replace(/&u=[^&]+/, `&u=${id(C)}`)}`)).status, 403);
   assert.equal((await fetch(`${base}${prefix}r240/index.m3u8?${q.replace(/&t=[\w-]+/, "&t=AAAA")}`)).status, 403);
   assert.equal((await fetch(`${base}${prefix}../../x?${q}`)).status, 404);

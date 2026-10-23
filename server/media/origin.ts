@@ -80,6 +80,21 @@ const SECURITY = {
   "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox",
 };
 
+/** Shared caches (Railway edge CDN) on the PUBLIC port may keep a signed media response at most as long as its link is
+ *  still valid, capped at EDGE_MAX_S. The edge keys on the full URL (token query included) and can't purge one URL, so a
+ *  year-long "public, immutable" would keep serving an expired, unsent or blocked item. Browsers get the same bound (a new
+ *  link is signed every URL_WINDOW anyway). no-store / private responses (view-once, timers) pass through unchanged.
+ *  The internal port (self-hosted media-cache, which re-verifies the token on every hit) keeps the origin's value. */
+export const EDGE_MAX_S = 600;
+export function edgeCache(cache: string, exp: number, now = Date.now()) {
+  if (!/^public\b/.test(cache)) return cache;
+  const left = Number.isFinite(exp) ? Math.max(0, Math.floor(exp - now / 1000)) : 0;
+  const m = /max-age=(\d+)/.exec(cache);
+  const ttl = Math.min(left, EDGE_MAX_S, m ? Number(m[1]) : EDGE_MAX_S);
+  if (ttl <= 0) return "no-store";
+  return `public, max-age=${ttl}, s-maxage=${ttl}`;
+}
+
 let lookup: OriginLookup | null = null;
 let health: () => Record<string, unknown> = () => ({});
 export function configureOrigin(fn: OriginLookup, healthFn: () => Record<string, unknown>) {
@@ -115,7 +130,7 @@ export async function handleMediaOrigin(req: IncomingMessage, res: ServerRespons
   } catch {
     return fail(res, 404);
   }
-  const base: Record<string, string> = { "Content-Type": f.mime, "Cache-Control": f.cache, ...CORS, ...SECURITY };
+  const base: Record<string, string> = { "Content-Type": f.mime, "Cache-Control": opts.internal ? f.cache : edgeCache(f.cache, Number(q.get("exp"))), ...CORS, ...SECURITY };
   if (f.disposition) base["Content-Disposition"] = f.disposition;
   if (f.cache === "no-store") base.Pragma = "no-cache";
 

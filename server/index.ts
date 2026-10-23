@@ -122,7 +122,9 @@ async function main() {
         res.writeHead(404).end();
         return;
       }
-      res.writeHead(200, { "Content-Type": f.type, "Cache-Control": "public, max-age=31536000, immutable" });
+      // browsers: 1 year (the URL carries ?v=<version>); shared/edge caches: 10 min, so a removed or replaced photo (or a
+      // deleted account) leaves the CDN quickly — the edge has no per-URL purge
+      res.writeHead(200, { "Content-Type": f.type, "Cache-Control": "public, max-age=31536000, s-maxage=600, immutable" });
       fs.createReadStream(f.file).pipe(res);
       return;
     }
