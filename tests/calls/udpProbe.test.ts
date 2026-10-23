@@ -47,3 +47,21 @@ test("SFU gateway: ping interval + dead timeout → terminate (close handler rec
 test("SFU gateway: a reconnect handshake that hangs is terminated too", () => {
   assert.match(sfu, /ws\.readyState === WebSocket\.CONNECTING && Date\.now\(\) - lastSeen > GATEWAY_DEAD_MS[\s\S]{0,160}ws\.terminate\(\)/);
 });
+
+test("Oct 23: a TURN relay over TLS/TCP counts as TCP (so the UDP upgrade probe keeps running); relay over UDP is UDP", async () => {
+  const { selectedProtocol, selectedPath } = await import("../../src/lib/calls/udpProbe");
+  const rep = (local: Record<string, unknown>) => {
+    const m = new Map<string, Record<string, unknown>>([
+      ["t", { type: "transport", selectedCandidatePairId: "p" }],
+      ["p", { type: "candidate-pair", id: "p", localCandidateId: "l", state: "succeeded", nominated: true }],
+      ["l", { type: "local-candidate", id: "l", ...local }],
+    ]);
+    return { forEach: (cb: (v: never) => void) => m.forEach((v) => cb(v as never)), get: (k: string) => m.get(k) };
+  };
+  assert.equal(selectedProtocol(rep({ protocol: "udp", candidateType: "relay", relayProtocol: "tls" }) as never), "tcp");
+  assert.equal(selectedProtocol(rep({ protocol: "udp", candidateType: "relay", relayProtocol: "tcp" }) as never), "tcp");
+  assert.equal(selectedProtocol(rep({ protocol: "udp", candidateType: "relay", relayProtocol: "udp" }) as never), "udp");
+  assert.equal(selectedProtocol(rep({ protocol: "udp", candidateType: "srflx" }) as never), "udp");
+  assert.equal(selectedPath(rep({ protocol: "udp", candidateType: "relay", relayProtocol: "tls" }) as never), "relay-tls");
+  assert.equal(selectedPath(rep({ protocol: "udp", candidateType: "host" }) as never), "udp");
+});

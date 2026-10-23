@@ -20,7 +20,8 @@ test("Opus voice: mono, no DTX (onset clipping), inband FEC, 48 kbps average, 20
 test("voice encoding has high bandwidth + network priority and its own cap, not a video cap", () => {
   assert.equal(MIC_AUDIO_ENCODING.priority, "high");
   assert.equal(MIC_AUDIO_ENCODING.networkPriority, "high");
-  assert.equal(MIC_AUDIO_ENCODING.maxBitrate, AUDIO_SPEECH.maxBitrate);
+  assert.equal(MIC_AUDIO_ENCODING.maxBitrate, 64_000, "own voice cap (Oct 23: 64 kbps), independent of LiveKit AUDIO_SPEECH");
+  assert.ok(MIC_AUDIO_ENCODING.maxBitrate >= AUDIO_SPEECH.maxBitrate);
   assert.ok(MIC_AUDIO_ENCODING.maxBitrate < 150_000, "below even the lowest video layer");
 });
 
