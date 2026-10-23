@@ -14,6 +14,13 @@ import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { androidNativeEnabled, iosMicReacquireEnabled, iosNativeVideoEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
+
+/** TURN URLs for mediasoup calls: UDP 3478 relay first, TLS 443 last resort. */
+export function mediasoupTurnUrls(urls: readonly string[]): string[] {
+  const udp = urls.filter((u) => u.startsWith("turn:") && /transport=udp/.test(u));
+  const tls = urls.filter((u) => u.startsWith("turns:"));
+  return [...udp, ...tls];
+}
 import { isBenignMediaFailure } from "./mediaLog";
 
 /** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
@@ -87,7 +94,11 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         // Path order (Donny, Oct 17): direct UDP to the SFU first; our own TURN relay (turn.openlounge.app, TLS 443,
         // short-lived credentials) to the SAME SFU only when UDP can't connect — ICE ranks relay candidates last, so
         // normal networks never use it. The SFU's ICE-TCP 40443 candidate is not offered (udpOnlyResult).
-        const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: s.urls.filter((u) => u.startsWith("turns:")) })).filter((s) => s.urls.length);
+        // UDP first, always (Donny, Oct 23): also offer TURN over UDP 3478 — a network that blocks the SFU's UDP port
+        // range but allows UDP/3478 (common on hotel/corporate Wi-Fi) then stays on UDP via our relay instead of
+        // dropping to TLS:443 (TCP head-of-line blocking = choppy audio on loss). ICE ranks relay-UDP above relay-TLS,
+        // and both below direct UDP. turn:…?transport=tcp adds nothing over TLS:443 and is still not offered.
+        const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) })).filter((s) => s.urls.length);
         return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}), ...(androidNativeEnabled() ? { androidNative: true } : {}), ...(iosMicReacquireEnabled() ? { iosMicReacquire: true } : {}), ...(iosNativeVideo && userId === participants?.callerId ? { iosNativeVideo: true } : {}) } : null;
       },
       relay: (input) => gw.request(input),
