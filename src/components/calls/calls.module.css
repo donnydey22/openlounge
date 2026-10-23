@@ -19,9 +19,15 @@
 }
 .screenOut { animation: screenOut 260ms ease-in both; }
 @keyframes screenOut { to { opacity: 0; transform: scale(0.96); } }
-/* connected video call ended: last frame + "Call ended" for a beat, then a quick fade (unmounts at ENDED_VIDEO_LINGER_MS) */
-.screen.endFade { animation: screenOut 260ms cubic-bezier(0.4, 0, 1, 1) 380ms both; }
-.screen.endFadeNow { animation: screenOut 240ms cubic-bezier(0.4, 0, 1, 1) both; pointer-events: none; }
+/* connected video call ended: the whole screen fades out at once (opacity only → no zoom / layout jump; the frame
+   visible at hang-up never sits there opaque), unmounted at ENDED_VIDEO_LINGER_MS. Kept under reduced motion: a
+   short opacity fade is not motion, and cutting instead would leave the stopped frame on screen until unmount. */
+.screen.endFade, .screen.endFadeNow { animation: endFade 200ms cubic-bezier(0, 0, 0.2, 1) both; pointer-events: none; }
+@keyframes endFade { from { opacity: 1; } to { opacity: 0; } }
+/* iPhone app video ended: the app removes its RTCViews on call:ended, so keep the page transparent (no black/dark
+   stage painted in their place); only the name/status/controls fade over what is behind. */
+.endNative, .endNative .videoStage, .endNative .pip { background: transparent !important; }
+.endNative .stageVideo, .endNative .stageBackdrop, .endNative .holdFrame, .endNative .pip video, .endNative .pip canvas { visibility: hidden !important; }
 /* ringing screen kept over the video stage until its first frame, then crossfaded away */
 .curtain { position: absolute; inset: 0; z-index: 5; background: #0b1220; pointer-events: none; }
 .curtainOut { animation: curtainOut 220ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
@@ -152,7 +158,7 @@
 .banner { animation: fadeUp 220ms ease-out both; }
 
 @media (prefers-reduced-motion: reduce) {
-  .screen, .screen.endFade, .screen.endFadeNow, .fadeUp, .bar, .banner, .curtainOut { animation: none; }
+  .screen:not(.endFade):not(.endFadeNow), .fadeUp, .bar, .banner, .curtainOut { animation: none; }
   .blobA, .blobB, .ring, .accept, .accept::before, .accept::after, .swipeHint, .barDot { animation: none; }
   .ring { opacity: 0; }
   .pip, .controls { transition: opacity 200ms; }

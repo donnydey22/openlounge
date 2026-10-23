@@ -64,6 +64,10 @@ class Stub {
     f.live = live;
     wire(which);
   }
+  /** the far side hung up / the network dropped: its track ends but stays attached (no srcObject change) */
+  stall(which: "local" | "remote") {
+    feeds[which].stream?.getTracks().forEach((t) => t.stop());
+  }
   attachVideo(which: "local" | "remote", el: HTMLVideoElement | null) {
     for (const old of els[which]) if (old !== el) old.srcObject = null;
     els[which] = el ? [el] : [];

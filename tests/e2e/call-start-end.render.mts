@@ -46,10 +46,17 @@ function classify(rgb: number[]): Cls {
   return "other";
 }
 
-const results: Record<string, { timeline: string; counts: Record<string, number>; startGapFrames: number; endFrames: number }> = {};
+const results: Record<string, { timeline: string; counts: Record<string, number>; startGapFrames: number; endFrames: number; end: Record<string, number> }> = {};
 const browser = await pw.chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
-for (const scenario of ["web", "native"] as const) {
-  const native = scenario === "native";
+// END variants (who hangs up / how): local = I hang up (engine stops tracks, then ended snapshot); remote = the other
+// side hangs up (their track ends first, ended arrives ~150 ms later); drop = network drop (remote freezes, 1.5 s of
+// "Reconnecting…", then the call ends). web = Android / desktop browser + Android WebView wrapper (same DOM video
+// path); native = iPhone app (app-owned RTCViews under a transparent page).
+const SCEN = (process.env.SCEN || "web,native,web-remote,web-drop,web-callee,native-remote").split(",");
+for (const scenario of SCEN) {
+  const native = scenario.startsWith("native");
+  const how = scenario.includes("remote") ? "remote" : scenario.includes("drop") ? "drop" : "local";
+  const role = scenario.includes("callee") ? "callee" : "caller";
   const vdir = `${OUT}/vid-${scenario}`;
   rmSync(vdir, { recursive: true, force: true });
   const ctx = await browser.newContext({ viewport: { width: W, height: H }, recordVideo: { dir: vdir, size: { width: W, height: H } } });
@@ -68,7 +75,7 @@ for (const scenario of ["web", "native"] as const) {
   };
   // ringing (outgoing video call)
   await mark("outgoing");
-  await S("set", { call: call("ringing"), role: "caller", ui: "outgoing", camOn: true });
+  await S("set", { call: call("ringing"), role, ui: role === "caller" ? "outgoing" : "incoming", camOn: true });
   if (!native) await S("feed", "local", true);
   await page.waitForTimeout(1500);
   // answered
@@ -78,17 +85,31 @@ for (const scenario of ["web", "native"] as const) {
   else setTimeout(() => void S("set", { remoteCam: true }), 500);
   await page.waitForTimeout(3000);
   // hang up: engine tears media down and shows the ended state, then clears after its linger
+  if (how === "remote") {
+    // far side hung up: their video stops (native: the app's remote RTCView stops updating) ~150 ms before call:ended
+    await S("stall", "remote");
+    await page.waitForTimeout(150);
+  } else if (how === "drop") {
+    await S("stall", "remote");
+    await S("set", { reconnecting: true });
+    await page.waitForTimeout(1500);
+  }
   await mark("end");
+  // ground truth next to the recording: the screen's computed opacity on every animation frame until unmount
+  await page.evaluate(`(() => { const out = (window.__op = []); const tick = () => { const el = document.querySelector('[data-testid="call-screen"]'); if (!el) return; out.push(+getComputedStyle(el).opacity); requestAnimationFrame(tick); }; requestAnimationFrame(tick); })()`);
+
   await page.evaluate(() => { const n = document.getElementById("native-rtc"); if (n) n.style.visibility = "hidden"; });
   // same order as engine.endWith: freeze tiles (no-op before the fix), stop tracks, then publish the ended snapshot
   await S("freeze");
   await S("feed", "remote", false);
   await S("feed", "local", false);
-  await S("set", { call: call("ended"), ui: "ended", endedText: "Call ended · 0:03", endedVideo: true });
+  await S("set", { call: call("ended"), ui: "ended", endedText: "Call ended · 0:03", endedVideo: true, reconnecting: false });
   await page.waitForTimeout(LINGER);
   await S("reset");
   await mark("gone");
   await page.waitForTimeout(800);
+  const op: number[] = await page.evaluate(() => (window as any).__op);
+  const opReversals = op.filter((v, i) => i > 0 && v > op[i - 1] + 0.01).length;
   await page.screenshot({ path: `${OUT}/${scenario}-after-gone.png` });
   await ctx.close();
   const f = readdirSync(vdir)[0];
@@ -123,11 +144,32 @@ for (const scenario of ["web", "native"] as const) {
   const rle = (a: Cls[]) => a.reduce((o: [Cls, number][], c) => (o.length && o[o.length - 1][0] === c ? o[o.length - 1][1]++ : o.push([c, 1]), o), []).map(([c, n]) => `${c}×${n}`).join(" ");
   // overlay fully gone = first frame showing what is behind it (app shell / theme)
   const goneIdx = endWin.findIndex((c, i) => i > 0 && c === "light");
+  // END quality on the raw centre-band colour (one pixel per frame after the 1×1 scale):
+  //  staleHold  = frames after the first post-hangup frame still showing the video opaque (≈ the pre-hangup colour)
+  //  black      = black frames between hang-up and gone; flicker = the fade reversing direction (a flash / jump)
+  //  leftover   = any video-coloured frame after the overlay is gone (a tile left behind)
+  const px = (i: number) => [raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]];
+  const e0 = at("end");
+  const ref = px(Math.max(0, e0 - 2));
+  const bg = px(Math.min(cls.length - 1, at("gone") + fr(600)));
+  const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  let staleHold = 0, black = 0, flicker = 0, leftover = 0;
+  let prev = dist(ref, bg);
+  const endIdx = Math.min(cls.length, at("gone") + fr(400));
+  for (let i = e0; i < endIdx; i++) {
+    const c = px(i), d = dist(c, bg);
+    if (i > e0 + 1 && dist(c, ref) < 12 && cls[i] !== "light") staleHold++;
+    if (cls[i] === "black") black++;
+    if (d > prev + 25) flicker++;
+    prev = Math.min(prev, d);
+    if (i >= at("gone") && (cls[i] === "remote" || cls[i] === "local" || cls[i] === "native")) leftover++;
+  }
   results[scenario] = {
     timeline: `CONNECT: ${rle(startWin)}  ||  END: ${rle(endWin)}`,
     counts: { flashFramesBeforeFirstVideo: flash, msToFirstVideo: firstVideo * 40, msEndToGone: goneIdx * 40 },
     startGapFrames: flash,
     endFrames: goneIdx,
+    end: { staleHoldFrames: staleHold, blackFrames: black, flickerFrames: flicker, leftoverFrames: leftover, opacityReversals: opReversals, msEndToGone: goneIdx * 40 },
   };
   const fi0 = { connect: at("connect"), end: at("end") };
   for (const [k, fi] of Object.entries(fi0)) {
@@ -138,3 +180,8 @@ for (const scenario of ["web", "native"] as const) {
   console.log(scenario, JSON.stringify(results[scenario], null, 1));
 }
 await browser.close();
+// must-pass gate (GATE=1): 0 stale / black / flicker / leftover frames at the end, start gap 0
+const bad = Object.entries(results).filter(([, r]) => r.startGapFrames || r.end.staleHoldFrames || r.end.blackFrames || r.end.flickerFrames || r.end.leftoverFrames || r.end.opacityReversals);
+console.log("SUMMARY", JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, r]) => [k, { start: r.startGapFrames, ...r.end }]))));
+if (process.env.GATE && bad.length) { console.log("GATE FAIL", bad.map(([k]) => k).join(",")); process.exit(1); }
+if (process.env.GATE) console.log("GATE PASS");
