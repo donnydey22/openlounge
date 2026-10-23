@@ -37,6 +37,19 @@ test("FX-web-404: app-styled 404 page and /rooms + /profile aliases exist", () =
   for (const f of ["src/app/not-found.tsx", "src/app/rooms/page.tsx", "src/app/profile/page.tsx"]) assert.ok(existsSync(f), f);
 });
 
+test("FX-download-latest: /download serves the latest Android build; label, file, sha256 and fallback are consistent", async () => {
+  const r = await import("../../src/lib/releases");
+  const a = r.ANDROID_RELEASE, f = r.ANDROID_FALLBACK;
+  assert.equal(a.file, `/downloads/openlounge-${a.version}-${a.build}.apk`);
+  assert.equal(f.file, `/downloads/openlounge-${f.version}-${f.build}.apk`);
+  assert.ok(a.build > f.build, "latest build is newer than the fallback");
+  for (const x of [a, f, r.IOS_RELEASE]) assert.match(x.sha256, /^[0-9a-f]{64}$/);
+  assert.match(r.ANDROID_SIGNER_SHA256, /^[0-9a-f]{64}$/);
+  assert.equal(r.IOS_RELEASE.file, `/downloads/openlounge-ios-${r.IOS_RELEASE.version}-b${r.IOS_RELEASE.build}.ipa`);
+  assert.equal(r.binaryUrl(a.file), `${r.BINARY_HOST}/openlounge-${a.version}-${a.build}.apk`);
+  assert.match(R("src/app/download/DownloadHub.tsx"), /ANDROID_RELEASE/);
+});
+
 test("FX-registry: every fixed-registry row names an existing verifying test", () => {
   const rows = R("docs/fixed-registry.csv").trim().split("\n").slice(1);
   assert.ok(rows.length >= 25, `registry has ${rows.length} rows`);
