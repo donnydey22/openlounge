@@ -35,3 +35,9 @@ FX-033,2026-10-07,web/android,App blank on old Android WebViews,Modern syntax/ru
 FX-034,2026-10-15,web,Plain 404s for /rooms and /profile,No aliases / unstyled 404,c08fab4,tests/fixed/guards.test.ts,FX-web-404
 FX-035,2026-10-11,rooms,Co-host could act against the host,No server-side host protection,a128e26,tests/monet/creator.test.ts,
 FX-036,2026-10-23,download,/download must serve the latest Android APK signed with the 0.3.19 release key (0.3.19 kept as fallback),Manual label/file edits could drift; binaries hosted as GitHub release assets,8c0fa92,tests/fixed/guards.test.ts,FX-download-latest
+FX-037,2026-10-23,media/original,No way to get the full-quality original of a photo/video (only the compressed copy),Only transcoded renditions were stored/served,f804098,tests/media/original.test.ts,
+FX-038,2026-10-23,media/original,'Download original' offered on view-once / self-destructing media,Original action not gated on timed media,792d2ad,tests/media/original.test.ts,
+FX-039,2026-10-23,media/purge,Media sweep could delete without a dry run; orphan sweep unbounded,No dry-run mode or circuit breaker on the sweeper,8f47676,tests/media/media.test.ts,dry-run deletes nothing
+FX-040,2026-10-23,storage,No Storage & data controls; server usage unknown,Feature missing (read-only usage + unenforced allowance; nothing stored deleted),aab2d9b,tests/storage/storage.test.ts,
+FX-041,2026-10-23,history/sync,Long chats open slowly / not offline; scroll-back stalls,History refetched whole on every open; no device cache or cursor paging,59403a8,tests/history/longHistory.test.ts,
+FX-042,2026-10-23,realtime/latency,High-latency links (Kenya/Sydney) slow to sync history,Uncompressed WS frames on long RTT links (permessage-deflate behind WS_DEFLATE flag; default off),5632312,tests/hardening/wsDeflate.test.ts,
