@@ -194,6 +194,7 @@ for (const engine of ENGINES) {
     const rpage = await rcontext.newPage();
     rpage.on("pageerror", (error) => errors.push(error.message));
     await rpage.setContent(html);
+    await rpage.locator("#mouse-target").scrollIntoViewIfNeeded(); // WebKit lays the phone page out taller: target can be below the fold
     const rb = (await rpage.locator("#mouse-target").boundingBox())!;
     await rpage.mouse.move(rb.x + 30, rb.y + rb.height / 2);
     await rpage.mouse.down();

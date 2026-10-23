@@ -114,6 +114,7 @@ for (const scenario of SCEN) {
   await page.waitForTimeout(800);
   const op: number[] = await page.evaluate(() => (window as any).__op);
   const opReversals = op.filter((v, i) => i > 0 && v > op[i - 1] + 0.01).length;
+  if (process.env.DEBUG_OP) console.log("OP", scenario, op.length, op.slice(0, 20).map((v) => v.toFixed(2)).join(" "));
   await page.screenshot({ path: `${OUT}/${scenario}-after-gone.png` });
   await ctx.close();
   const f = readdirSync(vdir)[0];
