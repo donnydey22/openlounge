@@ -137,6 +137,7 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     resumeVideo(video);
   };
   for (const ev of stallEvents) video.addEventListener(ev, onStall);
+  video.addEventListener("olcall:freeze", freeze); // engine: video call ending, hold the last frame now
   video.addEventListener("loadedmetadata", onMeta);
   video.addEventListener("loadstart", onMeta);
   if (typeof v.requestVideoFrameCallback === "function") rvfc = v.requestVideoFrameCallback(loop);
@@ -158,6 +159,7 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     window.clearInterval(dog);
     if (rvfc && v.cancelVideoFrameCallback) v.cancelVideoFrameCallback(rvfc);
     for (const ev of stallEvents) video.removeEventListener(ev, onStall);
+    video.removeEventListener("olcall:freeze", freeze);
     video.removeEventListener("loadedmetadata", onMeta);
     video.removeEventListener("loadstart", onMeta);
     video.removeEventListener("timeupdate", onFrame);

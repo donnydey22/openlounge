@@ -14,6 +14,15 @@ import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import css from "./calls.module.css";
 
+/** iPhone app video: show the local self-view this long after connect when the other side has no camera. */
+const NATIVE_LOCAL_GRACE_MS = 1200;
+/** iPhone app video: the RTCViews get this long (≈ 2 frames + bridge hop) under the curtain before it fades. */
+const NATIVE_REVEAL_MS = 120;
+/** Web video: fade the curtain even if no first-frame event arrives (camera-off peer, hold frame). */
+const CURTAIN_FALLBACK_MS = 900;
+
+const prefersReducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
 const QUICK_REPLIES = ["Can't talk now. What's up?", "I'll call you right back.", "I'll call you later.", "Can't talk now. Call me later?"];
 
 // Transparent 1x1 GIF. Without a poster, Android WebView paints its default gray "play" poster until the first
@@ -82,6 +91,19 @@ function Background({ s }: { s: CallSnapshot }) {
       <div className={css.blob + " " + css.blobB} style={{ background: "#6366f1" }} />
       {p.photoUrl && <div className={css.bgPhoto} style={{ backgroundImage: `url(${JSON.stringify(p.photoUrl).slice(1, -1)})` }} />}
       <div className={css.shade} />
+    </div>
+  );
+}
+
+/**
+ * The pre-video screen (blurred avatar + colour blobs, opaque) kept over the video stage until its first frame is
+ * on screen, then faded out: ringing → video is one crossfade, never a black or theme-coloured flash. On the iPhone
+ * app it also covers the transparent page while the app-owned RTCViews pick up their first layout.
+ */
+function Curtain({ s, fading, onGone }: { s: CallSnapshot; fading: boolean; onGone: () => void }) {
+  return (
+    <div className={cn(css.curtain, fading && css.curtainOut)} aria-hidden data-testid="call-curtain" data-fading={fading ? "1" : "0"} onAnimationEnd={(e) => e.target === e.currentTarget && onGone()}>
+      <Background s={s} />
     </div>
   );
 }
@@ -209,16 +231,29 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
   );
 }
 
-function BigVideo({ which, mirrored, tileRef }: { which: "local" | "remote"; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null> }) {
+function BigVideo({ which, mirrored, tileRef, onFirstFrame }: { which: "local" | "remote"; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null>; onFirstFrame?: () => void }) {
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
   const back = useRef<HTMLVideoElement>(null);
+  const firstFrame = useRef(onFirstFrame);
+  firstFrame.current = onFirstFrame;
   useEffect(() => {
     const el = vid.current;
+    // first decoded frame of the big tile → the pre-video curtain may fade (no black stage flashes in between)
+    const ready = () => {
+      if (el && el.videoWidth > 0 && el.readyState >= 2) firstFrame.current?.();
+    };
+    el?.addEventListener("loadeddata", ready);
+    el?.addEventListener("playing", ready);
+    el?.addEventListener("resize", ready);
     callEngine.attachVideo(which, el);
+    ready();
     const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
     const stopBackdrop = el && back.current ? mirrorBackdrop(el, back.current) : () => {};
     return () => {
+      el?.removeEventListener("loadeddata", ready);
+      el?.removeEventListener("playing", ready);
+      el?.removeEventListener("resize", ready);
       stopBackdrop();
       release();
       callEngine.attachVideo(which, null);
@@ -372,7 +407,35 @@ export function CallOverlay() {
   const [swap, setSwap] = useState(false);
   const [showCtl, setShowCtl] = useState(true);
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const video = active && (s.remoteCam || s.camOn);
+  // iPhone app-owned video: until the remote camera is live the app has nothing reliable to paint under the
+  // transparent page (local capture starts late, deferIosVideoCapture), so keep the opaque call screen. If the other
+  // person has no camera, the local self-view takes over after a short grace (as before, just without the flash).
+  const [nativeGrace, setNativeGrace] = useState(false);
+  const waitNative = !!s.nativeVideo && active && s.camOn && !s.remoteCam;
+  useEffect(() => {
+    if (!waitNative) return setNativeGrace(false);
+    const t = setTimeout(() => setNativeGrace(true), NATIVE_LOCAL_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [waitNative]);
+  const video = active && (s.remoteCam || s.camOn) && (!s.nativeVideo || s.remoteCam || nativeGrace);
+  // Ringing → video crossfade: "on" (curtain over the stage) → "fading" (first frame painted) → "off".
+  const [curtain, setCurtain] = useState<"on" | "fading" | "off">("on");
+  useEffect(() => {
+    if (!video) return setCurtain("on");
+    // native RTCViews: give the app two frames after the first layout record; web: the first decoded frame (below),
+    // with a fallback so a camera-off peer (hold frame / black) never keeps the curtain up
+    const t = setTimeout(() => setCurtain((c) => (c === "on" ? "fading" : c)), s.nativeVideo ? NATIVE_REVEAL_MS : CURTAIN_FALLBACK_MS);
+    return () => clearTimeout(t);
+  }, [video, s.nativeVideo]);
+  const revealStage = useCallback(() => setCurtain((c) => (c === "on" ? "fading" : c)), []);
+  useEffect(() => {
+    if (curtain === "fading" && prefersReducedMotion()) setCurtain("off");
+  }, [curtain]);
+  // A connected video call that ended: hold its last frame (same tile) and fade out, no audio-style "Call ended" card.
+  // iPhone app video has no page-side frame to hold (the app removes its RTCViews on call:ended) → fade at once.
+  const endedVideo = s.ui === "ended" && s.endedVideo;
+  const showStage = video || endedVideo;
+  const lastBig = useRef<"local" | "remote">("remote");
   const poke = useCallback(() => {
     setShowCtl(true);
     if (idle.current) clearTimeout(idle.current);
@@ -393,6 +456,8 @@ export function CallOverlay() {
   }, [active]);
 
   const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
+  if (video) lastBig.current = bigWhich;
+  const stageWhich = endedVideo ? lastBig.current : bigWhich;
   const showPip = s.remoteCam && s.camOn;
   const ctlHidden = video && !showCtl;
   const bigTile = useRef<HTMLDivElement | null>(null);
@@ -449,9 +514,10 @@ export function CallOverlay() {
   const nativeFullscreen = s.nativeVideo && !s.minimized && (s.ui === "connecting" || s.ui === "active") && video;
 
   return (
-    <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen)} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} onPointerDown={video ? poke : undefined}>
-      {video ? <BigVideo which={bigWhich} mirrored={bigWhich === "local" && s.facing === "user"} tileRef={bigTile} /> : <Background s={s} />}
-      {showPip && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+    <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? css.endFadeNow : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
+      {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} /> : <Background s={s} />}
+      {showPip && video && <Pip which={bigWhich === "local" ? "remote" : "local"} mirrored={bigWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {video && curtain !== "off" && <Curtain s={s} fading={curtain === "fading"} onGone={() => setCurtain("off")} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         {/* top bar */}
@@ -516,8 +582,8 @@ export function CallOverlay() {
         </div>
 
         {/* center: avatar, name, status */}
-        <div className={cn("flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center", video && "justify-start pt-2", css.controls, ctlHidden && css.controlsHidden)}>
-          {!video && (
+        <div className={cn("flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center", showStage && "justify-start pt-2", css.controls, ctlHidden && css.controlsHidden)}>
+          {!showStage && (
             <div className={cn(css.rings, "[@media(max-height:560px)]:scale-75")}>
               {ringing && (
                 <>
@@ -530,7 +596,7 @@ export function CallOverlay() {
             </div>
           )}
           <div className={cn("min-w-0 max-w-full", css.fadeUp)}>
-            <div className={cn("truncate font-semibold tracking-tight", video ? "text-xl drop-shadow" : "text-[28px] leading-tight max-[340px]:text-2xl")} data-testid="call-name">
+            <div className={cn("truncate font-semibold tracking-tight", showStage ? "text-xl drop-shadow" : "text-[28px] leading-tight max-[340px]:text-2xl")} data-testid="call-name">
               {p.name}
             </div>
             <div className="mt-1 flex items-center justify-center gap-2 text-[15px] text-white/80 tabular-nums drop-shadow" data-testid="call-status">

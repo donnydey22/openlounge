@@ -61,6 +61,9 @@ export interface CallSnapshot {
   endedText: string | null;
   /** ended because of busy / no answer → offer "Call again" */
   canRetry: boolean;
+  /** a connected video call just ended normally: the overlay holds the last frame and fades out quickly instead of
+   *  switching to the audio-style "Call ended" screen (retry/lost screens are unaffected) */
+  endedVideo: boolean;
   error: string | null;
   needsGesture: boolean;
   /** "Bea turned on video" prompt (offer to turn on mine) */
@@ -75,6 +78,10 @@ export interface CallSnapshot {
 }
 
 const ENDED_LINGER_MS = 1800;
+/** Connected video call → last frame + "Call ended · m:ss", then a 260 ms fade (call screen gone in < 0.7 s). */
+export const ENDED_VIDEO_LINGER_MS = 650;
+/** dispatched on attached call <video> elements right before an ended video call tears media down (frameHold freezes) */
+export const CALL_FREEZE_EVENT = "olcall:freeze";
 
 const initial = (): CallSnapshot => ({
   call: null,
@@ -94,6 +101,7 @@ const initial = (): CallSnapshot => ({
   connectedAt: null,
   endedText: null,
   canRetry: false,
+  endedVideo: false,
   error: null,
   needsGesture: false,
   videoInvite: false,
@@ -715,9 +723,13 @@ export class CallEngine {
 
   private endWith(call: CallInfo, text: string, canRetry: boolean) {
     this.clearEnd();
+    const endedVideo = !canRetry && !!this.s.connectedAt && (this.s.ui === "active" || this.s.ui === "connecting") && (!!call.video || this.s.camOn || this.s.remoteCam);
+    // hold the last decoded frame on every call tile before teardown stops the tracks (a locally stopped track fires
+    // no "ended" event, so frameHold would otherwise paint one black frame before its watchdog notices)
+    if (endedVideo) for (const el of [...this.videoEls.remote, ...this.videoEls.local]) try { el.dispatchEvent(new Event(CALL_FREEZE_EVENT)); } catch { /* non-DOM */ }
     this.teardownMedia();
-    this.set({ call: { ...call, phase: "ended" }, ui: "ended", endedText: text, canRetry, minimized: false, reconnecting: false });
-    this.endTimer = setTimeout(() => this.set({ ...initial(), v: this.s.v + 1 }), canRetry ? 6000 : ENDED_LINGER_MS);
+    this.set({ call: { ...call, phase: "ended" }, ui: "ended", endedText: text, canRetry, endedVideo, minimized: false, reconnecting: false });
+    this.endTimer = setTimeout(() => this.set({ ...initial(), v: this.s.v + 1 }), canRetry ? 6000 : endedVideo ? ENDED_VIDEO_LINGER_MS : ENDED_LINGER_MS);
   }
   private clearEnd() {
     if (this.endTimer) clearTimeout(this.endTimer);
