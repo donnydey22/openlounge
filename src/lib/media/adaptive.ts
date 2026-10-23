@@ -199,11 +199,19 @@ export function attachAdaptive(video: HTMLVideoElement, src: AdaptiveSources, op
           else stats.switches.push({ atMs: Math.round(now()), height: ht });
         });
         let mediaRecoveries = 0;
+        let netRetries = 0;
         h.on(Hls.Events.ERROR, (_e, d) => {
           if (!d.fatal) return;
-          if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            // offline blip / expired link: keep trying from where we are
-            setTimeout(() => !destroyed && h.startLoad(), 1500);
+          const code = (d as { response?: { code?: number } }).response?.code ?? 0;
+          if (d.type === Hls.ErrorTypes.NETWORK_ERROR && (code < 400 || code >= 500 || code === 408 || code === 429) && netRetries < 8) {
+            // offline blip: keep trying from where we are, backing off (1.5 s → 30 s) instead of hammering the origin
+            const delay = Math.min(30_000, 1500 * 2 ** netRetries++);
+            setTimeout(() => !destroyed && h.startLoad(), delay);
+          } else if (d.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            // 403/404/410 (gone, expired, not allowed) or out of retries: the ladder isn't coming back — use the MP4
+            h.destroy();
+            hls = null;
+            useMp4();
           } else if (d.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries++ < 2) h.recoverMediaError();
           else {
             h.destroy();

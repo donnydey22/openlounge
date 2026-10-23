@@ -74,6 +74,8 @@ interface UploadSession {
 
 const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const VARIANTS: MediaVariant[] = ["full", "thumb", "poster", "original", "hls", "hlsLow", "thumbS", "thumbAvif", "thumbSAvif"];
+/** Self-destructing (timer or view once): served no-store from the origin only, never edge-cached, never HLS. */
+const isTimed = (r: { expiresAt?: number | null; viewOnce?: boolean; ttlSeconds?: number | null }) => !!(r.expiresAt || r.viewOnce || r.ttlSeconds);
 const HLS_PATH_RE = /^hls\/r(\d{2,4})\/(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$/;
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -233,7 +235,9 @@ export class MediaService {
       status: r.status,
       ...(r.files.thumb ? { thumb: true } : {}),
       ...(r.files.poster ? { poster: true } : {}),
-      ...(r.files.hls?.rungs?.length ? { hls: r.files.hls.rungs } : {}),
+      // self-destructing media plays from the no-store origin MP4 only: its HLS ladder is never advertised (the origin
+      // refuses timed HLS, and an advertised ladder made players retry 404s in a loop)
+      ...(r.files.hls?.rungs?.length && !isTimed(r) ? { hls: r.files.hls.rungs } : {}),
       ...(r.files.thumbS ? { srcset: true } : {}),
       label: r.label,
       ...(r.ttlSeconds ? { ttl: r.ttlSeconds } : {}),
@@ -743,6 +747,7 @@ export class MediaService {
         if (variant === "full" && !r.files.full && r.files.original) variant = "original"; // still processing
         if (!r.files[variant]) continue;
         if (r.viewOnce) continue; // view once: nothing loads until the recipient opens it
+        if ((variant === "hls" || variant === "hlsLow") && isTimed(r)) continue; // timed: MP4 from the origin only
         const u = this.fileUrl(r, variant, viewerId, now);
         if (u) urls[v as MediaVariant] = u;
       }
@@ -795,7 +800,7 @@ export class MediaService {
   // ---------- adaptive video (HLS ladder) ----------
 
   private wantsHls(r: MediaRow) {
-    return HLS_ENABLED && this.ffmpeg && r.kind === "video" && !r.gif && !r.viewOnce && (r.durationMs ?? 0) > 0 && (r.durationMs ?? 0) <= HLS_MAX_MS;
+    return HLS_ENABLED && this.ffmpeg && r.kind === "video" && !r.gif && !isTimed(r) && (r.durationMs ?? 0) > 0 && (r.durationMs ?? 0) <= HLS_MAX_MS;
   }
 
   /**
@@ -1028,6 +1033,7 @@ export class MediaService {
   /** Delete the file and the media row; leave a tombstone; tell both sides. Idempotent. */
   async expire(r: MediaRow, reason: MediaGoneReason) {
     if (!this.rows.has(r.id)) return;
+    if (process.env.MEDIA_SWEEP_DRY_RUN === "1") return void log.info("media expire dry-run", { id: r.id, reason, kind: r.kind });
     this.rows.delete(r.id);
     clearTimeout(this.timers.get(r.id));
     this.timers.delete(r.id);
@@ -1050,17 +1056,62 @@ export class MediaService {
       text = rest.length > 1 ? albumLabel(rest) : mediaLabel({ kind: rest[0].kind, gif: rest[0].gif });
     }
     this.publishMessage(r.conversationId, r.messageId, text);
-    log.info("media gone", { id: r.id, reason, left: rest.length });
+    log.info("media gone", { id: r.id, reason, left: rest.length, kind: r.kind, timed: isTimed(r), bytes: Object.values(r.files).reduce((n, f) => n + (f?.size ?? 0), 0), variants: Object.keys(r.files) });
   }
 
   /** Periodic: due expiries, orphans (message deleted / trimmed / sender's account deleted), unsent + stale uploads. */
+  /**
+   * What a sweep would delete right now, without touching anything (dry-run + the circuit breaker below).
+   * Media-free: ids, kinds, sizes and reasons only.
+   */
+  plan(now = Date.now()) {
+    const out: { id: string; reason: "expired" | "viewed" | "owner-deleted" | "orphan" | "unsent"; kind: string; bytes: number; variants: string[]; timed: boolean }[] = [];
+    const storeLoaded = store.users.size > 0;
+    for (const r of this.rows.values()) {
+      const base = { id: r.id, kind: r.kind, bytes: Object.values(r.files).reduce((n, f) => n + (f?.size ?? 0), 0), variants: Object.keys(r.files), timed: isTimed(r) };
+      if (r.expiresAt && r.expiresAt <= now) out.push({ ...base, reason: r.viewOnce && r.openedAt ? "viewed" : "expired" });
+      else if (!storeLoaded) continue;
+      else if (!store.users.has(r.ownerId)) out.push({ ...base, reason: "owner-deleted" });
+      else if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId!, r.messageId)) out.push({ ...base, reason: "orphan" });
+      else if (!r.messageId && now - r.createdAt > UNSENT_TTL_MS) out.push({ ...base, reason: "unsent" });
+    }
+    return out;
+  }
+
   async sweep(now = Date.now()) {
+    // Guards. Due self-destruct expiries always run (that's the privacy promise). Everything else — orphans, files of
+    // deleted accounts — is skipped while the chat store isn't loaded, and paused for this pass if an unusual number
+    // would go at once (a bug or a half-loaded store must never mass-delete normal media). MEDIA_SWEEP_DRY_RUN=1
+    // logs the plan and deletes nothing at all.
+    const plan = this.plan(now);
+    const nonTimed = plan.filter((p) => p.reason === "owner-deleted" || p.reason === "orphan").length;
+    const dryRun = process.env.MEDIA_SWEEP_DRY_RUN === "1";
+    const maxOrphans = Number(process.env.MEDIA_ORPHAN_SWEEP_MAX || 200);
+    const orphansPaused = store.users.size === 0 || nonTimed > maxOrphans;
+    if (nonTimed > maxOrphans) {
+      metrics.inc("media_sweep_paused_total");
+      log.error("media sweep: orphan deletion paused (too many at once)", { wouldDelete: nonTimed, max: maxOrphans });
+    }
+    if (dryRun) {
+      const by: Record<string, { n: number; bytes: number }> = {};
+      for (const p of plan) (by[p.reason] ??= { n: 0, bytes: 0 }), (by[p.reason].n++, (by[p.reason].bytes += p.bytes));
+      log.info("media sweep dry-run", { by, orphansPaused });
+      return plan;
+    }
     for (const r of [...this.rows.values()]) {
       if (r.expiresAt && r.expiresAt <= now) {
         await this.expire(r, r.viewOnce && r.openedAt ? "viewed" : "expired");
         continue;
       }
       if (r.expiresAt && !this.timers.has(r.id)) this.schedule(r);
+      if (orphansPaused) {
+        if (!r.messageId && now - r.createdAt > UNSENT_TTL_MS && store.users.size > 0) {
+          this.rows.delete(r.id);
+          this.removeFiles(r.id);
+          await this.repo!.remove(r.id).catch(() => {});
+        }
+        continue;
+      }
       if (!store.users.has(r.ownerId)) {
         // account deleted: files they uploaded are erased; the bubble says "Photo deleted"
         await this.expire(r, "deleted");
