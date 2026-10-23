@@ -64,6 +64,8 @@ const TYPING_SHOW_MS = 6_000;
 
 /** Consecutive messages from the same person within this window form one group (one avatar, tight spacing). */
 const RENDER_WINDOW = 200;
+/** older pages: the same 60 rows a page as before (the first page stays small for a fast first paint on weak links) */
+const OLDER_PAGE = 60;
 const GROUP_WINDOW_MS = 3 * 60_000;
 /** A quiet gap this long gets a centred time label (Clubhouse / iMessage style) instead of per-message stamps. */
 const TIME_GAP_MS = 15 * 60_000;
@@ -269,6 +271,7 @@ export function DmThread({
   // device cache (instant open, offline too) + cursor paging state
   const fromServer = useRef(false); // the newest page came from the server (cache must not overwrite it)
   const prefetched = useRef<{ beforeId: string; messages: DirectMessage[]; hasMore: boolean } | null>(null);
+  const prefetchInflight = useRef<{ beforeId: string; p: Promise<{ messages: DirectMessage[]; hasMore: boolean }> } | null>(null);
   const prefetching = useRef<string | null>(null);
   const anchor = useRef<{ height: number; top: number } | null>(null); // keep the reader's place when older pages land
   const anchorPending = useRef<ReturnType<typeof readPos>>(null); // "reopen where you left off" (first visible message)
@@ -566,6 +569,7 @@ export function DmThread({
     fromServer.current = false;
     prefetched.current = null;
     prefetching.current = null;
+    prefetchInflight.current = null;
     anchor.current = null;
     anchorPending.current = null;
   }, [peerId]);
@@ -863,13 +867,15 @@ export function DmThread({
     (beforeId: string | null) => {
       if (!beforeId || prefetching.current === beforeId || prefetched.current?.beforeId === beforeId) return;
       prefetching.current = beforeId;
-      request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: HISTORY_PAGE })
-        .then((r) => {
-          if (prefetching.current === beforeId) prefetched.current = { beforeId, messages: r.messages, hasMore: r.hasMore };
-        })
+      const p = request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: OLDER_PAGE });
+      prefetchInflight.current = { beforeId, p };
+      p.then((r) => {
+        if (prefetching.current === beforeId) prefetched.current = { beforeId, messages: r.messages, hasMore: r.hasMore };
+      })
         .catch(() => {})
         .finally(() => {
           if (prefetching.current === beforeId) prefetching.current = null;
+          if (prefetchInflight.current?.p === p) prefetchInflight.current = null;
         });
     },
     [peerId, request],
@@ -882,11 +888,14 @@ export function DmThread({
     const el = listRef.current;
     try {
       const t0 = performance.now();
-      const pre = prefetched.current?.beforeId === beforeId ? prefetched.current : null;
+      // the prefetched page, or the prefetch still on its way (never a second request for the same page)
+      const inflight = prefetchInflight.current?.beforeId === beforeId ? prefetchInflight.current.p : null;
+      const pre = prefetched.current?.beforeId === beforeId ? prefetched.current : inflight ? await inflight.catch(() => null) : null;
       prefetched.current = null;
+      prefetching.current = null;
       if (pre) chatStats.olderFromPrefetch++;
       else chatStats.olderFromNetwork++;
-      const r = pre ?? (await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: HISTORY_PAGE }));
+      const r = pre ?? (await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: OLDER_PAGE }));
       stickToBottom.current = false;
       if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
       setMessages((list) => reconcileOlder<Item>(list ?? [], r.messages as Item[]));
