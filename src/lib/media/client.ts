@@ -246,3 +246,6 @@ export const markViewed = (id: string) => postJson(`/api/media/${id}/viewed`, {}
 export const markPlayed = (id: string) => postJson(`/api/media/${id}/played`, {}).catch(() => {});
 export const deleteMediaNow = (id: string, opts: { all?: boolean } = {}) => postJson(`/api/media/${id}/delete`, opts.all ? { all: true } : {});
 export const reconcileMedia = (messageIds: string[]) => postJson<{ items: MediaUpdateEvent[] }>("/api/media/reconcile", { messageIds });
+export type MediaUsage = { chats: { conv: string; bytes: number; items: number; mine: number }[]; sentBytes: number; usable: number; fairShare: number; allowance: number; enforced: false };
+/** Settings → Storage & data: server-side media per chat + the report-only allowance (read only). */
+export const getMediaUsage = () => postJson<MediaUsage>("/api/media/usage", undefined, "GET");

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, ChevronRight, FileText, LifeBuoy, ShieldAlert, ShieldCheck, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus, Download } from "lucide-react";
+import { Bell, ChevronRight, FileText, HardDrive, LifeBuoy, ShieldAlert, ShieldCheck, Loader2, LogOut, MessageCircle, Moon, Sparkles, Sun, UserPlus, Download } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
 import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
@@ -108,6 +108,10 @@ export default function SettingsPage() {
               <ChevronRight className="h-4 w-4 text-zinc-500" />
             </Link>
             <DataSaverRow />
+            <Link href="/settings/storage" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5" data-testid="storage-link">
+              <HardDrive className="h-4 w-4 text-zinc-400" /> <span className="flex-1">Storage &amp; data</span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </Link>
             <MonetSettingsRows signedIn={!!me} />
             <BlockedAccounts meId={me?.id} toast={toast} />
             <Link href="/invite" className="flex items-center gap-3 border-t border-white/5 px-4 py-3 text-sm hover:bg-white/5">

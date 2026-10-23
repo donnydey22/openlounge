@@ -15,6 +15,7 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
+  ArrowDown,
   FileVideo,
   Flame,
   Loader2,
@@ -54,6 +55,27 @@ import { useInView, useMediaUrls, useTick } from "./hooks";
 import { CountdownRing, ProgressRing } from "./Rings";
 import { openViewer } from "./viewerStore";
 import { LinkifiedText } from "../chat/LinkifiedText";
+import { isGroupId } from "@/lib/groups";
+import { AUTO_DOWNLOAD_EVENT, autoDownloadAllowed, type AutoKind } from "@/lib/storage/autoDownload";
+import { cachedMediaUrl, rememberMedia } from "@/lib/storage/mediaCache";
+
+/** Settings → Storage & data → auto-download, live (changes apply without a reload). */
+function useAutoDownload(kind: AutoKind) {
+  const [on, setOn] = useState(true);
+  useEffect(() => {
+    const read = () => setOn(autoDownloadAllowed(kind));
+    read();
+    window.addEventListener(AUTO_DOWNLOAD_EVENT, read);
+    const c = (navigator as unknown as { connection?: EventTarget }).connection;
+    c?.addEventListener?.("change", read);
+    return () => {
+      window.removeEventListener(AUTO_DOWNLOAD_EVENT, read);
+      c?.removeEventListener?.("change", read);
+    };
+  }, [kind]);
+  return on;
+}
+const convOf = (m: Msg, mine: boolean) => (mine || isGroupId(m.toId) ? m.toId : m.fromId);
 
 type Msg = DirectMessage & { state?: "sending" | "failed" };
 
@@ -133,7 +155,7 @@ export const MediaBubble = memo(function MediaBubble({ m, mine, shape, onRetry }
   if (album && album.length > 1)
     return (
       <div className={cn("relative overflow-hidden", shape, mine ? "bg-emerald-500" : "dm-theirs bg-zinc-800")} style={{ width: tileBox(album[0]).css, maxWidth: "100%" }}>
-        <AlbumCarousel m={m} items={album} onRetry={onRetry} />
+        <AlbumCarousel m={m} items={album} mine={mine} onRetry={onRetry} />
         {caption && <Caption text={caption} mine={mine} className="px-3 pt-1.5 pb-2" />}
       </div>
     );
@@ -202,7 +224,29 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
   const [loaded, setLoaded] = useState(false);
   const isVideo = a.kind === "video";
   const local = outbox?.previewUrl;
-  const src = local ?? (isVideo ? urls?.poster : urls?.thumb ?? urls?.full);
+  // auto-download (Settings → Storage & data): photos off → blurred preview + size pill until tapped; videos off →
+  // the poster shows but nothing preloads / autoplays. My own media always loads (it's mine, already on the device).
+  const autoPhoto = useAutoDownload("photo");
+  const autoVideo = useAutoDownload("video");
+  const [manual, setManual] = useState(false);
+  const fetchOk = mine || manual || !!local || isVideo || autoPhoto;
+  const inlineOk = mine || manual || autoVideo;
+  // offline (no signed URL): the device media cache's copy of the thumbnail, if any
+  const [offlineSrc, setOfflineSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!near || urls || local || a.viewOnce || typeof navigator === "undefined" || navigator.onLine) return;
+    let alive = true;
+    let made: string | null = null;
+    void cachedMediaUrl(a.id).then((u) => {
+      made = u;
+      if (alive) setOfflineSrc(u);
+    });
+    return () => {
+      alive = false;
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [near, urls, local, a.id, a.viewOnce]);
+  const src = fetchOk ? local ?? (isVideo ? urls?.poster : urls?.thumb ?? urls?.full) ?? offlineSrc ?? undefined : undefined;
   const uploading = !!outbox && outbox.phase !== "done" && outbox.phase !== "failed";
   const failed = m.state === "failed" || outbox?.phase === "failed";
   const viewOnceLocked = !!a.viewOnce;
@@ -246,9 +290,34 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
       {/* no blurred placeholder yet (just picked, or an old message without one): never a blank tile */}
       {isVideo && !a.ph && !loaded && !local && <VideoSkeleton />}
       {!viewOnceLocked && src && (
-        <ThumbImage a={a} urls={urls} src={src} local={local} width={box.width} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")} />
+        <ThumbImage
+          a={a}
+          urls={urls}
+          src={src}
+          local={local}
+          width={box.width}
+          onLoaded={() => {
+            setLoaded(true);
+            if (!local && !a.expiresAt && src && !src.startsWith("blob:")) rememberMedia(a.id, convOf(m, mine), src);
+          }}
+          className={cn("absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none", loaded || local ? "opacity-100" : "opacity-0")}
+        />
       )}
-      {isVideo && !viewOnceLocked && !uploading && !failed && a.status !== "processing" && <InlineVideo a={a} urls={urls} />}
+      {!viewOnceLocked && !fetchOk && (
+        <button
+          type="button"
+          data-testid="media-autodl-off"
+          onClick={(e) => {
+            e.stopPropagation();
+            setManual(true);
+          }}
+          className="absolute inset-0 m-auto flex h-9 w-fit items-center gap-1.5 rounded-full bg-black/55 px-3 text-[13px] font-medium text-white tabular-nums backdrop-blur-sm"
+          aria-label={`Download photo, ${formatBytes(a.size)}`}
+        >
+          <ArrowDown className="h-4 w-4" /> {formatBytes(a.size)}
+        </button>
+      )}
+      {isVideo && inlineOk && !viewOnceLocked && !uploading && !failed && a.status !== "processing" && <InlineVideo a={a} urls={urls} />}
       {viewOnceLocked && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/25 text-white">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 backdrop-blur-sm">
@@ -319,9 +388,16 @@ function VisualTile({ m, a, mine, onRetry }: { m: Msg; a: MediaAttachment; mine:
  * inside are kept (stopPropagation) unless they start on the 20px bubble edges or the carousel is on its last page;
  * those reach the reply gesture (`data-hscroll-pass="1"`).
  */
-function AlbumCarousel({ m, items, onRetry }: { m: Msg; items: MediaAttachment[]; onRetry?: (m: Msg) => void }) {
+function AlbumCarousel({ m, items, mine, onRetry }: { m: Msg; items: MediaAttachment[]; mine: boolean; onRetry?: (m: Msg) => void }) {
   const frame = tileBox(items[0]);
   const outbox = useOutbox(m.clientId);
+  // auto-download, same rules as a single tile: one "download" pill for the whole album
+  const autoPhoto = useAutoDownload("photo");
+  const autoVideo = useAutoDownload("video");
+  const [manual, setManual] = useState(false);
+  const photoOk = mine || manual || !!outbox || autoPhoto;
+  const inlineOk = mine || manual || autoVideo;
+  const heldBytes = photoOk ? 0 : items.reduce((t, x) => t + (x.kind === "video" ? 0 : x.size ?? 0), 0);
   const uploading = !!outbox && outbox.phase !== "done" && outbox.phase !== "failed";
   const failed = m.state === "failed" || outbox?.phase === "failed";
   const [ref, near] = useInView<HTMLDivElement>("800px");
@@ -456,11 +532,27 @@ function AlbumCarousel({ m, items, onRetry }: { m: Msg; items: MediaAttachment[]
             near={near && Math.abs(i - page) <= 1}
             active={i === page}
             local={outbox?.items?.[i]?.previewUrl}
+            fetchOk={photoOk || a.kind === "video"}
+            inlineOk={inlineOk}
             progress={uploading ? outbox?.items?.[i]?.progress : undefined}
             onOpen={() => open(i)}
           />
         ))}
       </div>
+      {heldBytes > 0 && (
+        <button
+          type="button"
+          data-testid="media-autodl-off"
+          onClick={(e) => {
+            e.stopPropagation();
+            setManual(true);
+          }}
+          className="absolute inset-0 z-10 m-auto flex h-9 w-fit items-center gap-1.5 rounded-full bg-black/55 px-3 text-[13px] font-medium text-white tabular-nums backdrop-blur-sm"
+          aria-label={`Download ${n} items, ${formatBytes(heldBytes)}`}
+        >
+          <ArrowDown className="h-4 w-4" /> {formatBytes(heldBytes)}
+        </button>
+      )}
       {/* counter + dots */}
       <span className="pointer-events-none absolute top-2 left-2 z-10 rounded-full bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-white tabular-nums backdrop-blur-sm" data-testid="album-counter">
         {page + 1}/{n}
@@ -536,6 +628,8 @@ const AlbumPage = memo(function AlbumPage({
   near,
   active,
   local,
+  fetchOk = true,
+  inlineOk = true,
   progress,
   onOpen,
 }: {
@@ -546,13 +640,15 @@ const AlbumPage = memo(function AlbumPage({
   near: boolean;
   active: boolean;
   local?: string;
+  fetchOk?: boolean;
+  inlineOk?: boolean;
   progress?: number;
   onOpen: () => void;
 }) {
   const urls = useMediaUrls(a, near);
   const [loaded, setLoaded] = useState(false);
   const isVideo = a.kind === "video";
-  const src = local ?? (isVideo ? urls?.poster : urls?.thumb ?? urls?.full);
+  const src = fetchOk ? local ?? (isVideo ? urls?.poster : urls?.thumb ?? urls?.full) : undefined;
   const ar = a.w && a.h ? a.w / a.h : frameAr;
   // close to the frame → fill it; very different shape → show it whole over its blurred placeholder
   const fit = Math.abs(ar / frameAr - 1) < 0.28 ? "object-cover" : "object-contain";
@@ -570,7 +666,7 @@ const AlbumPage = memo(function AlbumPage({
       {src && (
         <ThumbImage a={a} urls={urls} src={src} local={local} width={330} onLoaded={() => setLoaded(true)} className={cn("absolute inset-0 h-full w-full transition-opacity duration-200 motion-reduce:transition-none", fit, loaded || local ? "opacity-100" : "opacity-0")} />
       )}
-      {isVideo && active && progress === undefined && <InlineVideo a={a} urls={urls} />}
+      {isVideo && active && inlineOk && progress === undefined && <InlineVideo a={a} urls={urls} />}
       {isVideo && (
         <span className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[11px] font-semibold text-white tabular-nums backdrop-blur-sm">
           {a.gif ? "GIF" : (
