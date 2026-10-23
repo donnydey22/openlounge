@@ -16,7 +16,7 @@ async function hub(deflate: boolean) {
     c.on("page", (_d, ack) => ack({ messages: Array.from({ length: 200 }, (_, i) => ({ id: `m${i}`, fromId: "u_a", toId: "u_b", text: `message number ${i} lorem ipsum`, createdAt: 1_800_000_000_000 + i })) }));
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  return { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/ws`, close: () => { h.close?.(); server.closeAllConnections?.(); server.close(); } };
+  return { url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/ws`, close: () => { void h.drain(0); server.closeAllConnections?.(); server.close(); } };
 }
 
 async function roundTrip(url: string) {
