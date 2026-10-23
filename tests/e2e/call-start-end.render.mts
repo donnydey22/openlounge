@@ -55,11 +55,16 @@ const browser = await pw[ENG].launch(ENG === "chromium" ? { args: ["--autoplay-p
 // side hangs up (their track ends first, ended arrives ~150 ms later); drop = network drop (remote freezes, 1.5 s of
 // "Reconnecting…", then the call ends). web = Android / desktop browser + Android WebView wrapper (same DOM video
 // path); native = iPhone app (app-owned RTCViews under a transparent page).
-const SCEN = (process.env.SCEN || "web,native,web-remote,web-drop,web-callee,native-remote").split(",");
+const SCEN = (process.env.SCEN || "web,native,web-remote,web-drop,web-callee,native-remote,web-callee-perm-remote,web-callee-perm-local,web-perm-local").split(",");
 for (const scenario of SCEN) {
   const native = scenario.startsWith("native");
   const how = scenario.includes("remote") ? "remote" : scenario.includes("drop") ? "drop" : "local";
   const role = scenario.includes("callee") ? "callee" : "caller";
+  // perm-*: a real OS camera/mic prompt is up after Accept / connect: the engine already says camOn (accept(withVideo))
+  // but the camera track arrives only when the user taps Allow, PERM ms later (1.5–4 s on phones). perm-remote: the
+  // other side's video arrives while the prompt is still up; perm-local: our camera first, the remote later.
+  const perm = scenario.includes("perm") ? Number(process.env.PERM || 2500) : 0;
+  const permRemoteFirst = scenario.includes("perm-remote");
   const vdir = `${OUT}/vid-${scenario}`;
   rmSync(vdir, { recursive: true, force: true });
   const devOpts = DEV ? { userAgent: DEV.userAgent, hasTouch: true, ...(ENG !== "firefox" ? { isMobile: DEV.isMobile, deviceScaleFactor: 1 } : {}) } : {};
@@ -79,15 +84,24 @@ for (const scenario of SCEN) {
   };
   // ringing (outgoing video call)
   await mark("outgoing");
-  await S("set", { call: call("ringing"), role, ui: role === "caller" ? "outgoing" : "incoming", camOn: true });
-  if (!native) await S("feed", "local", true);
+  await S("set", { call: call("ringing"), role, ui: role === "caller" ? "outgoing" : "incoming", camOn: !perm });
+  if (!native && !perm) await S("feed", "local", true);
   await page.waitForTimeout(1500);
   // answered
   await mark("connect");
   await S("set", { call: call("active"), ui: "active", connectedAt: Date.now(), camOn: true, nativeAudio: native, nativeVideo: native, remoteCam: !native });
+  if (perm) {
+    await S("set", { call: call("active"), ui: "connecting", camOn: true, remoteCam: false, nativeAudio: false, nativeVideo: false });
+    const remoteAt = permRemoteFirst ? 600 : perm + 700;
+    setTimeout(() => void S("feed", "local", true), perm);
+    setTimeout(() => void S("set", { ui: "active", connectedAt: Date.now(), remoteCam: true }).then(() => S("feed", "remote", true)), remoteAt);
+    await page.waitForTimeout(Math.max(perm, remoteAt) + 2000);
+  } else {
+  await S("set", { call: call("active"), ui: "active", connectedAt: Date.now(), camOn: true, nativeAudio: native, nativeVideo: native, remoteCam: !native });
   if (!native) setTimeout(() => void S("feed", "remote", true), 300);
   else setTimeout(() => void S("set", { remoteCam: true }), 500);
   await page.waitForTimeout(3000);
+  }
   // hang up: engine tears media down and shows the ended state, then clears after its linger
   if (how === "remote") {
     // far side hung up: their video stops (native: the app's remote RTCView stops updating) ~150 ms before call:ended
@@ -146,6 +160,12 @@ for (const scenario of SCEN) {
   const endWin = cls.slice(at("end"), Math.min(cls.length, at("gone") + fr(400)));
   const firstVideo = startWin.findIndex((c) => c === "remote" || c === "native");
   const flash = startWin.slice(0, firstVideo < 0 ? startWin.length : firstVideo).filter((c) => c === "black" || c === "light").length;
+  // whole start window (not only before the first video): any black / theme flash, and any fall back to the ringing
+  // screen after video was shown (curtain re-shown / tile swap) = a visible blip
+  const startBlack = startWin.filter((c) => c === "black" || c === "light").length;
+  const isVid = (c: Cls) => c === "remote" || c === "local" || c === "native";
+  const steady = startWin.findIndex((c, i) => isVid(c) && isVid(startWin[i + 1]) && isVid(startWin[i + 2])); // 3 frames: not a 1-frame encoder artifact
+  const backToRinging = steady < 0 ? 0 : startWin.slice(steady).filter((c) => c === "ringing").length;
   const rle = (a: Cls[]) => a.reduce((o: [Cls, number][], c) => (o.length && o[o.length - 1][0] === c ? o[o.length - 1][1]++ : o.push([c, 1]), o), []).map(([c, n]) => `${c}×${n}`).join(" ");
   // overlay fully gone = first frame showing what is behind it (app shell / theme)
   const goneIdx = endWin.findIndex((c, i) => i > 0 && c === "light");
@@ -171,8 +191,8 @@ for (const scenario of SCEN) {
   }
   results[scenario] = {
     timeline: `CONNECT: ${rle(startWin)}  ||  END: ${rle(endWin)}`,
-    counts: { flashFramesBeforeFirstVideo: flash, msToFirstVideo: firstVideo * 40, msEndToGone: goneIdx * 40 },
-    startGapFrames: flash,
+    counts: { flashFramesBeforeFirstVideo: flash, startBlackFrames: startBlack, backToRingingFrames: backToRinging, msToFirstVideo: firstVideo * 40, msEndToGone: goneIdx * 40 },
+    startGapFrames: flash + startBlack + backToRinging,
     endFrames: goneIdx,
     end: { staleHoldFrames: staleHold, blackFrames: black, flickerFrames: flicker, leftoverFrames: leftover, opacityReversals: opReversals, msEndToGone: goneIdx * 40 },
   };

@@ -37,10 +37,27 @@ export function resumeVideo(video: HTMLVideoElement) {
   if (video.paused || video.readyState < 3) void video.play().catch(() => {});
 }
 
+/** Max time a seeded picture (the previous feed's last frame, kept across a big-tile swap) waits for the new feed. */
+export const SEED_MAX_MS = 1500;
+
+/**
+ * Seed `canvas` with the video's current frame and mark it, right before the same tile switches to another feed
+ * (local self-view → remote on connect). The next holdFrames() on that canvas keeps the picture until the new feed
+ * has painted RELEASE_AFTER_FRAMES frames, so the swap never shows a black / empty element in between.
+ */
+export function seedHold(video: HTMLVideoElement, canvas: HTMLCanvasElement): boolean {
+  if (!captureFrame(video, canvas)) return false;
+  canvas.dataset.seed = "1";
+  canvas.style.visibility = "visible";
+  return true;
+}
+
 export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): () => void {
   const v = video as RVFCVideo;
-  let held = false;
-  let hasFrame = false;
+  const seeded = canvas.dataset.seed === "1";
+  delete canvas.dataset.seed;
+  let held = seeded;
+  let hasFrame = seeded;
   let lastFrameAt = 0;
   let lastCaptureAt = 0;
   let rvfc = 0;
@@ -156,12 +173,15 @@ export function holdFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement): 
     if (performance.now() - lastFrameAt > STALL_AFTER_MS) freeze();
   }, 250);
 
-  canvas.style.visibility = "hidden";
-  canvas.dataset.held = "0";
+  canvas.style.visibility = seeded ? "visible" : "hidden";
+  canvas.dataset.held = seeded ? "1" : "0";
+  // a seeded picture never outstays a feed that does not come (camera off on the other side)
+  const seedTimer = seeded ? window.setTimeout(() => { if (!pinned) setHeld(false); }, SEED_MAX_MS) : 0;
   watchStream();
   onFrame();
   return () => {
     disposed = true;
+    window.clearTimeout(seedTimer);
     window.clearInterval(dog);
     if (rvfc && v.cancelVideoFrameCallback) v.cancelVideoFrameCallback(rvfc);
     for (const ev of stallEvents) video.removeEventListener(ev, onStall);

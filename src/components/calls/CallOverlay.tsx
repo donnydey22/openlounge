@@ -9,7 +9,7 @@ import { Avatar } from "@/components/Avatar";
 import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
 import { nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
-import { holdFrames, mirrorBackdrop } from "@/lib/calls/frameHold";
+import { holdFrames, mirrorBackdrop, seedHold } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import { AudioRouteButton, RouteNotice } from "./AudioRouteButton";
@@ -232,14 +232,20 @@ function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "loca
   );
 }
 
-function BigVideo({ which, mirrored, tileRef, onFirstFrame }: { which: "local" | "remote"; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null>; onFirstFrame?: () => void }) {
+function BigVideo({ which, mirrored, tileRef, onFirstFrame, onAttached }: { which: "local" | "remote"; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null>; onFirstFrame?: () => void; onAttached?: () => void }) {
   const vid = useRef<HTMLVideoElement>(null);
   const hold = useRef<HTMLCanvasElement>(null);
   const back = useRef<HTMLVideoElement>(null);
   const firstFrame = useRef(onFirstFrame);
   firstFrame.current = onFirstFrame;
+  const attached = useRef(onAttached);
+  attached.current = onAttached;
   useEffect(() => {
     const el = vid.current;
+    // a feed is attached (srcObject set → loadstart). Until then the OS camera/mic prompt may still be up: nothing to
+    // paint yet, so the pre-video curtain must not time out onto an empty (black) stage.
+    const onLoadStart = () => { if (el?.srcObject) attached.current?.(); };
+    el?.addEventListener("loadstart", onLoadStart);
     // first decoded frame of the big tile → the pre-video curtain may fade (no black stage flashes in between)
     const ready = () => {
       if (el && el.videoWidth > 0 && el.readyState >= 2) firstFrame.current?.();
@@ -249,14 +255,19 @@ function BigVideo({ which, mirrored, tileRef, onFirstFrame }: { which: "local" |
     el?.addEventListener("resize", ready);
     callEngine.attachVideo(which, el);
     ready();
+    onLoadStart();
     const release = el && hold.current ? holdFrames(el, hold.current) : () => {};
     const stopBackdrop = el && back.current ? mirrorBackdrop(el, back.current) : () => {};
+    const canvas = hold.current;
     return () => {
+      el?.removeEventListener("loadstart", onLoadStart);
       el?.removeEventListener("loadeddata", ready);
       el?.removeEventListener("playing", ready);
       el?.removeEventListener("resize", ready);
       stopBackdrop();
       release();
+      // same tile switching feed (self-view → remote): keep the last picture up until the new feed paints
+      if (el && canvas && el.isConnected) seedHold(el, canvas);
       callEngine.attachVideo(which, null);
     };
   }, [which]);
@@ -417,13 +428,20 @@ export function CallOverlay() {
   const video = active && (s.remoteCam || s.camOn) && (!s.nativeVideo || s.remoteCam || nativeGrace);
   // Ringing → video crossfade: "on" (curtain over the stage) → "fading" (first frame painted) → "off".
   const [curtain, setCurtain] = useState<"on" | "fading" | "off">("on");
+  // the big tile has a feed attached: the curtain fallback timer only runs from here (see BigVideo onAttached)
+  const [stageFed, setStageFed] = useState(false);
+  const onStageAttached = useCallback(() => setStageFed(true), []);
+  useEffect(() => {
+    if (!video) setStageFed(false);
+  }, [video]);
   useEffect(() => {
     if (!video) return setCurtain("on");
+    if (!s.nativeVideo && !stageFed) return; // OS permission prompt still up / camera not started: keep the curtain
     // native RTCViews: give the app two frames after the first layout record; web: the first decoded frame (below),
     // with a fallback so a camera-off peer (hold frame / black) never keeps the curtain up
     const t = setTimeout(() => setCurtain((c) => (c === "on" ? "fading" : c)), s.nativeVideo ? NATIVE_REVEAL_MS : CURTAIN_FALLBACK_MS);
     return () => clearTimeout(t);
-  }, [video, s.nativeVideo]);
+  }, [video, s.nativeVideo, stageFed]);
   const revealStage = useCallback(() => setCurtain((c) => (c === "on" ? "fading" : c)), []);
   useEffect(() => {
     if (curtain === "fading" && prefersReducedMotion()) setCurtain("off");
@@ -519,7 +537,7 @@ export function CallOverlay() {
 
   return (
     <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? cn(css.endFadeNow, css.endNative) : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
-      {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} /> : <Background s={s} />}
+      {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} onAttached={onStageAttached} /> : <Background s={s} />}
       {stagePip && <Pip which={stageWhich === "local" ? "remote" : "local"} mirrored={stageWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
       {video && curtain !== "off" && <Curtain s={s} fading={curtain === "fading"} onGone={() => setCurtain("off")} />}
 
