@@ -25,6 +25,16 @@ function Harness() {
       {item("back", <div id="back-target">iOS back-swipe gutter</div>)}
       {item("vertical", <div id="vertical-target">Vertical scroll</div>)}
       {item("threshold", <div id="threshold-target">Short drag</div>)}
+      {item("mouse", <div id="mouse-target" style={{ padding: "14px 14px 14px 48px" }}>Mouse drag</div>)}
+      {item("mouse-cancel", <div id="mouse-cancel-target" style={{ padding: "14px 14px 14px 48px" }}>Drag past then back</div>)}
+      {item("click-guard", <div id="click-guard-target" role="button" tabIndex={0} style={{ padding: "14px 14px 14px 48px" }} onClick={() => mark("click")}>Tile with a tap action</div>)}
+      {item("wheel", <div id="wheel-target" style={{ padding: 14 }}>Trackpad swipe</div>)}
+      {item("wheel-vert", <div id="wheel-vert-target" style={{ padding: 14 }}>Trackpad scroll</div>)}
+      {item("link", <div id="link-host" style={{ padding: "14px 14px 14px 48px" }}>See <a id="link-target" href="#linked" onClick={(e) => { e.preventDefault(); mark("link-click"); }}>this link</a> ok</div>)}
+      {item("reaction", <div style={{ padding: "14px 14px 14px 48px" }}>Reacted <button id="reaction-target" type="button" onClick={() => mark("reaction-click")}>👍 2</button></div>)}
+      {item("own", <div id="own-target" style={{ padding: "14px 14px 14px 48px", marginLeft: "auto", width: 200, textAlign: "right" }}>My own message</div>)}
+      {item("select", <div id="select-target" style={{ padding: 4, fontSize: 20 }}>Select this sentence with the mouse please</div>)}
+      <div id="spacer" style={{ height: 1400 }} />
     </main>
   );
 }

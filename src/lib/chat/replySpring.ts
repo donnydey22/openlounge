@@ -1,0 +1,65 @@
+// Swipe-to-reply physics (WhatsApp-style): the bubble follows the finger 1:1 up to the threshold, then with rubber-band
+// resistance; on release it springs home carrying the finger's velocity. Pure functions so they can be unit-tested.
+
+/** Raw horizontal travel (px) that arms the reply. Release past it → reply; drag back below it → cancelled. */
+export const REPLY_THRESHOLD = 56;
+/** Hard cap on how far the bubble can travel (px). */
+export const REPLY_MAX_OFFSET = 96;
+/** Resistance past the threshold: each extra px of finger travel moves the bubble this much. */
+export const REPLY_RESISTANCE = 0.32;
+/** Axis lock distance (px). Below this nothing moves, so taps, long-presses and vertical scrolls stay native. */
+export const AXIS_LOCK_PX = 8;
+/** Release spring: critically-damped-ish (WhatsApp settles with no visible overshoot in ~250 ms). */
+export const RELEASE_SPRING = { stiffness: 520, damping: 40, mass: 1 };
+
+/** Finger travel → bubble offset (rubber band past the threshold, never negative, capped). */
+export function rubberBand(raw: number, threshold = REPLY_THRESHOLD, max = REPLY_MAX_OFFSET, k = REPLY_RESISTANCE) {
+  if (!(raw > 0)) return 0;
+  if (raw <= threshold) return raw;
+  return Math.min(max, threshold + (raw - threshold) * k);
+}
+
+/** 0 → 1 progress toward the threshold (drives the reply icon's reveal + scale). */
+export const revealProgress = (offset: number, threshold = REPLY_THRESHOLD) => Math.max(0, Math.min(1, offset / threshold));
+
+/** Reply icon transform for a given offset: fades/scales in with the drag, sits a little behind the bubble edge. */
+export function iconStyle(offset: number, armed: boolean, threshold = REPLY_THRESHOLD) {
+  const p = revealProgress(offset, threshold);
+  const scale = armed ? 1 : 0.35 + 0.65 * p;
+  return { opacity: p, scale, x: Math.min(offset, threshold) * 0.35 - 6 };
+}
+
+/**
+ * One semi-implicit Euler step of a damped spring toward 0. Returns the next [position, velocity].
+ * dt in seconds; velocity in px/s.
+ */
+export function springStep(x: number, v: number, dt: number, o = RELEASE_SPRING): [number, number] {
+  const a = (-o.stiffness * x - o.damping * v) / o.mass;
+  const nv = v + a * dt;
+  return [x + nv * dt, nv];
+}
+
+/** Simulate the release spring (used by tests to check it settles fast and never overshoots visibly). */
+export function simulateRelease(x0: number, v0: number, o = RELEASE_SPRING, hz = 120) {
+  let x = x0;
+  let v = v0;
+  let t = 0;
+  let minX = x0;
+  const dt = 1 / hz;
+  while (t < 2 && (Math.abs(x) > 0.5 || Math.abs(v) > 10)) {
+    [x, v] = springStep(x, v, dt, o);
+    minX = Math.min(minX, x);
+    t += dt;
+  }
+  return { settleMs: Math.round(t * 1000), overshootPx: Math.max(0, -minX) };
+}
+
+/** Velocity (px/s) from the last few pointer samples (newest last), ignoring samples older than 100 ms. */
+export function releaseVelocity(samples: { t: number; x: number }[]) {
+  if (samples.length < 2) return 0;
+  const last = samples[samples.length - 1];
+  const recent = samples.filter((s) => last.t - s.t <= 100);
+  const first = recent[0];
+  const dt = (last.t - first.t) / 1000;
+  return dt > 0 ? (last.x - first.x) / dt : 0;
+}
