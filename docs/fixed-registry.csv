@@ -34,3 +34,4 @@ FX-032,2026-10-08,web/safari,App blank on Safari < 16.4,Lookbehind regex literal
 FX-033,2026-10-07,web/android,App blank on old Android WebViews,Modern syntax/runtime not lowered,d61418e,tests/browser-floor/floor.test.ts,
 FX-034,2026-10-15,web,Plain 404s for /rooms and /profile,No aliases / unstyled 404,c08fab4,tests/fixed/guards.test.ts,FX-web-404
 FX-035,2026-10-11,rooms,Co-host could act against the host,No server-side host protection,a128e26,tests/monet/creator.test.ts,
+FX-036,2026-10-23,download,/download must serve the latest Android APK signed with the 0.3.19 release key (0.3.19 kept as fallback),Manual label/file edits could drift; binaries hosted as GitHub release assets,8c0fa92,tests/fixed/guards.test.ts,FX-download-latest
