@@ -73,6 +73,12 @@ export class MediasoupCallSession {
   private readonly onMicAudioState = () => void this.queueMicProcessorSync();
   /** Transports whose ICE restart already ran in the current outage; a second failure goes to the TCP fallback. */
   private iceRestarted = new Set<string>();
+  /** The SFU no longer knows this session ("Unknown media session": closed while our socket was away, e.g. a
+   *  Wi-Fi <-> cellular switch, socket close 1005 -> session_closed). ICE restarts on it can never succeed; the engine
+   *  must rebuild (fresh session + freshly acquired tracks) at once. Approved by Donny, Oct 23 2026 4:48 PM MST. */
+  sessionGone = false;
+  /** Result of the last restartIceAll(): true only when every transport got fresh ICE parameters applied. */
+  lastIceRestartOk: boolean | null = null;
   private micRecovering: Promise<void> | null = null;
   private readonly onMicEnded = () => void this.recoverMic();
   private micMuteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -353,15 +359,18 @@ export class MediasoupCallSession {
     }
   }
 
-  private async restartIce(transport: TransportLike | RecvTransportLike, direction: "send" | "recv") {
+  private async restartIce(transport: TransportLike | RecvTransportLike, direction: "send" | "recv"): Promise<boolean> {
     try {
-      const r = await this.req<{ ok: boolean; iceParameters?: Parameters<TransportLike["restartIce"]>[0]["iceParameters"] }>(
+      const r = await this.req<{ ok: boolean; error?: string; iceParameters?: Parameters<TransportLike["restartIce"]>[0]["iceParameters"] }>(
         "ms:transport:restartIce", { direction, transportId: transport.id },
       );
-      if (!r.ok || !r.iceParameters || this.closed) return;
+      if (!r.ok && /unknown media session|media session closed/i.test(String(r.error ?? ""))) this.sessionGone = true;
+      if (!r.ok || !r.iceParameters || this.closed) return false;
       await transport.restartIce({ iceParameters: r.iceParameters });
+      return true;
     } catch {
       // Older SFU or a dead socket: the engine's disconnected grace timer still switches to the TCP path.
+      return false;
     }
   }
 
@@ -652,7 +661,8 @@ export class MediasoupCallSession {
   async restartIceAll(): Promise<void> {
     if (this.closed) return;
     const pairs: [TransportLike | RecvTransportLike | null, "send" | "recv"][] = [[this.send, "send"], [this.recv, "recv"]];
-    await Promise.all(pairs.map(([t, d]) => (t ? this.restartIce(t, d).catch(() => {}) : Promise.resolve())));
+    const oks = await Promise.all(pairs.map(([t, d]) => (t ? this.restartIce(t, d).catch(() => false) : Promise.resolve(true))));
+    this.lastIceRestartOk = oks.every(Boolean);
   }
 
   /** Raw transport stats for the engine's quality guard (UDP → TCP on sustained degradation). */

@@ -339,6 +339,9 @@ test("3ae8ff34: floor 'tcp' verdict while the transport is still connected resum
   assert.equal(LADDER[l.level].audioBps, 48_000);
 });
 
+// sha256 of `git diff 087c96b -- src/lib/calls/mediasoupSession.ts` (index line stripped) = the FX-044 patch only
+const MS_SESSION_APPROVED_DIFF_SHA256 = "ccf21d2d8fe521cae9f78de3c56ed5b613d017a894706294f1c3fd8253a402d0";
+
 test("protected: Android video path unchanged — video never takes native media in any opt-in/guard state; WebView video files identical to prod 087c96b", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const prevNav = (globalThis as { navigator?: unknown }).navigator;
@@ -357,8 +360,13 @@ test("protected: Android video path unchanged — video never takes native media
     Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
   }
   const { execSync } = await import("node:child_process");
-  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/mediasoupSession.ts src/lib/calls/androidLifecycle.ts src/lib/calls/netAdapt.ts", { encoding: "utf8" }).trim();
-  assert.equal(changed, "", "WebView media session / Android lifecycle / bandwidth ladder untouched");
+  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/androidLifecycle.ts src/lib/calls/netAdapt.ts", { encoding: "utf8" }).trim();
+  assert.equal(changed, "", "Android lifecycle / bandwidth ladder untouched");
+  // mediasoupSession.ts: the ONLY approved change since prod 087c96b is FX-044 (sessionGone + real restartIce result;
+  // Donny approved Oct 23 2026 4:48 PM MST). Any other edit still fails: the diff must equal exactly that patch.
+  const { createHash } = await import("node:crypto");
+  const msDiff = execSync("git diff 087c96b -- src/lib/calls/mediasoupSession.ts", { encoding: "utf8" }).replace(/^index .*\n/m, "");
+  assert.equal(createHash("sha256").update(msDiff).digest("hex"), MS_SESSION_APPROVED_DIFF_SHA256, "WebView media session: only the approved FX-044 change");
 });
 
 

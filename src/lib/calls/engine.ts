@@ -1585,8 +1585,13 @@ export class CallEngine {
           if (wait) await new Promise((r) => setTimeout(r, wait));
           if (!live() || this.mediasoup !== first) break;
           if (this.mediasoupConnected) return done("ice", 0);
-          this.netLog("ms-ice-restart");
           await first.restartIceAll().catch(() => {});
+          const ice = first as { sessionGone?: boolean; lastIceRestartOk?: boolean | null };
+          // log the real result (was logged as a success even when the SFU refused it)
+          this.netLog("ms-ice-restart", { ok: ice.lastIceRestartOk ?? null, gone: !!ice.sessionGone });
+          // the SFU already closed this session (call 89a7c572, 4:04 PM): every further ICE restart fails the same
+          // way, so skip them and rebuild now (dropMediaForRejoin stops the old tracks; the rebuild acquires fresh ones)
+          if (ice.sessionGone) break;
           if (await this.waitMsConnected(first, 2500)) return done("ice", 0);
         }
       }
