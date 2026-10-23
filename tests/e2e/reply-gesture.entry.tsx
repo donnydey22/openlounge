@@ -25,6 +25,10 @@ function Harness() {
       {item("back", <div id="back-target">iOS back-swipe gutter</div>)}
       {item("vertical", <div id="vertical-target">Vertical scroll</div>)}
       {item("threshold", <div id="threshold-target">Short drag</div>)}
+      {item("mouse", <div id="mouse-target" style={{ padding: "14px 14px 14px 48px" }}>Mouse drag</div>)}
+      {item("mouse-cancel", <div id="mouse-cancel-target" style={{ padding: "14px 14px 14px 48px" }}>Drag past then back</div>)}
+      {item("click-guard", <div id="click-guard-target" role="button" tabIndex={0} style={{ padding: "14px 14px 14px 48px" }} onClick={() => mark("click")}>Tile with a tap action</div>)}
+      {item("select", <div id="select-target" style={{ padding: 4, fontSize: 20 }}>Select this sentence with the mouse please</div>)}
     </main>
   );
 }
