@@ -4,7 +4,7 @@
 // that operates on a conversation's message list (reactions, invite cards, stickers, expiring files, moderation,
 // persistence) applies to groups. This service owns membership, roles, pins, invite links, service messages,
 // read cursors and the per-member fan-out / push. See /workspace/groups/MODEL.md.
-import { pageBefore, type PageQuery } from "../chat/paging";
+import { page, pageBefore, type PageQuery } from "../chat/paging";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DirectMessage, DmReadReceipt, PublicUser } from "../../src/lib/types";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH } from "../../src/lib/types";
@@ -747,8 +747,8 @@ export class GroupService {
   history(userId: string, gid: string, before?: number | PageQuery, limit?: number) {
     if (!this.canAccess(userId, gid)) return null;
     const q: PageQuery = typeof before === "object" && before ? before : { before: before as number | undefined, limit };
-    const page = pageBefore(this.store.dms.get(gid) ?? [], q);
-    return { messages: page.messages.map((m) => this.decorate(m)), hasMore: page.hasMore };
+    const pg = page(this.store.dms.get(gid) ?? [], q);
+    return { ...pg, messages: pg.messages.map((m) => this.decorate(m)) };
   }
 
   since(userId: string, after: number): ConvMessage[] {

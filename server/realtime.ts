@@ -652,9 +652,9 @@ export function registerRealtime(io: WsHub) {
     );
 
     // cursor paging: beforeId (message id, exact) or before (ms, legacy); limit 1..200 (default 60 for older clients)
-    socket.on("dm:history", ({ peerId, before, beforeId, limit }: { peerId: string; before?: number; beforeId?: string; limit?: number }, ack: AckFn = noop) =>
+    socket.on("dm:history", ({ peerId, before, beforeId, afterId, limit }: { peerId: string; before?: number; beforeId?: string; afterId?: string; limit?: number }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const q = { before: typeof before === "number" ? before : undefined, beforeId: typeof beforeId === "string" ? beforeId : undefined, limit };
+        const q = { before: typeof before === "number" ? before : undefined, beforeId: typeof beforeId === "string" ? beforeId : undefined, afterId: typeof afterId === "string" ? afterId : undefined, limit };
         if (isGroupId(peerId)) return ack(groupHistory(userId, peerId, q));
         const peer = store.publicUser(peerId);
         if (!peer) return ack({ ok: false, error: "User not found" });
@@ -673,9 +673,9 @@ export function registerRealtime(io: WsHub) {
     );
 
     // Catch-up after a reconnect: every DM to/from me stored after `after` (ms), oldest first.
-    socket.on("dm:since", ({ after, order }: { after?: number; order?: string }, ack: AckFn = noop) =>
+    socket.on("dm:since", ({ after, afterId, order }: { after?: number; afterId?: string; order?: string }, ack: AckFn = noop) =>
       authed(ack, (userId) => {
-        const r = store.dmsSince(userId, Number(after) || 0, 200, order === "asc" ? "asc" : "latest");
+        const r = store.dmsSince(userId, Number(after) || 0, 200, order === "asc" ? "asc" : "latest", typeof afterId === "string" ? afterId : undefined);
         ack({ ok: true, messages: r.messages.map(withSenderPhoto), hasMore: r.hasMore });
       }),
     );

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CACHE_THREAD_WINDOW, cacheWindow, reconcileNewest, reconcileOlder } from "../../src/lib/chat/historyReconcile";
+import { appendNewer, cacheWindow, mergeForCache, newestConfirmed, reconcileNewest, reconcileOlder } from "../../src/lib/chat/historyReconcile";
 
 type M = { id: string; createdAt: number; clientId?: string; state?: string; text?: string };
 const m = (i: number, extra: Partial<M> = {}): M => ({ id: `m${i}`, createdAt: 1000 + i, ...extra });
@@ -33,11 +33,31 @@ test("older page replaces its range and keeps everything newer", () => {
   assert.equal(new Set(again.map((x) => x.id)).size, again.length);
 });
 
-test("cache window keeps the newest confirmed messages only (older pages stay re-fetchable from the server)", () => {
-  const list = Array.from({ length: CACHE_THREAD_WINDOW + 50 }, (_, i) => m(i));
+test("cache keeps every confirmed row (no window) and merges: reopening with only the newest page never shrinks it", () => {
+  const list = Array.from({ length: 2000 }, (_, i) => m(i));
   list.push({ id: "tmp", createdAt: 1e9, state: "sending" });
-  const w = cacheWindow(list);
-  assert.equal(w.length, CACHE_THREAD_WINDOW);
-  assert.equal(w[0].id, "m50");
-  assert.ok(!w.some((x) => x.state));
+  assert.equal(cacheWindow(list).length, 2000);
+  const merged = mergeForCache(list.slice(0, 2000), false, [m(1960, { text: "edited" }), m(1999), m(2000)], true);
+  assert.equal(merged.messages.length, 1960 + 3); // m0..m1959 kept; m1961..m1998 were deleted on the server
+  assert.equal(merged.messages[0].id, "m0");
+  assert.equal(merged.hasMore, false); // cached rows reach #1
+  assert.equal(merged.messages.find((x) => x.id === "m1960")!.text, "edited");
+});
+
+test("since-cursor top-up appends newer messages once, swaps my pending send for its server copy", () => {
+  const cur = [m(1), m(2), { id: "tmp", createdAt: 5000, clientId: "c9", state: "sending" }];
+  const out = appendNewer(cur, [m(3), m(4, { clientId: "c9" })]);
+  assert.deepEqual(out.map((x) => x.id), ["m1", "m2", "m3", "m4"]);
+  assert.equal(newestConfirmed(out)!.id, "m4");
+  assert.deepEqual(appendNewer(out, [m(4)]).map((x) => x.id), ["m1", "m2", "m3", "m4"]);
+});
+
+test("a cache from before a long gap never leaves a hole: disconnected older rows are not shown / are set aside", () => {
+  const cached = [m(1), m(2), m(3)];
+  const page = [m(100), m(101)]; // 96 messages arrived meanwhile, the newest page doesn't reach the cache
+  assert.deepEqual(reconcileNewest(cached, page, true).map((x) => x.id), ["m100", "m101"]);
+  const merged = mergeForCache(cached, false, page, true);
+  assert.equal(merged.disconnected, true);
+  assert.deepEqual(merged.messages.map((x) => x.id), ["m100", "m101"]);
+  assert.equal(merged.hasMore, true);
 });

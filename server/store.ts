@@ -28,7 +28,7 @@ import { parseSticker } from "../src/lib/stickers/token";
 import { replyReference } from "../src/lib/chat/reply";
 import type { MediaAttachment } from "../src/lib/media/types";
 import { ConversationMap } from "./chat/convIndex";
-import { pageBefore, type PageQuery } from "./chat/paging";
+import { page, pageBefore, type PageQuery } from "./chat/paging";
 import { AVATAR_COLORS, CHAT_MAX_LENGTH, INTERESTS, MAX_INTERESTS, ROOM_CHAT_HISTORY, ROOM_REACTIONS, TOPICS, USERNAME_RE } from "../src/lib/types";
 import type { Me } from "../src/lib/types";
 import { maskPhone } from "./otp";
@@ -2116,7 +2116,7 @@ export class Store {
     const hiddenAt = this.chatPrefs.hiddenAt(userId, peerId);
     const all = this.visibleTo(userId, this.dms.get(conversationId(userId, peerId)) ?? []);
     const list = hiddenAt ? all.filter((m) => m.createdAt > hiddenAt) : all;
-    return pageBefore(list, q);
+    return page(list, q);
   }
 
   /** a 1:1 list minus the messages this viewer deleted "for me" (same array when there are none) */
@@ -2187,7 +2187,7 @@ export class Store {
   private editRate = new Map<string, number[]>();
 
   /** All DMs to/from userId at or after `after` (inclusive; clients dedupe by id), oldest first — reconnect catch-up. */
-  dmsSince(userId: string, after: number, limit = 200, order: "latest" | "asc" = "latest") {
+  dmsSince(userId: string, after: number, limit = 200, order: "latest" | "asc" = "latest", afterId?: string) {
     const out: DirectMessage[] = [];
     for (const key of this.dms.keysOf(userId)) {
       const list = this.dms.get(key) ?? [];
@@ -2199,6 +2199,12 @@ export class Store {
     }
     if (this.groups) out.push(...this.groups.since(userId, after));
     out.sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    // exact forward cursor (createdAt, id): drop what the client already has at the boundary millisecond
+    if (afterId) {
+      let k = 0;
+      while (k < out.length && out[k].createdAt === after && out[k].id <= afterId) k++;
+      if (k) out.splice(0, k);
+    }
     // "asc": the oldest `limit` first, so a client can page forward (after = last createdAt) until hasMore is false
     // and never miss the middle of a long offline gap. "latest" (default) keeps the old reply for older clients.
     return { messages: order === "asc" ? out.slice(0, limit) : out.slice(-limit), hasMore: out.length > limit };

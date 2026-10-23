@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import "./env";
 import { setTestEnv, startApp, wipeDb, phoneLogin, sql, type App } from "../unified-auth/harness";
-import { pageBefore } from "../../server/chat/paging";
+import { pageAfter, pageBefore } from "../../server/chat/paging";
 
 setTestEnv({ providers: false });
 let app: App;
@@ -164,4 +164,65 @@ test("inbox: dm:list returns the conversation with its last message and the unre
   assert.ok(r.unread >= 1);
   const none = await C.client.req("dm:list", {});
   assert.equal(none.conversations.length, 0);
+});
+
+test("pageAfter: since-cursor returns exactly the newer messages; an unknown cursor resets to the newest page", () => {
+  const list = Array.from({ length: 50 }, (_, i) => ({ id: `m${i}`, createdAt: 1000 + Math.floor(i / 4) }));
+  const a = pageAfter(list, { afterId: "m9", limit: 10 });
+  assert.deepEqual(a.messages.map((m) => m.id), list.slice(10, 20).map((m) => m.id));
+  assert.equal(a.hasMore, true);
+  const b = pageAfter(list, { afterId: "m45", limit: 10 });
+  assert.deepEqual(b.messages.map((m) => m.id), ["m46", "m47", "m48", "m49"]);
+  assert.equal(b.hasMore, false);
+  const c = pageAfter(list, { afterId: "gone", limit: 10 }) as { reset?: boolean; messages: unknown[] };
+  assert.equal(c.reset, true);
+  assert.equal(c.messages.length, 10);
+});
+
+test("mid-scroll incoming messages: paging back while new messages arrive has no gaps and no duplicates", async () => {
+  const seen: string[] = [];
+  let r = await hist(B, { peerId: id(A), limit: 40 });
+  seen.unshift(...r.messages.map((m: any) => m.id));
+  let sent = 0;
+  for (let pg = 0; pg < 12 && r.hasMore; pg++) {
+    // a new message lands between every page request (the scroll anchor = oldest loaded id, unaffected)
+    await sleep(70);
+    const s = await A.client.req("dm:send", { to: id(B), text: `mid ${pg}`, clientId: `mid-${pg}-${uniq()}` });
+    if (s.ok) sent++;
+    r = await hist(B, { peerId: id(A), limit: 40, beforeId: r.messages[0].id });
+    seen.unshift(...r.messages.map((m: any) => m.id));
+  }
+  assert.equal(new Set(seen).size, seen.length, "duplicate across pages");
+  const key = [id(A), id(B)].sort().join("|");
+  const list = store.dms.get(key)!;
+  const firstIdx = list.findIndex((m) => m.id === seen[0]);
+  const expected = list.slice(firstIdx, firstIdx + seen.length).map((m) => m.id);
+  assert.deepEqual(seen, expected, "gap in the scrolled range");
+  // and the since-cursor from the newest loaded message returns exactly the ones that arrived meanwhile
+  const top = await hist(B, { peerId: id(A), limit: 40 });
+  const newest = top.messages.at(-1 - sent).id;
+  const since = await hist(B, { peerId: id(A), afterId: newest, limit: 200 });
+  assert.equal(since.newer, true);
+  assert.equal(since.messages.length, sent);
+  assert.ok(since.messages.every((m: any) => m.text.startsWith("mid ")));
+});
+
+test("reconnect gap-fill with the exact (createdAt, id) cursor: every missed message once, none twice", async () => {
+  const key = [id(A), id(B)].sort().join("|");
+  const list = store.dms.get(key)!;
+  const startIdx = list.length - 430;
+  const got: string[] = [];
+  let cursor = list[startIdx].createdAt;
+  let cursorId: string | undefined = list[startIdx].id;
+  for (let i = 0; i < 20; i++) {
+    await sleep(70);
+    const r = await B.client.req("dm:since", { after: cursor, afterId: cursorId, order: "asc" });
+    assert.equal(r.ok, true);
+    got.push(...r.messages.filter((m: any) => !m.toId?.startsWith?.("g_") && [id(A), id(B)].includes(m.toId)).map((m: any) => m.id));
+    if (!r.hasMore) break;
+    cursor = r.messages.at(-1).createdAt;
+    cursorId = r.messages.at(-1).id;
+  }
+  assert.equal(new Set(got).size, got.length, "duplicate");
+  assert.deepEqual(got, list.slice(startIdx + 1).map((m) => m.id));
 });

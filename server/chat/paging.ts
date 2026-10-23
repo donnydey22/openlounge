@@ -5,7 +5,7 @@
 export const HISTORY_PAGE_DEFAULT = 60; // legacy callers (no limit given) keep their page size
 export const HISTORY_PAGE_MAX = 200;
 
-export type PageQuery = { before?: number; beforeId?: string; limit?: number };
+export type PageQuery = { before?: number; beforeId?: string; afterId?: string; limit?: number };
 
 export function clampLimit(limit: unknown, fallback = HISTORY_PAGE_DEFAULT) {
   const n = Math.floor(Number(limit));
@@ -43,4 +43,23 @@ export function pageBefore<T extends { id: string; createdAt: number }>(list: re
   if (!found && typeof q.before === "number" && Number.isFinite(q.before) && q.before > 0) end = lowerBound(list, q.before);
   const start = Math.max(0, end - limit);
   return { messages: list.slice(start, end), hasMore: start > 0 };
+}
+
+/**
+ * Since-cursor for one conversation: the `limit` messages right AFTER afterId (oldest first) + whether newer ones
+ * remain. Used to top up a cached thread on reopen without refetching what the device already has. An unknown id
+ * (purged/deleted meanwhile) answers `reset: true` with the newest page so the client reconciles from scratch.
+ */
+export function pageAfter<T extends { id: string; createdAt: number }>(list: readonly T[], q: PageQuery) {
+  const limit = clampLimit(q.limit);
+  for (let i = list.length - 1; i >= 0; i--)
+    if (list[i].id === q.afterId) {
+      const end = Math.min(list.length, i + 1 + limit);
+      return { messages: list.slice(i + 1, end), hasMore: end < list.length, newer: true as const };
+    }
+  return { ...pageBefore(list, { limit }), reset: true as const };
+}
+
+export function page<T extends { id: string; createdAt: number }>(list: readonly T[], q: PageQuery) {
+  return typeof q.afterId === "string" && q.afterId ? pageAfter(list, q) : pageBefore(list, q);
 }

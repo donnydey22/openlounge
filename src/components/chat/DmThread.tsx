@@ -55,7 +55,8 @@ import { ReplyGesture } from "./ReplyGesture";
 import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
 import { replyReference } from "@/lib/chat/reply";
 import { readThread, writeThread } from "@/lib/chat/historyCache";
-import { HISTORY_PAGE, PREFETCH_TOP_PX, reconcileNewest, reconcileOlder } from "@/lib/chat/historyReconcile";
+import { HISTORY_PAGE, PREFETCH_TOP_PX, appendNewer, newestConfirmed, reconcileNewest, reconcileOlder } from "@/lib/chat/historyReconcile";
+import { CACHE_FRESH_MS, HISTORY_PAGE_MAX_CLIENT, chatStats, readPos, savePos } from "@/lib/chat/chatStats";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
@@ -270,6 +271,12 @@ export function DmThread({
   const prefetched = useRef<{ beforeId: string; messages: DirectMessage[]; hasMore: boolean } | null>(null);
   const prefetching = useRef<string | null>(null);
   const anchor = useRef<{ height: number; top: number } | null>(null); // keep the reader's place when older pages land
+  const anchorPending = useRef<ReturnType<typeof readPos>>(null); // "reopen where you left off" (first visible message)
+  const posTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restorePos = (pid: string) => {
+    if (!anchorPending.current && me?.id) anchorPending.current = readPos(me.id, pid);
+    return !!anchorPending.current;
+  };
   const isSelf = me?.id === peerId;
   const presence = usePresence(peerId, peer?.lastSeenAt);
 
@@ -560,45 +567,77 @@ export function DmThread({
     prefetched.current = null;
     prefetching.current = null;
     anchor.current = null;
+    anchorPending.current = null;
   }, [peerId]);
 
-  // cached copy first: the thread paints from this device instantly (even offline), the server page reconciles it
+  // cached copy first: the thread paints from this device instantly (even offline), then a since-cursor tops it up
   const meId = me?.id;
+  const cacheRead = useRef<{ peer: string; p: Promise<Awaited<ReturnType<typeof readThread<Item>>>> } | null>(null);
+  const cacheFor = (pid: string) => {
+    if (!meId || isSelf) return Promise.resolve(null);
+    if (cacheRead.current?.peer !== pid) cacheRead.current = { peer: pid, p: readThread<Item>(meId, pid).catch(() => null) };
+    return cacheRead.current.p;
+  };
   useEffect(() => {
     if (!meId || isSelf) return;
     let live = true;
-    void readThread<Item>(meId, peerId).then((rec) => {
+    void cacheFor(peerId).then((rec) => {
       if (!live || !rec || fromServer.current || messagesRef.current?.length) return;
       if (rec.peer) setPeer((p) => p ?? (rec.peer as PublicUser));
       if (rec.group) setGroup((g) => g ?? (rec.group as GroupInfo));
       setMessages((list) => (list?.length ? list : rec.messages));
-      setHasMore(rec.hasMore || rec.messages.length > 0);
-      stickToBottom.current = true;
+      setHasMore(rec.hasMore);
+      stickToBottom.current = !restorePos(peerId);
     });
     return () => {
       live = false;
     };
   }, [meId, peerId, isSelf]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // history: one fetch when the thread opens (live updates + reconnect catch-up arrive as events)
+  // history: one fetch when the thread opens (live updates + reconnect catch-up arrive as events).
+  // Cached thread → since-cursor (only messages newer than the cached newest); no cache / gap too long → newest page.
   useEffect(() => {
     if (!connected || isSelf || loadedFor.current === peerId) return;
     loadedFor.current = peerId;
-    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId, limit: HISTORY_PAGE })
-      .then((r) => {
+    type Hist = { peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo; newer?: boolean; reset?: boolean };
+    const newestPage = () =>
+      request<Hist>("dm:history", { peerId, limit: HISTORY_PAGE }).then((r) => {
         fromServer.current = true;
         setPeer(r.peer);
         if (r.group) setGroup(r.group);
         // server page wins inside its range (edits / deletes since the cache was written); live + pending sends stay
         setMessages((list) => mergeMessages(reconcileNewest<Item>(list ?? [], r.messages as Item[], r.hasMore), list ?? []));
         setHasMore(r.hasMore);
-        stickToBottom.current = true;
+        if (!messagesRef.current?.length ? !restorePos(peerId) : !anchorPending.current) stickToBottom.current = true;
+      });
+    const cached = Promise.race([cacheFor(peerId), new Promise<null>((res) => setTimeout(() => res(null), 250))]);
+    cached
+      .then((rec) => {
+        const cursor = rec ? newestConfirmed(rec.messages) : null;
+        if (!rec || !cursor) {
+          chatStats.cacheMiss++;
+          return newestPage();
+        }
+        return request<Hist>("dm:history", { peerId, afterId: cursor.id, limit: HISTORY_PAGE_MAX_CLIENT }).then((r) => {
+          if (!r.newer || r.hasMore) {
+            chatStats.cacheStale++;
+            return newestPage(); // cursor gone (purged / deleted) or a gap longer than one page: reconcile from the top
+          }
+          chatStats.cacheHit++;
+          fromServer.current = true;
+          setPeer(r.peer);
+          if (r.group) setGroup(r.group);
+          setMessages((list) => mergeMessages(appendNewer<Item>(list?.length ? list : rec.messages, r.messages as Item[]), list ?? []));
+          setHasMore(rec.hasMore);
+          // old cache (ticks / edits may have moved while away): refresh the newest page quietly in the background
+          if (Date.now() - rec.savedAt > CACHE_FRESH_MS) void newestPage().catch(() => {});
+        });
       })
       .catch((e: Error) => {
         loadedFor.current = null; // retry on the next (re)connect
         if (!isTransient(e)) setError(friendlyMessage(e, "Couldn't load this conversation. Try again."));
       });
-  }, [connected, peerId, request, markRead, isSelf]);
+  }, [connected, peerId, request, markRead, isSelf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setActiveDm(peerId);
@@ -782,6 +821,17 @@ export function DmThread({
       el.scrollTop = a.top + (el.scrollHeight - a.height);
       return;
     }
+    const pos = anchorPending.current;
+    if (el && pos && messages?.length) {
+      anchorPending.current = null;
+      const row = el.querySelector<HTMLElement>(`[data-testid=dm-msg][data-mid="${CSS.escape(pos.id)}"]`);
+      if (row) {
+        stickToBottom.current = false;
+        el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - pos.offset;
+        return;
+      }
+      stickToBottom.current = true; // that message isn't loaded any more: newest, as before
+    }
     if (!el || !stickToBottom.current) return;
     if (smoothNext.current && "scrollTo" in el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     else el.scrollTop = el.scrollHeight;
@@ -831,13 +881,17 @@ export function DmThread({
     setLoadingMore(true);
     const el = listRef.current;
     try {
+      const t0 = performance.now();
       const pre = prefetched.current?.beforeId === beforeId ? prefetched.current : null;
       prefetched.current = null;
+      if (pre) chatStats.olderFromPrefetch++;
+      else chatStats.olderFromNetwork++;
       const r = pre ?? (await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: HISTORY_PAGE }));
       stickToBottom.current = false;
       if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
       setMessages((list) => reconcileOlder<Item>(list ?? [], r.messages as Item[]));
       setHasMore(r.hasMore);
+      chatStats.olderMs.push(Math.round(performance.now() - t0));
       if (r.hasMore && r.messages.length) prefetchOlder(r.messages[0].id);
     } catch {
       /* stays loadable */
@@ -1153,13 +1207,52 @@ export function DmThread({
   const rowOffset = Math.max(0, rows.length - renderWindow);
   const visibleRows = rowOffset ? rows.slice(rowOffset) : rows;
 
-  const jumpToReply = useCallback((messageId: string) => {
-    if (jumpToMessage(listRef.current, messageId)) return;
-    setRenderWindow((n) => Math.max(n, rows.length));
-    requestAnimationFrame(() => {
-      if (!jumpToMessage(listRef.current, messageId)) toast("Original message is no longer loaded");
-    });
-  }, [rows.length, toast]);
+  // tap a quote → jump to and highlight the original; if it isn't loaded yet, page back (contiguously, by id cursor)
+  // until it is, then jump. Bounded; a deleted original says so.
+  const jumping = useRef(false);
+  const jumpToReply = useCallback(
+    async (messageId: string) => {
+      if (jumpToMessage(listRef.current, messageId)) return;
+      const jumpWhenRendered = () =>
+        new Promise<boolean>((res) => {
+          setRenderWindow(Number.MAX_SAFE_INTEGER);
+          requestAnimationFrame(() => requestAnimationFrame(() => res(jumpToMessage(listRef.current, messageId))));
+        });
+      if ((messagesRef.current ?? []).some((m) => m.id === messageId)) {
+        if (!(await jumpWhenRendered())) toast("Original message is no longer loaded");
+        return;
+      }
+      if (!hasMore || jumping.current) return void toast(hasMore ? "Loading…" : "That message is no longer available");
+      jumping.current = true;
+      setLoadingMore(true);
+      try {
+        let more: boolean = hasMore;
+        for (let i = 0; i < 60 && more; i++) {
+          const beforeId = oldestId();
+          if (!beforeId) break;
+          const r = await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, beforeId, limit: 200 });
+          const el = listRef.current;
+          stickToBottom.current = false;
+          if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+          await new Promise<void>((res) => {
+            setMessages((list) => reconcileOlder<Item>(list ?? [], r.messages as Item[]));
+            setHasMore(r.hasMore);
+            requestAnimationFrame(() => res());
+          });
+          more = r.hasMore;
+          if (r.messages.some((m) => m.id === messageId)) break;
+        }
+        prefetched.current = null;
+        if (!(await jumpWhenRendered())) toast("That message is no longer available");
+      } catch {
+        toast("Couldn't load that message. Try again.");
+      } finally {
+        jumping.current = false;
+        setLoadingMore(false);
+      }
+    },
+    [hasMore, peerId, request, toast], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const lastMineIdx = useMemo(() => {
     if (!messages || !me) return -1;
@@ -1417,7 +1510,18 @@ export function DmThread({
             stickToBottom.current = near;
             if (near && unseenBelow) setUnseenBelow(0);
             // infinite scroll upward: the next older page (usually already prefetched) loads before the top is reached
-            if (hasMore && !loadingMore && el.scrollTop < PREFETCH_TOP_PX && fromServer.current) void loadEarlier();
+            if (hasMore && !loadingMore && el.scrollTop < Math.max(PREFETCH_TOP_PX, el.clientHeight * 1.5) && fromServer.current) void loadEarlier();
+            // remember the reading position (first visible message) so the chat reopens there
+            if (posTimer.current) clearTimeout(posTimer.current);
+            posTimer.current = setTimeout(() => {
+              if (!me?.id || isSelf) return;
+              if (near) return savePos(me.id, peerId, null);
+              const top = el.getBoundingClientRect().top;
+              for (const row of el.querySelectorAll<HTMLElement>("[data-testid=dm-msg][data-mid]")) {
+                const r = row.getBoundingClientRect();
+                if (r.bottom > top) return savePos(me.id, peerId, { id: row.dataset.mid!, offset: r.top - top });
+              }
+            }, 250);
           }}
           className="flex h-full flex-col overflow-y-auto overscroll-contain px-3 pt-3 pb-2 [overflow-anchor:none]"
           data-testid="dm-list"

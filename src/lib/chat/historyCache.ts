@@ -1,11 +1,11 @@
 // Device cache for chats (web, and the iOS / Android apps through their WebView's IndexedDB):
-// inbox rows + the newest messages of each thread, so chats open instantly (offline too) and then reconcile.
+// inbox rows + every message row each thread has loaded (merged, never evicted), so chats open instantly (offline too) and then reconcile.
 // - Never the source of truth: everything here is re-fetchable from the server, which keeps all history.
 // - A corrupt / unreadable / newer-schema database is set aside (left untouched under its own name) and a fresh one
 //   is used; tabs learn about it over BroadcastChannel. Nothing is silently dropped.
 // - Scoped per signed-in user; wiped on sign-out (shared devices).
 // - Media bytes are not stored here (the browser HTTP cache / CDN handle those).
-import { cacheWindow, type CachedMsg } from "./historyReconcile";
+import { mergeForCache, type CachedMsg } from "./historyReconcile";
 
 const SCHEMA = 1;
 const BASE = "ol-chat";
@@ -121,9 +121,21 @@ export async function readThread<M extends CachedMsg>(meId: string, peerId: stri
   return rec;
 }
 
+/** Merge-write (one transaction): never shrinks what the device already had; an unreadable record is set aside. */
 export function writeThread<M extends CachedMsg>(meId: string, peerId: string, messages: readonly M[], extra: { hasMore: boolean; peer?: unknown; group?: unknown }) {
-  const rec: ThreadRec<M> = { key: `${meId}:${peerId}`, schema: SCHEMA, savedAt: Date.now(), messages: cacheWindow(messages), ...extra };
-  return tx("threads", "readwrite", (s) => s.put(rec));
+  const key = `${meId}:${peerId}`;
+  return tx("threads", "readwrite", (s) => {
+    const get = s.get(key);
+    get.onsuccess = () => {
+      const old = get.result as ThreadRec<M> | undefined;
+      const ok = !!old && old.schema === SCHEMA && Array.isArray(old.messages) && old.messages.every(valid);
+      if (old && !ok) s.put({ ...old, key: `aside:${key}:${Date.now()}` }); // keep it for recovery, never drop silently
+      const merged = mergeForCache(ok ? old!.messages : [], ok ? !!old!.hasMore : false, messages, extra.hasMore);
+      if (merged.disconnected) s.put({ ...old!, key: `aside:${key}:${Date.now()}` }); // rows kept under their own key
+      const rec: ThreadRec<M> = { key, schema: SCHEMA, savedAt: Date.now(), ...extra, messages: merged.messages, hasMore: merged.hasMore };
+      s.put(rec);
+    };
+  });
 }
 
 export async function readInbox<C>(meId: string): Promise<C[] | null> {
