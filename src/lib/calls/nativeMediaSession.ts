@@ -296,7 +296,9 @@ export class NativeMediaSession {
     await nativeMediaCmd({ op: "restartIce" }).catch(() => {});
   }
   async applyLadderStep(step: { audioBps: number }): Promise<boolean> {
-    return (await nativeMediaCmd({ op: "ladder", audioBps: voiceLadderBps(step.audioBps) }).catch(() => false)) === true;
+    // audioBps stays the raw rung: shipped app builds key their camera tier off it (iOS 48k/32k/24k/16k → 850/400/150/60
+    // kbps). voiceBps is the Opus cap new builds apply (floor 32k, top 64k); older builds ignore it and keep their own floor.
+    return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps, voiceBps: voiceLadderBps(step.audioBps) }).catch(() => false)) === true;
   }
   async getTransportStats(): Promise<RTCStatsReport[]> {
     const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;
