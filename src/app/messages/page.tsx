@@ -54,6 +54,14 @@ export default function MessagesPage() {
       live = false;
     };
   }, [meId]);
+  // offline app shell: ask the service worker to keep the top chats' screens so they open with no signal
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (warmed.current || !connected || !conversations?.length || !serverAnswered.current) return;
+    warmed.current = true;
+    const paths = [...conversations.slice(0, 20).map((c) => `/messages/${encodeURIComponent(c.peer.id)}`), ...(groupInbox.rows ?? []).slice(0, 10).map((g) => `/messages/${encodeURIComponent(g.id)}`)];
+    void navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: "ol-shell-warm", paths })).catch(() => {});
+  }, [connected, conversations, groupInbox.rows]);
   // write-through (debounced): what the device shows next launch, live updates included
   useEffect(() => {
     if (!meId || !conversations || !serverAnswered.current) return;

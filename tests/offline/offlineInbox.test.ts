@@ -26,7 +26,7 @@ test("offline snapshot never shown to another account (switch) and wiped", () =>
   const kv = new KV();
   saveOfflineMe({ id: "u1" }, [], 0, kv);
   assert.equal(readOfflineMe("u9", kv), null);
-  assert.equal(offlineMeId(kv), null, "foreign snapshot is removed");
+  assert.equal(offlineMeId(kv), "u1", "kept for the caller's account-switch wipe");
   saveOfflineMe({ id: "u1" }, [], 0, kv);
   assert.equal(readOfflineMe(null, kv), null);
   saveOfflineMe({ id: "u1" }, [], 0, kv);
@@ -86,6 +86,7 @@ test("offline inbox wiring: cache read/write-through, per-user wipe, snapshot bo
   const drop = app.slice(app.indexOf("const dropSession"), app.indexOf("const dropSession") + 600);
   for (const k of ["wipeChatCache()", "clearOfflineMe()", "clearAllPending()"]) assert.ok(drop.includes(k), `sign-out wipes ${k}`);
   assert.match(app, /readOfflineMe<Me>\(c\.uid\)/);
+  assert.match(app, /cachedId !== c\.uid\) \{\s*void wipeChatCache\(\);\s*clearAllPending\(\);\s*clearOfflineMe\(\);/);
   assert.match(app, /prev !== s\.user\.id\)\s*\{\s*void wipeChatCache\(\);\s*clearAllPending\(\);/);
   const inbox = readFileSync("src/app/messages/page.tsx", "utf8");
   assert.match(inbox, /readInbox<ConversationSummary>\(meId\)/);

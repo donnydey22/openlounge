@@ -48,6 +48,28 @@ function shellTrim(cache, max) {
   });
 }
 
+// The inbox asks for its top chats' screens to be kept (only while online), so a chat never opened by a full
+// page load still opens with no signal. Same-origin paths matching SHELL_ROUTES only; at most 30 per message.
+self.addEventListener("message", (event) => {
+  var d = event.data;
+  if (!d || d.type !== "ol-shell-warm" || !Array.isArray(d.paths) || typeof caches === "undefined") return;
+  var origin = self.location.origin;
+  var paths = d.paths.filter(function (x) { return typeof x === "string" && SHELL_ROUTES.test(x); }).slice(0, 30);
+  var job = caches.open(SHELL_PAGES).then(function (c) {
+    return paths.reduce(function (chain, path) {
+      return chain.then(function () {
+        return c.match(origin + path).then(function (hit) {
+          if (hit) return;
+          return fetch(origin + path, { credentials: "same-origin" }).then(function (res) {
+            if (res && res.ok && res.type === "basic" && !res.redirected) return c.put(origin + path, res);
+          }).catch(function () {});
+        });
+      });
+    }, Promise.resolve()).then(function () { return shellTrim(c, 80); });
+  });
+  if (event.waitUntil) event.waitUntil(job);
+});
+
 self.addEventListener("fetch", (event) => {
   var req = event.request;
   if (req.method !== "GET" || typeof caches === "undefined") return;

@@ -29,10 +29,7 @@ export function readOfflineMe<M extends { id: string }>(uid: string | null | und
     if (!raw) return null;
     const s = JSON.parse(raw) as OfflineSnap<M>;
     if (s?.v !== 1 || typeof s.me?.id !== "string") return null;
-    if (!uid || s.me.id !== uid) {
-      kv?.removeItem(KEY); // another account's profile: never shown
-      return null;
-    }
+    if (!uid || s.me.id !== uid) return null; // another account's profile: never shown (the caller wipes it)
     return s;
   } catch {
     return null;

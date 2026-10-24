@@ -487,6 +487,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (c0) void persistSessionCookie();
       // offline launch (WhatsApp-style): open on the last profile of THIS account while the server is unreachable;
       // the first real session answer replaces it, a definitive "signed out" drops it with everything else
+      // stored session is a different account than the cached one (switch on this device): wipe before anything paints
+      const cachedId = offlineMeId();
+      if (cachedId && c.uid && cachedId !== c.uid) {
+        void wipeChatCache();
+        clearAllPending();
+        clearOfflineMe();
+      }
       if (!meRef.current) {
         const snap = readOfflineMe<Me>(c.uid);
         if (snap) {
