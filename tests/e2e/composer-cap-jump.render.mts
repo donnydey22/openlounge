@@ -28,6 +28,7 @@ for (const eng of ENGS) {
     await ctx.addInitScript((u: any) => { localStorage.setItem("openlounge:theme", u.theme); if (localStorage.getItem("openlounge:uid")) return; localStorage.setItem("openlounge:session", u.refresh); localStorage.setItem("openlounge:access", JSON.stringify({ t: u.access, exp: Date.now() + 3e6 })); localStorage.setItem("openlounge:uid", u.uid); localStorage.setItem("openlounge:saved", String(Date.now())); }, U);
     const page = await ctx.newPage(); const errs: string[] = []; page.on("pageerror", (e) => errs.push(e.message));
     const shot = (s: string) => OUT ? page.screenshot({ path: `${OUT}/${eng}-${name}-${theme}-${s}.png` }) : Promise.resolve();
+    const guard = setTimeout(() => { check(`${t}: context watchdog (180s)`, false); page.close().catch(() => {}); }, 180_000);
     try {
       await page.goto(`${BASE}/messages/${b.res.user.id}`); await sleep(2500);
       const nn = page.getByRole("button", { name: "Not now" }); if (await nn.isVisible().catch(() => false)) await nn.click();
@@ -37,10 +38,10 @@ for (const eng of ENGS) {
       const shown = async () => (await jump.getAttribute("data-show")) === "1";
       check(`${t}: jump hidden at bottom on open`, !(await shown()));
       // ---- composer cap
-      await ta.click(); const h1 = (await ta.boundingBox())!.height;
+      console.log("STEP composer"); await ta.click(); const h1 = (await ta.boundingBox())!.height;
       const sendBox0 = await page.getByRole("button", { name: "Send message" }).first().boundingBox().catch(() => null);
       const long = Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of a long pasted note`).join("\n");
-      await ta.fill(long); await ta.evaluate((el: HTMLTextAreaElement) => { el.setSelectionRange(el.value.length, el.value.length); el.dispatchEvent(new Event("input", { bubbles: true })); });
+      console.log("STEP fill"); await ta.fill(long); await ta.evaluate((el: HTMLTextAreaElement) => { el.setSelectionRange(el.value.length, el.value.length); el.dispatchEvent(new Event("input", { bubbles: true })); });
       await sleep(250);
       const m = await ta.evaluate((el: HTMLTextAreaElement) => { const cs = getComputedStyle(el); return { h: el.getBoundingClientRect().height, sh: el.scrollHeight, ch: el.clientHeight, st: el.scrollTop, oy: cs.overflowY, lh: parseFloat(cs.lineHeight), vh: window.visualViewport?.height || innerHeight }; });
       check(`${t}: composer capped ≤ 6 lines + padding`, m.h <= m.lh * 6 + 30, JSON.stringify(m));
@@ -62,7 +63,7 @@ for (const eng of ENGS) {
         await shot("2-keyboard-up");
         await page.setViewportSize({ width: w, height: h }); await sleep(300);
       }
-      // send → shrinks back
+      console.log("STEP send");
       await page.getByRole("button", { name: "Send message" }).first().click(); await sleep(1200);
       const h3 = (await ta.boundingBox())!.height;
       check(`${t}: shrinks back after send`, (await ta.inputValue()) === "" && h3 <= h1 + 2, `${h1}→${h3}`);
@@ -98,7 +99,7 @@ for (const eng of ENGS) {
       await page.evaluate(() => document.documentElement.setAttribute("dir", "ltr"));
       check(`${t}: no page errors`, errs.length === 0, errs.join("|").slice(0, 200));
     } catch (e) { check(`${t}: flow`, false, String(e).slice(0, 300)); if (OUT) await page.screenshot({ path: `${OUT}/${eng}-${name}-${theme}-FAIL.png` }).catch(() => {}); }
-    await ctx.close(); a.client.close(); b.client.close();
+    clearTimeout(guard); await ctx.close().catch(() => {}); a.client.close(); b.client.close();
   }
   await br.close();
 }
