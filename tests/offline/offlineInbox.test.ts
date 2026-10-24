@@ -113,10 +113,10 @@ test("app shell SW: pages network-first (fresh online), cached copy offline, API
   const handlers: Record<string, (e: any) => void> = {};
   const self = { addEventListener: (t: string, f: any) => (handlers[t] = f), location: { origin: "https://ol.test" }, clients: { claim: async () => {} }, registration: {} };
   vm.runInNewContext(readFileSync("public/sw.js", "utf8"), { self, caches, fetch, URL, Date, console, setInterval, clearInterval, Promise });
-  const go = async (url: string, mode = "navigate") => {
+  const go = async (url: string, mode = "navigate"): Promise<any> => {
     let resp: Promise<any> | null = null; const waits: Promise<unknown>[] = [];
     handlers.fetch({ request: { url, method: "GET", mode }, respondWith: (p: Promise<any>) => (resp = p), waitUntil: (p: Promise<unknown>) => waits.push(p) });
-    const r = resp ? await resp : null; await Promise.all(waits); return r;
+    const r: any = resp ? await resp : null; await Promise.all(waits); return r as any;
   };
   const a = await go("https://ol.test/messages");
   assert.match(a.body, /fresh .*messages 1/);
