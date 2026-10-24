@@ -1,4 +1,4 @@
-// FX-046 / FX-047: WhatsApp-style composer cap + jump-to-latest (pure maths + source guards).
+// FX-052 / FX-053: WhatsApp-style composer cap + jump-to-latest (pure maths + source guards).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
