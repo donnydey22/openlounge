@@ -29,7 +29,7 @@ function start() {
   return new Promise<ChildProcess>((resolve, reject) => {
     const p = spawn(process.execPath, ["--expose-gc", "--import", "tsx", "server/index.ts"], {
       cwd: new URL("../..", import.meta.url).pathname,
-      env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), DATABASE_URL: DB, DATA_DIR: "/tmp/olm-data", METRICS_TOKEN: "m", RL_AUTH_PER_MIN: "10000", WS_RATE_PER_SEC: "200", WS_RATE_BURST: "400", LOG_LEVEL: "info" },
+      env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), DATABASE_URL: DB, DATA_DIR: `${process.env.TMPDIR || "/tmp"}/olm-data`, METRICS_TOKEN: "m", RL_AUTH_PER_MIN: "10000", WS_RATE_PER_SEC: "200", WS_RATE_BURST: "400", LOG_LEVEL: "info" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";

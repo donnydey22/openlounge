@@ -8,14 +8,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, renameSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 const pw = (await import(process.env.PW_MODULE || "playwright")).default;
-const OUT = process.env.OUT || "/tmp/call-start-end";
+const OUT = process.env.OUT || `${process.env.TMPDIR || "/tmp"}/call-start-end`;
 const LINGER = Number(process.env.LINGER || 650); // engine linger for a connected video call (before this branch: 1800)
 const THEME_BG = process.env.THEME_BG || "#f4f4f5"; // iOS app root view colour (light theme shows the flash best)
 mkdirSync(OUT, { recursive: true });
 
 const stub = (p: string) => path.resolve("tests/e2e/stubs", p);
 const res = await build({
-  entryPoints: ["tests/e2e/call-start-end.entry.tsx"], bundle: true, write: false, format: "iife", outdir: "/tmp/cse-build", tsconfig: "tsconfig.json",
+  entryPoints: ["tests/e2e/call-start-end.entry.tsx"], bundle: true, write: false, format: "iife", outdir: `${process.env.TMPDIR || "/tmp"}/cse-build`, tsconfig: "tsconfig.json",
   loader: { ".css": "local-css" }, define: { "process.env.NODE_ENV": '"production"' },
   plugins: [{ name: "stubs", setup(b) {
     b.onResolve({ filter: /^@\/lib\/calls\/engine$/ }, () => ({ path: stub("callEngineStub.ts") }));

@@ -24,7 +24,7 @@ function startServer(extraEnv: Record<string, string> = {}) {
   return new Promise<ChildProcess>((resolve, reject) => {
     const p = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
       cwd: new URL("../..", import.meta.url).pathname,
-      env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), DATABASE_URL: DB, DATA_DIR: "/tmp/olh-it-data", WS_RATE_PER_SEC: "5", WS_RATE_BURST: "10", RL_AUTH_PER_MIN: "1000", LOG_LEVEL: "info", ...extraEnv },
+      env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), DATABASE_URL: DB, DATA_DIR: `${process.env.TMPDIR || "/tmp"}/olh-it-data`, WS_RATE_PER_SEC: "5", WS_RATE_BURST: "10", RL_AUTH_PER_MIN: "1000", LOG_LEVEL: "info", ...extraEnv },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";

@@ -2,7 +2,7 @@
 import pw from "/workspace/e2e/node_modules/playwright/index.js";
 import { phoneLogin } from "../unified-auth/harness";
 const BASE = process.env.BASE || "http://127.0.0.1:3350", WS = BASE.replace("http", "ws") + "/ws";
-const CLIP = process.env.CLIP || "/tmp/vs-clip.mp4";
+const CLIP = process.env.CLIP || `${process.env.TMPDIR || "/tmp"}/vs-clip.mp4`;
 const ph = () => `+1555${Math.floor(Math.random() * 9e6 + 1e6)}`; const r = () => Math.random().toString(36).slice(2, 7);
 const sleep = (m: number) => new Promise((x) => setTimeout(x, m));
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, x = "") => { ok ? pass++ : fail++; console.log(ok ? "PASS" : "FAIL", n, x); };
@@ -56,7 +56,7 @@ for (const eng of ENGS) {
         if (slow) await page.unroute(/\.(mp4|m3u8|ts|m4s)(\?|$)/);
       }
       // pictures: blur/thumbnail until the full image decodes, cross-fade, never a spinner (slowed full download)
-      await page.locator("[data-testid=attach-input-media]").first().setInputFiles(process.env.PHOTO || "/tmp/vs-photo.jpg");
+      await page.locator("[data-testid=attach-input-media]").first().setInputFiles(process.env.PHOTO || `${process.env.TMPDIR || "/tmp"}/vs-photo.jpg`);
       await page.locator("[data-testid=attach-send]").click({ timeout: 8000 });
       const pb = page.locator("[data-testid=media-photo]").last(); await pb.waitFor({ timeout: 20000 });
       let pok = false; for (let i = 0; i < 40 && !pok; i++) { await sleep(500); pok = !(await page.locator("[data-testid=media-cancel]").count()); }

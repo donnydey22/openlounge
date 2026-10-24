@@ -26,7 +26,7 @@ for (const ea of ENGS) for (const eb of ENGS) for (const [w, h] of SIZES) for (c
     const A = await open(brA, ea, U(a), w, h), B = await open(brB, eb, U(b), w, h);
     await B.p.goto(`${BASE}/messages`); await A.p.goto(`${BASE}/messages/${b.res.user.id}`); await sleep(2500);
     for (const P of [A.p, B.p]) { const nn = P.getByRole("button", { name: "Not now" }); if (await nn.isVisible().catch(() => false)) await nn.click(); }
-    if (process.env.DBG) { await A.p.screenshot({ path: "/tmp/tpc-a.png" }); console.log(A.p.url(), A.errs); }
+    if (process.env.DBG) { await A.p.screenshot({ path: `${process.env.TMPDIR || "/tmp"}/tpc-a.png` }); console.log(A.p.url(), A.errs); }
     await A.p.locator(`[data-testid=${video ? "dm-video-call" : "dm-call"}]:visible`).first().click();
     await B.p.locator("[data-testid=call-accept]").waitFor({ timeout: 15000 }); check(`${t}: callee rings`, true);
     await B.p.locator("[data-testid=call-accept]").click({ force: true });

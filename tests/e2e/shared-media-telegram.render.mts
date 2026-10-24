@@ -6,7 +6,7 @@ import { phoneLogin } from "../unified-auth/harness";
 
 const BASE = process.env.BASE || "http://127.0.0.1:3350";
 const WS = BASE.replace(/^http/, "ws") + "/ws";
-const PHOTO = process.env.PHOTO || "/tmp/vs-photo.jpg";
+const PHOTO = process.env.PHOTO || `${process.env.TMPDIR || "/tmp"}/vs-photo.jpg`;
 const ENGS = (process.env.ENGS || "chromium,webkit,firefox").split(",") as ("chromium" | "webkit" | "firefox")[];
 const SIZES: [number, number][] = (process.env.SIZES || "375x812,412x915,820x1180,1280x800").split(",").map((spec) => {
   const [width, height] = spec.split("x").map(Number);
@@ -109,7 +109,7 @@ for (const engine of ENGS) {
       check(`${label}: no browser page errors`, pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
     } catch (error) {
       check(`${label}: shared media flow`, false, String(error).slice(0, 500));
-      await page.screenshot({ path: `/tmp/openlounge-shared-media-${engine}-${width}.png`, fullPage: true }).catch(() => {});
+      await page.screenshot({ path: `${process.env.TMPDIR || "/tmp"}/openlounge-shared-media-${engine}-${width}.png`, fullPage: true }).catch(() => {});
     } finally {
       await context.close();
       sender.client.close();
