@@ -22,9 +22,9 @@ export const OPUS_VOICE_CODEC_OPTIONS = {
   opusDtx: false,
   opusStereo: false,
   opusMaxPlaybackRate: 48_000,
-  // 64 kbps mono fullband (Oct 23, clarity): headroom for in-band FEC on lossy links without starving the primary
-  // encode. The browser's bandwidth estimator still sets the real rate below this cap on a congested link.
-  opusMaxAverageBitrate: 64_000,
+  // 48 kbps mono fullband: the best-call profile (call 3ae8ff34, Oct 17, build 45 / 666ae7f), restored Oct 24 (Donny).
+  // The browser's bandwidth estimator still sets the real rate below this cap on a congested link.
+  opusMaxAverageBitrate: 48_000,
   // 20 ms frames: Opus' standard voice packetization, the best balance of header overhead and loss recovery.
   opusPtime: 20,
 } as const;
@@ -34,7 +34,7 @@ export const OPUS_VOICE_CODEC_OPTIONS = {
  * the browser's bandwidth allocator and DSCP network priority; it stays independent of every video bitrate cap.
  */
 export const MIC_AUDIO_ENCODING = {
-  maxBitrate: 64_000,
+  maxBitrate: 48_000,
   priority: "high",
   networkPriority: "high",
 } as const satisfies RTCRtpEncodingParameters & { networkPriority?: RTCPriorityType };
@@ -89,13 +89,13 @@ export async function resumePausedCallAudio(els: readonly Pick<HTMLMediaElement,
  * and a lower cap does not reduce it — it only made voice muffled. Congestion is still handled: maxBitrate is a cap,
  * and the browser/libwebrtc bandwidth estimator sends less than it whenever the link can't carry it.
  */
-export const VOICE_FLOOR_BPS = 32_000;
+export const VOICE_FLOOR_BPS = 24_000; // best-call (b45/666ae7f) floor, every platform (Oct 24)
 /** @deprecated kept for older imports; the floor now applies on every platform */
 export const ANDROID_VOICE_FLOOR_BPS = VOICE_FLOOR_BPS;
 /** Top voice cap (matches opusMaxAverageBitrate / MIC_AUDIO_ENCODING). The shared LADDER (netAdapt.ts, protected) still
  *  lists 48 kbps on its top rung; that rung means "full quality", so it maps to this cap. Offline libopus A/B on the
  *  reference clip (VOIP, FEC, 12 % loss, PESQ-WB): 16k 2.24 / 24k 3.60 / 32k 3.72 / 48k 3.90 / 64k 3.96. */
-export const VOICE_TOP_BPS = 64_000;
+export const VOICE_TOP_BPS = 48_000; // best-call ladder 48/32/24 (Oct 24)
 export function voiceLadderBps(stepBps: number, _ua = ""): number {
   void _ua;
   if (stepBps >= 48_000) return VOICE_TOP_BPS;

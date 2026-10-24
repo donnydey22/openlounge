@@ -15,13 +15,16 @@ import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { androidNativeEnabled, iosMicReacquireEnabled, iosNativeVideoEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
 
-/** TURN URLs for mediasoup calls, in the locked order (Donny, Oct 24): UDP 3478 first, then TCP 3478, then TLS 443.
- *  Same order the DO call-signal service hands out (call-signal/src/core.mjs iceConfig). */
+/** Mediasoup call TURN logins live at most 10 minutes (Donny, Oct 24). Rejoins/call:get mint fresh ones. */
+export const MEDIASOUP_TURN_TTL_S = 600;
+
+/** Relay fallback for mediasoup calls, every lane (iPhone native, browser/Keiko) (Donny, Oct 24 5:28 AM): direct UDP to
+ *  the SFU on 165.232.137.71 always comes first (it announces UDP host candidates; ICE ranks host above relay), then
+ *  TURN over TCP 3478, then TURNS 443 on turn.openlounge.app. TURN-over-UDP is not offered. */
 export function mediasoupTurnUrls(urls: readonly string[]): string[] {
-  const udp = urls.filter((u) => u.startsWith("turn:") && /transport=udp/.test(u));
   const tcp = urls.filter((u) => u.startsWith("turn:") && /transport=tcp/.test(u));
   const tls = urls.filter((u) => u.startsWith("turns:"));
-  return [...udp, ...tcp, ...tls];
+  return [...tcp, ...tls];
 }
 import { isBenignMediaFailure } from "./mediaLog";
 
@@ -100,7 +103,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         // range but allows UDP/3478 (common on hotel/corporate Wi-Fi) then stays on UDP via our relay instead of
         // dropping to TLS:443 (TCP head-of-line blocking = choppy audio on loss). ICE ranks relay-UDP above relay-TLS,
         // and both below direct UDP. turn:…?transport=tcp adds nothing over TLS:443 and is still not offered.
-        const turns = mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) })).filter((s) => s.urls.length);
+        const turns = mintTurnIceServers(callId, userId, { ttlS: MEDIASOUP_TURN_TTL_S })?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) })).filter((s) => s.urls.length);
         return token ? { provider: "mediasoup", url: "broker", token, callId, expiresAt: Math.floor(Date.now() / 1000) + ttlSec, ...(turns?.length ? { iceServers: turns } : {}), ...(androidNativeEnabled() ? { androidNative: true } : {}), ...(iosMicReacquireEnabled() ? { iosMicReacquire: true } : {}), ...(iosNativeVideo && userId === participants?.callerId ? { iosNativeVideo: true } : {}) } : null;
       },
       relay: (input) => gw.request(input),

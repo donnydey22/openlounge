@@ -45,9 +45,9 @@ test("path order: SFU ICE-TCP candidates stripped (UDP direct first), our TURNS 
   const r = udpOnlyResult("transport:create", { transport: { id: "t", iceCandidates: [{ protocol: "udp" }, { protocol: "tcp" }] } }) as { transport: { iceCandidates: unknown[] } };
   assert.deepEqual(r.transport.iceCandidates, [{ protocol: "udp" }]);
   assert.deepEqual(udpOnlyResult("produce", { id: "p" }), { id: "p" });
-  // Oct 23 (UDP first, always): TURN-UDP 3478 then TURNS 443 via mediasoupTurnUrls; turn:?transport=tcp still not offered
-  assert.ok(srv.includes("mintTurnIceServers(callId, userId)?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) }))"));
-  assert.ok(srv.includes('u.startsWith("turn:") && /transport=udp/.test(u)') && srv.includes('u.startsWith("turns:")'));
+  // Oct 24 5:28 AM (UDP first, every lane): direct UDP to the SFU, then relay fallback TURN TCP 3478 then TURNS 443
+  assert.ok(srv.includes("mintTurnIceServers(callId, userId, { ttlS: MEDIASOUP_TURN_TTL_S })?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) }))"));
+  assert.ok(srv.includes('u.startsWith("turn:") && /transport=tcp/.test(u)') && srv.includes('u.startsWith("turns:")'));
 });
 
 test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting UI, transient states ignored, then silent LiveKit", () => {

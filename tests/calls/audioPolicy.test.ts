@@ -16,7 +16,7 @@ test("UDP Mediasoup voice producer requests Opus FEC (DTX off) without stereo ov
     opusDtx: false,
     opusStereo: false,
     opusMaxPlaybackRate: 48_000,
-    opusMaxAverageBitrate: 64_000,
+    opusMaxAverageBitrate: 48_000,
     opusPtime: 20,
   });
 });
@@ -33,16 +33,16 @@ test("voice floor 32 kbps on every platform; top ladder rung = 64 kbps cap (Oct 
   const { LADDER } = await import("../../src/lib/calls/netAdapt");
   const android = "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36";
   const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
-  assert.equal(VOICE_FLOOR_BPS, 32_000);
-  assert.equal(ANDROID_VOICE_FLOOR_BPS, 32_000);
-  assert.equal(VOICE_TOP_BPS, 64_000);
+  assert.equal(VOICE_FLOOR_BPS, 24_000);
+  assert.equal(ANDROID_VOICE_FLOOR_BPS, 24_000);
+  assert.equal(VOICE_TOP_BPS, 48_000);
   for (const ua of [android, iphone, ""]) {
-    assert.equal(voiceLadderBps(16_000, ua), 32_000);
-    assert.equal(voiceLadderBps(24_000, ua), 32_000);
+    assert.equal(voiceLadderBps(16_000, ua), 24_000);
+    assert.equal(voiceLadderBps(24_000, ua), 24_000);
     assert.equal(voiceLadderBps(32_000, ua), 32_000);
-    assert.equal(voiceLadderBps(48_000, ua), 64_000);
+    assert.equal(voiceLadderBps(48_000, ua), 48_000);
   }
-  for (const step of LADDER) assert.ok(voiceLadderBps(step.audioBps) >= 32_000, "no rung starves voice");
+  for (const step of LADDER) assert.ok(voiceLadderBps(step.audioBps) >= 24_000, "no rung starves voice");
 });
 
 test("audio-levels telemetry: wrapper flag is 'app', it no longer overwrites the native-media flag", async () => {
