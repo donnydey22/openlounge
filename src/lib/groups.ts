@@ -41,7 +41,7 @@ export interface GroupPin {
   messageId: string;
   pinnedBy: string | null;
   pinnedAt: number;
-  /** the pinned message (null if it has since been deleted / trimmed) */
+  /** the pinned message (null if it has since been deleted) */
   message: ConvMessage | null;
 }
 

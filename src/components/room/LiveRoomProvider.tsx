@@ -31,6 +31,9 @@ interface LiveRoomContextValue {
   sendChat(text: string, replyToId?: string): Promise<boolean>;
   editChat(messageId: string, text: string): Promise<boolean>;
   deleteChat(messageId: string): Promise<void>;
+  /** room chat is permanent (034): older pages back to message #1 */
+  chatHasMore: boolean;
+  loadOlderChat(): Promise<void>;
   setSelfMuted(muted: boolean): void;
 }
 
@@ -50,6 +53,10 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomState | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [chatHasMore, setChatHasMore] = useState(false);
+  const chatRef = useRef<ChatMessage[]>([]);
+  chatRef.current = chat;
+  const olderBusy = useRef(false);
   const [joined, setJoined] = useState(false);
   const [gone, setGone] = useState<Gone>(null);
   const [audioEnabled, setAudioEnabled] = useState(false);
@@ -122,13 +129,14 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     markAudio("room-join-req");
-    request<{ room: RoomState; chat?: ChatMessage[]; audio: { enabled: boolean; url?: string; token?: string } }>("room:join", { roomId })
+    request<{ room: RoomState; chat?: ChatMessage[]; chatHasMore?: boolean; audio: { enabled: boolean; url?: string; token?: string } }>("room:join", { roomId })
       .then((res) => {
         if (cancelled) return;
         markAudio("room-joined");
         joinedEpoch.current = connectionEpoch;
         setRoom(res.room);
         setChat(res.chat ?? []);
+        setChatHasMore(!!res.chatHasMore);
         setAudioEnabled(!!res.audio?.enabled);
         setPrefetched(res.audio?.url && res.audio?.token ? { url: res.audio.url, token: res.audio.token } : null);
         setJoined(true);
@@ -165,10 +173,12 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
     };
     const onChatMessage = (message: ChatMessage) => {
       if (message.roomId !== roomId) return;
-      setChat((current) => (current.some((item) => item.id === message.id) ? current : [...current, message].slice(-ROOM_CHAT_HISTORY)));
+      setChat((current) => (current.some((item) => item.id === message.id) ? current : [...current, message]));
     };
-    const onChatDeleted = ({ roomId: deletedRoomId, messageId }: { roomId: string; messageId: string }) => {
-      if (deletedRoomId === roomId) setChat((current) => current.filter((item) => item.id !== messageId));
+    // delete for everyone: the bubble becomes "This message was deleted" (older servers send no placeholder: drop it)
+    const onChatDeleted = ({ roomId: deletedRoomId, messageId, placeholder }: { roomId: string; messageId: string; placeholder?: ChatMessage }) => {
+      if (deletedRoomId !== roomId) return;
+      setChat((current) => (placeholder ? current.map((item) => (item.id === messageId ? placeholder : item)) : current.filter((item) => item.id !== messageId)));
     };
     const onChatEdited = (message: ChatMessage) => {
       if (message.roomId === roomId) setChat((current) => current.map((item) => (item.id === message.id ? { ...item, text: message.text, editedAt: message.editedAt } : item)));
@@ -274,6 +284,24 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
     [request, reportError, roomId],
   );
 
+  const loadOlderChat = useCallback(async () => {
+    const first = chatRef.current[0];
+    if (olderBusy.current || !first) return;
+    olderBusy.current = true;
+    try {
+      const r = await request<{ messages: ChatMessage[]; hasMore: boolean }>("chat:history", { roomId, beforeId: first.id, limit: ROOM_CHAT_HISTORY });
+      setChat((current) => {
+        const have = new Set(current.map((m) => m.id));
+        return [...(r.messages ?? []).filter((m) => !have.has(m.id)), ...current];
+      });
+      setChatHasMore(!!r.hasMore);
+    } catch {
+      /* offline / older server: try again on the next scroll */
+    } finally {
+      olderBusy.current = false;
+    }
+  }, [request, roomId]);
+
   const deleteChat = useCallback(
     async (messageId: string) => {
       if (!roomId) return;
@@ -300,8 +328,8 @@ export function LiveRoomProvider({ children }: { children: React.ReactNode }) {
   );
 
   const value = useMemo<LiveRoomContextValue>(
-    () => ({ roomId, room, chat, joined, gone, audio, burstReactions, tileReactions, reactionTrayOpen, activate, leave, setReactionTrayOpen, sendReaction, sendChat, editChat, deleteChat, setSelfMuted }),
-    [roomId, room, chat, joined, gone, audio, burstReactions, tileReactions, reactionTrayOpen, activate, leave, sendReaction, sendChat, editChat, deleteChat, setSelfMuted],
+    () => ({ roomId, room, chat, joined, gone, audio, burstReactions, tileReactions, reactionTrayOpen, activate, leave, setReactionTrayOpen, sendReaction, sendChat, editChat, deleteChat, chatHasMore, loadOlderChat, setSelfMuted }),
+    [chatHasMore, loadOlderChat, roomId, room, chat, joined, gone, audio, burstReactions, tileReactions, reactionTrayOpen, activate, leave, sendReaction, sendChat, editChat, deleteChat, setSelfMuted],
   );
 
   return (

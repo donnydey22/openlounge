@@ -388,6 +388,16 @@ export function DmThread({
   const pendingRef = useRef(pendingDel);
   pendingRef.current = pendingDel;
   const [selected, setSelected] = useState<Set<string> | null>(null);
+  // delete for everyone: the bubble stays as "This message was deleted" for every member (034), on this device's cache too
+  const showPlaceholder = useCallback((ph: DirectMessage) => {
+    setMessages((list) => {
+      if (!list) return list;
+      const i = list.findIndex((x) => x.id === ph.id);
+      if (i >= 0) return list.map((x) => (x.id === ph.id ? (ph as Item) : x));
+      return [...list, ph as Item].sort((a, b) => a.createdAt - b.createdAt);
+    });
+    if (threadRef.current) void putMessages(threadRef.current, [ph as Item]);
+  }, []);
   const restoreItems = useCallback((items: Item[]) => {
     setMessages((list) => {
       if (!list) return list;
@@ -404,7 +414,9 @@ export function DmThread({
         restoreItems(p.items);
         toast(friendlyMessage(e, "Couldn't delete that message"));
       };
-      const done = () => threadRef.current && void markGone(threadRef.current, ids); // device row kept, never shown again
+      // delete for me: device row kept, never shown again. Delete for everyone (and group deletes): the server's
+      // conv:deleted brings the "This message was deleted" placeholder, which replaces the row instead
+      const done = () => threadRef.current && !(isGroup || p.forEveryone) && void markGone(threadRef.current, ids);
       if (isGroup) void Promise.all(ids.map((messageId) => request("group:deleteMessage", { id: peerId, messageId }))).then(done, fail);
       else void request("dm:delete", { peerId, messageIds: ids, forEveryone: p.forEveryone }).then(done, fail);
     },
@@ -435,8 +447,9 @@ export function DmThread({
   // deleted elsewhere (the peer deleted for everyone, or I did on another device): drop it here too
   useEffect(() => {
     if (!socket || isGroup) return;
-    const onDeleted = (d: { conversationId: string; messageId: string }) => {
+    const onDeleted = (d: { conversationId: string; messageId: string; placeholder?: DirectMessage }) => {
       if (d.conversationId !== peerId) return;
+      if (d.placeholder) return showPlaceholder(d.placeholder);
       if (threadRef.current) void markGone(threadRef.current, [d.messageId]);
       setMessages((list) => (list && list.some((x) => x.id === d.messageId) ? list.filter((x) => x.id !== d.messageId) : list));
     };
@@ -444,7 +457,7 @@ export function DmThread({
     return () => {
       socket.off("conv:deleted", onDeleted);
     };
-  }, [socket, isGroup, peerId]);
+  }, [socket, isGroup, peerId, showPlaceholder]);
   /** Telegram's exit: the bubble crumbles to dust, then the row folds away (transform / opacity, then one height) */
   const animateOut = useCallback((items: Item[]) => {
     const root = listRef.current;
@@ -798,10 +811,11 @@ export function DmThread({
     };
     const onConvStop = (d: { conversationId: string; from: string }) => d.conversationId === peerId && drop(d.from);
     const onGroupMsg = (m: DirectMessage) => m.toId === peerId && drop(m.fromId);
-    const onDeleted = (d: { conversationId: string; messageId: string }) => {
+    const onDeleted = (d: { conversationId: string; messageId: string; placeholder?: DirectMessage }) => {
       if (d.conversationId !== peerId) return;
+      if (d.placeholder) return showPlaceholder(d.placeholder);
       if (threadRef.current) void markGone(threadRef.current, [d.messageId]);
-      setMessages((list) => (list ? list.filter((x) => x.id !== d.messageId) : list));
+      setMessages((list) => (list && list.some((x) => x.id === d.messageId) ? list.filter((x) => x.id !== d.messageId) : list));
     };
     socket.on("conv:typing", onConvTyping);
     socket.on("conv:typing_stop", onConvStop);
@@ -816,7 +830,7 @@ export function DmThread({
       timers.clear();
       setTypers([]);
     };
-  }, [socket, isGroup, peerId, me?.id]);
+  }, [socket, isGroup, peerId, me?.id, showPlaceholder]);
   useEffect(() => {
     if (isGroup) setPeerTyping(typers.length > 0);
   }, [isGroup, typers.length]);
@@ -2130,8 +2144,12 @@ const MessageRow = memo(function MessageRow({
             (sticker || parts) && m.replyTo && mine && "flex flex-col items-end",
           )}
         >
-          {m.replyTo && <ReplyQuote reply={m.replyTo} mine={mine} onJump={onJumpToReply} />}
-          {sticker ? (
+          {m.replyTo && !m.deleted && <ReplyQuote reply={m.replyTo} mine={mine} onJump={onJumpToReply} />}
+          {m.deleted ? (
+            <span data-testid="msg-deleted-placeholder" className="italic opacity-70">
+              🚫 {mine ? "You deleted this message" : "This message was deleted"}
+            </span>
+          ) : sticker ? (
             <StickerMessage sticker={sticker} pending={m.state === "sending"} />
           ) : parts ? (
             <BigEmoji parts={parts} replay={interactNonce} onTap={(e, at) => onBigTap(m, e, at)} />

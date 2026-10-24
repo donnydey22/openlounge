@@ -59,7 +59,7 @@ export interface GroupEmitter {
   presence?(userId: string): { online: boolean; presence: "online" | "away" | "offline"; lastSeenAt: number | null };
   /** attachments: a group message was deleted for everyone → erase its files (server/media onMessageDeleted) */
   mediaMessageDeleted?(messageId: string): void;
-  /** attachments: a group was deleted (last member out) → erase every file sent in it (server/media purgeConversation) */
+  /** attachments: a group was deleted (last member out) → only self-destructing files go; the rest are kept (server/media purgeConversation) */
   mediaConversationDeleted?(conversationId: string): void;
 }
 
@@ -72,7 +72,6 @@ const CREATE_MAX_PER_HOUR = 10;
 const MSG_MAX_PER_10S = 8;
 const INVITE_MAX_TTL_MS = 365 * 86_400_000;
 const PHOTO_MAX_BYTES = 400_000;
-const HISTORY_CAP = 1000;
 
 const clamp = (s: unknown, max: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const cleanText = (s: unknown, max: number): { text: string } | { text: null; error: string } => {
@@ -554,7 +553,7 @@ export class GroupService {
     const me = this.member(gid, userId);
     if (!conv || !me) return err("Group not found", 404);
     const msg = (this.store.dms.get(gid) ?? []).find((m) => m.id === messageId);
-    if (!msg) return err("Message not found", 404);
+    if (!msg || msg.deleted) return err("Message not found", 404);
     if (msg.fromId !== userId && !canAdmin(me.role)) return err("Only admins can delete other people's messages", 403);
     this.store.removeConversationMessage(gid, msg.id);
     this.emitter?.mediaMessageDeleted?.(msg.id);
@@ -565,7 +564,9 @@ export class GroupService {
       pins.splice(pi, 1);
       this.emitTo(this.memberIds(gid), "group:pins", { id: gid, pins: this.info(userId, gid)!.pins });
     }
-    this.emitTo(this.memberIds(gid), "conv:deleted", { conversationId: gid, messageId: msg.id, by: userId });
+    const ph = (this.store.dms.get(gid) ?? []).find((m) => m.id === msg.id);
+    // placeholder: new clients swap the bubble for "This message was deleted"; older ones just drop it (as before)
+    this.emitTo(this.memberIds(gid), "conv:deleted", { conversationId: gid, messageId: msg.id, by: userId, forEveryone: true, ...(ph?.deleted ? { placeholder: this.decorate(ph) } : {}) });
     return { ok: true as const };
   }
 

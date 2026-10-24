@@ -140,7 +140,7 @@ export function putPage<M extends CachedMsg>(thread: string, page: readonly M[],
       const g = s.get(k);
       g.onsuccess = () => {
         const old = g.result as Row<M> | undefined;
-        s.put({ k, t: thread, id: m.id, m, prev: old?.prev ?? null, at, ...(old?.gone ? { gone: 1 as const } : {}) } satisfies Row<M>);
+        s.put({ k, t: thread, id: m.id, m, prev: old?.prev ?? null, at, ...(old?.gone && !(m as { deleted?: boolean }).deleted ? { gone: 1 as const } : {}) } satisfies Row<M>);
       };
     });
     if (o.newerId && typeof o.newerAt === "number") {
@@ -167,7 +167,7 @@ export function putMessages<M extends CachedMsg>(thread: string, list: readonly 
       g.onsuccess = () => {
         const old = g.result as Row<M> | undefined;
         // prevOf: the thread knows this row's older neighbour (live message on a synced, connected thread)
-        s.put({ k, t: thread, id: m.id, m, prev: old?.prev ?? prevOf?.(m) ?? null, at, ...(old?.gone ? { gone: 1 as const } : {}) } satisfies Row<M>);
+        s.put({ k, t: thread, id: m.id, m, prev: old?.prev ?? prevOf?.(m) ?? null, at, ...(old?.gone && !(m as { deleted?: boolean }).deleted ? { gone: 1 as const } : {}) } satisfies Row<M>);
       };
     }
   }, undefined);

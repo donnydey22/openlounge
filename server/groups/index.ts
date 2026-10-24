@@ -53,7 +53,7 @@ export function wireGroups(io: WsHub, withOnline: WithOnline) {
       void media.onMessageDeleted(messageId).catch((err) => console.error("[groups] media delete failed:", err));
     },
     mediaConversationDeleted(conversationId) {
-      void media.purgeConversation(conversationId).catch((err) => console.error("[groups] media purge failed:", err));
+      void media.purgeConversation(conversationId).catch((err) => console.error("[groups] media purge failed:", err)); // self-destructing items only (permanence 034)
     },
     presence(userId) {
       const u = withOnline({ id: userId });

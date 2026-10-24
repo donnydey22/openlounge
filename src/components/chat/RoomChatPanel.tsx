@@ -3,7 +3,7 @@
 import { FormattedText } from "./FormattedText";
 import { LinkifiedText } from "./LinkifiedText";
 import { DELETED_NAME, isDeletedId, useDeletedIds } from "@/lib/userDisplay";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Flag, Pencil, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
@@ -53,6 +53,8 @@ export function RoomChatPanel({
   hiddenIds,
   onClose,
   className,
+  hasMore = false,
+  onLoadOlder,
 }: {
   messages: ChatMessage[];
   meId: string | undefined;
@@ -72,7 +74,17 @@ export function RoomChatPanel({
   hiddenIds?: Set<string>;
   onClose?: () => void;
   className?: string;
+  /** permanent room chat: older messages exist on the server */
+  hasMore?: boolean;
+  onLoadOlder?: () => Promise<void>;
 }) {
+  const anchor = useRef<{ h: number; top: number; first: string | undefined } | null>(null);
+  const loadOlder = useCallback(() => {
+    const el = listRef.current;
+    if (!onLoadOlder || !hasMore || anchor.current || !el) return;
+    anchor.current = { h: el.scrollHeight, top: el.scrollTop, first: messages[0]?.id };
+    void onLoadOlder().finally(() => setTimeout(() => (anchor.current = null), 0));
+  }, [onLoadOlder, hasMore, messages]);
   const all = messages;
   messages = hiddenIds?.size ? all.filter((m) => !hiddenIds.has(m.authorId)) : all;
   useDeletedIds(); // live "Deleted Account" for authors who delete their account
@@ -99,6 +111,15 @@ export function RoomChatPanel({
   useLayoutEffect(() => {
     scrollToBottom();
   }, []);
+
+  // older page prepended: keep the same message under the finger (no jump)
+  useLayoutEffect(() => {
+    const a = anchor.current, el = listRef.current;
+    if (a && el && messages[0]?.id !== a.first) {
+      el.scrollTop = el.scrollHeight - a.h + a.top;
+      anchor.current = null;
+    }
+  }, [messages]);
 
   useEffect(() => {
     const last = messages[messages.length - 1];
@@ -130,9 +151,17 @@ export function RoomChatPanel({
             const el = e.currentTarget;
             atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
             if (atBottom.current) setShowJump(false);
+            if (el.scrollTop < 120) loadOlder();
           }}
           className="chat-fade h-full overflow-y-auto overscroll-contain px-3 pt-2 pb-3"
         >
+          {hasMore && onLoadOlder && (
+            <div className="flex justify-center py-2">
+              <button data-testid="room-chat-older" onClick={loadOlder} className="rounded-full bg-white/5 px-3 py-1 text-[12px] text-zinc-400 hover:bg-white/10">
+                Load earlier messages
+              </button>
+            </div>
+          )}
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-1 py-10 text-center text-sm text-zinc-500">
               <div className="text-2xl">💬</div>
@@ -144,6 +173,15 @@ export function RoomChatPanel({
             const grouped = !!prev && prev.authorId === m.authorId && m.createdAt - prev.createdAt < GROUP_WINDOW_MS;
             const mine = m.authorId === meId;
             const sticker = parseSticker(m.text); // sticker message: large, no bubble
+            if (m.deleted)
+              return (
+                <div key={m.id} data-testid="dm-msg" data-mid={m.id} data-deleted="1" className={cn("flex", mine ? "justify-end" : "justify-start", "mt-2.5")}>
+                  <div className={cn("max-w-[82%] rounded-2xl px-3 py-1.5 text-[13px] italic text-zinc-500", mine ? "rounded-br-md bg-emerald-500/10" : "rounded-bl-md bg-zinc-800/50")} data-testid="msg-deleted-placeholder">
+                    🚫 {mine ? "You deleted this message" : "This message was deleted"}
+                    <span className="ml-2 text-[10px] not-italic text-zinc-600">{softTime(m.createdAt)}</span>
+                  </div>
+                </div>
+              );
             const canDelete = mine || (canModerate && (m.authorId !== hostId || canModerateHost));
             const canReport = !mine && !!onReport && !m.authorIsBot;
             const canEdit = !!onEdit && mine && !sticker && Date.now() - m.createdAt < 48 * 3600_000;

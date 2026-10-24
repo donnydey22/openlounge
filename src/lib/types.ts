@@ -129,6 +129,7 @@ export const AVATAR_COLORS = [
 // ---------- chat ----------
 
 export const CHAT_MAX_LENGTH = 500;
+/** room chat page size (join payload / chat:history); room chat itself is never capped (034) */
 export const ROOM_CHAT_HISTORY = 200;
 
 export interface ChatMessage {
@@ -145,8 +146,11 @@ export interface ChatMessage {
   createdAt: number;
   /** Trusted, immutable snapshot of the room message this message replies to. */
   replyTo?: ReplyReference;
-  /** set when the author edited the message (room chat is in-memory, like the message itself) */
+  /** set when the author edited the message (stored with the message, 034 room_messages) */
   editedAt?: number;
+  /** deleted for everyone: content removed, shown as a "This message was deleted" placeholder (text carries that label) */
+  deleted?: boolean;
+  deletedAt?: number;
 }
 
 /**
@@ -191,6 +195,9 @@ export interface DirectMessage {
   roomId?: string;
   /** call service message details (kind = "call") */
   call?: CallMeta;
+  /** deleted for everyone: content removed, shown as a "This message was deleted" placeholder (text carries that label) */
+  deleted?: boolean;
+  deletedAt?: number;
   /** Emoji reactions, oldest first (one per person per message, Telegram-style). Absent = none. */
   reactions?: DmReaction[];
   /** Photo / video / document / voice note (server/media). `text` is then the caption, or a label like "📷 Photo". */

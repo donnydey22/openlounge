@@ -367,8 +367,10 @@ export class PgPersistence implements Persistence {
     }
     for (const r of db.rooms ?? []) out.rooms.set(r.id, [r.id, t(r.title), t(r.topic), t(r.description), t(r.hostId), r.createdAt]);
     for (const m of db.dms ?? [])
+      if (!m.deleted) // delete-for-everyone placeholders live in message_tombstones (034); the content row leaves dms
       out.dms.set(m.id, [m.id, conversationId(m.fromId, m.toId), t(m.fromId), t(m.fromName), t(m.fromColor), t(m.toId), t(m.text), m.createdAt, m.readAt ?? null, tn(m.clientId), tn(m.kind), tn(m.roomId), m.call ? JSON.stringify(m.call) : null, m.replyTo ? JSON.stringify(m.replyTo) : null]);
     for (const m of db.dms ?? [])
+      if (!m.deleted)
       for (const r of m.reactions ?? []) out.reactions.set(`${m.id}${SEP}${r.userId}${SEP}${r.emoji}`, [m.id, t(r.userId), t(r.emoji), r.at]);
     for (const s of db.sessions ?? [])
       if (humans.has(s.userId))
@@ -470,7 +472,7 @@ export class PgPersistence implements Persistence {
              host_id = EXCLUDED.host_id, created_at = EXCLUDED.created_at`,
           [0, 1, 2, 3, 4, 5].map((i) => col(up.rooms, i)),
         );
-      // DMs (text immutable; read_at set once when seen; per-conversation cap trims show up as deletes)
+      // DMs (read_at set once when seen; a delete for everyone shows up as a delete — its placeholder is in 034)
       if (del.dms.length) await client.query("DELETE FROM dms WHERE id = ANY($1::text[])", [del.dms]);
       if (up.dms.length)
         await client.query(
@@ -481,7 +483,7 @@ export class PgPersistence implements Persistence {
              read_at = COALESCE(dms.read_at, EXCLUDED.read_at), client_id = COALESCE(dms.client_id, EXCLUDED.client_id), reply_to = COALESCE(dms.reply_to, EXCLUDED.reply_to)`,
           [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((i) => col(up.dms, i)),
         );
-      // DM reactions (014), after dms (FK; trimmed / deleted messages cascade)
+      // DM reactions (014), after dms (FK; deleted messages cascade)
       if (del.reactions.length) {
         const k = del.reactions.map((x) => x.split(SEP));
         await client.query(

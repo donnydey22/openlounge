@@ -36,6 +36,7 @@ import { BOT_CHAT_LINES, BOT_DM_REPLIES, NOTABLE_USERS, SEED_ROOMS, fillerUsers 
 import { conversationId, isGroupId } from "./conversation";
 import { ChatPrefs } from "./chatPrefs";
 import { DmActions } from "./dmActions";
+import { DELETED_TEXT, Permanence } from "./permanence";
 import type { GroupService } from "./groups/service";
 import { REPORT_REASONS, REPORT_TARGETS, filterText, type ReportReason, type ReportRecord, type ReportTarget } from "./moderation";
 import { normalizeSocialLinks, sanitizeStoredLinks, type SocialKey } from "../src/lib/socialLinks";
@@ -89,7 +90,7 @@ interface RoomRecord {
   /** Speaking priority — who holds the podium right now */
   podiumUserId: string | null;
   participants: Map<string, ParticipantRecord>;
-  /** In-room chat, kept for the life of the room (memory only, capped) */
+  /** In-room chat: the permanent stored log (034 room_messages, never capped), shared with server/permanence */
   chat: ChatMessage[];
   /** invite-only (drop-in audio chats): hidden from the hallway, never persisted, only `allowed` users can join */
   private?: boolean;
@@ -109,7 +110,7 @@ export interface StoreEvents {
   toast(userId: string, message: string): void;
   kickSocket(socketId: string, roomId: string, reason: string): void;
   chatMessage(msg: ChatMessage): void;
-  chatDeleted(roomId: string, messageId: string): void;
+  chatDeleted(roomId: string, messageId: string, placeholder?: ChatMessage): void;
   chatEdited?(msg: ChatMessage): void;
   dmMessage(msg: DirectMessage): void;
   dmTyping(fromId: string, toId: string): void;
@@ -220,6 +221,8 @@ export class Store {
   chatPrefs = new ChatPrefs();
   /** "Delete for me" hidden ids + the "Delete for everyone" archive (030): server/dmActions.ts */
   dmActions = new DmActions();
+  /** permanence (034): delete-for-everyone placeholders + room chat kept forever: server/permanence.ts */
+  permanence = new Permanence();
   sessions = new Map<string, SessionRecord>(); // tokenHash -> session
   /** sign-in methods: "<provider>|<subject>" -> identity (phone numbers included — see migration 005) */
   identities = new Map<string, IdentityRecord>();
@@ -278,6 +281,8 @@ export class Store {
     }
     await this.chatPrefs.load();
     await this.dmActions.load();
+    await this.permanence.load();
+    this.applyPermanence();
     // edit stamps (031) onto the loaded messages ("edited" label survives restarts)
     if (this.dmActions.allEdits().size)
       for (const list of this.dms.values())
@@ -289,6 +294,31 @@ export class Store {
     let cleared = 0;
     for (const id of this.tombstones.keys()) cleared += this.readAllFrom(id, { silent: true }).length;
     if (cleared) log.info("cleared unread from deleted accounts", { conversations: cleared });
+  }
+
+  /** boot: put every delete-for-everyone placeholder back in its place, and every room's stored chat on the room */
+  private applyPermanence() {
+    let placed = 0;
+    for (const t of this.permanence.tombstones()) {
+      const list = this.dms.get(t.conversationId) ?? [];
+      if (list.some((m) => m.id === t.messageId)) continue;
+      const ph: DirectMessage = { id: t.messageId, fromId: t.fromId, fromName: t.fromName, fromColor: t.fromColor, toId: t.toId, text: DELETED_TEXT, createdAt: t.createdAt, readAt: t.createdAt, deleted: true, deletedAt: t.deletedAt };
+      let i = list.length;
+      while (i > 0 && (list[i - 1].createdAt > ph.createdAt || (list[i - 1].createdAt === ph.createdAt && list[i - 1].id > ph.id))) i--;
+      list.splice(i, 0, ph);
+      this.dms.set(t.conversationId, list);
+      placed++;
+    }
+    for (const room of this.rooms.values()) this.bindRoomChat(room);
+    if (placed) log.info("placed deleted-message placeholders", { placed });
+  }
+
+  /** room.chat IS the stored log (never capped); messages already on the room (seed backlog) are kept */
+  private bindRoomChat(room: RoomRecord) {
+    const log2 = this.permanence.roomChat(room.id);
+    if (room.chat === log2) return;
+    for (const m of room.chat) if (!log2.some((x) => x.id === m.id)) this.permanence.addRoomMessage(m);
+    room.chat = log2;
   }
 
   attach(events: StoreEvents) {
@@ -423,12 +453,20 @@ export class Store {
     this.events?.dmMessage(msg);
   }
 
-  /** Conversation layer: delete a message for everyone (the snapshot diff removes the row). */
+  /**
+   * Conversation layer: delete a message for everyone. The content leaves (the snapshot diff removes the dms row, the
+   * 030 archive is unchanged) and a content-free "This message was deleted" placeholder takes its place for every
+   * member, forever (034 message_tombstones).
+   */
   removeConversationMessage(key: string, messageId: string) {
     const list = this.dms.get(key);
     const i = list ? list.findIndex((m) => m.id === messageId) : -1;
-    if (!list || i < 0) return false;
-    list.splice(i, 1);
+    if (!list || i < 0 || list[i].deleted) return false;
+    const m = list[i];
+    const now = Date.now();
+    const ph: DirectMessage = { id: m.id, fromId: m.fromId, fromName: m.fromName, fromColor: m.fromColor, toId: m.toId, text: DELETED_TEXT, createdAt: m.createdAt, readAt: m.readAt ?? now, ...(m.clientId ? { clientId: m.clientId } : {}), deleted: true, deletedAt: now };
+    list[i] = ph;
+    this.permanence.addTombstone({ messageId: m.id, conversationId: key, fromId: m.fromId, fromName: m.fromName, fromColor: m.fromColor, toId: m.toId, createdAt: m.createdAt, deletedAt: now });
     this.scheduleSave();
     return true;
   }
@@ -473,6 +511,7 @@ export class Store {
   /** Close the backend (after a final flush). */
   async close() {
     await this.flush();
+    await this.permanence.drain().catch(() => {});
     await this.backend?.close();
   }
 
@@ -1541,7 +1580,7 @@ export class Store {
     room.ended = true;
     room.endedAt = Date.now();
     room.participants.clear();
-    room.chat = []; // room chat lives only as long as the room
+    // room chat is kept forever (034 room_messages): it stays readable / pageable after the room ends
     this.events?.roomEnded(room.id);
     this.events?.roomsListChanged();
     this.scheduleSave();
@@ -1728,13 +1767,31 @@ export class Store {
       createdAt,
       ...(replyTo ? { replyTo } : {}),
     };
-    room.chat.push(msg);
-    if (room.chat.length > ROOM_CHAT_HISTORY) room.chat.splice(0, room.chat.length - ROOM_CHAT_HISTORY);
+    this.bindRoomChat(room);
+    this.permanence.addRoomMessage(msg); // no cap: room chat is permanent (034)
     return msg;
   }
 
+  /** join payload: the newest page (older ones via chatPage, back to message #1) */
   chatHistory(roomId: string): ChatMessage[] {
-    return [...(this.rooms.get(roomId)?.chat ?? [])];
+    const room = this.rooms.get(roomId);
+    if (room) this.bindRoomChat(room);
+    return pageBefore(this.permanence.roomChat(roomId), { limit: ROOM_CHAT_HISTORY }).messages;
+  }
+
+  /**
+   * Room chat paging (chat:history): beforeId / afterId cursors like dm:history, works after the room ended.
+   * Private rooms: the allowed list; a room no longer in memory: only people who wrote in it.
+   */
+  chatPage(userId: string, roomId: unknown, q: PageQuery) {
+    if (typeof roomId !== "string" || !roomId || !this.users.has(userId)) return { ok: false as const, error: "Room not found" };
+    const room = this.rooms.get(roomId);
+    const log2 = this.permanence.roomChat(roomId);
+    const allowed = room ? !room.private || !!room.allowed?.has(userId) || room.participants.has(userId) : log2.some((m) => m.authorId === userId);
+    if (!allowed) return { ok: false as const, error: "Room not found" };
+    if (room) this.bindRoomChat(room);
+    const pg2 = page(log2, q);
+    return { ok: true as const, ...pg2 };
   }
 
   /** Simple per-user rate limit shared by room chat and DMs: 8 messages / 10 s. */
@@ -1759,8 +1816,8 @@ export class Store {
     if (!text) return { ok: false as const, error: "Message is empty" };
     if (this.rateLimited(userId)) return { ok: false as const, error: "Slow down a little 🙂" };
     const firstMessage = !ctx.room.chat.some((m) => m.authorId === userId);
-    const target = typeof replyToId === "string" ? ctx.room.chat.find((m) => m.id === replyToId) : undefined;
-    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    const target = typeof replyToId === "string" ? ctx.room.chat.find((m) => m.id === replyToId && !m.deleted) : undefined;
+    if (replyToId !== undefined && (!target || target.deleted)) return { ok: false as const, error: "Original message is no longer available" };
     const msg = this.pushChat(ctx.room, userId, text, Date.now(), target ? replyReference(target) : undefined)!;
     this.events?.chatMessage(msg);
 
@@ -1786,8 +1843,13 @@ export class Store {
     if (coHost && room.hostId !== userId && room.chat[idx].authorId === room.hostId) return { ok: false as const, error: "Co-hosts can't delete the host's messages" };
     if (room.chat[idx].authorId !== userId && room.hostId !== userId && !coHost)
       return { ok: false as const, error: "Only the host, a co-host, or the author can delete a message" };
-    room.chat.splice(idx, 1);
-    this.events?.chatDeleted(roomId, messageId);
+    if (room.chat[idx].deleted) return { ok: true as const };
+    // delete for everyone: content removed, a "This message was deleted" placeholder stays in its place (034)
+    const old = room.chat[idx];
+    const ph: ChatMessage = { id: old.id, roomId: old.roomId, authorId: old.authorId, authorName: old.authorName, authorColor: old.authorColor, authorPhotoUrl: old.authorPhotoUrl, authorRole: old.authorRole, authorIsBot: old.authorIsBot, text: DELETED_TEXT, createdAt: old.createdAt, deleted: true, deletedAt: Date.now() };
+    room.chat[idx] = ph;
+    this.permanence.saveRoomMessage(ph);
+    this.events?.chatDeleted(roomId, messageId, ph);
     return { ok: true as const };
   }
 
@@ -1796,7 +1858,7 @@ export class Store {
     const ctx = this.participant(roomId, userId);
     if (!ctx) return { ok: false as const, error: "Join the room to chat" };
     const m = typeof messageId === "string" ? ctx.room.chat.find((x) => x.id === messageId) : undefined;
-    if (!m) return { ok: false as const, error: "Message not found" };
+    if (!m || m.deleted) return { ok: false as const, error: "Message not found" };
     if (m.authorId !== userId) return { ok: false as const, error: "You can only edit your own messages" };
     if (parseSticker(m.text)) return { ok: false as const, error: "This message can't be edited" };
     if (Date.now() - m.createdAt > MESSAGE_EDIT_WINDOW_MS) return { ok: false as const, error: "Messages can only be edited for 48 hours" };
@@ -1808,6 +1870,7 @@ export class Store {
     if (this.slidingLimit(this.editRate, userId, 60_000, 20)) return { ok: false as const, error: "Slow down a little 🙂" };
     m.text = c.text;
     m.editedAt = Date.now();
+    this.permanence.saveRoomMessage(m);
     this.events?.chatEdited?.(m);
     return { ok: true as const, unchanged: false, message: m };
   }
@@ -2128,7 +2191,7 @@ export class Store {
   /**
    * Telegram-style delete in a 1:1 chat. forEveryone: only your own messages; they leave the conversation for both
    * sides (archived 30 days for moderation — the soft delete). Otherwise: hidden for you only, any message.
-   * Unknown ids are ignored (already deleted / trimmed) so a retry is harmless. Groups use group:deleteMessage.
+   * Unknown or already-deleted ids are ignored so a retry is harmless. Groups use group:deleteMessage.
    */
   deleteDmMessages(userId: string, peerId: unknown, rawIds: unknown, forEveryone: unknown) {
     if (typeof peerId !== "string" || !peerId || isGroupId(peerId) || peerId === userId) return { ok: false as const, error: "User not found" };
@@ -2166,7 +2229,7 @@ export class Store {
     if (!inGroup && this.isBlockedEither(userId, chatId)) return { ok: false as const, status: 403, blocked: true, error: "You can't edit messages in this conversation." };
     const key = conversationId(userId, chatId);
     const m = (this.dms.get(key) ?? []).find((x) => x.id === messageId);
-    if (!m || (inGroup && this.groups?.isService(m.id))) return nf;
+    if (!m || m.deleted || (inGroup && this.groups?.isService(m.id))) return nf;
     if (m.fromId !== userId) return { ok: false as const, status: 403, error: "You can only edit your own messages" };
     if (m.kind || m.call || m.media || m.attachments?.length || parseSticker(m.text)) return { ok: false as const, status: 400, error: "This message can't be edited" };
     if (Date.now() - m.createdAt > MESSAGE_EDIT_WINDOW_MS) return { ok: false as const, status: 400, error: "Messages can only be edited for 48 hours" };
@@ -2231,7 +2294,7 @@ export class Store {
     }
     if (this.rateLimited(fromId)) return { ok: false as const, error: "Slow down a little 🙂" };
     const target = typeof replyToId === "string" ? this.findDm(conversationId(fromId, toId), replyToId) : null;
-    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    if (replyToId !== undefined && (!target || target.deleted)) return { ok: false as const, error: "Original message is no longer available" };
     const msg = this.appendDm(fromId, toId, text, cid, target ? { replyTo: replyReference(target) } : undefined);
     // sending implies you've read everything before it
     this.markDmRead(fromId, toId);
@@ -2341,7 +2404,7 @@ export class Store {
     }
     // no per-message chat limit here: albums send several at once, and uploads are rate limited in server/media
     const target = typeof replyToId === "string" ? this.findDm(conversationId(fromId, toId), replyToId) : null;
-    if (replyToId !== undefined && !target) return { ok: false as const, error: "Original message is no longer available" };
+    if (replyToId !== undefined && (!target || target.deleted)) return { ok: false as const, error: "Original message is no longer available" };
     const msg = this.appendDm(fromId, toId, text.slice(0, CHAT_MAX_LENGTH), cid, { media, attachments, ...(target ? { replyTo: replyReference(target) } : {}) });
     this.markDmRead(fromId, toId);
     return { ok: true as const, message: msg, duplicate: false };
@@ -2538,7 +2601,7 @@ export class Store {
     if (!this.users.has(userId) || userId === peerId || (inGroup ? !this.groups?.canAccess(userId, peerId) : !this.users.has(peerId))) return { ok: false as const, error: "Message not found" };
     if (!inGroup && this.isBlockedEither(userId, peerId)) return { ok: false as const, blocked: true, error: "You can't react in this conversation." };
     const m = (this.dms.get(conversationId(userId, peerId)) ?? []).find((x) => x.id === messageId);
-    if (!m || (inGroup && this.groups?.isService(m.id))) return { ok: false as const, error: "Message not found" };
+    if (!m || m.deleted || (inGroup && this.groups?.isService(m.id))) return { ok: false as const, error: "Message not found" };
     if (this.slidingLimit(this.dmReactRate, userId, 10_000, 40)) return { ok: false as const, error: "Slow down a little 🙂" };
     const list: DmReaction[] = m.reactions ?? [];
     const ev = (r: DmReaction): DmReactionEvent => ({ messageId: m.id, fromId: m.fromId, toId: m.toId, userId: r.userId, emoji: r.emoji, at: r.at });

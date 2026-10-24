@@ -53,6 +53,8 @@ export default function RoomPage() {
     sendChat,
     editChat,
     deleteChat,
+    chatHasMore,
+    loadOlderChat,
     setSelfMuted,
   } = useLiveRoom();
   const [selected, setSelected] = useState<string | null>(null);
@@ -523,6 +525,8 @@ export default function RoomPage() {
               connected={connected}
               onSend={sendChat}
               onDelete={deleteChat}
+              hasMore={chatHasMore}
+              onLoadOlder={loadOlderChat}
               onEdit={editChat}
               onAuthorClick={openAuthor}
               hiddenIds={safety.hidden}
@@ -546,6 +550,8 @@ export default function RoomPage() {
             connected={connected}
             onSend={sendChat}
             onDelete={deleteChat}
+              hasMore={chatHasMore}
+              onLoadOlder={loadOlderChat}
               onEdit={editChat}
             onAuthorClick={openAuthor}
             hiddenIds={safety.hidden}

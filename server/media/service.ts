@@ -1185,11 +1185,16 @@ export class MediaService {
     for (const s of [...this.sessions.values()]) if (now - s.updatedAt > UPLOAD_STALE_MS) this.dropSession(s.id);
   }
 
-  /** Conversation deleted by the chat layer (a group's last member left): remove every file sent in it. Idempotent. */
+  /**
+   * Conversation deleted by the chat layer (a group's last member left). Permanence (034): ordinary photos, videos,
+   * voice notes and documents are KEPT (the messages stay in history); only self-destructing / view-once items go
+   * (they would expire on their own timer anyway). Idempotent.
+   */
   async purgeConversation(conversationId: string) {
     await this.ready();
     const mids = new Set<string>();
-    for (const r of this.rows.values()) if (r.conversationId === conversationId && r.messageId) mids.add(r.messageId);
+    for (const r of this.rows.values())
+      if (r.conversationId === conversationId && r.messageId && (r.viewOnce || r.ttlSeconds || r.expiresAt)) mids.add(r.messageId);
     for (const mid of mids) await this.onMessageDeleted(mid);
     if (mids.size) log.info("media conversation purged", { conversationId, messages: mids.size });
   }

@@ -325,7 +325,7 @@ function jMessages(db: JDb, me: string, q: ParsedQuery, o: { chat: string | null
   const blocked = jBlocked(db, me);
   const all: HxMessage[] = [];
   for (const d of [...db.dms].sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))) {
-    if (d.kind || (d.fromId !== me && d.toId !== me)) continue;
+    if (d.kind || (d as { deleted?: boolean }).deleted || (d.fromId !== me && d.toId !== me)) continue;
     const peerId = d.fromId === me ? d.toId : d.fromId;
     if (o.chat && peerId !== o.chat) continue;
     if (o.from && d.fromId !== o.from) continue;

@@ -7,7 +7,8 @@ import type { Conn, WsHub } from "./ws";
 import { closeLiveKitRoom, createJoinToken, livekit, muteParticipantAudio, setCanPublish } from "./livekit";
 import { normalizeReactionEmoji, store } from "./store";
 import { stickers } from "./stickers/service";
-import { isGroupId } from "./conversation";
+import { conversationId, isGroupId } from "./conversation";
+import { ROOM_CHAT_HISTORY } from "../src/lib/types";
 import { attachGroupHandlers, groupHistory, groupMessage, groupTyping, groups, wireGroups } from "./groups";
 import { OtpService, normalizePhone } from "./otp";
 import { dropTicket, getTicket, issueTicket } from "./authx/signup";
@@ -206,8 +207,8 @@ export function registerRealtime(io: WsHub) {
     chatMessage(msg) {
       io.to(`room:${msg.roomId}`).emit("chat:message", msg);
     },
-    chatDeleted(roomId, messageId) {
-      io.to(`room:${roomId}`).emit("chat:deleted", { roomId, messageId });
+    chatDeleted(roomId, messageId, placeholder) {
+      io.to(`room:${roomId}`).emit("chat:deleted", { roomId, messageId, ...(placeholder ? { placeholder } : {}) });
     },
     chatEdited(msg) {
       io.to(`room:${msg.roomId}`).emit("chat:edited", msg);
@@ -544,7 +545,7 @@ export function registerRealtime(io: WsHub) {
               .then((token) => ({ url: livekit.url, token }))
               .catch(() => null);
         }
-        ack({ ok: true, room: roomState(roomId), chat: store.chatHistory(roomId), audio: { enabled: livekit.enabled, ...(lk ?? {}) } });
+        ack({ ok: true, room: roomState(roomId), chat: store.chatHistory(roomId), chatHasMore: store.permanence.roomChat(roomId).length > ROOM_CHAT_HISTORY, audio: { enabled: livekit.enabled, ...(lk ?? {}) } });
       }),
     );
 
@@ -633,6 +634,11 @@ export function registerRealtime(io: WsHub) {
         if (store.socketOf(roomId, userId) !== socket.id) return ack({ ok: false, error: "Join the room to chat" });
         ack(store.editChat(roomId, userId, messageId, text));
       }),
+    );
+
+    // room chat history (permanent, 034): page back to message #1 like dm:history; works after the room ended
+    socket.on("chat:history", ({ roomId, beforeId, afterId, limit }: { roomId: string; beforeId?: string; afterId?: string; limit?: number }, ack: AckFn = noop) =>
+      authed(ack, (userId) => ack(store.chatPage(userId, roomId, { beforeId: typeof beforeId === "string" ? beforeId : undefined, afterId: typeof afterId === "string" ? afterId : undefined, limit }))),
     );
 
     socket.on("chat:delete", ({ roomId, messageId }: { roomId: string; messageId: string }, ack: AckFn = noop) =>
@@ -747,8 +753,10 @@ export function registerRealtime(io: WsHub) {
         const r = store.deleteDmMessages(userId, peerId, messageIds, forEveryone === true);
         if (!r.ok) return ack(r);
         for (const messageId of r.messageIds) {
-          io.to(`user:${userId}`).emit("conv:deleted", { conversationId: peerId, messageId, by: userId, forEveryone: r.forEveryone });
-          if (r.forEveryone) io.to(`user:${peerId}`).emit("conv:deleted", { conversationId: userId, messageId, by: userId, forEveryone: true });
+          const ph = r.forEveryone ? store.findDm(conversationId(userId, peerId), messageId) : null;
+          const placeholder = ph?.deleted ? { placeholder: ph } : {};
+          io.to(`user:${userId}`).emit("conv:deleted", { conversationId: peerId, messageId, by: userId, forEveryone: r.forEveryone, ...placeholder });
+          if (r.forEveryone) io.to(`user:${peerId}`).emit("conv:deleted", { conversationId: userId, messageId, by: userId, forEveryone: true, ...placeholder });
         }
         if (r.peerUnreadChanged) io.to(`user:${peerId}`).emit("dm:unread", { count: store.unreadDmCount(peerId) });
         ack({ ok: true, messageIds: r.messageIds, forEveryone: r.forEveryone });
