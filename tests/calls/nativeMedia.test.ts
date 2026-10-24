@@ -118,8 +118,8 @@ test("native iPhone video reuses the existing call overlay above a suppressed ap
   assert.match(provider, /css\.nativeVideoUnderlay/);
   assert.match(overlay, /const nativeFullscreen = s\.nativeVideo && !s\.minimized/);
   assert.match(overlay, /nativeFullscreen && css\.nativeVideoScreen/);
-  assert.match(overlay, /const \[swap, setSwap\] = useState\(false\)/);
-  assert.match(overlay, /const bigWhich: "local" \| "remote" = s\.remoteCam && s\.camOn \? \(swap \? "local" : "remote"\) : s\.remoteCam \? "remote" : "local"/);
+  // FX-061 (Oct 24): no swap; big tile always remote, self-view only in the PiP.
+  assert.match(overlay, /const bigWhich: "local" \| "remote" = "remote";/);
   assert.match(overlay, /big: \{ kind: bigWhich, rect: big, fit: "cover" \}/);
   assert.match(overlay, /const stage = bigTile\.current\?\.getBoundingClientRect\(\)/);
   assert.match(overlay, /const left = Math\.max\(stage\.left, r\.left\)/);

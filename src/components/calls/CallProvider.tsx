@@ -101,7 +101,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       if (d.type === "call:hangup") void (st.ui === "incoming" ? e_.decline() : e_.hangup());
       else if (d.type === "call:accept" && st.ui === "incoming") void e_.accept(st.call?.video ?? false);
       else if (d.type === "call:decline" && st.ui === "incoming") void e_.decline();
-      else if (d.type === "call:mute" && typeof d.muted === "boolean" && d.muted !== st.muted) void e_.toggleMute();
+      else if (d.type === "call:mute" && typeof d.muted === "boolean") void e_.setMuted(d.muted, "native"); // FX-063: no toggle, no echo back
     };
     window.addEventListener("openlounge:native-call", onNative);
     // Native Accept on an already-loaded page (CallKit / Android call screen): accept IN PLACE instead of the wrapper

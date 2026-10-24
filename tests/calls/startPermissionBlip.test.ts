@@ -8,7 +8,7 @@ const ms = readFileSync("src/lib/calls/mediasoupSession.ts", "utf8");
 const eng = readFileSync("src/lib/calls/engine.ts", "utf8");
 
 test("permission prompt: curtain fallback only runs once the big tile has a feed attached", () => {
-  assert.match(ov, /if \(!s\.nativeVideo && !stageFed\) return;/);
+  assert.match(ov, /if \(!s\.nativeVideo && !stageFed && s\.remoteCam\) return;/);
   assert.match(ov, /addEventListener\("loadstart", onLoadStart\)/);
   assert.match(ov, /onAttached=\{onStageAttached\}/);
 });

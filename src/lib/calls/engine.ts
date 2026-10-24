@@ -2443,14 +2443,37 @@ export class CallEngine {
   }
 
   // ---------- controls ----------
+  /** last page-initiated mute change (value + time): CallKit echoes of older taps must not flip the button back */
+  private muteIntent: { muted: boolean; at: number } | null = null;
+  private muteApply: Promise<void> = Promise.resolve();
+
   async toggleMute() {
-    const muted = !this.s.muted;
-    this.set({ muted });
-    buzz("light");
-    if (this.mediasoup) await this.mediasoup.setMuted(muted).catch(() => {});
-    const t = this.micTrack;
-    if (t) await (muted ? t.mute() : t.unmute()).catch(() => {});
-    postNative({ type: "call:muted", muted });
+    return this.setMuted(!this.s.muted, "user");
+  }
+
+  /**
+   * FX-063: one source of truth for mute. The button flips at once (optimistic) and stays put: media is applied in
+   * tap order (serialized), and the native call UI (CallKit / Android) is told only about user taps. A native mute
+   * event that only echoes an earlier tap (CallKit performs queued CXSetMutedCallActions after the page moved on) is
+   * ignored, so the state never ping-pongs between Mute and Unmute.
+   */
+  async setMuted(muted: boolean, from: "user" | "native" = "user") {
+    if (from === "native") {
+      if (ignoreNativeMute(this.muteIntent, muted, this.s.muted)) return; // no-op or stale echo of an older tap
+    } else {
+      this.muteIntent = { muted, at: Date.now() };
+      buzz("light");
+    }
+    if (muted !== this.s.muted) this.set({ muted });
+    const apply = async () => {
+      const want = this.s.muted;
+      if (this.mediasoup) await this.mediasoup.setMuted(want).catch(() => {});
+      const t = this.micTrack;
+      if (t) await (want ? t.mute() : t.unmute()).catch(() => {});
+    };
+    this.muteApply = this.muteApply.then(apply, apply);
+    if (from === "user") postNative({ type: "call:muted", muted });
+    await this.muteApply;
   }
 
   async toggleCam() {
@@ -2613,6 +2636,15 @@ export const fmt = (s: number) => {
   const ss = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 };
+
+/** window in which a native mute event contradicting the latest tap is treated as a stale CallKit echo */
+export const MUTE_ECHO_MS = 1500;
+
+/** FX-063: a native (CallKit / Android) mute event is dropped when it changes nothing or contradicts a tap made < MUTE_ECHO_MS ago. */
+export function ignoreNativeMute(intent: { muted: boolean; at: number } | null, muted: boolean, current: boolean, now = Date.now()): boolean {
+  if (muted === current) return true;
+  return !!intent && now - intent.at < MUTE_ECHO_MS && intent.muted !== muted;
+}
 
 export const callEngine = typeof window !== "undefined" ? new CallEngine() : (null as unknown as CallEngine);
 

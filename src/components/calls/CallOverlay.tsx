@@ -109,7 +109,8 @@ function Curtain({ s, fading, onGone }: { s: CallSnapshot; fading: boolean; onGo
   );
 }
 
-/** Self-view: draggable, snaps to the nearest corner, tap swaps big/small. */
+/** Self-view: draggable, snaps to the nearest corner (FX-061: always the local camera; no swap into the big tile). */
+const noop = () => {};
 function Pip({ which, onSwap, mirrored, tileRef, onTileChanged }: { which: "local" | "remote"; onSwap: () => void; mirrored: boolean; tileRef?: React.MutableRefObject<HTMLDivElement | null>; onTileChanged?: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const vid = useRef<HTMLVideoElement>(null);
@@ -412,7 +413,6 @@ export function CallOverlay() {
   const s = useCall();
   const active = s.ui === "active" || s.ui === "connecting";
   useTicker(!!s.ui && s.ui !== "ended");
-  const [swap, setSwap] = useState(false);
   const [showCtl, setShowCtl] = useState(true);
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
   // iPhone app-owned video: until the remote camera is live the app has nothing reliable to paint under the
@@ -436,12 +436,14 @@ export function CallOverlay() {
   }, [video]);
   useEffect(() => {
     if (!video) return setCurtain("on");
-    if (!s.nativeVideo && !stageFed) return; // OS permission prompt still up / camera not started: keep the curtain
+    // OS permission prompt still up / camera not started: keep the curtain. No remote video yet: the stage is the
+    // placeholder itself (same backdrop), so the curtain may lift and show the self-view PiP over it (FX-061).
+    if (!s.nativeVideo && !stageFed && s.remoteCam) return;
     // native RTCViews: give the app two frames after the first layout record; web: the first decoded frame (below),
     // with a fallback so a camera-off peer (hold frame / black) never keeps the curtain up
     const t = setTimeout(() => setCurtain((c) => (c === "on" ? "fading" : c)), s.nativeVideo ? NATIVE_REVEAL_MS : CURTAIN_FALLBACK_MS);
     return () => clearTimeout(t);
-  }, [video, s.nativeVideo, stageFed]);
+  }, [video, s.nativeVideo, stageFed, s.remoteCam]);
   const revealStage = useCallback(() => setCurtain((c) => (c === "on" ? "fading" : c)), []);
   useEffect(() => {
     if (curtain === "fading" && prefersReducedMotion()) setCurtain("off");
@@ -471,11 +473,15 @@ export function CallOverlay() {
     return () => window.removeEventListener("keydown", k);
   }, [active]);
 
-  const bigWhich: "local" | "remote" = s.remoteCam && s.camOn ? (swap ? "local" : "remote") : s.remoteCam ? "remote" : "local";
-  const showPip = s.remoteCam && s.camOn;
+  // FX-061: the big tile is ONLY the other person (never the local camera, not even before their video arrives or via
+  // a swap); until their feed is live it shows a clean avatar/status placeholder. The self-view lives only in the PiP.
+  const bigWhich: "local" | "remote" = "remote";
+  const showPip = s.camOn;
   // the ended screen keeps exactly the tiles it had (no tile popping out or swapping while it fades)
   const lastPip = useRef(false);
+  const lastRemote = useRef(false);
   if (video) {
+    lastRemote.current = s.remoteCam;
     lastBig.current = bigWhich;
     lastPip.current = showPip;
   }
@@ -512,7 +518,7 @@ export function CallOverlay() {
     const pip = showPip ? rect(pipTile.current) : null;
     // The app-owned iPhone call surface is phone-only. Keep its remote full tile aspect-filled exactly as this overlay
     // renders on phones; the native renderer preserves aspect ratio (no stretch) and the local PiP is cover as well.
-    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: bigWhich === "local" ? "remote" : "local", rect: pip, fit: "cover", mirror: bigWhich === "remote" && s.facing === "user" } : null }).catch(() => {});
+    void nativeMediaCmd({ op: "videoLayout", version: 1, callId: s.call.id, hidden: false, viewport: { width: stage.width, height: stage.height, keyboard: Math.max(0, stage.height - (window.visualViewport?.height ?? stage.height)) }, big: { kind: bigWhich, rect: big, fit: "cover" }, pip: pip ? { kind: "local", rect: pip, fit: "cover", mirror: s.facing === "user" } : null }).catch(() => {});
   }, [bigWhich, s.call, s.facing, s.minimized, s.nativeVideo, showPip, video]);
   useEffect(() => {
     if (!s.nativeVideo || !s.call) return;
@@ -537,8 +543,8 @@ export function CallOverlay() {
 
   return (
     <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? cn(css.endFadeNow, css.endNative) : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
-      {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} onAttached={onStageAttached} /> : <Background s={s} />}
-      {stagePip && <Pip which={stageWhich === "local" ? "remote" : "local"} mirrored={stageWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {showStage && (s.remoteCam || (endedVideo && lastRemote.current)) ? <BigVideo which={stageWhich} mirrored={false} tileRef={bigTile} onFirstFrame={revealStage} onAttached={onStageAttached} /> : showStage ? <div ref={bigTile} className={css.videoStage} data-testid="call-remote-placeholder"><Background s={s} /></div> : <Background s={s} />}
+      {stagePip && <Pip which="local" mirrored={s.facing === "user"} onSwap={noop} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
       {video && curtain !== "off" && <Curtain s={s} fading={curtain === "fading"} onGone={() => setCurtain("off")} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
