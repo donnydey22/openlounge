@@ -1009,8 +1009,8 @@ export class CallEngine {
       if (firstMediaOk) this.initCallRoute();
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
-      if (media.provider === "mediasoup" && this.s.call?.id) this.turnRefresh.start(this.s.call.id);
       this.startUdpProbe(session);
+      if (media.provider === "mediasoup" && this.s.call?.id) this.turnRefresh.start(this.s.call.id);
       this.startAndroidLifecycle(session);
       if (answer || this.s.call?.phase === "active") {
         if (this.s.ui === "connecting") {
