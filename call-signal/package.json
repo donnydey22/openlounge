@@ -1,0 +1,9 @@
+{
+  "name": "openlounge-call-signal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Open Lounge 1:1 call signaling + short-lived TURN creds (ChatSwap socketEvents.js:1468-1830 parity). Runs on the DigitalOcean UDP droplet only; calling only; no LiveKit, no rooms.",
+  "scripts": { "start": "node src/index.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "ws": "8.18.3" }
+}
