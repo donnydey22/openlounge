@@ -1,7 +1,7 @@
 /* Open Lounge service worker — notifications ONLY.
  *
- * Deliberately has NO fetch handler: nothing is cached, every page/JS request goes straight to
- * the network exactly as it does without a service worker, so the app always loads fresh.
+ * Pages are network-first (online the app always loads fresh); the last copy of the inbox / chat
+ * screens and the hashed build files are kept only so the app opens with no signal (offline inbox).
  * It exists so Android Chrome (where `new Notification()` throws) can show notifications via
  * registration.showNotification(), and so clicking a notification focuses the tab and opens
  * the right room / DM.
@@ -17,7 +17,85 @@ self.addEventListener("install", () => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      // drop app-shell caches from older versions
+      typeof caches === "undefined"
+        ? null
+        : caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith("ol-shell-") && k !== SHELL_PAGES && k !== SHELL_STATIC).map((k) => caches.delete(k)))),
+    ]),
+  );
+});
+
+/* ======================================================================================
+ * OFFLINE APP SHELL (offline inbox: opening the app with no signal)
+ * Online behaviour is unchanged: pages are NETWORK-FIRST (always fresh; the copy is only refreshed),
+ * and only when the network fails is the last copy of that page (or the inbox) served. Hashed build
+ * files (/_next/static, immutable) are cache-first. Nothing else is touched: API, WebSocket, media,
+ * uploads and auth all go straight to the network. No user data lives here (chats are in IndexedDB,
+ * per signed-in user, wiped on sign-out).
+ * ====================================================================================== */
+var SHELL_PAGES = "ol-shell-pages-v1";
+var SHELL_STATIC = "ol-shell-static-v1";
+var SHELL_STATIC_MAX = 400;
+var SHELL_ROUTES = /^\/(messages(\/[^/]+)?|calls|settings)?\/?$/;
+
+function shellTrim(cache, max) {
+  return cache.keys().then(function (keys) {
+    if (keys.length <= max) return;
+    return Promise.all(keys.slice(0, keys.length - max).map(function (k) { return cache.delete(k); }));
+  });
+}
+
+self.addEventListener("fetch", (event) => {
+  var req = event.request;
+  if (req.method !== "GET" || typeof caches === "undefined") return;
+  var url;
+  try {
+    url = new URL(req.url);
+  } catch (e) {
+    return;
+  }
+  if (url.origin !== self.location.origin) return;
+  if (req.mode === "navigate" && SHELL_ROUTES.test(url.pathname)) {
+    event.respondWith(
+      fetch(req)
+        .then(function (res) {
+          if (res && res.ok && res.type === "basic" && !res.redirected) {
+            var copy = res.clone();
+            var key = url.origin + url.pathname; // no query: one copy per screen
+            event.waitUntil(caches.open(SHELL_PAGES).then(function (c) { return c.put(key, copy); }).catch(function () {}));
+          }
+          return res;
+        })
+        .catch(function (err) {
+          return caches.open(SHELL_PAGES).then(function (c) {
+            return c.match(url.origin + url.pathname).then(function (hit) {
+              // an unseen chat / screen with no signal: the inbox (it routes client-side from there)
+              return hit || c.match(url.origin + "/messages") || c.match(url.origin + "/") || Promise.reject(err);
+            });
+          });
+        }),
+    );
+    return;
+  }
+  if (url.pathname.indexOf("/_next/static/") === 0) {
+    event.respondWith(
+      caches.open(SHELL_STATIC).then(function (c) {
+        return c.match(req).then(function (hit) {
+          if (hit) return hit;
+          return fetch(req).then(function (res) {
+            if (res && res.ok && res.type === "basic") {
+              var copy = res.clone();
+              event.waitUntil(c.put(req, copy).then(function () { return shellTrim(c, SHELL_STATIC_MAX); }).catch(function () {}));
+            }
+            return res;
+          });
+        });
+      }),
+    );
+  }
 });
 
 /* ======================================================================================

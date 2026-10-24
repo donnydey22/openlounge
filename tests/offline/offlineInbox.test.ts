@@ -98,3 +98,33 @@ test("offline inbox wiring: cache read/write-through, per-user wipe, snapshot bo
   assert.match(th, /removePending\(me\.id, item\.clientId\)/);
   assert.match(th, /pendingFor\(me\.id, peerId\)/);
 });
+
+test("app shell SW: pages network-first (fresh online), cached copy offline, API untouched", async () => {
+  const vm = await import("node:vm");
+  const store = new Map<string, Map<string, unknown>>();
+  const caches = {
+    open: async (n: string) => { if (!store.has(n)) store.set(n, new Map()); const m = store.get(n)!; return { put: async (k: any, v: unknown) => void m.set(typeof k === "string" ? k : k.url, v), match: async (k: any) => m.get(typeof k === "string" ? k : k.url), keys: async () => [...m.keys()], delete: async (k: string) => m.delete(k) }; },
+    keys: async () => [...store.keys()],
+    delete: async (k: string) => store.delete(k),
+  };
+  let online = true;
+  let fetches = 0;
+  const fetch = async (r: any) => { fetches++; if (!online) throw new TypeError("offline"); return { ok: true, type: "basic", redirected: false, body: `fresh ${r.url} ${fetches}`, clone() { return { ...this }; } }; };
+  const handlers: Record<string, (e: any) => void> = {};
+  const self = { addEventListener: (t: string, f: any) => (handlers[t] = f), location: { origin: "https://ol.test" }, clients: { claim: async () => {} }, registration: {} };
+  vm.runInNewContext(readFileSync("public/sw.js", "utf8"), { self, caches, fetch, URL, Date, console, setInterval, clearInterval, Promise });
+  const go = async (url: string, mode = "navigate") => {
+    let resp: Promise<any> | null = null; const waits: Promise<unknown>[] = [];
+    handlers.fetch({ request: { url, method: "GET", mode }, respondWith: (p: Promise<any>) => (resp = p), waitUntil: (p: Promise<unknown>) => waits.push(p) });
+    const r = resp ? await resp : null; await Promise.all(waits); return r;
+  };
+  const a = await go("https://ol.test/messages");
+  assert.match(a.body, /fresh .*messages 1/);
+  online = false;
+  assert.match((await go("https://ol.test/messages")).body, /messages 1/, "offline: last copy");
+  assert.match((await go("https://ol.test/messages/u_unseen")).body, /messages 1/, "unseen chat offline → inbox shell");
+  online = true;
+  assert.match((await go("https://ol.test/messages")).body, /fresh .*messages 4/, "online: always network");
+  assert.equal(await go("https://ol.test/api/me", "cors"), null, "API not intercepted");
+  assert.equal(await go("https://other.test/messages"), null, "cross-origin not intercepted");
+});

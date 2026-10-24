@@ -622,6 +622,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [request],
   );
 
+  // offline app shell: /sw.js keeps the last inbox / chat screens so the app opens with no signal (network-first
+  // online). Same registration the notifications use; registering again is a no-op.
+  useEffect(() => {
+    try {
+      if ("serviceWorker" in navigator && window.isSecureContext) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    } catch {
+      /* older WebViews */
+    }
+  }, []);
+
   // keep the offline-launch snapshot current (only real server sessions are saved)
   useEffect(() => {
     if (me && !meFromSnap.current) saveOfflineMe(me, following, unreadDms);
