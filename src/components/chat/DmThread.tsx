@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, CheckCircle2, ChevronLeft, Copy, CornerUpLeft, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { Ban, CheckCircle2, ChevronLeft, Copy, CornerUpLeft, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -20,6 +20,8 @@ import { ReactionFlight, type Flight } from "./emoji/ReactionFlight";
 import { burst, dust } from "./emoji/effects";
 import { DeleteDialog } from "./DeleteDialog";
 import { UNDO_MS, UndoToast } from "./UndoToast";
+import { JumpToLatest } from "./JumpToLatest";
+import { distanceFromBottom, scrollToLatest, showJumpButton } from "@/lib/chatScroll";
 import { animate, haptic, prefersReducedMotion } from "./emoji/motion";
 import { NATIVE_VISIBILITY_EVENT, appVisible } from "@/lib/realtime";
 import { cn, firstName } from "@/lib/utils";
@@ -265,6 +267,8 @@ export function DmThread({
   const [error, setError] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const [unseenBelow, setUnseenBelow] = useState(0);
+  const jumpToNewestWindow = useRef<() => void>(() => {});
+  const [farUp, setFarUp] = useState(false); // > ~1 screen above the newest → show the round jump button
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const smoothNext = useRef(false);
@@ -889,7 +893,12 @@ export function DmThread({
     if (!el) return;
     stickToBottom.current = true;
     setUnseenBelow(0);
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setFarUp(false);
+    if (distanceFromBottom(el) > el.clientHeight * 3) {
+      // very far (deep in history): swap the virtual window to the newest rows first, then glide the last screen
+      jumpToNewestWindow.current();
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToLatest(listRef.current)));
+    } else scrollToLatest(el);
   };
 
   const loadingOlder = useRef(false);
@@ -1317,6 +1326,10 @@ export function DmThread({
     captureAnchor.current();
     setVr({ a: r.length - ns, b: r.length - ne });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  jumpToNewestWindow.current = () => {
+    anchor.current = null;
+    setVr({ a: V_INIT_ROWS, b: 0 });
+  };
   const vRaf = useRef(0);
   const scheduleEnsure = useCallback(() => {
     if (vRaf.current) return;
@@ -1681,6 +1694,8 @@ export function DmThread({
             const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
             stickToBottom.current = near;
             if (near && unseenBelow) setUnseenBelow(0);
+            const far = showJumpButton(distanceFromBottom(el), el.clientHeight, 0);
+            if (far !== farUp) setFarUp(far);
             if (!near) captureAnchor.current();
             scheduleEnsure();
             maybePrefetch();
@@ -1809,14 +1824,7 @@ export function DmThread({
             onUndo={undoDelete}
           />
         )}
-        {unseenBelow > 0 && !pendingDel && (
-          <button
-            onClick={scrollToBottom}
-            className="fade-in absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 py-1.5 text-xs font-semibold text-zinc-100 shadow-lg ring-1 ring-white/10"
-          >
-            <ArrowDown className="h-3.5 w-3.5" /> {unseenBelow === 1 ? "New message" : `${unseenBelow} new messages`}
-          </button>
-        )}
+        <JumpToLatest show={(farUp || unseenBelow > 0) && !pendingDel} unseen={unseenBelow} onJump={scrollToBottom} />
       </div>
 
       <div data-ol-bottom-pad className="shrink-0 border-t border-white/5 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">

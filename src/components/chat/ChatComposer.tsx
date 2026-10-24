@@ -9,7 +9,7 @@ import { toggleStyle, wrapLink, type MdStyle } from "@/lib/format/markdown";
 import { CHAT_MAX_LENGTH } from "@/lib/types";
 import { enterSends, indentLines, newline, tabIndents } from "@/lib/composer/keys";
 
-const COMPOSER_MAX_H = 200; // ~8 lines, then it scrolls
+import { composerMaxHeight } from "@/lib/chatScroll";
 const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && !window.matchMedia?.("(any-pointer: fine)").matches;
 const canBackgroundPreload = () => {
   if (typeof navigator === "undefined") return false;
@@ -21,6 +21,29 @@ const warmEmojiPicker = () => void import("./emoji/EmojiPicker").then(({ preload
 import { cn } from "@/lib/utils";
 import { StickerButton } from "../stickers/StickerButton";
 import { useEmojiPanelHeight } from "@/lib/emoji/fit";
+
+/** Auto-grow up to ~6 lines (or 40% of the visible viewport on short screens / with the keyboard up), then scroll inside. */
+export function fitComposer(ta: HTMLTextAreaElement | null) {
+  if (!ta) return;
+  const cs = getComputedStyle(ta);
+  const fs = parseFloat(cs.fontSize) || 16;
+  const lh = parseFloat(cs.lineHeight) || fs * 1.375;
+  const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  const vh = (typeof window !== "undefined" && (window.visualViewport?.height || window.innerHeight)) || 800;
+  const cap = composerMaxHeight(lh, padY, vh);
+  const atEnd = ta.selectionEnd === ta.value.length;
+  const prevScroll = ta.scrollTop;
+  ta.style.height = "auto";
+  const full = ta.scrollHeight + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  const h = Math.min(full, cap);
+  ta.style.height = h + "px";
+  ta.style.maxHeight = cap + "px";
+  const over = full > cap + 1;
+  ta.style.overflowY = over ? "auto" : "hidden";
+  ta.dataset.capped = over ? "1" : "0";
+  // keep the caret in view: typing / pasting at the end follows it, editing mid-text keeps the user's place
+  ta.scrollTop = over && atEnd ? ta.scrollHeight : prevScroll;
+}
 
 // the animated picker (and its catalog) loads only when the panel is first opened
 const EmojiPicker = lazy(() => import("./emoji/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
@@ -72,6 +95,19 @@ export function ChatComposer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // keyboard up/down (iOS visualViewport), Android WebView resize, rotation: re-fit the cap so the composer never covers the chat
+  useEffect(() => {
+    const refit = () => fitComposer(ref.current);
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    vv?.addEventListener("resize", refit);
+    window.addEventListener("resize", refit);
+    window.addEventListener("orientationchange", refit);
+    return () => {
+      vv?.removeEventListener("resize", refit);
+      window.removeEventListener("resize", refit);
+      window.removeEventListener("orientationchange", refit);
+    };
+  }, []);
   const [panel, setPanel] = useState(false);
   const [coarse, setCoarse] = useState(false);
   useEffect(() => setCoarse(coarsePointer()), []);
@@ -89,8 +125,7 @@ export function ChatComposer({
     const ta = ref.current;
     const grow = () => {
       if (!ta) return;
-      ta.style.height = "auto";
-      ta.style.height = Math.min(ta.scrollHeight, COMPOSER_MAX_H) + "px";
+      fitComposer(ta);
     };
     if (editId && editing) {
       if (draftRef.current === null) draftRef.current = text;
@@ -152,9 +187,7 @@ export function ChatComposer({
   }, []);
   const grow = () => {
     const ta = ref.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, COMPOSER_MAX_H) + "px";
+    fitComposer(ta);
   };
   /** keyboard edits (newline / indent) apply synchronously: the next keystroke must see the new value + caret */
   const applyKeyEdit = (ta: HTMLTextAreaElement, r: { text: string; start: number; end: number }) => {
@@ -275,7 +308,11 @@ export function ChatComposer({
     if (ok) {
       setText("");
       setSel(null);
-      if (ref.current) ref.current.style.height = "";
+      if (ref.current) {
+        ref.current.style.height = "";
+        ref.current.style.overflowY = "hidden";
+        ref.current.dataset.capped = "0";
+      }
     }
     if (!panel) ref.current?.focus();
   };
@@ -410,9 +447,7 @@ export function ChatComposer({
             setText(e.target.value);
             if (e.target.value.trim()) onTyping?.();
             else onTypingStop?.();
-            // auto-grow up to ~5 lines
-            e.target.style.height = "auto";
-            e.target.style.height = Math.min(e.target.scrollHeight, COMPOSER_MAX_H) + "px";
+            fitComposer(e.target); // auto-grow to the cap, then scroll inside
           }}
           onKeyDown={(e) => {
             if (formatKey(e)) return;
@@ -443,7 +478,7 @@ export function ChatComposer({
             }
           }}
           className={cn(
-            "block max-h-[200px] w-full resize-none border border-white/10 bg-zinc-950 px-4 leading-snug outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 disabled:opacity-50",
+            "composer-input block max-h-[200px] w-full resize-none overflow-y-hidden overscroll-contain border border-white/10 bg-zinc-950 px-4 leading-snug outline-none placeholder:text-zinc-600 focus:border-emerald-500/60 disabled:opacity-50",
             compact ? "rounded-[20px] py-2 text-[16px] sm:text-[14px]" : "rounded-2xl py-2.5 text-[16px] sm:text-[15px]",
             emojiPanel && "pr-11",
           )}

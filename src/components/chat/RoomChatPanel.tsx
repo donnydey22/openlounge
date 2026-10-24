@@ -4,7 +4,7 @@ import { FormattedText } from "./FormattedText";
 import { LinkifiedText } from "./LinkifiedText";
 import { DELETED_NAME, isDeletedId, useDeletedIds } from "@/lib/userDisplay";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Flag, Pencil, Trash2, X } from "lucide-react";
+import { Flag, Pencil, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { cn, firstName } from "@/lib/utils";
 import { formatClock, serverNow, useClockTick } from "@/lib/time";
@@ -16,6 +16,8 @@ import { ReplyGesture } from "./ReplyGesture";
 import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
 import { replyReference } from "@/lib/chat/reply";
 import { jumpToMessage } from "../groups/GroupBits";
+import { JumpToLatest } from "./JumpToLatest";
+import { distanceFromBottom, scrollToLatest, showJumpButton } from "@/lib/chatScroll";
 
 const GROUP_WINDOW_MS = 2 * 60_000;
 
@@ -91,7 +93,9 @@ export function RoomChatPanel({
   useClockTick(); // soft stamps ("now" → "4m") keep counting
   const listRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
-  const [showJump, setShowJump] = useState(false);
+  const [unseen, setUnseen] = useState(0);
+  const [farUp, setFarUp] = useState(false);
+  const seenLen = useRef<string>(messages[messages.length - 1]?.id ?? "");
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [replying, setReplying] = useState<import("@/lib/types").ReplyReference | null>(null);
@@ -123,11 +127,16 @@ export function RoomChatPanel({
 
   useEffect(() => {
     const last = messages[messages.length - 1];
+    // count only messages appended at the end (older pages prepending are not "new")
+    const prevLast = seenLen.current;
+    const idx = prevLast ? messages.findIndex((x) => x.id === prevLast) : -1;
+    const added = prevLast && last?.id !== prevLast ? (idx >= 0 ? messages.length - 1 - idx : 1) : 0;
+    seenLen.current = last?.id ?? "";
     if (atBottom.current || last?.authorId === meId) {
       scrollToBottom(true);
-      setShowJump(false);
-    } else {
-      setShowJump(true);
+      setUnseen(0);
+    } else if (added) {
+      setUnseen((n) => n + added);
     }
   }, [messages, meId]);
 
@@ -150,7 +159,9 @@ export function RoomChatPanel({
           onScroll={(e) => {
             const el = e.currentTarget;
             atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-            if (atBottom.current) setShowJump(false);
+            if (atBottom.current) setUnseen(0);
+            const far = showJumpButton(distanceFromBottom(el), el.clientHeight, 0);
+            if (far !== farUp) setFarUp(far);
             if (el.scrollTop < 120) loadOlder();
           }}
           className="chat-fade h-full overflow-y-auto overscroll-contain px-3 pt-2 pb-3"
@@ -309,14 +320,17 @@ export function RoomChatPanel({
             );
           })}
         </div>
-        {showJump && (
-          <button
-            onClick={() => scrollToBottom(true)}
-            className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 shadow-lg ring-1 ring-white/10"
-          >
-            <ArrowDown className="h-3.5 w-3.5" /> New
-          </button>
-        )}
+        <JumpToLatest
+          testId="room-jump-latest"
+          show={farUp || unseen > 0}
+          unseen={unseen}
+          onJump={() => {
+            atBottom.current = true;
+            setUnseen(0);
+            setFarUp(false);
+            scrollToLatest(listRef.current);
+          }}
+        />
       </div>
 
       <div className="px-3 pt-1 pb-3">
