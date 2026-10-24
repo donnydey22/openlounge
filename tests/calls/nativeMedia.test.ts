@@ -163,13 +163,13 @@ test("server: native SFU connection is stable across page sockets and survives a
   assert.equal(m.nativeConnectionFor("sockX", "u2", "n_abc12345"), "native:u2:n_abc12345", "scoped per authenticated user");
 });
 
-test("native media: ordinary voice remains audio-only while a latched iPhone video call forwards paired fields to native LiveKit", async () => {
+test("native media: ordinary voice remains audio-only while a latched iPhone video call never forwards a LiveKit grant to the app (LiveKit removed from calling)", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");
   const cmds: Record<string, unknown>[] = [];
   installWindow({ capabilities: ["calls", "nativeMedia", "nativeVideo"], nativeMedia: async (c: Record<string, unknown>) => { cmds.push(c); return true; }, msReply() {} });
   const s = new m.NativeMediaSession(fakeSocket() as never, { provider: "livekit", url: "wss://lk", token: "t", iceServers: [] } as never, { onRemoteTrack() {}, onState() {}, onLocalVideo() {}, callId: "c9", nativeVideo: true, streamId: "ol-c9-u1" });
-  await s.connect(true);
-  assert.deepEqual(cmds[0], { op: "connectLiveKit", callId: "c9", url: "wss://lk", token: "t", iceServers: [], video: true, nativeVideo: true, streamId: "ol-c9-u1" });
+  await assert.rejects(s.connect(true), /livekit calling removed/);
+  assert.equal(cmds.some((c) => c.op === "connectLiveKit"), false);
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.match(src, /media\.provider === "mediasoup" \|\| this\.iosNativeVideoLatched\(\)/);
   s.close();

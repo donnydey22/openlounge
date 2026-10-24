@@ -275,8 +275,11 @@ export class NativeMediaSession {
     const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
     // Resolves once the app's media is connected (rejects on failure/timeout → engine falls back). Same call + same
     // path after a page reload = the app re-attaches its live media; nothing is rebuilt.
-    if (m.provider === "livekit") await nativeMediaCmd({ op: "connectLiveKit", callId, url: m.url, token: m.token, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}) });
-    else await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}) });
+    // LiveKit is removed from calling (Donny, Oct 24 2026): the native lane only joins mediasoup (UDP first, then our
+    // TURN relay UDP -> TCP -> TLS 443). A LiveKit grant never reaches the app; rejecting lets the engine keep its
+    // non-native path. LiveKit drop-in rooms are a separate code path and are untouched.
+    if (m.provider === "livekit") throw new Error("native media: livekit calling removed");
+    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }

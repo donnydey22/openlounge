@@ -15,11 +15,13 @@ import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
 import { androidNativeEnabled, iosMicReacquireEnabled, iosNativeVideoEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
 
-/** TURN URLs for mediasoup calls: UDP 3478 relay first, TLS 443 last resort. */
+/** TURN URLs for mediasoup calls, in the locked order (Donny, Oct 24): UDP 3478 first, then TCP 3478, then TLS 443.
+ *  Same order the DO call-signal service hands out (call-signal/src/core.mjs iceConfig). */
 export function mediasoupTurnUrls(urls: readonly string[]): string[] {
   const udp = urls.filter((u) => u.startsWith("turn:") && /transport=udp/.test(u));
+  const tcp = urls.filter((u) => u.startsWith("turn:") && /transport=tcp/.test(u));
   const tls = urls.filter((u) => u.startsWith("turns:"));
-  return [...udp, ...tls];
+  return [...udp, ...tcp, ...tls];
 }
 import { isBenignMediaFailure } from "./mediaLog";
 
