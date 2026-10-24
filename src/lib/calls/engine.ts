@@ -1347,6 +1347,8 @@ export class CallEngine {
 
   private onMediaFallback = (d: { call?: CallInfo; media?: CallMedia | null; from?: string; to?: string }) => {
     if (!d?.call || d.call.id !== this.s.call?.id || d.media?.provider !== "livekit") return;
+    // LiveKit is out of calling (Donny, Oct 24 2026): a stray server LiveKit grant never moves the call off mediasoup.
+    if (this.media?.provider === "mediasoup") return void this.diag("ignored-livekit-fallback", {});
     // A callee can receive the switch while still looking at the incoming-call screen. Update the credential but do
     // not connect or prompt for media until they press Accept.
     if (this.s.ui === "incoming") {
@@ -1354,7 +1356,6 @@ export class CallEngine {
       this.clearMediasoupDegrade();
       return;
     }
-    if (this.media?.provider === "mediasoup") this.udpRecovery.onUdpDrop(Date.now());
     this.startUdpRecovery();
     void this.switchMedia(d.media, d.call);
   };
@@ -1622,7 +1623,7 @@ export class CallEngine {
         }
         if (Date.now() - t0 > CallEngine.MS_RECOVER_MAX_MS) {
           this.msRecovering = false;
-          return void this.lastResortLiveKit("recover-timeout", `attempts=${attempt}`);
+          return void this.lastResortRelay("recover-timeout", `attempts=${attempt}`);
         }
         const base = CallEngine.MS_REBUILD_DELAYS[Math.min(attempt, CallEngine.MS_REBUILD_DELAYS.length - 1)];
         await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * Math.min(1000, base / 2))));
@@ -1738,7 +1739,7 @@ export class CallEngine {
         if (session && this.mediasoup === session && this.mediasoupConnected) return;
       }
       if (live()) {
-        await this.lastResortLiveKit("first-connect", reason);
+        await this.lastResortRelay("first-connect", reason);
       }
     } finally {
       this.inFirstRetry = false;
@@ -1748,8 +1749,8 @@ export class CallEngine {
   /** Native media failures keep a granted caller on app-owned media; Android retains its existing WebView escape. */
   private nativeFailed(reason: string) {
     if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);
-    if (this.iosNativeVideoLatched()) return this.lastResortLiveKit("native-ms-failed", reason);
-    return this.nativeLiveKitNow(reason);
+    if (this.iosNativeVideoLatched()) return this.lastResortRelay("native-ms-failed", reason);
+    return this.nativeRelayNow(reason);
   }
 
   /** True only for the server-granted caller video call whose capture is permanently app-owned for this call. */
@@ -1803,38 +1804,43 @@ export class CallEngine {
     this.lifecycle = null;
   }
 
-  /** Android app native mediasoup failed: request LiveKit backup credentials now and hand the call over (once per call). */
+  /** Android app native mediasoup failed: move to the same-SFU TURN relay now (once per call). */
   private nativeLkCall: string | null = null;
-  private async nativeLiveKitNow(reason: string) {
+  private async nativeRelayNow(reason: string) {
     const callId = this.s.call?.id;
     if (!callId || !this.busy || this.nativeLkCall === callId || this.media?.provider !== "mediasoup") return;
     this.nativeLkCall = callId;
-    await this.lastResortLiveKit("native-ms-failed", reason);
+    await this.lastResortRelay("native-ms-failed", reason);
   }
 
-  /** Last resort only after the mediasoup UDP retries truly failed: LiveKit. The clear message only if LiveKit fails too. */
-  private async lastResortLiveKit(stage: string, reason = "") {
+  /** Last resort after the mediasoup UDP retries truly failed: the TURN relay on the SAME mediasoup server (Donny, Oct 24
+   *  2026; LiveKit is out of calling). The rebuilt transports carry the call's short-lived TURN logins in the Oct 23
+   *  order (TURN UDP 3478 → TCP 3478 → TURNS 443); the native app goes relay-only. While on relay the UDP-return
+   *  loop (udpRecoveryTick → restoreMediasoupUdp, make-before-break) keeps probing direct UDP until hang-up. */
+  private async lastResortRelay(stage: string, reason = "") {
     const callId = this.s.call?.id;
     if (!callId || !this.busy) return;
-    this.diag("ms-last-resort-livekit", { stage, reason: reason.slice(0, 160) });
-    const r = await this.req<{ ok: boolean; media?: CallMedia | null; error?: string }>("call:mediaFallback", { callId }, 6_000).catch(() => null);
-    if (!this.busy || this.s.call?.id !== callId) return;
-    if (r?.ok && r.media?.provider === "livekit") {
-      try {
-        await this.switchMedia(r.media);
+    this.diag("ms-last-resort-relay", { stage, reason: reason.slice(0, 160) });
+    const media = this.media;
+    if (media?.provider === "mediasoup" && media.iceServers?.length) {
+      this.clearMediasoupDegrade();
+      this.parkMediaForSwitch();
+      this.dropMediaForRejoin();
+      this.media = media;
+      const session = await this.connectMediasoup(media, true, false, true);
+      if (!this.busy || this.s.call?.id !== callId) return;
+      if (session) {
+        this.msTcp = true;
+        this.netLog("ms-relay-fallback", { stage });
+        this.udpRecovery.onUdpDrop(Date.now());
+        this.startUdpRecovery();
         this.set({ reconnecting: false, error: null });
         return;
-      } catch {
-        /* fall through to the clear message */
       }
     }
-    // The paired iPhone path must never turn an unavailable TCP fallback into a call-ending error or page capture.
-    // It keeps the app-owned capture and retries native recovery while the server call remains live.
-    if (this.iosNativeVideoLatched()) {
-      // Native retry remains authoritative for this call: do not translate an unavailable TCP credential into a hangup.
-      return void this.rejoin(`native-livekit:${r?.error ?? "failed"}`);
-    }
-    this.failUdpUnreachable(stage, `livekit:${r?.error ?? "failed"}`);
+    // The paired iPhone path must never turn an unavailable relay into a call-ending error or page capture.
+    if (this.iosNativeVideoLatched()) return void this.rejoin("native-relay:failed");
+    this.failUdpUnreachable(stage, media?.iceServers?.length ? "relay:failed" : "relay:no-turn");
   }
 
   /** End the attempt with the clear network message; the server's hangup notifies the other side. Logged via call:diag. */

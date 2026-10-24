@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { IceRestartBackoff } from "../../src/lib/calls/iceRestartBackoff";
 import { selectedProtocol, anyOnTcp, udpProbeDelay } from "../../src/lib/calls/udpProbe";
 import { CALL_AUDIO_CONSTRAINTS, MIC_AUDIO_ENCODING, OPUS_VOICE_CODEC_OPTIONS, VOICE_FLOOR_BPS, voiceLadderBps, shouldRestartIce } from "../../src/lib/calls/audioPolicy";
 import { CALL_JITTER_BUFFER_TARGET_MS } from "../../src/lib/calls/audioParity";
@@ -11,7 +12,7 @@ import { MEDIASOUP_TURN_TTL_S, mediasoupTurnUrls } from "../../server/calls/inde
 const URLS = ["turn:turn.openlounge.app:3478?transport=udp", "turn:turn.openlounge.app:3478?transport=tcp", "turns:turn.openlounge.app:443?transport=tcp"];
 
 test("UDP first in every lane: SFU offers direct UDP only; relay fallback is TURN TCP then TURNS 443; <= 10 min logins", () => {
-  assert.deepEqual(mediasoupTurnUrls([URLS[2], URLS[0], URLS[1]]), [URLS[1], URLS[2]]);
+  assert.deepEqual(mediasoupTurnUrls([URLS[2], URLS[0], URLS[1]]), [URLS[0], URLS[1], URLS[2]]);
   assert.ok(MEDIASOUP_TURN_TTL_S <= 600 && MEDIASOUP_TURN_TTL_S > 0);
   const sfu = readFileSync("media-sfu/src/config.mjs", "utf8") + readFileSync("media-sfu/src/index.mjs", "utf8");
   assert.match(sfu, /enableUdp: !tcpOnly/);
@@ -61,8 +62,9 @@ const onUdp = rep([{ type: "transport", selectedCandidatePairId: "p" }, { id: "p
 const onRelay443 = rep([{ type: "transport", selectedCandidatePairId: "p" }, { id: "p", type: "candidate-pair", localCandidateId: "l" }, { id: "l", type: "local-candidate", protocol: "udp", candidateType: "relay", relayProtocol: "tls" }]);
 test("stays on UDP across a transient drop: in-place ICE restart on the same SFU, same producers, no teardown", () => {
   const ms = readFileSync("src/lib/calls/mediasoupSession.ts", "utf8");
-  const blk = ms.slice(ms.indexOf("First outage on this transport"), ms.indexOf('if (state === "failed" || state === "closed")', ms.indexOf("First outage on this transport")));
-  assert.match(blk, /restart ICE in place \(same producers\/consumers, no renegotiation\)/);
+  const blk = ms.slice(ms.indexOf("Every outage on this transport"), ms.indexOf('if (state === "failed" || state === "closed")', ms.indexOf("Every outage on this transport")));
+  assert.match(blk, /restart ICE in place on UDP to the same server \(same\s*\/\/ producers\/consumers, no renegotiation\)/);
+  assert.match(blk, /this\.iceRestarts\[direction\]\.shouldRestart\(Date\.now\(\)\)/);
   assert.match(blk, /void this\.restartIce\(transport, direction\)/);
   assert.doesNotMatch(blk, /close\(|createSendTransport|createRecvTransport/);
   assert.equal(selectedProtocol(onUdp as never), "udp");
@@ -80,4 +82,19 @@ test("returns from relay (TCP/443) to UDP when UDP recovers: probe = in-place IC
 test("voice keeps top priority for the whole call", () => {
   assert.equal(MIC_AUDIO_ENCODING.priority, "high");
   assert.equal(MIC_AUDIO_ENCODING.networkPriority, "high");
+});
+
+test("every drop gets a fast ICE restart (Donny 5:41 AM), with backoff so it can't loop", () => {
+  const b = new IceRestartBackoff();
+  assert.equal(b.shouldRestart(0), true, "first drop: immediate");
+  b.onConnected();
+  assert.equal(b.shouldRestart(5_000), true, "second drop after recovery: immediate again");
+  b.onConnected();
+  assert.equal(b.shouldRestart(5_500), false, "within 1 s of the last restart: wait");
+  assert.equal(b.shouldRestart(6_000), true);
+  // restarts that never reconnect back off: 1 s → 2 s → 4 s … capped at 30 s
+  let t = 6_000, n = 0;
+  for (let i = 0; i < 200; i++) { t += 500; if (b.shouldRestart(t)) n++; }
+  assert.ok(n <= 8, `bounded restarts in 100 s without recovery (got ${n})`);
+  assert.ok(b.currentGapMs <= 30_000);
 });

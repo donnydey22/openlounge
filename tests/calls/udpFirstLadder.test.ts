@@ -45,25 +45,27 @@ test("path order: SFU ICE-TCP candidates stripped (UDP direct first), our TURNS 
   const r = udpOnlyResult("transport:create", { transport: { id: "t", iceCandidates: [{ protocol: "udp" }, { protocol: "tcp" }] } }) as { transport: { iceCandidates: unknown[] } };
   assert.deepEqual(r.transport.iceCandidates, [{ protocol: "udp" }]);
   assert.deepEqual(udpOnlyResult("produce", { id: "p" }), { id: "p" });
-  // Oct 24 5:28 AM (UDP first, every lane): direct UDP to the SFU, then relay fallback TURN TCP 3478 then TURNS 443
+  // Oct 23 order, kept by Donny Oct 24 5:41 AM: direct UDP to the SFU, then TURN UDP 3478, TURN TCP 3478, TURNS 443
   assert.ok(srv.includes("mintTurnIceServers(callId, userId, { ttlS: MEDIASOUP_TURN_TTL_S })?.map((s) => ({ ...s, urls: mediasoupTurnUrls(s.urls) }))"));
-  assert.ok(srv.includes('u.startsWith("turn:") && /transport=tcp/.test(u)') && srv.includes('u.startsWith("turns:")'));
+  assert.ok(srv.includes("return [...udp, ...tcp, ...tls];") && srv.includes('u.startsWith("turns:")'));
 });
 
-test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting UI, transient states ignored, then silent LiveKit", () => {
+test("first connect (5:44): silent retries within a 5 s budget, no Reconnecting UI, transient states ignored, then silent same-SFU TURN relay", () => {
   assert.match(eng, /if \(!recovering && !this\.inFirstRetry\) void this\.retryFirstConnect\(/);
   assert.match(eng, /FIRST_CONNECT_BUDGET_MS = 5_000;/);
-  const rf = eng.slice(eng.indexOf("private async retryFirstConnect("), eng.indexOf("private async lastResortLiveKit("));
+  const rf = eng.slice(eng.indexOf("private async retryFirstConnect("), eng.indexOf("private async lastResortRelay("));
   assert.doesNotMatch(rf, /reconnecting: true/);
-  assert.match(rf, /await this\.lastResortLiveKit\("first-connect"/);
+  assert.match(rf, /await this\.lastResortRelay\("first-connect"/);
   assert.match(eng, /if \(!this\.msRecoveryOnly\(\)\) \{\s*this\.netLog\(`ms-\$\{state\}-first`\);\s*return;/);
-  const lk = eng.slice(eng.indexOf("private async lastResortLiveKit("), eng.indexOf("private failUdpUnreachable("));
+  const lk = eng.slice(eng.indexOf("private async lastResortRelay("), eng.indexOf("private failUdpUnreachable("));
   assert.doesNotMatch(lk, /reconnecting: true/);
-  assert.match(lk, /"call:mediaFallback"/);
-  assert.match(lk, /if \(this\.iosNativeVideoLatched\(\)\) \{[\s\S]{0,240}this\.rejoin/,
+  assert.doesNotMatch(lk, /"call:mediaFallback"|livekit/i, "no LiveKit in the calling fallback (Oct 24 2026)");
+  assert.match(lk, /this\.connectMediasoup\(media, true, false, true\)/, "relay on the same mediasoup server");
+  assert.match(lk, /this\.startUdpRecovery\(\)/, "UDP-return probe keeps running on relay");
+  assert.match(lk, /if \(this\.iosNativeVideoLatched\(\)\) return void this\.rejoin/,
     "a granted iPhone native-video call keeps native ownership when TCP fallback is unavailable");
   assert.match(lk, /this\.failUdpUnreachable\(stage/, "ordinary calls retain the terminal UDP fallback");
-  assert.match(eng, /MS_RECOVER_MAX_MS\) \{[\s\S]{0,120}lastResortLiveKit\("recover-timeout"/);
+  assert.match(eng, /MS_RECOVER_MAX_MS\) \{[\s\S]{0,120}lastResortRelay\("recover-timeout"/);
   assert.match(eng, /Can't connect the call on this network\. Try another Wi-Fi or mobile data\./);
 });
 

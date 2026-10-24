@@ -68,7 +68,7 @@ test("first outage restarts ICE in place and reports disconnected; second failur
   // a successful recovery clears the episode and reports connected
   handlers.get("connectionstatechange")!("connected");
   assert.equal(states.at(-1), "connected");
-  assert.equal(a.iceRestarted.size, 0);
+  assert.equal(a.iceRestarts.recv.currentGapMs, 1_000, "connected resets the restart backoff");
 });
 
 test("ICE restart errors are swallowed so the engine's TCP fallback timer still runs", async () => {

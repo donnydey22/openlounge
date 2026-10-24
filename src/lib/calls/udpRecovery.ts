@@ -1,13 +1,13 @@
 /**
  * Persistent UDP recovery policy (pure, clock-injected so it is unit-testable).
  *
- * Direct UDP (mediasoup) is the preferred path. When it drops mid-call the engine moves to the existing LiveKit
- * TCP/TURN-443 path as a TEMPORARY bridge, then keeps trying to return to UDP until hang-up:
+ * Direct UDP (mediasoup) is the preferred path. When it drops mid-call the engine moves to the TURN relay on the
+ * same mediasoup server (TURN UDP 3478 → TCP 3478 → TURNS 443; LiveKit is out of calling, Oct 24 2026) as a TEMPORARY bridge, then keeps trying to return to UDP until hang-up:
  *  - only after the TCP bridge has been stable for `tcpStableMs` (hysteresis: never leave a path that just settled),
  *  - with exponential backoff between attempts (`baseBackoffMs` doubling, capped at `maxBackoffMs`, ±jitter),
  *  - an attempt only counts as a success once UDP has held for `udpHoldMs`; a drop before that is a failed attempt
  *    and the backoff keeps growing (anti-flap).
- * The LiveKit fallback itself is not changed by this module.
+ * The relay fallback itself lives in engine.ts (lastResortRelay).
  */
 export interface UdpRecoveryOptions {
   tcpStableMs: number;

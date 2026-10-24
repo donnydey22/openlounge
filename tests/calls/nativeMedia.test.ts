@@ -215,8 +215,8 @@ test("native media: Android keeps its existing WebView fallback while a latched 
   assert.equal(m.nativeMediaIsAndroid(), true);
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.ok(src.includes("if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);"));
-  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return this\.lastResortLiveKit\("native-ms-failed", reason\)/);
-  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) \{[\s\S]{0,240}this\.rejoin/);
+  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return this\.lastResortRelay\("native-ms-failed", reason\)/);
+  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return void this\.rejoin\("native-relay:failed"\)/);
 });
 
 test("Android baseline moat: WebView media by default for every build; native only with the server opt-in, build 34+, and a healthy device; a failure falls back and holds for 7 days", async () => {
@@ -339,8 +339,10 @@ test("3ae8ff34: floor 'tcp' verdict while the transport is still connected resum
   assert.equal(LADDER[l.level].audioBps, 48_000);
 });
 
-// sha256 of `git diff 087c96b -- src/lib/calls/mediasoupSession.ts` (index line stripped) = the FX-044 patch only
-const MS_SESSION_APPROVED_DIFF_SHA256 = "ccf21d2d8fe521cae9f78de3c56ed5b613d017a894706294f1c3fd8253a402d0";
+// sha256 of `git diff 087c96b -- src/lib/calls/mediasoupSession.ts` (index line stripped) = the FX-044 patch plus the
+// every-drop fast ICE restart with backoff (IceRestartBackoff), approved by Donny Oct 24 2026 5:41 AM MST.
+// Previous approved hash (FX-044 only): ccf21d2d8fe521cae9f78de3c56ed5b613d017a894706294f1c3fd8253a402d0
+const MS_SESSION_APPROVED_DIFF_SHA256 = "13bbae17ca070abd30d1174b2101192fbc4fd8fe7ed31772ce1445c141f28c4c";
 
 test("protected: Android video path unchanged — video never takes native media in any opt-in/guard state; WebView video files identical to prod 087c96b", async () => {
   const m = await import("../../src/lib/calls/nativeMediaSession");

@@ -22,9 +22,11 @@ export const MEDIASOUP_TURN_TTL_S = 600;
  *  the SFU on 165.232.137.71 always comes first (it announces UDP host candidates; ICE ranks host above relay), then
  *  TURN over TCP 3478, then TURNS 443 on turn.openlounge.app. TURN-over-UDP is not offered. */
 export function mediasoupTurnUrls(urls: readonly string[]): string[] {
+  const udp = urls.filter((u) => u.startsWith("turn:") && !/transport=tcp/.test(u));
   const tcp = urls.filter((u) => u.startsWith("turn:") && /transport=tcp/.test(u));
   const tls = urls.filter((u) => u.startsWith("turns:"));
-  return [...tcp, ...tls];
+  // Oct 23 order kept (Donny 5:41 AM): direct UDP first (SFU candidates), then TURN UDP 3478, TCP 3478, TURNS 443
+  return [...udp, ...tcp, ...tls];
 }
 import { isBenignMediaFailure } from "./mediaLog";
 

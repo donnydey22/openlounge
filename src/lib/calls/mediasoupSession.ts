@@ -1,3 +1,4 @@
+import { IceRestartBackoff } from "./iceRestartBackoff";
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import { nativePlatform } from "@/lib/native";
@@ -72,7 +73,8 @@ export class MediasoupCallSession {
   private readonly onAvailable = () => void this.syncConsumers().catch(() => {});
   private readonly onMicAudioState = () => void this.queueMicProcessorSync();
   /** Transports whose ICE restart already ran in the current outage; a second failure goes to the TCP fallback. */
-  private iceRestarted = new Set<string>();
+  /** every-drop fast ICE restart with backoff (Donny, Oct 24 2026 5:41 AM MST) */
+  private iceRestarts = { send: new IceRestartBackoff(), recv: new IceRestartBackoff() };
   /** The SFU no longer knows this session ("Unknown media session": closed while our socket was away, e.g. a
    *  Wi-Fi <-> cellular switch, socket close 1005 -> session_closed). ICE restarts on it can never succeed; the engine
    *  must rebuild (fresh session + freshly acquired tracks) at once. Approved by Donny, Oct 23 2026 4:48 PM MST. */
@@ -334,15 +336,15 @@ export class MediasoupCallSession {
     transport.on("connectionstatechange", (state) => {
       if (this.closed) return;
       if (state === "connected") {
-        this.iceRestarted.delete(direction);
+        this.iceRestarts[direction].onConnected();
         // Report recovery after an in-place ICE restart; the initial connect reports through connectInner.
         if (this.connected) this.opts.onState("connected");
         return;
       }
-      // First outage on this transport: restart ICE in place (same producers/consumers, no renegotiation) and report
-      // "disconnected" so the engine's existing grace timer still falls back to TCP if the restart does not land.
-      if (this.connected && shouldRestartIce(state) && !this.iceRestarted.has(direction)) {
-        this.iceRestarted.add(direction);
+      // Every outage on this transport (backoff-limited): restart ICE in place on UDP to the same server (same
+      // producers/consumers, no renegotiation) and report "disconnected" so the engine's grace timer still moves to
+      // the TURN relay if the restart does not land.
+      if (this.connected && shouldRestartIce(state) && this.iceRestarts[direction].shouldRestart(Date.now())) {
         void this.restartIce(transport, direction);
         this.opts.onState("disconnected");
         return;
