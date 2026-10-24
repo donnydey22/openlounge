@@ -84,6 +84,12 @@ const HLS_PATH_RE = /^hls\/r(\d{2,4})\/(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$/;
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
+/** The message an attachment belongs to, unless it is gone or deleted for everyone (a placeholder carries no media). */
+const liveMessage = (conversationId: string, messageId: string) => {
+  const m = store.findDm(conversationId, messageId);
+  return m && !m.deleted ? m : undefined;
+};
+
 export class MediaService {
   repo: MediaRepo | null = null;
   private rows = new Map<string, MediaRow>();
@@ -246,7 +252,7 @@ export class MediaService {
     const members = this.members(r.conversationId);
     if (!members.includes(viewerId)) return false;
     if (viewerId !== r.ownerId && store.isBlockedEither(viewerId, r.ownerId)) return false;
-    if (r.conversationId && (r.conversationId.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId, r.messageId)) return false;
+    if (r.conversationId && (r.conversationId.includes("|") || isGroupId(r.conversationId)) && !liveMessage(r.conversationId, r.messageId)) return false;
     return true;
   }
 
@@ -1094,7 +1100,7 @@ export class MediaService {
     if (!r.messageId) return;
     this.unlink(r);
     const rest = this.itemsOfMessage(r.messageId);
-    const msg = r.conversationId ? store.findDm(r.conversationId, r.messageId) : null;
+    const msg = r.conversationId ? liveMessage(r.conversationId, r.messageId) : null;
     let text: string | undefined;
     if (!rest.length) {
       // last (or only) item: leave a tombstone so the bubble says "Photo expired"; a caption goes with the file
@@ -1110,7 +1116,7 @@ export class MediaService {
     log.info("media gone", { id: r.id, reason, left: rest.length, kind: r.kind, timed: isTimed(r), bytes: Object.values(r.files).reduce((n, f) => n + (f?.size ?? 0), 0), variants: Object.keys(r.files) });
   }
 
-  /** Periodic: due expiries, orphans (message deleted / trimmed / sender's account deleted), unsent + stale uploads. */
+  /** Periodic: due expiries, orphans (message deleted for everyone / sender's account deleted), unsent + stale uploads. */
   /**
    * What a sweep would delete right now, without touching anything (dry-run + the circuit breaker below).
    * Media-free: ids, kinds, sizes and reasons only.
@@ -1123,7 +1129,7 @@ export class MediaService {
       if (r.expiresAt && r.expiresAt <= now) out.push({ ...base, reason: r.viewOnce && r.openedAt ? "viewed" : "expired" });
       else if (!storeLoaded) continue;
       else if (!store.users.has(r.ownerId)) out.push({ ...base, reason: "owner-deleted" });
-      else if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId!, r.messageId)) out.push({ ...base, reason: "orphan" });
+      else if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !liveMessage(r.conversationId!, r.messageId)) out.push({ ...base, reason: "orphan" });
       else if (!r.messageId && now - r.createdAt > UNSENT_TTL_MS) out.push({ ...base, reason: "unsent" });
     }
     return out;
@@ -1168,8 +1174,8 @@ export class MediaService {
         await this.expire(r, "deleted");
         continue;
       }
-      if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !store.findDm(r.conversationId!, r.messageId)) {
-        // message deleted for everyone / trimmed from history: no tombstone needed, the bubble is gone
+      if (r.messageId && (r.conversationId?.includes("|") || isGroupId(r.conversationId)) && !liveMessage(r.conversationId!, r.messageId)) {
+        // message deleted for everyone (now a content-free placeholder): no tombstone needed
         this.rows.delete(r.id);
         this.unlink(r);
         this.removeFiles(r.id);

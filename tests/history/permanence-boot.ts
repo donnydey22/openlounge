@@ -24,7 +24,7 @@ const room = walk((beforeId) => {
   const r = store.chatPage(a, roomId, { beforeId, limit: 200 });
   return r.ok ? r : { messages: [], hasMore: false };
 });
-const sum = (l: { id: string; text: string; deleted?: boolean }[]) => ({ n: l.length, first: l[0]?.text, deleted: l.filter((m) => m.deleted).map((m) => m.id), texts: Object.fromEntries(l.filter((m) => m.deleted).map((m) => [m.id, m.text])) });
+const sum = (l0: unknown[]) => { const l = l0 as { id: string; text: string; deleted?: boolean }[]; return { n: l.length, first: l[0]?.text, deleted: l.filter((m) => m.deleted).map((m) => m.id), texts: Object.fromEntries(l.filter((m) => m.deleted).map((m) => [m.id, m.text])) }; };
 console.log("RESULT " + JSON.stringify({ dmA: sum(dmA), dmB: sum(dmB), group: sum(grp), room: sum(room), dmKeyLen: store.dms.get(dmKey)?.length ?? 0 }));
 await store.close();
 process.exit(0);

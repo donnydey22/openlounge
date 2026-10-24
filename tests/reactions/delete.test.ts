@@ -43,7 +43,7 @@ after(async () => {
   await app?.close();
 });
 
-test("delete for everyone: own messages leave both sides, peer + my tabs get conv:deleted, archived", async () => {
+test("delete for everyone: content leaves both sides (placeholder remains), peer + my tabs get conv:deleted, archived", async () => {
   const m1 = await send(A, B, "oops wrong chat");
   const m2 = await send(A, B, "this one too");
   const keep = await send(B, A, "hi");
@@ -58,8 +58,15 @@ test("delete for everyone: own messages leave both sides, peer + my tabs get con
   assert.ok(del(inA).every((e) => e.data.conversationId === id(B)), "my other tabs keyed by the peer");
   assert.equal(del(inC).length, 0);
   assert.ok(inB.some((e) => e.ev === "dm:unread"), "peer unread badge refreshed " + JSON.stringify(inB.map((e) => e.ev)) + JSON.stringify(r));
-  assert.deepEqual(await ids(A, B), [keep]);
-  assert.deepEqual(await ids(B, A), [keep]);
+  // content leaves both sides; each side sees a "This message was deleted" placeholder in its place
+  for (const [x, y] of [[A, B], [B, A]] as const) {
+    const h = await x.client.req("dm:history", { peerId: id(y) });
+    const mine = h.messages.filter((m: any) => [m1, m2, keep].includes(m.id));
+    assert.deepEqual(mine.filter((m: any) => !m.deleted).map((m: any) => m.id), [keep]);
+    assert.ok(mine.filter((m: any) => m.deleted).every((m: any) => m.text === "This message was deleted" && !m.media), "placeholder only");
+    assert.equal(mine.filter((m: any) => m.deleted).length, 2);
+  }
+  assert.ok(del(inB).every((e) => e.data.placeholder?.deleted === true), "peer gets the placeholder live");
   await sleep(1200);
   const rows = await sql<{ message_id: string; deleted_by: string; text: string }>("SELECT message_id, deleted_by, text FROM dm_deleted WHERE message_id = ANY($1)", [[m1, m2]]);
   assert.equal(rows.length, 2, "soft delete: archived for moderation");

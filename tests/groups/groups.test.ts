@@ -143,7 +143,9 @@ test("permissions: members can't administer; owner promotes; admins moderate wit
   const del = await B.client.req("group:deleteMessage", { id: gid, messageId: aMsg.id });
   assert.equal(del.ok, true);
   const h = await A.client.req("dm:history", { peerId: gid });
-  assert.ok(!h.messages.some((m: any) => m.id === aMsg.id));
+  // delete for everyone: content gone, every member sees a "This message was deleted" placeholder in its place
+  const ph = h.messages.find((m: any) => m.id === aMsg.id);
+  assert.ok(ph && ph.deleted === true && ph.text === "This message was deleted" && !ph.media, "placeholder replaces the message");
   assert.equal(h.group.pins.length, 0, "deleting unpins");
   // service messages for the changes
   const texts = h.messages.filter((m: any) => m.service).map((m: any) => m.service.type);

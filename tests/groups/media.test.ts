@@ -171,7 +171,7 @@ test("deleting a group message for everyone (sender or admin) erases its files a
   assert.ok(!(await sign(B, a1))?.full);
 });
 
-test("a deleted group (last member out) erases every file sent in it; other groups keep theirs", async () => {
+test("a deleted group (last member out) keeps its files (history is permanent); only self-destruct media is purged", async () => {
   const keep = await A.client.req("group:create", { title: "Keep " + uniq(), memberIds: [id(B)] });
   const kp = await upload(A, f("gps.jpg"), "photo");
   assert.equal((await api(base, "/api/media/send", { to: keep.group.id, mediaId: kp, clientId: `c${uniq()}` }, { token: tok(A) })).status, 200);
@@ -187,13 +187,13 @@ test("a deleted group (last member out) erases every file sent in it; other grou
   assert.equal(last.deleted, true);
   await sleep(400);
   for (const x of ids) {
-    assert.ok(!fs.existsSync(await fileDir(x)), "erased with the group");
-    assert.equal(await rowCount(x), 0);
+    assert.ok(fs.existsSync(await fileDir(x)), "kept after the last member leaves");
+    assert.equal(await rowCount(x), 1);
   }
   assert.ok(fs.existsSync(await fileDir(kp)), "another group's file is untouched");
 });
 
-test("sweeper: a group attachment whose message is gone from history (trimmed) is erased; live ones stay", async () => {
+test("sweeper: a group attachment whose message was deleted for everyone is erased; live ones stay", async () => {
   const { store } = await import("../../server/store");
   const g = await A.client.req("group:create", { title: "Trim " + uniq(), memberIds: [id(B)] });
   const gid = g.group.id as string;
@@ -201,7 +201,7 @@ test("sweeper: a group attachment whose message is gone from history (trimmed) i
   const live = await upload(A, f("alpha.png"), "photo");
   const s1 = await api(base, "/api/media/send", { to: gid, mediaId: gone, clientId: `c${uniq()}` }, { token: tok(A) });
   assert.equal((await api(base, "/api/media/send", { to: gid, mediaId: live, clientId: `c${uniq()}` }, { token: tok(A) })).status, 200);
-  store.removeConversationMessage(gid, s1.data.message.id); // what the history cap does to the oldest rows
+  store.removeConversationMessage(gid, s1.data.message.id); // delete for everyone (leaves a content-free placeholder)
   await media.sweep();
   assert.ok(!fs.existsSync(await fileDir(gone)));
   assert.equal(await rowCount(gone), 0);
