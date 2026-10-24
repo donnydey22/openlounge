@@ -192,7 +192,9 @@ for (const scenario of SCEN) {
   results[scenario] = {
     timeline: `CONNECT: ${rle(startWin)}  ||  END: ${rle(endWin)}`,
     counts: { flashFramesBeforeFirstVideo: flash, startBlackFrames: startBlack, backToRingingFrames: backToRinging, msToFirstVideo: firstVideo * 40, msEndToGone: goneIdx * 40 },
-    startGapFrames: flash + startBlack + backToRinging,
+    // whole-window counts apply to the permission scenarios (their start window has no stall / reconnect phase);
+    // the original scenarios keep their original measure (web-drop's window includes the 1.5 s frozen-network phase)
+    startGapFrames: flash + (perm ? startBlack + backToRinging : 0),
     endFrames: goneIdx,
     end: { staleHoldFrames: staleHold, blackFrames: black, flickerFrames: flicker, leftoverFrames: leftover, opacityReversals: opReversals, msEndToGone: goneIdx * 40 },
   };
