@@ -34,6 +34,7 @@ import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicropho
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
 import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor } from "./netAdapt";
 import { followAudioDevices } from "../audioDevices";
+import { TurnRefresher } from "./turnRefresh";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -183,6 +184,16 @@ export class CallEngine {
   private listeners = new Set<() => void>();
   private socket: RealtimeClient | null = null;
   private meId: string | null = null;
+  /** mid-call relay login refresh at ~8 min, every 8 min (Donny, Oct 24 2026) */
+  private turnRefresh = new TurnRefresher({
+    fetch: async (callId) => {
+      const r = await this.req<{ ok: boolean; iceServers?: NonNullable<CallMedia["iceServers"]> }>("call:turnRefresh", { callId }, 5_000);
+      return r.ok ? r.iceServers ?? null : null;
+    },
+    session: () => (this.mediasoup instanceof MediasoupCallSession ? (this.mediasoup as unknown as import("./turnRefresh").RefreshableSession) : null),
+    remember: (iceServers) => { if (this._media?.provider === "mediasoup") this._media = { ...this._media, iceServers }; },
+    log: (ev, d) => { this.netLog(ev, d ?? {}); this.diag(ev, d ?? {}); },
+  });
   private _media: CallMedia | null = null;
   /** every media grant carries the server's Android-native opt-in (absent = WebView baseline); remembered for the next ring */
   private get media(): CallMedia | null {
@@ -998,6 +1009,7 @@ export class CallEngine {
       if (firstMediaOk) this.initCallRoute();
       this.clearMediasoupDegrade();
       this.startQualityGuard(session);
+      if (media.provider === "mediasoup" && this.s.call?.id) this.turnRefresh.start(this.s.call.id);
       this.startUdpProbe(session);
       this.startAndroidLifecycle(session);
       if (answer || this.s.call?.phase === "active") {
@@ -2386,6 +2398,7 @@ export class CallEngine {
   }
 
   private teardownMedia() {
+    this.turnRefresh.stop();
     stopTones();
     this.msTcp = false;
     this.stopWebRouteWatch?.();

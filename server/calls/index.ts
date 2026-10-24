@@ -295,6 +295,16 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
   );
+  // Mid-call relay login refresh (Donny, Oct 24 2026): a fresh 10-min TURN login for a live call this user is in, so a
+  // relayed call never outlives its login (coturn re-checks expiry on every allocation Refresh). Nothing else changes.
+  socket.on("call:turnRefresh", ({ callId }: { callId?: unknown } = {}, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const live = s().liveCallOf(uid);
+      if (!live || typeof callId !== "string" || live.id !== callId) return ack({ ok: false, error: "No live call" });
+      const iceServers = mintTurnIceServers(callId, uid, { ttlS: MEDIASOUP_TURN_TTL_S })?.map((x) => ({ ...x, urls: mediasoupTurnUrls(x.urls) })).filter((x) => x.urls.length) ?? [];
+      ack({ ok: true, iceServers });
+    }),
+  );
   socket.on("call:current", (_: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack({ ok: true, call: s().liveCallOf(uid) })));
   socket.on("call:history", ({ before }: { before?: number }, ack: AckFn = noop) =>
     authed(ack, (uid) => {
