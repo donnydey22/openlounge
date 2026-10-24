@@ -55,6 +55,7 @@ import { ReplyGesture } from "./ReplyGesture";
 import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
 import { replyReference } from "@/lib/chat/reply";
 import { markGone, putMessages, putPage, readMeta, readNewest, readOlder, threadKey, writeMeta } from "@/lib/chat/msgStore";
+import { addPending, failPending, pendingFor, removePending, unfailPending } from "@/lib/chat/pendingSends";
 import { reconcileNewest, reconcileOlder } from "@/lib/chat/historyReconcile";
 
 const TYPING_SEND_EVERY_MS = 3_000;
@@ -994,10 +995,12 @@ export function DmThread({
           clearTimeout(stallTimers.current.get(item.clientId));
           stallTimers.current.delete(item.clientId);
         }
+        if (item.clientId && me) removePending(me.id, item.clientId);
         setMessages((list) => mergeMessages(list ?? [], [{ ...r.message, clientId: item.clientId }]));
       } catch (e) {
         // dropped connection: stays "sending" and is re-sent on reconnect; real errors → failed (tap to retry)
         const transient = isTransient(e);
+        if (!transient && item.clientId && me) failPending(me.id, item.clientId);
         if (!transient && item.clientId) {
           clearTimeout(stallTimers.current.get(item.clientId));
           stallTimers.current.delete(item.clientId);
@@ -1005,8 +1008,22 @@ export function DmThread({
         setMessages((list) => (list ?? []).map((x) => (x.clientId === item.clientId && x.state === "sending" && !transient ? { ...x, state: "failed", autoRetry: false } : x)));
       }
     },
-    [request, peerId],
+    [request, peerId, me],
   );
+
+  // durable outbox: texts queued offline in an earlier session come back as "sending" bubbles (sent on reconnect)
+  useEffect(() => {
+    if (!me?.id || isSelf) return;
+    const queued = pendingFor(me.id, peerId);
+    if (!queued.length) return;
+    setMessages((list) => {
+      const have = new Set((list ?? []).map((x) => x.clientId));
+      const add = queued
+        .filter((p) => !have.has(p.clientId))
+        .map((p) => ({ id: `local-${p.clientId}`, clientId: p.clientId, fromId: p.fromId, fromName: p.fromName ?? me.name, fromColor: p.fromColor ?? me.color, toId: p.to, text: p.text, ...(p.replyTo ? { replyTo: p.replyTo } : {}), createdAt: p.createdAt, state: p.failed ? "failed" : "sending", ...(p.failed ? { autoRetry: false } : {}) }) as Item);
+      return add.length ? [...(list ?? []), ...add] : list;
+    });
+  }, [me?.id, peerId, isSelf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- attachments (photos, videos, files, voice notes): optimistic bubble → resumable upload → send ----
   const mediaCallbacks = useMemo<QueueCallbacks>(
@@ -1057,6 +1074,7 @@ export function DmThread({
     }
     setUnseenBelow(0);
     setMessages((list) => [...(list ?? []), item]);
+    addPending(me.id, { clientId, to: peerId, text, replyToId: replying?.messageId, replyTo: replying ?? undefined, createdAt: item.createdAt, fromId: me.id, fromName: me.name, fromColor: me.color });
     armStall(clientId);
     if (connected) void deliver(item);
     setReplying(null);
@@ -1069,6 +1087,7 @@ export function DmThread({
       return;
     }
     setMessages((list) => (list ?? []).map((x) => (x.clientId === m.clientId && x.state === "failed" ? { ...x, state: "sending", autoRetry: undefined } : x)));
+    if (m.clientId && me) unfailPending(me.id, m.clientId);
     if (m.clientId) armStall(m.clientId);
     if (connected) void deliver({ ...m, state: "sending" });
   };

@@ -16,6 +16,8 @@ import { TopBar } from "@/components/TopBar";
 import { Avatar } from "@/components/Avatar";
 import { Sheet } from "@/components/Sheet";
 import { ChatRowMenu, RemoveChatConfirm, SwipeRow, removeLabel, sortPinned } from "@/components/chat/ChatActions";
+import { readInbox, writeInbox } from "@/lib/chat/historyCache";
+import { NetworkStatus } from "@/components/chat/NetworkStatus";
 import { GroupInboxRow, InboxLeaveGroup, mergeInbox, useGroupInbox } from "@/components/groups/GroupBits";
 
 export default function MessagesPage() {
@@ -30,11 +32,34 @@ export default function MessagesPage() {
   const groupInbox = useGroupInbox(); // group rows (conv:list), merged by recency below
 
   // one-shot fetch on open and after a reconnect; everything else is applied from pushed events
+  const serverAnswered = useRef(false);
   const load = useCallback(() => {
     request<{ conversations: ConversationSummary[] }>("dm:list")
-      .then((r) => setConversations(r.conversations))
+      .then((r) => {
+        serverAnswered.current = true;
+        setConversations(r.conversations);
+      })
       .catch(() => setConversations((c) => c ?? []));
   }, [request]);
+
+  // offline inbox: paint this account's cached chat list instantly (no signal too); the server list replaces it
+  useEffect(() => {
+    if (!meId) return;
+    let live = true;
+    void readInbox<ConversationSummary>(meId).then((cached) => {
+      if (!live || !cached || serverAnswered.current) return;
+      setConversations((c) => (c === null || c.length === 0 ? cached : c));
+    });
+    return () => {
+      live = false;
+    };
+  }, [meId]);
+  // write-through (debounced): what the device shows next launch, live updates included
+  useEffect(() => {
+    if (!meId || !conversations || !serverAnswered.current) return;
+    const t = setTimeout(() => void writeInbox(meId, conversations), 400);
+    return () => clearTimeout(t);
+  }, [meId, conversations]);
 
   useEffect(() => {
     if (connected) load();
@@ -133,7 +158,10 @@ export default function MessagesPage() {
       <TopBar />
       <main className="mx-auto max-w-2xl px-2 pt-5 pb-24">
         <div className="mb-3 flex items-center justify-between px-2">
-          <h1 className="text-2xl font-bold tracking-tight">Messages</h1>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight">Messages</h1>
+            <NetworkStatus />
+          </div>
           <div className="flex items-center gap-1.5">
             <Link href="/calls" aria-label="Calls" data-testid="open-calls" className="grid h-10 w-10 place-items-center rounded-full text-zinc-300 hover:bg-white/5 hover:text-white">
               <Phone className="h-5 w-5" />

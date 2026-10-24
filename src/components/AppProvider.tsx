@@ -16,6 +16,8 @@ import { clearToken, hydrateFromNative, loadCreds, loadToken, parkSession, saveC
 import { biometricsBridge, quickSignInReady } from "@/lib/biometrics";
 import { SignedOutError, getAccessToken, logout, persistSessionCookie, recoverFromCookie, refreshSession, validateStoredSession } from "@/lib/auth";
 import { FriendlyError, GENERIC_COPY, NETWORK_COPY, friendlyMessage, isTransient, toFriendly } from "@/lib/errors";
+import { clearOfflineMe, offlineMeId, readOfflineMe, saveOfflineMe } from "@/lib/chat/offlineSession";
+import { clearAllPending, flushPending } from "@/lib/chat/pendingSends";
 
 type Status = "booting" | "signedOut" | "connecting" | "ready";
 
@@ -180,6 +182,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   tokenRef.current = token;
   const meRef = useRef<Me | null>(null);
   meRef.current = me;
+  /** `me` came from the offline snapshot (no server answer yet): the first real session still applies over it */
+  const meFromSnap = useRef(false);
   const toastId = useRef(0);
   const resumeRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -229,6 +233,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const dismissToast = useCallback((id: number) => setToasts((list) => list.filter((x) => x.id !== id)), []);
 
   const applySession = useCallback((s: SessionPayload) => {
+    meFromSnap.current = false;
+    // account switch on this device: the previous account's cached chats / queued sends / profile go first
+    const prev = offlineMeId();
+    if (prev && s.user && prev !== s.user.id) {
+      void wipeChatCache();
+      clearAllPending();
+      clearOfflineMe();
+    }
     setMe(s.user);
     setFollowing(new Set(s.following));
     setUnreadDms(s.unreadDms ?? 0);
@@ -236,6 +248,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const dropSession = useCallback(() => {
     void wipeChatCache(); // cached chats belong to the account that signed out (shared devices)
+    clearOfflineMe(); // offline-launch profile snapshot
+    clearAllPending(); // unsent offline messages
+    meFromSnap.current = false;
     void wipeMediaCache(); // and their cached media bytes
     clearToken();
     setToken(null);
@@ -261,9 +276,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const v = await validateStoredSession();
         if (disposed) return;
         if (!v) return dropSession();
-        if (!meRef.current) applySession(v);
+        if (!meRef.current || meFromSnap.current) applySession(v);
       } catch {
-        if (disposed || meRef.current) return; // the socket resume may already have signed us in
+        if (disposed || (meRef.current && !meFromSnap.current)) return; // the socket resume may already have signed us in
         bootTimer = setTimeout(() => void boot(attempt + 1), Math.min(15_000, 1000 * 2 ** attempt));
       }
     };
@@ -470,8 +485,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setBooted(true);
       if (!c) return;
       if (c0) void persistSessionCookie();
+      // offline launch (WhatsApp-style): open on the last profile of THIS account while the server is unreachable;
+      // the first real session answer replaces it, a definitive "signed out" drops it with everything else
+      if (!meRef.current) {
+        const snap = readOfflineMe<Me>(c.uid);
+        if (snap) {
+          meFromSnap.current = true;
+          setMe(snap.me);
+          setFollowing(new Set(snap.following));
+          setUnreadDms(snap.unreadDms);
+        }
+      }
       void boot();
-      if (s.connected && !meRef.current) void resumeRef.current?.();
+      if (s.connected && (!meRef.current || meFromSnap.current)) void resumeRef.current?.();
     });
     return () => {
       disposed = true;
@@ -595,6 +621,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [request],
   );
+
+  // keep the offline-launch snapshot current (only real server sessions are saved)
+  useEffect(() => {
+    if (me && !meFromSnap.current) saveOfflineMe(me, following, unreadDms);
+  }, [me, following, unreadDms]);
+
+  // durable text outbox: anything typed offline (even before an app restart) goes out once we're back
+  useEffect(() => {
+    if (!connected || !me?.id || meFromSnap.current) return;
+    void flushPending(me.id, (p) => request("dm:send", { to: p.to, text: p.text, clientId: p.clientId, replyToId: p.replyToId }), isTransient);
+  }, [connected, me, request]);
 
   const isOnline = useCallback((userId: string) => onlineIds.has(userId) || (me?.id === userId && connected), [onlineIds, me?.id, connected]);
   const presenceOf = useCallback(

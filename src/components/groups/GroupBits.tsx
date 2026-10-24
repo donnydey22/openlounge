@@ -17,6 +17,7 @@ import { TypingLabel } from "../chat/TypingDots";
 import { Sheet } from "../Sheet";
 import { SwipeRow } from "../chat/ChatActions";
 import { friendlyMessage } from "@/lib/errors";
+import { readInbox, writeInbox } from "@/lib/chat/historyCache";
 
 /** A sender as the PublicUser-shaped "peer" DM bubbles expect (avatar next to their messages). */
 export function senderPeer(m: DirectMessage, members?: Map<string, GroupMember>): PublicUser {
@@ -207,11 +208,31 @@ export function useGroupInbox() {
   const meId = me?.id;
   const meUsername = me?.username;
 
+  const answered = useRef(false);
   const load = useCallback(() => {
     request<{ items: InboxItem[] }>("conv:list")
-      .then((r) => setRows(r.items.filter((x): x is GroupRowItem => x.type === "group")))
+      .then((r) => {
+        answered.current = true;
+        setRows(r.items.filter((x): x is GroupRowItem => x.type === "group"));
+      })
       .catch(() => setRows((x) => x ?? []));
   }, [request]);
+  // offline inbox: this account's cached group rows first; the server list replaces them
+  useEffect(() => {
+    if (!meId) return;
+    let live = true;
+    void readInbox<GroupRowItem>(`${meId}#groups`).then((cached) => {
+      if (live && cached && !answered.current) setRows((x) => (x === null || x.length === 0 ? cached : x));
+    });
+    return () => {
+      live = false;
+    };
+  }, [meId]);
+  useEffect(() => {
+    if (!meId || !rows || !answered.current) return;
+    const t = setTimeout(() => void writeInbox(`${meId}#groups`, rows), 400);
+    return () => clearTimeout(t);
+  }, [meId, rows]);
 
   useEffect(() => {
     if (connected) load();
