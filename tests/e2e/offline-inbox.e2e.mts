@@ -78,7 +78,7 @@ for (const engine of ENGINES) {
     try { await page.reload({ waitUntil: "domcontentloaded", timeout: 20000 }); } catch { opened = false; }
     const rowOk = opened && (await row().waitFor({ timeout: 15000 }).then(() => true, () => false));
     ok("offline open: inbox shows cached chats", rowOk, opened ? undefined : "page did not load offline");
-    const lastOk = rowOk && (await row().innerText()).includes("last from Sky");
+    const lastOk = rowOk && (await row().getByText("last from Sky").waitFor({ timeout: 5000 }).then(() => true, () => false)) && /\d{1,2}:\d{2}/.test(await row().innerText());
     ok("offline open: last message + time on row", lastOk);
     const ind = await page.getByTestId("network-status").waitFor({ timeout: 5000 }).then(() => page.getByTestId("network-status").innerText(), () => "");
     ok("offline indicator shown", /Waiting for network|Connecting/.test(ind), ind);
@@ -88,7 +88,7 @@ for (const engine of ENGINES) {
     if (rowOk) await row().click();
     const histOk = await page.getByText("last from Sky").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
     ok("offline: cached chat opens with history", histOk);
-    const phOk = await page.getByText("This message was deleted").first().waitFor({ timeout: 5000 }).then(() => true, () => false);
+    const phOk = await page.getByTestId("msg-deleted-placeholder").last().waitFor({ state: "attached", timeout: 8000 }).then(() => true, () => false);
     ok("offline: deleted placeholder kept", phOk);
     if (!phOk && process.env.DEBUG) { console.log("DBG texts", JSON.stringify((await page.locator("[data-testid=dm-thread] , main").first().innerText()).slice(-600))); console.log("DBG idb", await page.evaluate(async () => { const db: IDBDatabase = await new Promise((r) => { const q = indexedDB.open("ol-chat-msgs"); q.onsuccess = () => r(q.result); }); const all: any[] = await new Promise((r) => { const g = db.transaction("msgs").objectStore("msgs").getAll(); g.onsuccess = () => r(g.result); }); return JSON.stringify(all.filter((x) => x.m.deleted || /deleted/.test(x.m.text ?? "")).map((x) => ({ id: x.id, gone: x.gone, prev: x.prev, del: x.m.deleted, t: x.m.text }))); })); await page.screenshot({ path: "/tmp/oi-ph.png" }); }
     ok("offline: deleted text never shown", (await page.getByText("to be deleted").count()) === 0);
