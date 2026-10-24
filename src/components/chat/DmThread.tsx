@@ -54,13 +54,23 @@ import { retryMedia, type QueueCallbacks } from "@/lib/media/outbox";
 import { ReplyGesture } from "./ReplyGesture";
 import { ReplyComposerPreview, ReplyQuote } from "./ReplyQuote";
 import { replyReference } from "@/lib/chat/reply";
+import { markGone, putMessages, putPage, readMeta, readNewest, readOlder, threadKey, writeMeta } from "@/lib/chat/msgStore";
+import { reconcileNewest, reconcileOlder } from "@/lib/chat/historyReconcile";
 
 const TYPING_SEND_EVERY_MS = 3_000;
 const TYPING_IDLE_MS = 5_000;
 const TYPING_SHOW_MS = 6_000;
 
 /** Consecutive messages from the same person within this window form one group (one avatar, tight spacing). */
-const RENDER_WINDOW = 200;
+/** Local-first history: newest page on open, then older pages of OLDER_PAGE (device first, server on a cache miss). */
+const FIRST_PAGE = 60;
+const OLDER_PAGE = 100;
+/** infinite scroll: fetch the next older page while the reader is still this many screens from the top */
+const PREFETCH_SCREENS = 3;
+/** virtualized list: render what's on screen plus this much above / below; unmeasured rows are estimated */
+const V_OVERSCAN_PX = 1200;
+const V_EST_PX = 72;
+const V_INIT_ROWS = 40;
 const GROUP_WINDOW_MS = 3 * 60_000;
 /** A quiet gap this long gets a centred time label (Clubhouse / iMessage style) instead of per-message stamps. */
 const TIME_GAP_MS = 15 * 60_000;
@@ -263,7 +273,22 @@ export function DmThread({
   const loadedFor = useRef<string | null>(null);
   const messagesRef = useRef<Item[] | null>(null);
   messagesRef.current = messages;
+  const peerIdRef = useRef(peerId);
+  peerIdRef.current = peerId;
+  /** virtual list: remembers which row sits where before an update so the view never jumps (set below) */
+  const captureAnchor = useRef<() => void>(() => {});
   const isSelf = me?.id === peerId;
+  // ---- local-first device store (src/lib/chat/msgStore.ts): one row per message, append-only, never trimmed ----
+  const thread = me?.id && !isSelf ? threadKey(me.id, peerId) : null;
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+  /** message objects already on the device (identity: any edit / reaction / receipt makes a new object → re-put) */
+  const written = useRef(new WeakSet<object>());
+  /** ids shown from the device copy and not yet confirmed by the server's newest page */
+  const fromCache = useRef(new Set<string>());
+  /** the newest page is server-confirmed and the socket is up: live rows can be chained to their neighbour */
+  const syncedTail = useRef(false);
+  const serverAnswered = useRef(false);
   const presence = usePresence(peerId, peer?.lastSeenAt);
 
   // ---- group mode: peerId is a "g_…" conversation id. Same pipeline (dm:history / dm:send / dm:read / typing);
@@ -303,7 +328,10 @@ export function DmThread({
                 .catch((e: Error) => toast(friendlyMessage(e, "Couldn't pin that message"))),
             onDelete: (m) =>
               void request("group:deleteMessage", { id: peerId, messageId: m.id })
-                .then(() => setMessages((list) => (list ? list.filter((x) => x.id !== m.id) : list)))
+                .then(() => {
+                  if (threadRef.current) void markGone(threadRef.current, [m.id]);
+                  setMessages((list) => (list ? list.filter((x) => x.id !== m.id) : list));
+                })
                 .catch((e: Error) => toast(friendlyMessage(e, "Couldn't delete that message"))),
           }
         : undefined,
@@ -376,8 +404,9 @@ export function DmThread({
         restoreItems(p.items);
         toast(friendlyMessage(e, "Couldn't delete that message"));
       };
-      if (isGroup) void Promise.all(ids.map((messageId) => request("group:deleteMessage", { id: peerId, messageId }))).catch(fail);
-      else void request("dm:delete", { peerId, messageIds: ids, forEveryone: p.forEveryone }).catch(fail);
+      const done = () => threadRef.current && void markGone(threadRef.current, ids); // device row kept, never shown again
+      if (isGroup) void Promise.all(ids.map((messageId) => request("group:deleteMessage", { id: peerId, messageId }))).then(done, fail);
+      else void request("dm:delete", { peerId, messageIds: ids, forEveryone: p.forEveryone }).then(done, fail);
     },
     [isGroup, peerId, request, toast, restoreItems],
   );
@@ -406,8 +435,11 @@ export function DmThread({
   // deleted elsewhere (the peer deleted for everyone, or I did on another device): drop it here too
   useEffect(() => {
     if (!socket || isGroup) return;
-    const onDeleted = (d: { conversationId: string; messageId: string }) =>
-      d.conversationId === peerId && setMessages((list) => (list && list.some((x) => x.id === d.messageId) ? list.filter((x) => x.id !== d.messageId) : list));
+    const onDeleted = (d: { conversationId: string; messageId: string }) => {
+      if (d.conversationId !== peerId) return;
+      if (threadRef.current) void markGone(threadRef.current, [d.messageId]);
+      setMessages((list) => (list && list.some((x) => x.id === d.messageId) ? list.filter((x) => x.id !== d.messageId) : list));
+    };
     socket.on("conv:deleted", onDeleted);
     return () => {
       socket.off("conv:deleted", onDeleted);
@@ -549,26 +581,97 @@ export function DmThread({
     setError(null);
     setUnseenBelow(0);
     stickToBottom.current = true;
+    syncedTail.current = false;
+    serverAnswered.current = false;
+    fromCache.current = new Set();
   }, [peerId]);
+
+  // open from the device instantly (offline too); the server's newest page reconciles right after
+  useEffect(() => {
+    if (!thread) return;
+    let live = true;
+    void Promise.all([readNewest<Item>(thread, FIRST_PAGE), readMeta<{ peer?: PublicUser; group?: GroupInfo }>(thread)]).then(([c, meta]) => {
+      if (!live || serverAnswered.current || !c.messages.length) return;
+      for (const m of c.messages) {
+        written.current.add(m);
+        fromCache.current.add(m.id);
+      }
+      if (meta?.peer) setPeer((p) => p ?? meta.peer!);
+      if (meta?.group && isGroupId(peerId)) setGroup((g) => g ?? meta.group!);
+      setMessages((list) => (list === null ? c.messages : mergeMessages(c.messages, list)));
+      setHasMore(!c.reachedStart);
+      stickToBottom.current = true;
+    });
+    return () => {
+      live = false;
+    };
+  }, [thread]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // device write-through: only rows that are new or changed since they were written (never the whole thread)
+  useEffect(() => {
+    if (!thread || !messages) return;
+    const tm = setTimeout(() => {
+      const list = messagesRef.current;
+      if (!list || threadRef.current !== thread) return;
+      const changed: Item[] = [];
+      for (const m of list) if (!m.state && !written.current.has(m) && !String(m.id).startsWith("tmp")) changed.push(m);
+      if (!changed.length) return;
+      for (const m of changed) written.current.add(m);
+      let prevOf: ((m: Item) => string | undefined) | undefined;
+      if (syncedTail.current) {
+        const conf = list.filter((m) => !m.state && !String(m.id).startsWith("tmp"));
+        const at = new Map(conf.map((m, i) => [m.id, i]));
+        prevOf = (m) => {
+          const i = at.get(m.id);
+          return i ? conf[i - 1].id : undefined;
+        };
+      }
+      void putMessages(thread, changed, prevOf);
+    }, 300);
+    return () => clearTimeout(tm);
+  }, [messages, thread]);
+
+  /** server's newest page → screen + device: server wins inside its range, live / pending rows are kept */
+  const applyNewest = useCallback((r: { messages: DirectMessage[]; hasMore: boolean }) => {
+    const page = r.messages as Item[];
+    const lastT = page.length ? page[page.length - 1].createdAt : -Infinity;
+    const ids = new Set(page.map((m) => m.id));
+    setMessages((list) => {
+      const cur = list ?? [];
+      const liveNewer = cur.filter((m) => !m.state && m.createdAt > lastT && !ids.has(m.id) && !fromCache.current.has(m.id));
+      const next = reconcileNewest(cur, page, r.hasMore);
+      return liveNewer.length ? mergeMessages(next, liveNewer) : next;
+    });
+    fromCache.current = new Set();
+    const t = threadRef.current;
+    if (t) {
+      for (const m of page) written.current.add(m);
+      void putPage(t, page, { reachedStart: !r.hasMore });
+    }
+  }, []);
 
   // history: one fetch when the thread opens (live updates + reconnect catch-up arrive as events)
   useEffect(() => {
     if (!connected || isSelf || loadedFor.current === peerId) return;
     loadedFor.current = peerId;
-    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
+    request<{ peer: PublicUser; messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId, limit: FIRST_PAGE })
       .then((r) => {
+        serverAnswered.current = true;
         setPeer(r.peer);
         if (r.group) setGroup(r.group);
-        // keep anything that arrived live / was sent while the fetch was in flight
-        setMessages((list) => mergeMessages(r.messages, list ?? []));
+        // keep anything that arrived live / was sent while the fetch was in flight; drop device rows the server no longer has
+        const hadRows = !!messagesRef.current?.length;
+        applyNewest(r);
+        syncedTail.current = true;
         setHasMore(r.hasMore);
-        stickToBottom.current = true;
+        if (!hadRows) stickToBottom.current = true;
+        if (threadRef.current) void writeMeta(threadRef.current, { peer: r.peer, group: r.group });
       })
       .catch((e: Error) => {
         loadedFor.current = null; // retry on the next (re)connect
         if (!isTransient(e)) setError(friendlyMessage(e, "Couldn't load this conversation. Try again."));
       });
-  }, [connected, peerId, request, markRead, isSelf]);
+  }, [connected, peerId, request, markRead, isSelf, applyNewest]);
 
   useEffect(() => {
     setActiveDm(peerId);
@@ -695,8 +798,11 @@ export function DmThread({
     };
     const onConvStop = (d: { conversationId: string; from: string }) => d.conversationId === peerId && drop(d.from);
     const onGroupMsg = (m: DirectMessage) => m.toId === peerId && drop(m.fromId);
-    const onDeleted = (d: { conversationId: string; messageId: string }) =>
-      d.conversationId === peerId && setMessages((list) => (list ? list.filter((x) => x.id !== d.messageId) : list));
+    const onDeleted = (d: { conversationId: string; messageId: string }) => {
+      if (d.conversationId !== peerId) return;
+      if (threadRef.current) void markGone(threadRef.current, [d.messageId]);
+      setMessages((list) => (list ? list.filter((x) => x.id !== d.messageId) : list));
+    };
     socket.on("conv:typing", onConvTyping);
     socket.on("conv:typing_stop", onConvStop);
     socket.on("dm:message", onGroupMsg);
@@ -725,6 +831,7 @@ export function DmThread({
   // socket dropped → the peer's typing state is unknown: hide it
   useEffect(() => {
     if (!connected) setPeerTyping(false);
+    if (!connected) syncedTail.current = false; // missed rows possible until the refetch below
   }, [connected]);
 
   const wasConnected = useRef(connected);
@@ -732,15 +839,16 @@ export function DmThread({
     const was = wasConnected.current;
     wasConnected.current = connected;
     if (!connected || was || loadedFor.current !== peerId) return;
-    request<{ messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId })
+    request<{ messages: DirectMessage[]; hasMore: boolean; group?: GroupInfo }>("dm:history", { peerId, limit: FIRST_PAGE })
       .then((r) => {
         if (r.group) setGroup(r.group);
-        setMessages((list) => mergeMessages(list ?? [], r.messages));
+        applyNewest(r);
+        syncedTail.current = true;
       })
       .catch(() => {
         /* next reconnect tries again */
       });
-  }, [connected, peerId, request, markRead]);
+  }, [connected, peerId, request, markRead, applyNewest]);
 
   // Pin to the newest message before paint (no visible jump) unless the user scrolled up.
   useLayoutEffect(() => {
@@ -770,27 +878,74 @@ export function DmThread({
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
-  const loadEarlier = async () => {
-    if (!messages?.length || loadingMore) return;
+  const loadingOlder = useRef(false);
+  /** older rows shown from the device: refreshed from the server in the background (edits / reactions while away) */
+  const revalidate = useRef<Promise<void>>(Promise.resolve());
+  const applyOlder = useCallback((page: Item[]) => {
+    if (!page.length) return;
+    captureAnchor.current();
+    stickToBottom.current = false;
+    setMessages((list) => reconcileOlder(list ?? [], page));
+  }, []);
+  const loadEarlier = useCallback(async () => {
+    const list = messagesRef.current;
+    if (!list?.length || loadingOlder.current) return;
+    const oldest = list.find((m) => !m.state && !String(m.id).startsWith("tmp"));
+    if (!oldest) return;
+    loadingOlder.current = true;
     setLoadingMore(true);
-    const el = listRef.current;
-    const prevHeight = el?.scrollHeight ?? 0;
-    const prevTop = el?.scrollTop ?? 0;
+    const t = threadRef.current;
+    const pid = peerId;
     try {
-      const oldest = messages.find((m) => !m.state)?.createdAt ?? messages[0].createdAt;
-      const r = await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId, before: oldest });
-      stickToBottom.current = false;
-      setMessages((list) => mergeMessages(list ?? [], r.messages));
-      setHasMore(r.hasMore);
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-      });
+      let cursor: Item = oldest;
+      let reachedStart = false;
+      let full = false;
+      if (t) {
+        const c = await readOlder<Item>(t, oldest, OLDER_PAGE);
+        if (pid !== peerIdRef.current) return;
+        for (const m of c.messages) written.current.add(m);
+        applyOlder(c.messages);
+        reachedStart = c.reachedStart;
+        full = c.full;
+        if (c.messages.length) {
+          cursor = c.messages[0];
+          const newer = oldest;
+          const n = c.messages.length;
+          revalidate.current = revalidate.current.then(async () => {
+            await new Promise((r) => setTimeout(r, 1500));
+            if (pid !== peerIdRef.current) return;
+            try {
+              const r = await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId: pid, beforeId: newer.id, limit: n });
+              if (pid !== peerIdRef.current) return;
+              const changed = (r.messages as Item[]).filter((m) => !c.messages.some((x) => x.id === m.id && sameReactions(x.reactions, m.reactions) && x.text === m.text && x.editedAt === m.editedAt && x.readAt === m.readAt));
+              if (changed.length || r.messages.length !== n) {
+                void putPage(t, r.messages as Item[], { newerId: newer.id, newerAt: newer.createdAt, reachedStart: !r.hasMore });
+                applyOlder(r.messages as Item[]);
+              }
+            } catch {
+              /* offline: the device copy stays */
+            }
+          });
+        }
+      }
+      if (!full && !reachedStart) {
+        const r = await request<{ messages: DirectMessage[]; hasMore: boolean }>("dm:history", { peerId: pid, beforeId: cursor.id, limit: OLDER_PAGE });
+        if (pid !== peerIdRef.current) return;
+        if (t) {
+          for (const m of r.messages) written.current.add(m);
+          void putPage(t, r.messages as Item[], { newerId: cursor.id, newerAt: cursor.createdAt, reachedStart: !r.hasMore });
+        }
+        applyOlder(r.messages as Item[]);
+        reachedStart = !r.hasMore;
+      }
+      setHasMore(!reachedStart);
     } catch {
       /* stays loadable */
     } finally {
+      loadingOlder.current = false;
       setLoadingMore(false);
     }
-  };
+  }, [peerId, request, applyOlder]);
 
   // ---- optimistic send: bubble appears instantly, swaps in place when the server confirms ----
   // A send that hasn't been acked after SEND_STALL_MS turns into a quiet "Not delivered · Retry" (never a
@@ -1083,18 +1238,174 @@ export function DmThread({
     });
   }, [messages, clockTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // memory/DOM cap: long threads render only the newest RENDER_WINDOW rows ("Show earlier" grows it)
-  const [renderWindow, setRenderWindow] = useState(RENDER_WINDOW);
-  const rowOffset = Math.max(0, rows.length - renderWindow);
-  const visibleRows = rowOffset ? rows.slice(rowOffset) : rows;
+  // ---- virtualized list: only the rows on screen (+ overscan) are in the DOM; spacers stand in for the rest.
+  // The window is kept as distances from the END of the list, so older pages prepending never move it; the row on
+  // screen is anchored across every update (prepend, re-measure, window shift), so the view never jumps.
+  const vh = useRef(new Map<string, number>()); // measured row heights by key
+  const [vr, setVr] = useState({ a: V_INIT_ROWS, b: 0 }); // rendered rows = rows[n - a, n - b)
+  useEffect(() => setVr({ a: V_INIT_ROWS, b: 0 }), [peerId]);
+  const vStart = Math.max(0, rows.length - vr.a);
+  const vEnd = Math.max(vStart, rows.length - vr.b);
+  const rowOffset = vStart;
+  const visibleRows = rows.slice(vStart, vEnd);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const vRange = useRef({ s: vStart, e: vEnd });
+  vRange.current = { s: vStart, e: vEnd };
+  const topSpacer = useRef<HTMLDivElement>(null);
+  const bottomSpacer = useRef<HTMLDivElement>(null);
+  const anchor = useRef<{ key: string; top: number } | null>(null);
+  const hOf = (k: string) => vh.current.get(k) ?? V_EST_PX;
+  const spanH = (from: number, to: number) => {
+    let h = 0;
+    const r = rowsRef.current;
+    for (let i = from; i < to; i++) h += hOf(keyOf(r[i].m));
+    return h;
+  };
+  captureAnchor.current = () => {
+    const el = listRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of el.querySelectorAll<HTMLElement>(":scope > [data-vrow]")) {
+      const r = node.getBoundingClientRect();
+      if (r.bottom > top + 1) {
+        anchor.current = { key: node.dataset.vrow!, top: r.top - top };
+        return;
+      }
+    }
+    anchor.current = null;
+  };
+  /** move the window so it covers the viewport ± overscan (called on scroll, after updates) */
+  const ensureWindow = useCallback(() => {
+    const el = listRef.current;
+    const ts = topSpacer.current;
+    const r = rowsRef.current;
+    if (!el || !ts || !r.length) return;
+    const base = ts.offsetTop;
+    const viewTop = el.scrollTop - base;
+    const viewBot = viewTop + el.clientHeight;
+    const idxAt = (y: number) => {
+      let acc = 0;
+      for (let i = 0; i < r.length; i++) {
+        acc += hOf(keyOf(r[i].m));
+        if (acc > y) return i;
+      }
+      return r.length - 1;
+    };
+    const { s, e } = vRange.current;
+    const needS = Math.max(0, idxAt(viewTop - V_OVERSCAN_PX / 2));
+    const needE = Math.min(r.length, idxAt(viewBot + V_OVERSCAN_PX / 2) + 1);
+    const tooBig = e - s > 4 * Math.max(V_INIT_ROWS, needE - needS);
+    if (s <= needS && e >= needE && !tooBig) return;
+    const ns = Math.max(0, idxAt(viewTop - V_OVERSCAN_PX));
+    let ne = Math.min(r.length, idxAt(viewBot + V_OVERSCAN_PX) + 1);
+    if (stickToBottom.current) ne = r.length;
+    captureAnchor.current();
+    setVr({ a: r.length - ns, b: r.length - ne });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const vRaf = useRef(0);
+  const scheduleEnsure = useCallback(() => {
+    if (vRaf.current) return;
+    vRaf.current = requestAnimationFrame(() => {
+      vRaf.current = 0;
+      ensureWindow();
+    });
+  }, [ensureWindow]);
+  // after every render: measure the rendered rows, size the spacers, put the anchored row back where it was
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    for (const node of el.querySelectorAll<HTMLElement>(":scope > [data-vrow]")) vh.current.set(node.dataset.vrow!, node.offsetHeight);
+    const { s, e } = vRange.current;
+    const topH = spanH(0, s);
+    const botH = spanH(e, rowsRef.current.length);
+    const ts = topSpacer.current;
+    const bs = bottomSpacer.current;
+    const topChanged = !!ts && ts.style.height !== `${topH}px`;
+    if (ts) ts.style.height = `${topH}px`;
+    if (bs) bs.style.height = `${botH}px`;
+    const a = anchor.current;
+    if (stickToBottom.current) {
+      if (topChanged) el.scrollTop = el.scrollHeight;
+    } else if (a) {
+      const node = el.querySelector<HTMLElement>(`:scope > [data-vrow="${CSS.escape(a.key)}"]`);
+      if (node) {
+        const d = node.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+        if (Math.abs(d) > 0.5) el.scrollTop += d;
+      }
+    }
+    scheduleEnsure();
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => cancelAnimationFrame(vRaf.current), []);
 
+  /** bring a loaded message into the rendered window (it may be far outside it) */
+  const reveal = useCallback((messageId: string) => {
+    const r = rowsRef.current;
+    const i = r.findIndex((x) => x.m.id === messageId);
+    if (i < 0) return false;
+    const { s, e } = vRange.current;
+    if (i >= s && i < e) return true;
+    stickToBottom.current = false;
+    anchor.current = null;
+    const ns = Math.max(0, i - 30);
+    const ne = Math.min(r.length, i + 30);
+    const el = listRef.current;
+    setVr({ a: r.length - ns, b: r.length - ne });
+    // put the viewport where the window will be, so the spacer estimate doesn't land us elsewhere
+    if (el && topSpacer.current) el.scrollTop = topSpacer.current.offsetTop + spanH(0, i) - el.clientHeight / 2;
+    return true;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /** a message we were asked to show that isn't loaded yet: keep paging older until it is (or history ends) */
+  const pendingJump = useRef<{ id: string; jump: boolean; tries: number } | null>(null);
+  const jumpWhenRendered = useCallback((messageId: string, onFail?: () => void) => {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (!jumpToMessage(listRef.current, messageId)) onFail?.();
+      }),
+    );
+  }, []);
   const jumpToReply = useCallback((messageId: string) => {
     if (jumpToMessage(listRef.current, messageId)) return;
-    setRenderWindow((n) => Math.max(n, rows.length));
-    requestAnimationFrame(() => {
-      if (!jumpToMessage(listRef.current, messageId)) toast("Original message is no longer loaded");
-    });
-  }, [rows.length, toast]);
+    if (reveal(messageId)) return jumpWhenRendered(messageId, () => toast("Original message is no longer loaded"));
+    pendingJump.current = { id: messageId, jump: true, tries: 0 };
+    void loadEarlier();
+  }, [reveal, jumpWhenRendered, loadEarlier, toast]);
+  // search results (ChatSearch) ask the open thread to bring a message into view
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ chat?: string; id?: string }>).detail;
+      if (!d?.id || (d.chat && d.chat !== peerId)) return;
+      if (!reveal(d.id)) {
+        pendingJump.current = { id: d.id, jump: false, tries: 0 };
+        void loadEarlier();
+      }
+    };
+    window.addEventListener("openlounge:load-message", on);
+    return () => window.removeEventListener("openlounge:load-message", on);
+  }, [peerId, reveal, loadEarlier]);
+  useEffect(() => {
+    const p = pendingJump.current;
+    if (!p || loadingMore) return;
+    if (reveal(p.id)) {
+      pendingJump.current = null;
+      if (p.jump) jumpWhenRendered(p.id);
+    } else if (hasMore && p.tries < 40) {
+      p.tries++;
+      void loadEarlier();
+    } else {
+      pendingJump.current = null;
+      if (p.jump) toast("Original message is no longer loaded");
+    }
+  }, [rows, loadingMore, hasMore, reveal, jumpWhenRendered, loadEarlier, toast]);
+  // infinite scroll: keep an older page coming while the reader is within a few screens of the top
+  const maybePrefetch = useCallback(() => {
+    const el = listRef.current;
+    if (!el || !hasMore || loadingOlder.current || messagesRef.current === null) return;
+    if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS && !stickToBottom.current) void loadEarlier();
+  }, [hasMore, loadEarlier]);
+  useEffect(() => {
+    if (!loadingMore) maybePrefetch();
+  }, [loadingMore, messages, maybePrefetch]);
 
   const lastMineIdx = useMemo(() => {
     if (!messages || !me) return -1;
@@ -1336,7 +1647,12 @@ export function DmThread({
           canUnpin={amAdmin}
           onJump={(id) => {
             stickToBottom.current = false;
-            if (!jumpToMessage(listRef.current, id)) toast(hasMore ? "Scroll up to load that message" : "That message is no longer available");
+            if (jumpToMessage(listRef.current, id)) return;
+            if (reveal(id)) jumpWhenRendered(id);
+            else if (hasMore) {
+              pendingJump.current = { id, jump: true, tries: 0 };
+              void loadEarlier();
+            } else toast("That message is no longer available");
           }}
           onUnpin={(id) => groupRow?.onPin({ id } as Item, false)}
         />
@@ -1351,8 +1667,11 @@ export function DmThread({
             const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
             stickToBottom.current = near;
             if (near && unseenBelow) setUnseenBelow(0);
+            if (!near) captureAnchor.current();
+            scheduleEnsure();
+            maybePrefetch();
           }}
-          className="flex h-full flex-col overflow-y-auto overscroll-contain px-3 pt-3 pb-2 [overflow-anchor:none]"
+          className="relative flex h-full flex-col overflow-y-auto overscroll-contain px-3 pt-3 pb-2 [overflow-anchor:none]"
           data-testid="dm-list"
         >
           {/* pushes a short conversation to the bottom, like every chat app */}
@@ -1380,12 +1699,9 @@ export function DmThread({
                   )}
                 </div>
               )}
-              {rowOffset > 0 && (
-                <button type="button" onClick={() => setRenderWindow((w) => w + RENDER_WINDOW)} className="mx-auto my-2 block rounded-full px-3 py-1 text-xs font-semibold text-zinc-400 hover:bg-white/5">
-                  Show earlier messages
-                </button>
-              )}
+              <div ref={topSpacer} aria-hidden className="shrink-0" data-testid="dm-vspace-top" />
               {visibleRows.map(({ m, sep, newDay, first, last }, vi) => { const i = vi + rowOffset; return (
+                <div key={keyOf(m)} data-vrow={keyOf(m)} className="shrink-0 [display:flow-root]">
                 <ReplyGesture key={keyOf(m)} messageId={m.id} onReply={() => beginReply(m)} disabled={!!m.state || !!selected} testId="replyable-message">
                 {m.kind === "call" && m.call ? (
                 <CallMessageRow
@@ -1453,7 +1769,9 @@ export function DmThread({
                 </div>
               )}
                 </ReplyGesture>
+                </div>
               ); })}
+              <div ref={bottomSpacer} aria-hidden className="shrink-0" data-testid="dm-vspace-bottom" />
               {/* sponsored message in large groups: one per view, after the last message (server-gated, OFF by default) */}
               {isGroup && messages.length > 0 && <SponsoredSlot placement="groups" chat={peerId} className="my-2" />}
               {peerTyping && typingPeer && (

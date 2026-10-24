@@ -6,6 +6,7 @@
 // - Scoped per signed-in user; wiped on sign-out (shared devices).
 // - Media bytes are not stored here (the browser HTTP cache / CDN handle those).
 import { mergeForCache, type CachedMsg } from "./historyReconcile";
+import { wipeMsgStore } from "./msgStore";
 
 const SCHEMA = 1;
 const BASE = "ol-chat";
@@ -151,6 +152,7 @@ export function writeInbox<C>(meId: string, conversations: readonly C[]) {
 /** Sign-out: forget this device's cached chats (every database this app created, set-aside ones included). */
 export async function wipeChatCache() {
   if (!hasIdb()) return;
+  await wipeMsgStore(); // local-first message rows (ol-chat-msgs)
   const db = await dbp?.catch(() => null);
   db?.close();
   dbp = null;
