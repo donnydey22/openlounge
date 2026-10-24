@@ -1,4 +1,4 @@
-// FX-052/FX-053 render: composer cap + internal scroll, jump-to-latest appear/hide/badge/scroll.
+// FX-053/FX-054 render: composer cap + internal scroll, jump-to-latest appear/hide/badge/scroll.
 // Server must run with CSP=0 locally (production CSP has upgrade-insecure-requests, which WebKit applies to http://127.0.0.1).
 // BASE=http://127.0.0.1:3360 ENGS=chromium,webkit,firefox node --import tsx tests/e2e/composer-cap-jump.render.mts
 import pw from "playwright";
