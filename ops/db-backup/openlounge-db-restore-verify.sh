@@ -240,7 +240,10 @@ process_manifest() (
   timeout --foreground "$BACKUP_RESTORE_TIMEOUT_SEC" "$AGE" --decrypt --identity "$BACKUP_AGE_IDENTITY_FILE" --output "$restore_dump" "$archive"
   timeout --foreground "$BACKUP_RESTORE_TIMEOUT_SEC" "$AGE" --decrypt --identity "$BACKUP_AGE_IDENTITY_FILE" --output "$source_counts" "$counts_archive"
   [[ "$(wc -l <"$source_counts" | tr -d '[:space:]')" == "${META[table_count]}" ]] || die "decrypted source inventory does not match manifest"
-  "$PG_RESTORE" --list "$restore_dump" | grep -qE 'TABLE[[:space:]].*public' || die "decrypted archive has no public tables"
+  # Capture the full table of contents first: piping into `grep -q` lets grep exit early, pg_restore then dies of
+  # EPIPE and pipefail turns a good archive into a false "no public tables" failure (FX-052).
+  "$PG_RESTORE" --list "$restore_dump" >"$work_dir/toc.txt" || die "pg_restore could not list the decrypted archive"
+  grep -qE 'TABLE[[:space:]].*public' "$work_dir/toc.txt" || die "decrypted archive has no public tables"
 
   timeout --foreground "$BACKUP_RESTORE_TIMEOUT_SEC" "$INITDB" --no-instructions --auth-local=trust --auth-host=reject --encoding=UTF8 --no-locale -D "$scratch_cluster" >/dev/null
   timeout --foreground "$BACKUP_RESTORE_TIMEOUT_SEC" "$PG_CTL" -D "$scratch_cluster" -o "-h '' -k '$scratch_socket' -p $BACKUP_SCRATCH_PORT -c dynamic_shared_memory_type=mmap" -w start >/dev/null

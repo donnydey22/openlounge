@@ -162,7 +162,9 @@ dump_pid=""
 [[ -s "$plain_counts" ]] || die "source table-count inventory is empty"
 source_table_count="$(wc -l <"$plain_counts" | tr -d '[:space:]')"
 [[ "$source_table_count" =~ ^[1-9][0-9]*$ ]] || die "could not count source table inventory"
-pg_restore --list "$plain_dump" | grep -qE 'TABLE[[:space:]].*public' || die "logical archive has no public tables"
+# Capture the full listing before grepping; `| grep -q` can EPIPE pg_restore under pipefail (FX-052).
+pg_restore --list "$plain_dump" >"$work_dir/toc.txt" || die "pg_restore could not list the logical archive"
+grep -qE 'TABLE[[:space:]].*public' "$work_dir/toc.txt" || die "logical archive has no public tables"
 kill "$snapshot_pid" 2>/dev/null || true
 wait "$snapshot_pid" 2>/dev/null || true
 snapshot_pid=""

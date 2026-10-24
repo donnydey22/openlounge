@@ -31,6 +31,8 @@ else
 fi
 chmod 600 "$FILE"
 # sanity check: the archive's table of contents must list the core tables
-pg_restore --list "$FILE" | grep -qE 'TABLE public (users|dms)' || { echo "backup looks empty/corrupt: $FILE" >&2; exit 4; }
+# Capture the full listing before grepping; `| grep -q` can EPIPE pg_restore under pipefail (FX-052).
+TOC="$(pg_restore --list "$FILE")" || { echo "pg_restore could not list: $FILE" >&2; exit 4; }
+grep -qE 'TABLE public (users|dms)' <<<"$TOC" || { echo "backup looks empty/corrupt: $FILE" >&2; exit 4; }
 echo "backup ok: $FILE ($(du -h "$FILE" | cut -f1))"
 ls -1t "$OUT"/openlounge-*.dump 2>/dev/null | tail -n +"$((KEEP + 1))" | xargs -r rm -f
