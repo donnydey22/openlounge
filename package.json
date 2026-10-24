@@ -39,6 +39,8 @@
     "test:shared-media:render": "node --import tsx tests/e2e/shared-media-telegram.render.mts",
     "test:turn:relay": "node tests/e2e/turn-relay-harness.mjs",
     "test:turn:relay:config": "node --test tests/e2e/turn-relay-harness.test.mjs",
+    "test:offline": "node --import tsx --test --test-force-exit tests/offline/offlineInbox.test.ts",
+    "test:offline:e2e": "node --import tsx tests/e2e/offline-inbox.e2e.mts",
     "test:permanence": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=300000 tests/history/permanence.test.ts",
     "test:roomchat": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/room-chat/*.test.ts",
     "gate:fixed": "node scripts/gate-fixed.mjs"
