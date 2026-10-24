@@ -2398,9 +2398,9 @@ export class CallEngine {
   }
 
   private teardownMedia() {
-    this.turnRefresh.stop();
     stopTones();
     this.msTcp = false;
+    this.turnRefresh.stop();
     this.stopWebRouteWatch?.();
     this.webSinkId = "";
     this.routeUserPick = false;
