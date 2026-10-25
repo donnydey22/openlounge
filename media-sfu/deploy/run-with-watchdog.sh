@@ -23,10 +23,34 @@ notify() {
   "$notify_bin" --no-block "$@" >/dev/null 2>&1 || true
 }
 
+# Liveness depends only on the local SFU process/worker. The website gateway link
+# drops briefly during every Railway deploy; that is logged, never fatal.
+gateway_down_since=0
+gateway_warn_after=${MEDIASOUP_GATEWAY_WARN_SEC:-600}
+gateway_warned=0
+check_gateway() {
+  local body=$1
+  if [[ $body == *'"gateway":true'* ]]; then
+    if (( gateway_down_since )); then
+      echo "SFU gateway link restored after ~$((SECONDS + 1 - gateway_down_since))s" >&2
+    fi
+    gateway_down_since=0; gateway_warned=0
+  else
+    if (( !gateway_down_since )); then
+      gateway_down_since=$((SECONDS + 1))
+      echo "SFU gateway link down (not fatal; worker liveness only)" >&2
+    elif (( !gateway_warned && SECONDS + 1 - gateway_down_since >= gateway_warn_after )); then
+      echo "WARNING: SFU gateway link down for over ${gateway_warn_after}s (not restarting; worker alive)" >&2
+      gateway_warned=1
+    fi
+  fi
+}
+
 healthy() {
   local body
   body=$(curl --fail --silent --show-error --max-time 2 "$health_url") || return 1
-  [[ $body == *'"ok":true'* && $body == *'"worker":true'* && $body == *'"gateway":true'* ]]
+  check_gateway "$body"
+  [[ $body == *'"ok":true'* && $body == *'"worker":true'* ]]
 }
 
 "$node_bin" src/index.mjs &
