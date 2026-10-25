@@ -54,3 +54,14 @@ FX-052,2026-10-23,ops/db-backup,"Good backups quarantined as ""no public tables"
 FX-053,2026-10-23,chat/composer,"Composer kept growing to 200px (~8 lines) regardless of screen/keyboard; Donny t3292u: cap then scroll like WhatsApp","Fixed 200px cap ignored viewport/keyboard; no visualViewport re-fit",f64743f,tests/chat/composerJump.test.ts,composer max height
 FX-054,2026-10-23,chat/jump-latest,"No WhatsApp-style jump-to-latest: only a text pill when new messages arrived; nothing when scrolled far up","Pill shown only for unseen messages; no distance trigger, badge or far-jump",f64743f,tests/chat/composerJump.test.ts,jump button
 FX-055,2026-10-24,calls/turn-refresh,"Relayed (TURN) calls dropped at 10-15 min","Mediasoup TURN logins live 10 min and coturn re-checks expiry on every allocation Refresh; nothing refreshed the login mid-call",b944a99,tests/calls/turnRefresh.test.ts,relay login refresh
+FX-064,2026-10-24,calls/native-diag,"b67 iPhone consume results / first remote video frame / ICE recovery were invisible in Railway logs","Page ignored the app's media-diag events",15981ee,tests/calls/nativeDiagForward.test.ts,native diag forward
+FX-065,2026-10-24,calls/held,"HELD: Keiko-calls-Donny video and web-lane late producers (remote video appears when the peer produces late)","Held behaviour guard (Oct 23 working calls)",47dbce6,tests/calls/mediasoupLateProducer.test.ts,
+FX-066,2026-10-24,calls/held,"HELD: busy then redial (stale busy self-heal, double tap / second tab)","Held behaviour guard",0e9a3b2,tests/calls/staleRedial.test.ts,
+FX-067,2026-10-24,calls/held,"HELD: audio quality (healthy UDP never falls back; quality guard)","Held behaviour guard",2132192,tests/calls/callAudioReliable.test.ts,
+FX-068,2026-10-24,calls/held,"HELD: SFU media recovery / reconnect after drops","Held behaviour guard",eda29aa,tests/calls/msRecovery.test.ts,
+FX-069,2026-10-24,calls/held,"HELD: iPhone native lane (b45+) gets its own connect budget","Held behaviour guard",4e91566,tests/calls/nativeConnectBudget.test.ts,
+FX-070,2026-10-24,calls/held,"HELD: calls never use LiveKit (drop-in rooms untouched)","Held behaviour guard",13160da,tests/calls/noLiveKit.test.ts,
+FX-071,2026-10-24,calls/held,"HELD: native ringing / PushKit / CallKit plumbing","Held behaviour guard",af01a02,tests/calls/native.test.ts,
+FX-072,2026-10-24,calls/held,"HELD: server-side two-way quality verdict","Held behaviour guard",27437bb,tests/calls/serverQuality.test.ts,
+FX-073,2026-10-24,calls/held,"HELD: warm native Accept answers instantly","Held behaviour guard",b14c813,tests/calls/warmAccept.test.ts,
+FX-074,2026-10-24,calls/held,"HELD: video resilience (NACK/PLI/FIR/RTX/FEC)","Held behaviour guard",fbfbb42,tests/calls/videoResilience.test.ts,
