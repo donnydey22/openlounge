@@ -343,7 +343,7 @@ test("3ae8ff34: floor 'tcp' verdict while the transport is still connected resum
 // every-drop fast ICE restart with backoff (IceRestartBackoff), approved by Donny Oct 24 2026 5:41 AM MST.
 // Previous approved hash (FX-044 only): ccf21d2d8fe521cae9f78de3c56ed5b613d017a894706294f1c3fd8253a402d0
 // FX-079 (branch harden/dropped-conn-antifreeze-1024): fps floor + maintain-framerate + antiFreeze() added to
-// mediasoupSession.ts — PENDING DONNY'S REVIEW before merge (FX-044-only hash was 13bbae17…8c4c).
+// mediasoupSession.ts — approved by Donny Oct 24 2026 8:35 PM MST (previous hash 13bbae17…8c4c).
 const MS_SESSION_APPROVED_DIFF_SHA256 = "ce6c6d9a13ccf2522296aff17bbbf0d29bab174478713811d5f041ab034dbdb1";
 
 test("protected: Android video path unchanged — video never takes native media in any opt-in/guard state; WebView video files identical to prod 087c96b", async () => {
