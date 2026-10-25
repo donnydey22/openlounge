@@ -122,3 +122,16 @@ export function videoBpsFor(step: LadderStep, outKbps: number | null): number {
   const share = Math.floor(outKbps * 1000 * ADAPT.videoShareOfEstimate) - step.audioBps;
   return Math.max(ADAPT.minVideoBps, Math.min(step.videoBps, share));
 }
+
+/**
+ * FX-075 (call 30dc469c, Oct 24): availableOutgoingBitrate is application-limited — once video is capped low the
+ * estimate stays low, so videoBpsFor() alone ratchets video down to the 60 kbps floor and never restores it.
+ * On a clean sample (loss <= 2 %, RTT < 300 ms) grow the cap by 50 % of the previous cap (up to the rung's videoBps)
+ * even when the estimate has not moved. Lossy/slow samples keep the original estimate-tracking behaviour.
+ */
+export function videoBpsRecovering(step: LadderStep, v: { outKbps: number | null; lossPercent: number | null; rttMs: number | null }, lastBps: number | null): number {
+  const est = videoBpsFor(step, v.outKbps);
+  const clean = (v.lossPercent ?? 0) <= 2 && (v.rttMs === null || v.rttMs < 300);
+  if (!clean || !lastBps) return est;
+  return Math.max(est, Math.min(step.videoBps, Math.floor(lastBps * 1.5)));
+}

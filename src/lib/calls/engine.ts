@@ -32,7 +32,7 @@ import { flipCameraTrack } from "./cameraFlip";
 import { IosMicWatch, iosMicReacquireEligible } from "./iosMicReacquire";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
 import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type QualityCounters } from "./qualityGuard";
-import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor } from "./netAdapt";
+import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor, videoBpsRecovering } from "./netAdapt";
 import { followAudioDevices } from "../audioDevices";
 import { TurnRefresher } from "./turnRefresh";
 
@@ -1236,7 +1236,7 @@ export class CallEngine {
         if (a.type === "none" && this.s.camOn) {
           // track the live estimate within the current rung (only re-apply on a >25 % move: no setParameters churn)
           const step = LADDER[this.netLadder.level];
-          const vbps = videoBpsFor(step, v.outKbps);
+          const vbps = videoBpsRecovering(step, v, lastVideoBps || null);
           if (!lastVideoBps || Math.abs(vbps - lastVideoBps) / lastVideoBps > 0.25) {
             lastVideoBps = vbps;
             void session.applyLadderStep({ ...step, videoBps: vbps });

@@ -65,3 +65,4 @@ FX-071,2026-10-24,calls/held,"HELD: native ringing / PushKit / CallKit plumbing"
 FX-072,2026-10-24,calls/held,"HELD: server-side two-way quality verdict","Held behaviour guard",27437bb,tests/calls/serverQuality.test.ts,
 FX-073,2026-10-24,calls/held,"HELD: warm native Accept answers instantly","Held behaviour guard",b14c813,tests/calls/warmAccept.test.ts,
 FX-074,2026-10-24,calls/held,"HELD: video resilience (NACK/PLI/FIR/RTX/FEC)","Held behaviour guard",fbfbb42,tests/calls/videoResilience.test.ts,
+FX-075,2026-10-24,calls/video,"Video ladder ratchet: clean samples restore video cap (call 30dc469c)","videoBpsRecovering grows cap 1.5x per clean sample",branch,tests/calls/videoLadderRatchet.test.ts,
