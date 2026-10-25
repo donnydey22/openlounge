@@ -55,3 +55,9 @@ test("iOS lane: page asks the native camera for simulcast only when the flag is 
   const n = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
   assert.match(n, /nativeVideo && simulcastEnabled\(\) \? \{ simulcast: true \}/);
 });
+
+test("web sender (pin approval pending): camera produce passes simulcast encodings; ladder is layer-aware", () => {
+  const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
+  assert.match(ms, /const encodings = cameraEncodings\(\);/);
+  assert.match(ms, /simulcastLadderPatch\(p\.encodings, step\)/);
+});
