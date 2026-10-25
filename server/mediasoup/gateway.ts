@@ -109,6 +109,14 @@ export class MediasoupGateway {
     return { ok: true as const };
   }
 
+  /** FX-081: SFU-side per-call stats; accepted only from the authenticated gateway connection. */
+  handleTelemetry(conn: Conn, data: unknown): { callId: string; data: unknown } | null {
+    if (conn !== this.conn || !data || typeof data !== "object") return null;
+    const callId = (data as { callId?: unknown }).callId;
+    if (typeof callId !== "string" || !/^[\w:.@-]{1,128}$/.test(callId)) return null;
+    return { callId, data };
+  }
+
   handleNotice(conn: Conn, data: unknown) {
     if (conn !== this.conn || !data || typeof data !== "object") return { ok: false as const };
     const d = data as { connectionId?: unknown; event?: unknown; data?: unknown };

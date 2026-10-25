@@ -5,6 +5,7 @@ import { closeLiveKitRoom, createJoinToken, kickFromLiveKitRoom, livekit } from 
 import { onLiveKitEvent } from "../livekitWebhook";
 import { bg, push } from "../push";
 import { log, metrics } from "../log";
+import { callTelemetry, sanitizeSample } from "./telemetry";
 import { CallService } from "./service";
 import type { CallMediaBackend } from "./mediaBackend";
 import { initVoip, voipService } from "./voip";
@@ -256,6 +257,15 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:gateway:hello", ({ secret }: { secret?: unknown }, ack: AckFn = noop) => ack(mediaGateway().attach(socket, secret)));
   socket.on("ms:gateway:response", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleResponse(socket, data)));
   socket.on("ms:gateway:notice", (data: unknown, ack: AckFn = noop) => ack(mediaGateway().handleNotice(socket, data)));
+  // FX-081 SFU-side stats (gateway connection only; browsers are rejected by handleTelemetry)
+  socket.on("ms:gateway:telemetry", (data: unknown, ack: AckFn = noop) => {
+    const t = mediaGateway().handleTelemetry(socket, data);
+    if (!t) return ack({ ok: false });
+    const rows = sanitizeSample("sfu", "sfu", t.data);
+    callTelemetry.add(t.callId, rows);
+    if (rows.length) log.info("[calls] telemetry", { callId: t.callId, src: "sfu", s: rows.map(({ src: _s, t: _t, platform: _p, net: _n, ...r }) => r) });
+    ack({ ok: true });
+  });
   socket.on("call:start", ({ peerId, video, nativeVideo }: { peerId: string; video?: boolean; nativeVideo?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled())).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
@@ -273,6 +283,17 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   );
   socket.on("call:hangup", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().hangup(callId, uid))));
   socket.on("call:video", ({ callId, on }: { callId: string; on: boolean }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().setVideo(callId, uid, !!on))));
+  // FX-081 per-stream telemetry (every 5 s per client): sanitized, bounded per call, one log line per sample
+  socket.on("call:telemetry", (d: unknown, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const callId = typeof (d as { callId?: unknown })?.callId === "string" ? String((d as { callId: string }).callId).slice(0, 36) : "";
+      const rows = sanitizeSample("client", uid.slice(0, 12), d);
+      if (!callId || !rows.length) return ack({ ok: false });
+      callTelemetry.add(callId, rows);
+      log.info("[calls] telemetry", { callId, src: "client", user: uid.slice(0, 12), platform: rows[0].platform, net: rows[0].net, s: rows.map(({ src: _s, user: _u, t: _t, platform: _p, net: _n, ...r }) => r) });
+      ack({ ok: true });
+    }),
+  );
   // client call diagnostics (connect failure reasons, recovery, ladder steps): log only, never affects the call
   socket.on("call:diag", (d: { callId?: unknown; ev?: unknown; [k: string]: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => {

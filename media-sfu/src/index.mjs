@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createWorker } from "mediasoup";
 import WebSocket from "ws";
 import { readConfig } from "./config.mjs";
+import { LAYER_POLICY, nextLayer } from "./layers.mjs";
 
 const cfg = readConfig();
 const MAX_FRAME = 256_000;
@@ -275,6 +276,63 @@ async function routeRpc(input) {
   }
   throw new Error("Unsupported media action");
 }
+
+// FX-080 + FX-081: every LAYER_POLICY.sampleMs, steer each simulcast consumer's preferred layer from its receiver's
+// loss and the recv transport's BWE; every TELEMETRY_MS, send per-call SFU stats to the app server. Read-mostly:
+// setPreferredLayers is the only write, and only on consumers of type "simulcast". Never closes anything.
+const TELEMETRY_MS = 5_000;
+const layerState = new Map(); // consumer.id -> nextLayer state
+let lastTelemetry = 0;
+const lossOf = (stats) => { const r = stats.find((x) => x.type === "outbound-rtp"); return r && Number.isFinite(r.fractionLost) ? (r.fractionLost / 256) * 100 : null; };
+async function steerAndReport() {
+  const now = Date.now();
+  const report = now - lastTelemetry >= TELEMETRY_MS;
+  if (report) lastTelemetry = now;
+  const perCall = new Map();
+  for (const s of sessions.values()) {
+    if (s.closed) continue;
+    const recv = s.transports.get("recv");
+    let availableBps = null;
+    try { const ts = recv ? await recv.getStats() : []; const t = ts.find((x) => Number.isFinite(x.availableOutgoingBitrate)); availableBps = t ? t.availableOutgoingBitrate : null; } catch { /* closed */ }
+    const rows = perCall.get(s.callId) ?? perCall.set(s.callId, []).get(s.callId);
+    for (const c of s.consumers.values()) {
+      if (c.closed) continue;
+      let st = [];
+      try { st = await c.getStats(); } catch { continue; }
+      const lossPct = lossOf(st);
+      if (c.type === "simulcast") {
+        const prev = layerState.get(c.id);
+        const next = nextLayer(prev, { lossPct, availableBps: availableBps ?? undefined });
+        layerState.set(c.id, next);
+        if (!prev || prev.spatial !== next.spatial) {
+          try { await c.setPreferredLayers({ spatialLayer: next.spatial, temporalLayer: LAYER_POLICY.temporalMax }); } catch { /* consumer gone */ }
+          safeLog("layer_preferred", { call: b64(s.callId).slice(0, 12), spatial: next.spatial, lossPct: lossPct === null ? null : Math.round(lossPct), bweKbps: availableBps ? Math.round(availableBps / 1000) : null });
+        }
+      }
+      if (report && rows.length < 8) {
+        const o = st.find((x) => x.type === "outbound-rtp") ?? {};
+        rows.push({ user: String(s.userId).slice(0, 12), dir: "sfu-out", kind: c.kind, layer: c.currentLayers ? `${c.currentLayers.spatialLayer}/${c.currentLayers.temporalLayer}` : undefined,
+          lossPct, rttMs: Number.isFinite(o.roundTripTime) ? o.roundTripTime : null, jitterMs: null, kbps: Number.isFinite(o.bitrate) ? o.bitrate / 1000 : null, fps: null, freezes: null, score: c.score?.score ?? null });
+      }
+    }
+    if (report) for (const p of s.producers.values()) {
+      if (p.closed || rows.length >= 8) continue;
+      let st = [];
+      try { st = await p.getStats(); } catch { continue; }
+      const i = st[0] ?? {};
+      rows.push({ user: String(s.userId).slice(0, 12), dir: "sfu-in", kind: p.kind, lossPct: Number.isFinite(i.fractionLost) ? (i.fractionLost / 256) * 100 : null, rttMs: Number.isFinite(i.roundTripTime) ? i.roundTripTime : null,
+        jitterMs: Number.isFinite(i.jitter) ? i.jitter : null, kbps: st.reduce((a, x) => a + (Number.isFinite(x.bitrate) ? x.bitrate : 0), 0) / 1000, fps: null, freezes: null, score: p.score?.[0]?.score ?? null });
+    }
+  }
+  for (const id of [...layerState.keys()]) if (![...sessions.values()].some((s) => [...s.consumers.values()].some((c) => c.id === id))) layerState.delete(id);
+  if (report) for (const [callId, streams] of perCall) if (streams.length) emitGateway("ms:gateway:telemetry", { callId, t: now, streams });
+}
+let steering = false;
+setInterval(() => {
+  if (steering || !gatewayOnline) return;
+  steering = true;
+  steerAndReport().catch(() => {}).finally(() => { steering = false; });
+}, LAYER_POLICY.sampleMs).unref();
 
 let gateway = null;
 function emitGateway(ev, data) {

@@ -82,6 +82,8 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },
   "call:mediaFallback": { callId: "id" },
   "call:diag": { callId: "id", ev: "string" },
+  "call:telemetry": { callId: "id", seq: "number?", t: "number?", platform: "string?", net: "string?" },
+  "ms:gateway:telemetry": { callId: "id" },
   "call:mediaRestore": { callId: "id" },
   // Server-brokered Mediasoup signaling. Extra structured fields (DTLS/RTP parameters) are validated by the SFU
   // adapter rather than serialized into this intentionally tiny generic schema layer.

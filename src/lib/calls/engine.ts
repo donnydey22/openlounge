@@ -25,6 +25,7 @@ import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
+import { CallTelemetry } from "./callTelemetry";
 import { isAndroidApp } from "@/lib/notify";
 
 /** WebView media session or the iOS app's native media proxy (same surface) */
@@ -1221,6 +1222,7 @@ export class CallEngine {
   /** Sustained bad UDP quality (loss / RTT / bandwidth estimate / black-holed audio) → the LiveKit TCP/TURN-443 path. */
   private startQualityGuard(session: CallMediaSession) {
     this.stopQualityGuard();
+    this.startTelemetry(session); // FX-081: per-stream telemetry every 5 s (read-only, never affects the call)
     this.qualityGuard.reset();
     // bandwidth-aware ladder on every platform (single encoding, no simulcast); QualityGuard path kept unreachable-safe
     return this.startNetLadder(session);
@@ -1329,6 +1331,25 @@ export class CallEngine {
   }
   private releaseParked() {
     this.parked?.release();
+  }
+
+  private telemetry: { session: CallMediaSession; t: CallTelemetry } | null = null;
+  private startTelemetry(session: CallMediaSession) {
+    const callId = this.s.call?.id;
+    if (!callId || this.telemetry?.session === session) return;
+    this.stopTelemetry();
+    const t = new CallTelemetry({
+      callId, platform: nativePlatform() ?? "web",
+      stats: () => session.getTransportStats(),
+      net: () => (navigator as unknown as { connection?: { type?: string; effectiveType?: string } }).connection?.type ?? (navigator as unknown as { connection?: { effectiveType?: string } }).connection?.effectiveType,
+      send: (payload) => { try { this.socket?.emit("call:telemetry", payload); } catch { /* ignore */ } },
+    });
+    this.telemetry = { session, t };
+    t.start();
+  }
+  private stopTelemetry() {
+    this.telemetry?.t.stop();
+    this.telemetry = null;
   }
 
   private stopQualityGuard() {
@@ -1953,6 +1974,7 @@ export class CallEngine {
     this.mediasoup = null;
     this.stopAndroidLifecycle();
     this.stopQualityGuard();
+    this.stopTelemetry();
     this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
@@ -2451,6 +2473,7 @@ export class CallEngine {
     this.mediasoup = null;
     this.stopAndroidLifecycle();
     this.stopQualityGuard();
+    this.stopTelemetry();
     this.stopUdpProbe();
     this.mediasoupConnected = false;
     mediasoup?.close();
