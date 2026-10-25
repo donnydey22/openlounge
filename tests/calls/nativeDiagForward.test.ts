@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 (globalThis as { window?: unknown }).window ??= { addEventListener() {}, removeEventListener() {} };
-const load = () => import("../../src/lib/calls/nativeMediaSession.ts");
+const load = () => import("../../src/lib/calls/nativeMediaSession");
 
 const mk = async (got: Array<[string, unknown]>) =>
   new (await load()).NativeMediaSession({ on() {}, off() {}, request: async () => ({ ok: true }) } as never, { provider: "mediasoup", callId: "c1" } as never, {
