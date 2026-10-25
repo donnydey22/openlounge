@@ -169,6 +169,9 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
 
 const MS_EVENT = /^ms:[a-z:]+$/i;
 
+/** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
+export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered"]);
+
 export class NativeMediaSession {
   private closed = false;
   private connected = false;
@@ -198,6 +201,8 @@ export class NativeMediaSession {
       onWantsLiveKit?(reason: string): void;
       /** timing of each native step (relayed ms:* request, connect) for diagnostics */
       onStep?(step: { event: string; ms: number; ok: boolean; error?: string }): void;
+      /** FX-064: b67+ app media diagnostics (consume results, first remote video frame, ICE recovery) → Railway logs. */
+      onNativeDiag?(ev: string, data: Record<string, string | number>): void;
     },
   ) {
   }
@@ -209,6 +214,10 @@ export class NativeMediaSession {
     const s = d?.state;
     if (s === "failed" && d?.fallback === "livekit" && this.opts.onWantsLiveKit) {
       this.opts.onWantsLiveKit(String(d.reason ?? "native-ms-failed"));
+      return;
+    }
+    if (s === "media-diag") {
+      this.forwardNativeDiag(d as Record<string, unknown>);
       return;
     }
     if (s === "camera-unavailable") this.opts.onCameraUnavailable?.();
@@ -245,6 +254,24 @@ export class NativeMediaSession {
       },
     );
   };
+
+  /** FX-064: forward only known app diag events for this call, with short scalar fields (log-only, never affects media). */
+  private forwardNativeDiag(d: Record<string, unknown>) {
+    try {
+      const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
+      const ev = typeof d.ev === "string" ? d.ev : "";
+      if (!NATIVE_DIAG_EVENTS.has(ev) || d.callId !== callId) return;
+      const data: Record<string, string | number> = {};
+      for (const k of ["n", "kinds", "ms", "consumers"]) {
+        const v = d[k];
+        if (typeof v === "number" && Number.isFinite(v)) data[k] = v;
+        else if (typeof v === "string") data[k] = v.slice(0, 40);
+      }
+      this.opts.onNativeDiag?.(ev, data);
+    } catch {
+      /* diagnostics only */
+    }
+  }
 
   private step(event: string, t0: number, ok: boolean, error?: string) {
     try {

@@ -980,6 +980,11 @@ export class CallEngine {
           this.netLog("native-step", step);
           this.diag("native-step", step);
         },
+        onNativeDiag: (ev: string, data: Record<string, string | number>) => {
+          if (this.mediasoup !== session) return;
+          this.netLog(`native-${ev}`, data);
+          this.diag(`native-${ev}`, data);
+        },
         tcpOnly,
       });
       this.mediasoup = session;
