@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 import type { CallMediaBackend } from "./mediaBackend";
+import { callqGrantFor } from "./callqAllowlist";
 
 const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
@@ -259,7 +260,10 @@ export class CallService {
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const media = await t.p;
-    return media && (c.phase as CallPhase) !== "ended" ? media : null;
+    if (!media || (c.phase as CallPhase) === "ended") return null;
+    // FX-082: test accounts only get the call-quality grant; everyone else gets the exact same object as before.
+    const callq = media.provider === "mediasoup" ? callqGrantFor(userId) : null;
+    return callq ? { ...media, callq } : media;
   }
 
   /**

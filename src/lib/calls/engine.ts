@@ -6,6 +6,7 @@
 // already granted, pre-acquires the mic. Accepting then just connects + publishes. The caller is already in the
 // LiveKit room publishing when the callee joins, so audio flows the moment the callee's transport is up.
 import { UdpRecoveryPolicy } from "./udpRecovery";
+import { setSimulcastGrant } from "./simulcast";
 import { anyOnTcp, selectedPath, udpProbeDelay, UDP_WATCH_MS } from "./udpProbe";
 import { defaultRoute, isHeadsetKind, routeAnnouncement, routeFromNative, routesFromNative, routesFromWebOutputs, sortRoutes, type AudioRoute, type NativeRouteDetail } from "./audioRoute";
 import { watchVideoResilience } from "./videoResilience";
@@ -959,6 +960,7 @@ export class CallEngine {
       // A caller may have pre-acquired LiveKit tracks before the backend selection response arrived. Release them so
       // iOS/Android never hold two microphone/camera captures while the UDP transport starts.
       this.releaseLiveKitPrewarm();
+      setSimulcastGrant(media); // FX-082: test-account grant only; false for everyone else
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
         ...(this.iosNativeVideoLatched() && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}`, nativeVideo: true } : {}),

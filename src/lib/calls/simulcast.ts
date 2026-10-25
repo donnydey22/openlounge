@@ -17,7 +17,15 @@ export const SIMULCAST_LAYERS: readonly SimulcastLayer[] = [
 /** Temporal layers inside every spatial layer: the SFU can also drop to 1/2 or 1/4 frame rate without a keyframe. */
 export const SIMULCAST_SCALABILITY = "L1T3";
 
+// FX-082: the server's per-user grant for the current call (media.callq.simulcast). Only ever turns simulcast ON for
+// an allowlisted test account; absent grant = exactly the previous flag logic.
+let serverGrant = false;
+export function setSimulcastGrant(media: { callq?: { simulcast?: boolean } } | null | undefined): void {
+  serverGrant = media?.callq?.simulcast === true;
+}
+
 export function simulcastEnabled(): boolean {
+  if (serverGrant) return true;
   try {
     const w = typeof window === "undefined" ? undefined : (window as unknown as { __olSimulcast?: boolean });
     if (w?.__olSimulcast === true) return true;

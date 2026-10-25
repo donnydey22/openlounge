@@ -299,6 +299,8 @@ export interface CallMedia {
   callId?: string;
   /** Epoch seconds; useful to reject stale provider credentials before connecting. */
   expiresAt?: number;
+  /** FX-082: present only for server-allowlisted test accounts (call-quality rollout); absent = previous behaviour. */
+  callq?: { simulcast?: boolean };
 }
 
 /**
