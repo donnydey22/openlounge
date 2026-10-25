@@ -170,7 +170,7 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
 const MS_EVENT = /^ms:[a-z:]+$/i;
 
 /** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
-export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered"]);
+export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced"]);
 
 export class NativeMediaSession {
   private closed = false;

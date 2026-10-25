@@ -27,7 +27,7 @@ test("native diag forward: known events for this call reach onNativeDiag with sc
     ["no-remote-video-frame", { ms: 20000 }],
     ["ice-recovered", { consumers: 2 }],
   ]);
-  assert.equal((await load()).NATIVE_DIAG_EVENTS.size, 4);
+  assert.equal((await load()).NATIVE_DIAG_EVENTS.size, 7);
 });
 
 test("native diag forward: engine logs them as native-<ev> call diags, and media-diag never changes call state", () => {
@@ -35,4 +35,9 @@ test("native diag forward: engine logs them as native-<ev> call diags, and media
   assert.match(eng, /onNativeDiag: \(ev: string, data[^)]*\) => \{\n\s*if \(this\.mediasoup !== session\) return;\n\s*this\.netLog\(`native-\$\{ev\}`, data\);\n\s*this\.diag\(`native-\$\{ev\}`, data\);/);
   const nm = readFileSync("src/lib/calls/nativeMediaSession.ts", "utf8");
   assert.match(nm, /if \(s === "media-diag"\) \{\n\s*this\.forwardNativeDiag\(d as Record<string, unknown>\);\n\s*return;/);
+});
+
+test("FX-064: b68 per-kind resume / replacement diag events are forwarded", async () => {
+  const { NATIVE_DIAG_EVENTS } = await import("../../src/lib/calls/nativeMediaSession");
+  for (const ev of ["consumer-resumed", "resume-failed", "remote-video-replaced"]) assert.ok(NATIVE_DIAG_EVENTS.has(ev), ev);
 });

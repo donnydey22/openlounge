@@ -20,20 +20,20 @@ export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4
 
 export const IOS_RELEASE = {
   version: "0.3.19",
+  build: 68,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b68.ipa",
+  size: "14.5 MB",
+  sha256: "2dcd6ea41652d3a27b316133d64ae2b7fd3dc642bcfc094e6d42e59c61c284ae",
+} as const;
+/** Previous iOS build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
+export const IOS_FALLBACK = {
+  version: "0.3.19",
   build: 67,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b67.ipa",
   size: "13.9 MB",
   sha256: "e29917b271c6c5aec03e15ddc1706c81ca68e385a2952432ff912c85006fb899",
-} as const;
-/** Previous iOS build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
-export const IOS_FALLBACK = {
-  version: "0.3.19",
-  build: 66,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.3.19-b66.ipa",
-  size: "13.9 MB",
-  sha256: "d05a997ff05afddffdc0872621fb8f29dc14078b7128980f47782b1de9267cb0",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
