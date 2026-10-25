@@ -362,8 +362,13 @@ test("protected: Android video path unchanged — video never takes native media
     Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
   }
   const { execSync } = await import("node:child_process");
-  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/androidLifecycle.ts src/lib/calls/netAdapt.ts", { encoding: "utf8" }).trim();
-  assert.equal(changed, "", "Android lifecycle / bandwidth ladder untouched");
+  const changed = execSync("git diff --name-only 087c96b -- src/lib/calls/androidLifecycle.ts", { encoding: "utf8" }).trim();
+  assert.equal(changed, "", "Android lifecycle untouched");
+  // netAdapt.ts: the ONLY approved change since prod 087c96b is FX-075 (additive videoBpsRecovering; call 30dc469c;
+  // Donny approved Oct 24 2026 7:14 PM MST). Any other edit still fails: the diff must equal exactly that patch.
+  const { createHash: h75 } = await import("node:crypto");
+  const naDiff = execSync("git diff 087c96b -- src/lib/calls/netAdapt.ts", { encoding: "utf8" }).replace(/^index .*\n/m, "");
+  assert.equal(h75("sha256").update(naDiff).digest("hex"), "6d267d1e22e43d2f350040c49e7e16836ea0b75cbec942c524f52a18261638d2", "bandwidth ladder: only the approved FX-075 change");
   // mediasoupSession.ts: the ONLY approved change since prod 087c96b is FX-044 (sessionGone + real restartIce result;
   // Donny approved Oct 23 2026 4:48 PM MST). Any other edit still fails: the diff must equal exactly that patch.
   const { createHash } = await import("node:crypto");
