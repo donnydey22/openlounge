@@ -9,6 +9,7 @@ import { UdpRecoveryPolicy } from "./udpRecovery";
 import { anyOnTcp, selectedPath, udpProbeDelay, UDP_WATCH_MS } from "./udpProbe";
 import { defaultRoute, isHeadsetKind, routeAnnouncement, routeFromNative, routesFromNative, routesFromWebOutputs, sortRoutes, type AudioRoute, type NativeRouteDetail } from "./audioRoute";
 import { watchVideoResilience } from "./videoResilience";
+import { ANTI_FREEZE, FrozenFrameWatchdog, type FreezeAction } from "./antiFreeze";
 import { ensureCallReady } from "./permissions";
 import { nextElsewhere, type ElsewhereCall } from "./elsewhere";
 import { swapVideoTrack } from "./frameHold";
@@ -1092,7 +1093,32 @@ export class CallEngine {
   private stopVideoResilience: (() => void) | null = null;
   private startVideoResilience(receiver: RTCRtpReceiver | null | undefined) {
     this.stopVideoResilience?.();
-    this.stopVideoResilience = watchVideoResilience(receiver, (ev, x) => this.netLog(ev, x));
+    const stopJitter = watchVideoResilience(receiver, (ev, x) => this.netLog(ev, x));
+    const stopFreeze = this.watchFrozenVideo(receiver);
+    this.stopVideoResilience = () => { stopJitter(); stopFreeze(); };
+  }
+
+  /** FX-079: frozen-frame watchdog on the remote video (keyframe → re-resume → re-sync); see antiFreeze.ts */
+  private watchFrozenVideo(receiver: RTCRtpReceiver | null | undefined): () => void {
+    if (!receiver?.getStats) return () => {};
+    const session = this.mediasoup;
+    const dog = new FrozenFrameWatchdog();
+    const timer = setInterval(() => {
+      // a peer that turned its camera off pauses the producer (track muted): not a freeze
+      if (!session || this.mediasoup !== session || this.msRecovering || receiver.track?.muted) return;
+      void receiver.getStats().then((report) => {
+        let frames: number | null = null;
+        report.forEach((r: { type?: string; kind?: string; framesDecoded?: number }) => {
+          if (r.type === "inbound-rtp" && r.kind === "video") frames = r.framesDecoded ?? 0;
+        });
+        if (frames === null) return;
+        const action = dog.push(Date.now(), frames);
+        if (!action || this.mediasoup !== session) return;
+        this.netLog("video-freeze-recover", { action, stalls: dog.stalls });
+        void (session as { antiFreeze?: (a: FreezeAction) => Promise<boolean> }).antiFreeze?.(action);
+      }).catch(() => {});
+    }, ANTI_FREEZE.sampleMs);
+    return () => clearInterval(timer);
   }
 
   private onMediasoupTrack({ kind, track, close, receiver }: MediasoupRemoteTrack) {

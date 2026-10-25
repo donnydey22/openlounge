@@ -355,7 +355,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
         })
         .catch((e: unknown) => {
           log.warn("[calls] media request threw", { callId: callId.slice(0, 36), method, native: connectionId !== socket.id, error: String((e as Error)?.message ?? e).slice(0, 160) });
-          ack({ ok: false, error: "UDP media unavailable" });
+          // FX-078 (call bbbe198f): pass "Unknown media session" through so the client rebuilds at once (sessionGone)
+          // instead of retrying ICE restarts on a session the SFU no longer has.
+          const msg = String((e as Error)?.message ?? e);
+          ack({ ok: false, error: /unknown media session/i.test(msg) ? "Unknown media session" : "UDP media unavailable" });
         });
     });
   socket.on("ms:join", relay("join"));
@@ -366,4 +369,5 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:produce", relay("produce"));
   socket.on("ms:consume", relay("consume"));
   socket.on("ms:consumer:resume", relay("consumer:resume"));
+  socket.on("ms:consumer:requestKeyFrame", relay("consumer:requestKeyFrame")); // FX-079 anti-freeze
 }

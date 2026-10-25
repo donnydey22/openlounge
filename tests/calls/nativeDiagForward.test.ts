@@ -27,7 +27,7 @@ test("native diag forward: known events for this call reach onNativeDiag with sc
     ["no-remote-video-frame", { ms: 20000 }],
     ["ice-recovered", { consumers: 2 }],
   ]);
-  assert.equal((await load()).NATIVE_DIAG_EVENTS.size, 7);
+  assert.equal((await load()).NATIVE_DIAG_EVENTS.size, 10);
 });
 
 test("native diag forward: engine logs them as native-<ev> call diags, and media-diag never changes call state", () => {

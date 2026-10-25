@@ -69,14 +69,22 @@ function participantKey(callId, userId) {
 }
 
 function sessionOf(input) {
-  const s = sessions.get(input.connectionId);
+  let s = sessions.get(input.connectionId);
+  if (!s) {
+    // FX-078: same user + same call on a new connection while the old one is detached (grace) -> re-attach.
+    const prev = sessions.get(sessionsByParticipant.get(participantKey(input.callId, input.userId)));
+    if (prev && !prev.closed && prev.detachedAt && prev.callId === input.callId && prev.userId === input.userId) s = reattach(prev, input.connectionId);
+  }
   if (!s || s.closed || s.callId !== input.callId || s.userId !== input.userId) throw new Error("Unknown media session");
+  if (s.detachedAt) reattach(s, input.connectionId);
   return s;
 }
 
 function closeSession(s, reason = "closed") {
   if (!s || s.closed) return;
   s.closed = true;
+  if (s.detachTimer) clearTimeout(s.detachTimer);
+  s.detachTimer = null;
   for (const consumer of s.consumers.values()) consumer.close();
   for (const producer of s.producers.values()) producer.close();
   for (const transport of s.transports.values()) transport.close();
@@ -89,9 +97,32 @@ function closeCall(callId) {
   for (const s of [...sessions.values()]) if (s.callId === callId) closeSession(s, "call_closed");
 }
 
+// FX-078 (call bbbe198f): a dropped browser socket (Wi-Fi <-> cellular) no longer kills the peer's media at once.
+// The session (transports, producers, consumers) is kept for DETACH_GRACE_MS; a request from the same user for the
+// same call on a new connection re-attaches it (sessionOf), so an ICE restart resumes media. Expiry closes as before.
+const DETACH_GRACE_MS = 30_000;
 function closeConnection(connectionId) {
   const s = sessions.get(connectionId);
-  if (s) closeSession(s, "browser_socket_closed");
+  if (!s || s.closed) return;
+  if (s.detachTimer) return;
+  s.detachedAt = Date.now();
+  s.detachTimer = setTimeout(() => { s.detachTimer = null; if (s.detachedAt) closeSession(s, "browser_socket_closed"); }, DETACH_GRACE_MS);
+  s.detachTimer.unref?.();
+  safeLog("session_detached", { call: b64(s.callId).slice(0, 12), graceMs: DETACH_GRACE_MS });
+}
+
+function reattach(s, connectionId) {
+  if (s.detachTimer) clearTimeout(s.detachTimer);
+  s.detachTimer = null;
+  s.detachedAt = 0;
+  if (s.connectionId !== connectionId) {
+    sessions.delete(s.connectionId);
+    s.connectionId = connectionId;
+    sessions.set(connectionId, s);
+    sessionsByParticipant.set(s.participantKey, connectionId);
+  }
+  safeLog("session_reattached", { call: b64(s.callId).slice(0, 12) });
+  return s;
 }
 
 function publicTransport(transport) {
@@ -230,6 +261,14 @@ async function routeRpc(input) {
   if (method === "consumer:resume") {
     for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
       await consumer.resume();
+      return {};
+    }
+    throw new Error("Unknown consumer");
+  }
+  if (method === "consumer:requestKeyFrame") {
+    // FX-079 anti-freeze: a receiver whose picture stalled asks for a fresh keyframe (PLI to the sender) at once.
+    for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
+      if (consumer.kind === "video") await consumer.requestKeyFrame();
       return {};
     }
     throw new Error("Unknown consumer");

@@ -1,4 +1,5 @@
 import { IceRestartBackoff } from "./iceRestartBackoff";
+import { ANTI_FREEZE, antiFreezeFps, type FreezeAction } from "./antiFreeze";
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import { nativePlatform } from "@/lib/native";
@@ -653,10 +654,39 @@ export class MediasoupCallSession {
     const a = await set("audio", (e) => { e.maxBitrate = audioBps; });
     await set("video", (e) => {
       e.maxBitrate = step.videoBps;
-      e.maxFramerate = step.videoFps;
+      // FX-079: keep motion, shed resolution (frame-rate floor; degradationPreference set below)
+      e.maxFramerate = antiFreezeFps(step.videoFps);
       e.scaleResolutionDownBy = step.videoScale;
     });
+    await this.preferFramerate();
     return a;
+  }
+
+  /** FX-079: under CPU/bandwidth pressure the encoder lowers resolution instead of frame rate (no frozen picture). */
+  private async preferFramerate() {
+    const sender = this.producers.get("video")?.rtpSender as (RTCRtpSender & { getParameters(): RTCRtpSendParameters & { degradationPreference?: string } }) | undefined;
+    if (!sender?.getParameters || !sender.setParameters) return;
+    try {
+      const p = sender.getParameters();
+      if (p.degradationPreference === ANTI_FREEZE.degradationPreference) return;
+      p.degradationPreference = ANTI_FREEZE.degradationPreference;
+      await sender.setParameters(p);
+    } catch { /* engine without degradationPreference: the fps floor above still applies */ }
+  }
+
+  /** FX-079 frozen-frame recovery for the remote video: keyframe request, consumer re-resume, or consumer re-sync. */
+  async antiFreeze(action: FreezeAction): Promise<boolean> {
+    if (this.closed) return false;
+    const video = [...this.consumers.entries()].find(([, c]) => c.track?.kind === "video");
+    try {
+      if (action === "resync") { await this.syncConsumers(); return true; }
+      if (!video) { await this.syncConsumers(); return true; }
+      const ev = action === "keyframe" ? "ms:consumer:requestKeyFrame" : "ms:consumer:resume";
+      const r = await this.req<{ ok: boolean }>(ev, { consumerId: video[0] });
+      return r?.ok !== false;
+    } catch {
+      return false;
+    }
   }
 
   /** Network changed (Wi-Fi ⇄ cellular, new IP): fresh ICE on both transports in place, producers/consumers kept. */

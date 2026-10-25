@@ -170,7 +170,7 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
 const MS_EVENT = /^ms:[a-z:]+$/i;
 
 /** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
-export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced"]);
+export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced", "session-gone", "frame-stall", "ice-restart-coalesced"]);
 
 export class NativeMediaSession {
   private closed = false;
@@ -228,8 +228,14 @@ export class NativeMediaSession {
     }
     else if (s === "connected") {
       if (this.connected) this.opts.onState("connected");
-    } else if (s === "disconnected" || s === "failed") this.opts.onState(s);
+    } else if (s === "disconnected" || s === "failed") {
+      // FX-078: the app saw "Unknown media session" (SFU grace expired): the engine rebuilds at once, no more ICE restarts.
+      if (s === "failed" && (d as { gone?: boolean }).gone === true) this.sessionGone = true;
+      this.opts.onState(s);
+    }
   };
+  /** FX-078: set when the app reports the SFU no longer has this session; the engine's recovery skips to a rebuild. */
+  sessionGone = false;
 
   /** app → page: one ms:* request relayed over the page socket; the answer goes back via msReply */
   private readonly relay = (id: string, event: string, data: Record<string, unknown>) => {
