@@ -44,12 +44,14 @@ test("SFU layer policy: severe loss -> low at once; 2 lossy samples -> one down;
   assert.equal(nextLayer({ spatial: 2, bad: 0, good: 0 }, { lossPct: 0, availableBps: 600_000 }).spatial, 1);
 });
 
-test("wiring: camera produce passes simulcast encodings; SFU steers only simulcast consumers; mediasoupSession diff stays minimal", () => {
-  const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
-  assert.match(ms, /const encodings = cameraEncodings\(\);/);
-  assert.match(ms, /simulcastLadderPatch\(p\.encodings, step\)/);
+test("wiring: SFU steers only simulcast consumers and never closes anything", () => {
   const sfu = readFileSync(new URL("../../media-sfu/src/index.mjs", import.meta.url), "utf8");
   assert.match(sfu, /c\.type === "simulcast"/);
   assert.match(sfu, /setPreferredLayers\(\{ spatialLayer: next\.spatial/);
   assert.doesNotMatch(sfu.slice(sfu.indexOf("async function steerAndReport"), sfu.indexOf("let steering")), /\.close\(\)/, "steering never closes anything");
+});
+
+test("iOS lane: page asks the native camera for simulcast only when the flag is on", () => {
+  const n = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
+  assert.match(n, /nativeVideo && simulcastEnabled\(\) \? \{ simulcast: true \}/);
 });

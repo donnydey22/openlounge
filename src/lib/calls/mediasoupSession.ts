@@ -1,5 +1,4 @@
 import { IceRestartBackoff } from "./iceRestartBackoff";
-import { cameraEncodings, simulcastLadderPatch } from "./simulcast";
 import { ANTI_FREEZE, antiFreezeFps, type FreezeAction } from "./antiFreeze";
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -565,9 +564,7 @@ export class MediasoupCallSession {
     // Restore the proven direct producer path: Mediasoup/browser congestion control can use the camera's healthy
     // native bitrate instead of being pinned to the #41 400 kbps / 24 fps middle layer. Network-tier capture still
     // requests 360p/24 on constrained links, and LiveKit's adaptive fallback remains unchanged.
-    // FX-080: 3-layer simulcast when the rollout flag is on; otherwise the proven single encoding (unchanged).
-    const encodings = cameraEncodings();
-    const producer = await this.send.produce({ track, ...(encodings ? { encodings } : {}), appData: { source: "camera", ...(encodings ? { simulcast: true } : {}) } });
+    const producer = await this.send.produce({ track, appData: { source: "camera" } });
     if (this.closed || (generation !== undefined && generation !== this.generation)) {
       producer.close();
       track.stop();
@@ -655,11 +652,7 @@ export class MediasoupCallSession {
     };
     const audioBps = voiceLadderBps(step.audioBps, typeof navigator === "undefined" ? "" : navigator.userAgent);
     const a = await set("audio", (e) => { e.maxBitrate = audioBps; });
-    const vSender = this.producers.get("video")?.rtpSender;
-    const layered = (vSender?.getParameters?.().encodings?.length ?? 0) > 1; // FX-080 simulcast sender
-    if (layered) {
-      try { const p = vSender!.getParameters(); simulcastLadderPatch(p.encodings, step); await vSender!.setParameters!(p); } catch { /* keep layers */ }
-    } else await set("video", (e) => {
+    await set("video", (e) => {
       e.maxBitrate = step.videoBps;
       // FX-079: keep motion, shed resolution (frame-rate floor; degradationPreference set below)
       e.maxFramerate = antiFreezeFps(step.videoFps);

@@ -3,6 +3,7 @@
 // over its authenticated realtime socket and forwards ms:consumer:available. No getUserMedia, no WebView media.
 // Audio calls stay native as before; iPhone video is native only when its individual server media grant says so.
 // Safari and Android WebView paths never take the iPhone video branch.
+import { simulcastEnabled } from "./simulcast";
 import type { CallMedia } from "@/lib/types";
 import { voiceLadderBps } from "./audioPolicy";
 import type { RealtimeClient } from "@/lib/realtime";
@@ -312,7 +313,7 @@ export class NativeMediaSession {
     // TURN relay UDP -> TCP -> TLS 443). A LiveKit grant never reaches the app; rejecting lets the engine keep its
     // non-native path. LiveKit drop-in rooms are a separate code path and are untouched.
     if (m.provider === "livekit") throw new Error("native media: livekit calling removed");
-    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}) });
+    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}), ...(nativeVideo && simulcastEnabled() ? { simulcast: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }
