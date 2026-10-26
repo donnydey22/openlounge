@@ -4,7 +4,7 @@ import { MessageSquareReply } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { animate, haptic, prefersReducedMotion, SPRING_POP } from "./emoji/motion";
 import { carouselOwnsGesture } from "@/lib/media/gestures";
-import { AXIS_LOCK_PX, REPLY_THRESHOLD, iconStyle, releaseVelocity, rubberBand, springStep } from "@/lib/chat/replySpring";
+import { AXIS_LOCK_PX, REPLY_THRESHOLD, iconStyle, lockAxis, releaseVelocity, replyCompletes, rubberBand, springStep } from "@/lib/chat/replySpring";
 
 const IOS_BACK_SWIPE_GUTTER = 24;
 const INTERACTIVE_SELECTOR = 'button, a[href], input, textarea, select, [contenteditable="true"], [role="slider"], [data-testid="media-voice"]';
@@ -31,6 +31,16 @@ const onSelectedText = (x: number, y: number) => {
 
 /** Long-press (text selection / context menu) wins: a drag that only starts after this is not a swipe. */
 const LONG_PRESS_MS = 450;
+
+/** Haptic tick at the threshold: the native bridge (iOS/Android wrappers) or navigator.vibrate on plain Android web. */
+function thresholdTick() {
+  haptic("light");
+  try {
+    if (!(window as unknown as { OpenLoungeNative?: unknown }).OpenLoungeNative) navigator.vibrate?.(10);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Mouse only: is the pointer over actual text glyphs? Dragging across text keeps selecting text exactly as before;
@@ -217,6 +227,39 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ROOT CAUSE of "only works if I press really hard": React touch/pointer listeners are passive and the body only had
+  // touch-action: pan-y, so any light swipe with a little vertical arc let the browser/WebView start scrolling, which
+  // fires pointercancel and kills the swipe. Only a firm, perfectly flat drag survived. A non-passive native touchmove
+  // now claims the touch as soon as it reads as horizontal (or once locked), so the page doesn't scroll and no cancel comes.
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    let sx = 0;
+    let sy = 0;
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) {
+        sx = t.clientX;
+        sy = t.clientY;
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      const g = gesture.current;
+      if (g.id === -1 || disabledRef.current || !e.cancelable) return;
+      if (g.axis === "x") return e.preventDefault();
+      if (g.axis) return;
+      const t = e.touches[0];
+      if (!t) return;
+      if (lockAxis(t.clientX - sx, t.clientY - sy) === "x") e.preventDefault();
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+    };
+  }, []);
+
   useEffect(
     () => () => {
       stopSpring();
@@ -285,7 +328,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           const my = event.clientY - g.y;
           if (!g.axis && (Math.abs(mx) > AXIS_LOCK_PX || Math.abs(my) > AXIS_LOCK_PX)) {
             const late = !g.mouse && performance.now() - g.t > LONG_PRESS_MS;
-            g.axis = !late && Math.abs(mx) > Math.abs(my) && mx > 0 ? "x" : "y";
+            g.axis = !late ? lockAxis(mx, my) : "y";
             if (g.axis === "y") {
               gesture.current = idle();
               return;
@@ -321,7 +364,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           if (armed !== g.armed) {
             g.armed = armed;
             if (armed) {
-              haptic("light");
+              thresholdTick();
               animate(icon.current?.firstElementChild, [{ transform: "scale(1)" }, { transform: "scale(1.22)" }, { transform: "scale(1)" }], { spring: SPRING_POP });
             }
           }
@@ -330,7 +373,11 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
         onPointerUpCapture={(event) => {
           const g = gesture.current;
           if (g.id !== event.pointerId) return;
-          const complete = g.axis === "x" && event.clientX - g.x >= REPLY_THRESHOLD;
+          if (g.axis === "x") {
+            g.samples.push({ t: event.timeStamp || performance.now(), x: event.clientX });
+          }
+          // A light, quick flick counts too (WhatsApp): past the threshold, or past ~2/3 of it with flick velocity.
+          const complete = g.axis === "x" && replyCompletes(event.clientX - g.x, releaseVelocity(g.samples));
           if (complete) {
             // The nested rich message may also have a tap handler. A completed swipe is never a tap.
             event.preventDefault();
@@ -339,7 +386,8 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           end(complete);
         }}
         onPointerCancelCapture={(event) => {
-          if (gesture.current.id === event.pointerId) end(false);
+          // A browser that still cancels a locked swipe (e.g. iOS gesture recognizers) keeps an armed reply.
+          if (gesture.current.id === event.pointerId) end(gesture.current.axis === "x" && gesture.current.armed);
         }}
         onLostPointerCapture={(event) => {
           if (gesture.current.id === event.pointerId && gesture.current.axis === "x") end(false);
