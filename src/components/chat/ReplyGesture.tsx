@@ -77,7 +77,7 @@ function swallowNextClick(el: HTMLElement | null) {
   setTimeout(() => window.removeEventListener("click", stop, true), 400);
 }
 
-type Gesture = { id: number; t: number; x: number; y: number; axis: "x" | "y" | null; armed: boolean; mouse: boolean; samples: { t: number; x: number }[] };
+type Gesture = { id: number; t: number; x: number; y: number; axis: "x" | "y" | null; armed: boolean; mouse: boolean; samples: { t: number; x: number }[]; touch?: boolean };
 const idle = (): Gesture => ({ id: -1, t: 0, x: 0, y: 0, axis: null, armed: false, mouse: false, samples: [] });
 
 /**
@@ -240,7 +240,34 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
       if (disabledRef.current || e.touches.length > 1) return;
       const t = e.touches[0];
       if (!t) return;
-      if (gesture.current.axis === "x") {
+      const g = gesture.current;
+      if (g.touch) {
+        // FX-089: the browser cancelled the pointer stream (it does this on real phones), so touch drives the swipe.
+        if (e.cancelable) e.preventDefault();
+        const mx = t.clientX - g.x;
+        const my = t.clientY - g.y;
+        if (!g.axis && (Math.abs(mx) > AXIS_LOCK_PX || Math.abs(my) > AXIS_LOCK_PX)) {
+          g.axis = Math.abs(mx) > Math.abs(my) * AXIS_LOCK_RATIO && mx > 0 ? "x" : "y";
+          if (g.axis === "y") {
+            end(false);
+            return;
+          }
+          try {
+            window.dispatchEvent(new Event("ol-reply-swipe"));
+          } catch {}
+        }
+        if (g.axis !== "x") return;
+        g.samples.push({ t: e.timeStamp || performance.now(), x: t.clientX });
+        if (g.samples.length > 8) g.samples.shift();
+        const armed = mx >= REPLY_THRESHOLD;
+        if (armed !== g.armed) {
+          g.armed = armed;
+          if (armed) haptic("light");
+        }
+        paint(rubberBand(mx), armed);
+        return;
+      }
+      if (g.axis === "x") {
         if (e.cancelable) e.preventDefault();
         return;
       }
@@ -256,7 +283,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
     // FX-087: if a touch ends without the pointer finishing the gesture, never leave the bubble stuck offset.
     const onEnd = () => {
       const g = gesture.current;
-      if (g.id !== -1 && g.axis === "x") end(g.armed);
+      if (g.id !== -1 && (g.axis === "x" || g.touch)) end(g.axis === "x" && g.armed);
     };
     el.addEventListener("touchend", onEnd, { passive: true });
     el.addEventListener("touchcancel", onEnd, { passive: true });
@@ -397,10 +424,19 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           end(complete);
         }}
         onPointerCancelCapture={(event) => {
+          const g0 = gesture.current;
+          if (event.pointerType === "touch" && g0.id === event.pointerId && g0.axis !== "y") {
+            g0.touch = true; // FX-089: keep the swipe alive; touchmove/touchend take over
+            return;
+          }
           // FX-085: if the browser still cancels after the reply point was reached, the reply goes through.
           if (gesture.current.id === event.pointerId) end(gesture.current.axis === "x" && gesture.current.armed);
         }}
         onLostPointerCapture={(event) => {
+          if (gesture.current.touch) return;
+          // FX-089: moving capture from the touched child to this body fires a bubbling lostpointercapture from the
+          // child; that is not the end of the swipe (it was killing every real-phone swipe at the axis lock).
+          if (event.target !== body.current) return;
           if (gesture.current.id === event.pointerId && gesture.current.axis === "x") end(false);
         }}
       >

@@ -45,7 +45,7 @@ for (const engine of ENGINES) {
     await swipe(page, "#control-target", 6, 80, 200, 70);
     await swipe(page, "#back-target", 7, 8, 220, 70);
     await swipe(page, "#vertical-target", 8, 80, 240, 8, 70);
-    await swipe(page, "#threshold-target", 9, 80, 260, 45);
+    await swipe(page, "#threshold-target", 9, 80, 260, 15); // below REPLY_THRESHOLD (20 since FX-086)
     await page.locator("#text-gesture [data-testid=reply-desktop]").click();
 
     const tag = `${engine} ${width}x${height}`;
@@ -71,14 +71,14 @@ for (const engine of ENGINES) {
     let p = await start("#mouse-target");
     await mpage.mouse.move(p.x, p.y);
     await mpage.mouse.down();
-    await mpage.mouse.move(p.x + 30, p.y, { steps: 6 });
+    await mpage.mouse.move(p.x + 15, p.y, { steps: 6 });
     const mid = await offsetOf("#mouse-target");
     const midIcon = await iconOf("#mouse-target");
-    assert.ok(Math.abs(mid - 30) < 1.5, `${tag}: bubble tracks the mouse 1:1 below the threshold (${mid})`);
+    assert.ok(Math.abs(mid - 15) < 1.5, `${tag}: bubble tracks the mouse 1:1 below the threshold (${mid})`);
     assert.ok(midIcon.opacity > 0.3 && midIcon.opacity < 0.8 && midIcon.scale > 0.5 && midIcon.scale < 0.95, `${tag}: icon reveals + scales with the drag (${JSON.stringify(midIcon)})`);
     await mpage.mouse.move(p.x + 120, p.y, { steps: 10 });
     const far = await offsetOf("#mouse-target");
-    assert.ok(far > 56 && far <= 96 && far < 80, `${tag}: rubber band past the threshold (${far})`);
+    assert.ok(far > 20 && far <= 96 && far < 80, `${tag}: rubber band past the threshold (${far})`);
     assert.equal((await iconOf("#mouse-target")).opacity, 1, `${tag}: icon fully shown when armed`);
     await mpage.mouse.up();
     assert.ok((await replyLog(mpage)) === "mouse", `${tag}: mouse release past threshold replies`);
@@ -90,7 +90,7 @@ for (const engine of ENGINES) {
     await mpage.mouse.move(p.x, p.y);
     await mpage.mouse.down();
     await mpage.mouse.move(p.x + 80, p.y, { steps: 8 });
-    await mpage.mouse.move(p.x + 20, p.y, { steps: 6 });
+    await mpage.mouse.move(p.x + 10, p.y, { steps: 6 });
     await mpage.mouse.up();
     assert.ok(!(await replyLog(mpage)).includes("mouse-cancel"), `${tag}: dragging back below the threshold cancels`);
 
