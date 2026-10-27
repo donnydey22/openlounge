@@ -71,3 +71,4 @@ FX-079,2026-10-24,calls/video,"Video freezes under loss/peer drop (calls 30dc469
 FX-080,2026-10-24,calls/video,"Single camera encoding: SFU cannot drop a receiver's quality without the sender (WhatsApp gap 1)","No simulcast on mediasoup camera producer; no SFU layer steering",adf38c6,tests/calls/simulcastLayers.test.ts,
 FX-081,2026-10-24,calls/telemetry,"Call degradation invisible until Donny reports it (WhatsApp gap 8)","No per-stream loss/RTT/jitter/fps/freeze telemetry from clients or SFU",adf38c6,tests/calls/callTelemetry.test.ts,
 FX-082,2026-10-24,calls/rollout,"Simulcast must reach test accounts only (Donny 9:19 PM: deploy simulcast for test accounts)","Only a global window/env flag; no per-user server gate",686d53f,tests/calls/callqAllowlist.test.ts,
+FX-083,2026-10-26,chat/swipe-reply,"REVERTED: made swipe worse on device per Donny, reverted to Manus 2.0 behavior","FX-083/FX-083b (284b5e6, 43dedcd, 0ec619b) reverted",3dbfaea,,
