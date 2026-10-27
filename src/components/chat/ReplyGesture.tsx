@@ -217,6 +217,49 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // FX-085: on phones, pointer events can't stop the browser's own pan. With touch-action: pan-y a light swipe that
+  // drifts a little vertically gets claimed as a scroll and the browser fires pointercancel, killing the reply; only a
+  // hard, perfectly flat drag got through. A non-passive touchmove that preventDefaults horizontal-intent moves keeps
+  // the touch ours. Vertical drags are never blocked, so scrolling is unchanged.
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    let sx = 0;
+    let sy = 0;
+    let st = 0;
+    let decided: "x" | "y" | null = null;
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (!t || e.touches.length > 1) return;
+      sx = t.clientX;
+      sy = t.clientY;
+      st = performance.now();
+      decided = null;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (disabledRef.current || e.touches.length > 1) return;
+      const t = e.touches[0];
+      if (!t) return;
+      if (gesture.current.axis === "x") {
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+      if (decided === "y") return;
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (decided === null && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+        decided = dx > 0 && Math.abs(dx) >= Math.abs(dy) * AXIS_LOCK_RATIO && performance.now() - st <= LONG_PRESS_MS ? "x" : "y";
+      }
+      if (decided === "x" && e.cancelable) e.preventDefault();
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(
     () => () => {
       stopSpring();
@@ -339,7 +382,8 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           end(complete);
         }}
         onPointerCancelCapture={(event) => {
-          if (gesture.current.id === event.pointerId) end(false);
+          // FX-085: if the browser still cancels after the reply point was reached, the reply goes through.
+          if (gesture.current.id === event.pointerId) end(gesture.current.axis === "x" && gesture.current.armed);
         }}
         onLostPointerCapture={(event) => {
           if (gesture.current.id === event.pointerId && gesture.current.axis === "x") end(false);
