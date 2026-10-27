@@ -74,3 +74,4 @@ FX-082,2026-10-24,calls/rollout,"Simulcast must reach test accounts only (Donny 
 FX-083,2026-10-26,chat/swipe-reply,"REVERTED: made swipe worse on device per Donny, reverted to Manus 2.0 behavior","FX-083/FX-083b (284b5e6, 43dedcd, 0ec619b) reverted",3dbfaea,,
 FX-085,2026-10-26,chat/swipe-reply,"Light swipe on phones died: browser pan (touch-action pan-y) claimed slightly-diagonal swipes and fired pointercancel","non-passive touchmove preventDefault on horizontal intent; armed reply survives pointercancel",,,
 FX-086,2026-10-26,chat/swipe-reply,"More sensitive swipe per Donny: threshold 28->20px, axis lock 4->3px, ratio 0.6->0.5",,,,
+FX-087,2026-10-26,chat/swipe-reply,"Swipe still stuck on phone: slow/light start past 450ms was rejected; touch end without pointerup could leave bubble offset","no time gate on swipe start; touchend/touchcancel finish the gesture",,,

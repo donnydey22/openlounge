@@ -248,15 +248,25 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
       if (decided === null && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
-        decided = dx > 0 && Math.abs(dx) >= Math.abs(dy) * AXIS_LOCK_RATIO && performance.now() - st <= LONG_PRESS_MS ? "x" : "y";
+        decided = dx > 0 && Math.abs(dx) >= Math.abs(dy) * AXIS_LOCK_RATIO ? "x" : "y";
+        void st;
       }
       if (decided === "x" && e.cancelable) e.preventDefault();
     };
+    // FX-087: if a touch ends without the pointer finishing the gesture, never leave the bubble stuck offset.
+    const onEnd = () => {
+      const g = gesture.current;
+      if (g.id !== -1 && g.axis === "x") end(g.armed);
+    };
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onEnd, { passive: true });
     el.addEventListener("touchstart", onStart, { passive: true });
     el.addEventListener("touchmove", onMove, { passive: false });
     return () => {
       el.removeEventListener("touchstart", onStart);
       el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -327,7 +337,8 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           const mx = event.clientX - g.x;
           const my = event.clientY - g.y;
           if (!g.axis && (Math.abs(mx) > AXIS_LOCK_PX || Math.abs(my) > AXIS_LOCK_PX)) {
-            const late = !g.mouse && performance.now() - g.t > LONG_PRESS_MS;
+            // FX-087: a slow, light start no longer kills the swipe; only a real long-press (menu) does
+            const late = false;
             g.axis = !late && Math.abs(mx) > Math.abs(my) * AXIS_LOCK_RATIO && mx > 0 ? "x" : "y";
             if (g.axis === "y") {
               gesture.current = idle();
