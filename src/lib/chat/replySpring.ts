@@ -2,13 +2,15 @@
 // resistance; on release it springs home carrying the finger's velocity. Pure functions so they can be unit-tested.
 
 /** Raw horizontal travel (px) that arms the reply. Release past it → reply; drag back below it → cancelled. */
-export const REPLY_THRESHOLD = 56;
+export const REPLY_THRESHOLD = 28;
 /** Hard cap on how far the bubble can travel (px). */
 export const REPLY_MAX_OFFSET = 96;
 /** Resistance past the threshold: each extra px of finger travel moves the bubble this much. */
 export const REPLY_RESISTANCE = 0.32;
 /** Axis lock distance (px). Below this nothing moves, so taps, long-presses and vertical scrolls stay native. */
-export const AXIS_LOCK_PX = 8;
+export const AXIS_LOCK_PX = 4;
+/** Direction lock: horizontal wins when |dx| > |dy| * this (0.6 ≈ swipes up to ~59° off horizontal still reply; steeper = scroll). */
+export const AXIS_LOCK_RATIO = 0.6;
 /** Release spring: critically-damped-ish (WhatsApp settles with no visible overshoot in ~250 ms). */
 export const RELEASE_SPRING = { stiffness: 520, damping: 40, mass: 1 };
 

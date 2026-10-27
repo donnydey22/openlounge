@@ -4,7 +4,7 @@ import { MessageSquareReply } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { animate, haptic, prefersReducedMotion, SPRING_POP } from "./emoji/motion";
 import { carouselOwnsGesture } from "@/lib/media/gestures";
-import { AXIS_LOCK_PX, REPLY_THRESHOLD, iconStyle, releaseVelocity, rubberBand, springStep } from "@/lib/chat/replySpring";
+import { AXIS_LOCK_PX, AXIS_LOCK_RATIO, REPLY_THRESHOLD, iconStyle, releaseVelocity, rubberBand, springStep } from "@/lib/chat/replySpring";
 
 const IOS_BACK_SWIPE_GUTTER = 24;
 const INTERACTIVE_SELECTOR = 'button, a[href], input, textarea, select, [contenteditable="true"], [role="slider"], [data-testid="media-voice"]';
@@ -285,7 +285,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
           const my = event.clientY - g.y;
           if (!g.axis && (Math.abs(mx) > AXIS_LOCK_PX || Math.abs(my) > AXIS_LOCK_PX)) {
             const late = !g.mouse && performance.now() - g.t > LONG_PRESS_MS;
-            g.axis = !late && Math.abs(mx) > Math.abs(my) && mx > 0 ? "x" : "y";
+            g.axis = !late && Math.abs(mx) > Math.abs(my) * AXIS_LOCK_RATIO && mx > 0 ? "x" : "y";
             if (g.axis === "y") {
               gesture.current = idle();
               return;
