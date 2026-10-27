@@ -63,20 +63,3 @@ export function releaseVelocity(samples: { t: number; x: number }[]) {
   const dt = (last.t - first.t) / 1000;
   return dt > 0 ? (last.x - first.x) / dt : 0;
 }
-
-/** |dy| must exceed |dx| by this factor before the gesture counts as a vertical scroll (a light swipe's arc is fine). */
-export const AXIS_BIAS = 1.2;
-/** Flick: a quick swipe past this share of the threshold replies when it is released faster than REPLY_FLICK_VELOCITY. */
-export const REPLY_FLICK_RATIO = 0.6;
-export const REPLY_FLICK_VELOCITY = 400; // px/s
-
-/** Direction lock once past the dead zone: rightward and not clearly vertical → "x" (swipe), otherwise "y" (scroll). */
-export function lockAxis(dx: number, dy: number): "x" | "y" | null {
-  if (Math.abs(dx) <= AXIS_LOCK_PX && Math.abs(dy) <= AXIS_LOCK_PX) return null;
-  return dx > 0 && Math.abs(dy) <= dx * AXIS_BIAS ? "x" : "y";
-}
-
-/** Does a released swipe reply? Past the threshold, or a fast flick past REPLY_FLICK_RATIO of it. */
-export function replyCompletes(dx: number, velocity: number, threshold = REPLY_THRESHOLD) {
-  return dx >= threshold || (dx >= threshold * REPLY_FLICK_RATIO && velocity >= REPLY_FLICK_VELOCITY);
-}

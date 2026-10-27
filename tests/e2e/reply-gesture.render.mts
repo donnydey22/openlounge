@@ -45,12 +45,11 @@ for (const engine of ENGINES) {
     await swipe(page, "#control-target", 6, 80, 200, 70);
     await swipe(page, "#back-target", 7, 8, 220, 70);
     await swipe(page, "#vertical-target", 8, 80, 240, 8, 70);
-    await swipe(page, "#threshold-target", 9, 80, 260, 25);
-    await swipe(page, "#diagonal-target", 10, 80, 280, 64, 40);
+    await swipe(page, "#threshold-target", 9, 80, 260, 45);
     await page.locator("#text-gesture [data-testid=reply-desktop]").click();
 
     const tag = `${engine} ${width}x${height}`;
-    assert.equal(await replyLog(page), "text,visual,album-edge,diagonal,text", `${tag}: only normal text/visual media/edge album swipe and desktop action reply`);
+    assert.equal(await replyLog(page), "text,visual,album-edge,text", `${tag}: only normal text/visual media/edge album swipe and desktop action reply`);
 
     // Desktop pointer (a real mouse, pointerType "mouse"). Separate context without touch emulation: Playwright's
     // Firefox suppresses mouse pointer events when hasTouch is on.
