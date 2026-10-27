@@ -344,6 +344,10 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
               gesture.current = idle();
               return;
             }
+            // FX-088: a swipe always beats long-press. Pointer capture below stops the bubble seeing moves, so tell it directly.
+            try {
+              window.dispatchEvent(new Event("ol-reply-swipe"));
+            } catch {}
             // locked horizontal: keep the pointer even if it leaves the bubble, and stop a mouse drag from selecting text
             try {
               body.current?.setPointerCapture(event.pointerId);

@@ -2002,6 +2002,12 @@ const MessageRow = memo(function MessageRow({
     press.current.t = null;
   };
   const open = () => bubble.current && onActions(m, bubble.current);
+  // FX-088: the moment a swipe-to-reply locks sideways, the pending long-press is dropped
+  useEffect(() => {
+    const onSwipe = () => cancel();
+    window.addEventListener("ol-reply-swipe", onSwipe);
+    return () => window.removeEventListener("ol-reply-swipe", onSwipe);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const pressHandlers = {
     onPointerDown: (e: React.PointerEvent) => {
       if (e.pointerType === "mouse" || !e.isPrimary || selecting) return;
@@ -2019,7 +2025,7 @@ const MessageRow = memo(function MessageRow({
     },
     onPointerMove: (e: React.PointerEvent) => {
       if (!press.current.t) return;
-      if (Math.abs(e.clientX - press.current.x) > PRESS_SLOP_PX || Math.abs(e.clientY - press.current.y) > PRESS_SLOP_PX) cancel();
+      if (e.clientX - press.current.x > 3 || Math.abs(e.clientX - press.current.x) > PRESS_SLOP_PX || Math.abs(e.clientY - press.current.y) > PRESS_SLOP_PX) cancel();
     },
     onPointerUp: (e: React.PointerEvent) => {
       const wasLong = press.current.fired;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useMemo, useRef, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { linkify, type HashtagToken, type LinkToken, type MentionToken } from "@/lib/linkify";
 import { openLinkConfirm } from "./LinkConfirm";
@@ -107,6 +107,12 @@ function useLinkLongPress(t: LinkToken) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
   };
+  // FX-088: a swipe-to-reply always beats the link long-press
+  useEffect(() => {
+    const onSwipe = () => clear();
+    window.addEventListener("ol-reply-swipe", onSwipe);
+    return () => window.removeEventListener("ol-reply-swipe", onSwipe);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return {
     fired,
     handlers: {

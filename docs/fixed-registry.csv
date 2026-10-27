@@ -75,3 +75,4 @@ FX-083,2026-10-26,chat/swipe-reply,"REVERTED: made swipe worse on device per Don
 FX-085,2026-10-26,chat/swipe-reply,"Light swipe on phones died: browser pan (touch-action pan-y) claimed slightly-diagonal swipes and fired pointercancel","non-passive touchmove preventDefault on horizontal intent; armed reply survives pointercancel",,,
 FX-086,2026-10-26,chat/swipe-reply,"More sensitive swipe per Donny: threshold 28->20px, axis lock 4->3px, ratio 0.6->0.5",,,,
 FX-087,2026-10-26,chat/swipe-reply,"Swipe still stuck on phone: slow/light start past 450ms was rejected; touch end without pointerup could leave bubble offset","no time gate on swipe start; touchend/touchcancel finish the gesture",,,
+FX-088,2026-10-26,chat/swipe-reply,"Long-press menu stole slow swipes: reply pointer capture hid moves from the bubble so its 350ms long-press fired","swipe lock broadcasts ol-reply-swipe which cancels bubble and link long-press; 3px rightward move cancels long-press",,,
