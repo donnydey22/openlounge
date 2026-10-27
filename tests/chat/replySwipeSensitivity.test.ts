@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { AXIS_LOCK_PX, REPLY_THRESHOLD, lockAxis, replyCompletes, REPLY_FLICK_VELOCITY, simulateRelease } from "../../src/lib/chat/replySpring";
+import { AXIS_LOCK_PX, REPLY_THRESHOLD, lockAxis, replyCompletes } from "../../src/lib/chat/replySpring";
 
 test("FX-083 swipe reply: small dead zone, WhatsApp threshold", () => {
-  assert.ok(AXIS_LOCK_PX >= 4 && AXIS_LOCK_PX <= 6, "4-6px slop");
-  assert.ok(REPLY_THRESHOLD >= 40 && REPLY_THRESHOLD <= 48, "WhatsApp ~40-48px trigger");
-  assert.ok(REPLY_FLICK_VELOCITY <= 300, "0.3 px/ms flick");
+  assert.ok(AXIS_LOCK_PX >= 6 && AXIS_LOCK_PX <= 10);
+  assert.ok(REPLY_THRESHOLD >= 48 && REPLY_THRESHOLD <= 64);
   assert.equal(lockAxis(5, 3), null, "inside the dead zone nothing locks (taps / long-press stay native)");
 });
 
@@ -14,8 +13,6 @@ test("FX-083 swipe reply: direction lock favors a light, arcing horizontal swipe
   assert.equal(lockAxis(12, 0), "x");
   assert.equal(lockAxis(10, 11), "x", "a light swipe with a slight arc still swipes");
   assert.equal(lockAxis(4, 14), "y", "vertical drag scrolls");
-  assert.equal(lockAxis(12, 19), "x", "dx >= 0.6·|dy| is horizontal");
-  assert.equal(lockAxis(10, 18), "y");
   assert.equal(lockAxis(3, -20), "y", "vertical up scrolls");
   assert.equal(lockAxis(-14, 2), "y", "leftward drag never swipes to reply");
 });
@@ -33,17 +30,4 @@ test("FX-083 swipe reply: non-passive touchmove claims the horizontal swipe so t
   assert.match(src, /e\.preventDefault\(\)/);
   assert.match(src, /touchAction: "pan-y"/, "vertical scroll still native");
   assert.doesNotMatch(src, /\.force\b|pressure/, "no pressure dependency");
-});
-
-test("FX-083b swipe reply: slow light swipes survive (long-press can't steal them), 1:1 rAF transform, critically damped spring", () => {
-  const src = readFileSync("src/components/chat/ReplyGesture.tsx", "utf8");
-  assert.match(src, /setPointerCapture/);
-  assert.match(src, /const late = !g\.mouse && !g\.moved;/, "late lock only when the finger rested still");
-  assert.match(src, /requestAnimationFrame\(\(\) => \{\s*moveRaf\.current = 0;/, "moves coalesced per frame");
-  assert.match(src, /webkitTouchCallout = on \? "none"/);
-  assert.match(src, /data-reply-swiping/);
-  const dm = readFileSync("src/components/chat/DmThread.tsx", "utf8");
-  assert.match(dm, /closest\("\[data-reply-swiping\]"\)/, "DM long-press menu yields to a live swipe");
-  const r = simulateRelease(60, 0);
-  assert.ok(r.settleMs <= 320 && r.overshootPx < 1, JSON.stringify(r));
 });

@@ -14,7 +14,7 @@ test("bubble follows the pointer 1:1 to the threshold, then rubber-bands to a ha
 
 test("reply icon reveals and scales with the drag and is full size once armed", () => {
   const a = iconStyle(0, false);
-  const b = iconStyle(REPLY_THRESHOLD / 2, false);
+  const b = iconStyle(28, false);
   const c = iconStyle(REPLY_THRESHOLD, true);
   assert.equal(a.opacity, 0);
   assert.ok(b.opacity > 0.4 && b.opacity < 0.6 && b.scale > a.scale && b.scale < 1);

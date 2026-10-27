@@ -2011,12 +2011,6 @@ const MessageRow = memo(function MessageRow({
         y: e.clientY,
         fired: false,
         t: setTimeout(() => {
-          // FX-083: once swipe-to-reply owns the pointer (captured, so our pointermove never sees it) the long-press
-          // must not open the actions menu mid-swipe — that is what killed slow, light swipes.
-          if (bubble.current?.closest("[data-reply-swiping]")) {
-            press.current.t = null;
-            return;
-          }
           press.current.fired = true;
           press.current.t = null;
           open();

@@ -87,8 +87,8 @@ function swallowNextClick(el: HTMLElement | null) {
   setTimeout(() => window.removeEventListener("click", stop, true), 400);
 }
 
-type Gesture = { id: number; t: number; x: number; y: number; axis: "x" | "y" | null; armed: boolean; mouse: boolean; moved: boolean; samples: { t: number; x: number }[] };
-const idle = (): Gesture => ({ id: -1, t: 0, x: 0, y: 0, axis: null, armed: false, mouse: false, moved: false, samples: [] });
+type Gesture = { id: number; t: number; x: number; y: number; axis: "x" | "y" | null; armed: boolean; mouse: boolean; samples: { t: number; x: number }[] };
+const idle = (): Gesture => ({ id: -1, t: 0, x: 0, y: 0, axis: null, armed: false, mouse: false, samples: [] });
 
 /**
  * WhatsApp-style swipe right to reply (touch, pen and mouse). The bubble follows the pointer 1:1 to the threshold,
@@ -108,29 +108,6 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
   const unlockSelection = useRef<(() => void) | null>(null);
   const onReplyRef = useRef(onReply);
   onReplyRef.current = onReply;
-
-  const pending = useRef<{ x: number; armed: boolean } | null>(null);
-  const moveRaf = useRef(0);
-  /** Finger moves are coalesced to one transform write per frame (no layout, no React render). */
-  const paintSoon = (x: number, armed: boolean) => {
-    pending.current = { x, armed };
-    if (moveRaf.current) return;
-    moveRaf.current = requestAnimationFrame(() => {
-      moveRaf.current = 0;
-      const p = pending.current;
-      pending.current = null;
-      if (p && gesture.current.axis === "x") paint(p.x, p.armed);
-    });
-  };
-  const lockTouch = (on: boolean) => {
-    const el = body.current;
-    if (!el) return;
-    const st = el.style as CSSStyleDeclaration & { webkitUserSelect: string; webkitTouchCallout: string };
-    st.userSelect = st.webkitUserSelect = on ? "none" : "";
-    st.webkitTouchCallout = on ? "none" : "";
-    if (on) el.setAttribute("data-reply-swiping", "1");
-    else el.removeAttribute("data-reply-swiping");
-  };
 
   const paint = (x: number, armed: boolean) => {
     offset.current = x;
@@ -179,10 +156,6 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
     const v = releaseVelocity(g.samples);
     const wasX = g.axis === "x";
     gesture.current = idle();
-    if (moveRaf.current) cancelAnimationFrame(moveRaf.current);
-    moveRaf.current = 0;
-    pending.current = null;
-    lockTouch(false);
     unlockSelection.current?.();
     unlockSelection.current = null;
     if (wasX) swallowNextClick(body.current);
@@ -290,7 +263,6 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
   useEffect(
     () => () => {
       stopSpring();
-      if (moveRaf.current) cancelAnimationFrame(moveRaf.current);
       unlockSelection.current?.();
     },
     [],
@@ -347,24 +319,20 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
             return;
           }
           stopSpring();
-          gesture.current = { id: event.pointerId, t: performance.now(), x: event.clientX - offset.current, y: event.clientY, axis: null, armed: false, mouse, moved: false, samples: [{ t: event.timeStamp || performance.now(), x: event.clientX }] };
+          gesture.current = { id: event.pointerId, t: performance.now(), x: event.clientX - offset.current, y: event.clientY, axis: null, armed: false, mouse, samples: [{ t: event.timeStamp || performance.now(), x: event.clientX }] };
         }}
         onPointerMoveCapture={(event) => {
           const g = gesture.current;
           if (g.id !== event.pointerId || disabled) return;
           const mx = event.clientX - g.x;
           const my = event.clientY - g.y;
-          // A finger that starts drifting before the long-press time is a swipe, however slow or light it is. Only a
-          // finger that rested still past LONG_PRESS_MS (text selection / actions menu) is not a swipe.
-          if (!g.moved && (Math.abs(mx) > 2 || Math.abs(my) > 2)) g.moved = performance.now() - g.t <= LONG_PRESS_MS;
           if (!g.axis && (Math.abs(mx) > AXIS_LOCK_PX || Math.abs(my) > AXIS_LOCK_PX)) {
-            const late = !g.mouse && !g.moved;
+            const late = !g.mouse && performance.now() - g.t > LONG_PRESS_MS;
             g.axis = !late ? lockAxis(mx, my) : "y";
             if (g.axis === "y") {
               gesture.current = idle();
               return;
             }
-            lockTouch(true); // no text selection / iOS callout steals the touch while swiping
             // locked horizontal: keep the pointer even if it leaves the bubble, and stop a mouse drag from selecting text
             try {
               body.current?.setPointerCapture(event.pointerId);
@@ -400,7 +368,7 @@ export function ReplyGesture({ children, onReply, disabled = false, testId, mess
               animate(icon.current?.firstElementChild, [{ transform: "scale(1)" }, { transform: "scale(1.22)" }, { transform: "scale(1)" }], { spring: SPRING_POP });
             }
           }
-          paintSoon(rubberBand(mx), armed);
+          paint(rubberBand(mx), armed);
         }}
         onPointerUpCapture={(event) => {
           const g = gesture.current;

@@ -45,7 +45,7 @@ for (const engine of ENGINES) {
     await swipe(page, "#control-target", 6, 80, 200, 70);
     await swipe(page, "#back-target", 7, 8, 220, 70);
     await swipe(page, "#vertical-target", 8, 80, 240, 8, 70);
-    await swipe(page, "#threshold-target", 9, 80, 260, 18);
+    await swipe(page, "#threshold-target", 9, 80, 260, 25);
     await swipe(page, "#diagonal-target", 10, 80, 280, 64, 40);
     await page.locator("#text-gesture [data-testid=reply-desktop]").click();
 
@@ -79,7 +79,7 @@ for (const engine of ENGINES) {
     assert.ok(midIcon.opacity > 0.3 && midIcon.opacity < 0.8 && midIcon.scale > 0.5 && midIcon.scale < 0.95, `${tag}: icon reveals + scales with the drag (${JSON.stringify(midIcon)})`);
     await mpage.mouse.move(p.x + 120, p.y, { steps: 10 });
     const far = await offsetOf("#mouse-target");
-    assert.ok(far > 44 && far <= 88 && far < 70, `${tag}: rubber band past the threshold (${far})`);
+    assert.ok(far > 56 && far <= 96 && far < 80, `${tag}: rubber band past the threshold (${far})`);
     assert.equal((await iconOf("#mouse-target")).opacity, 1, `${tag}: icon fully shown when armed`);
     await mpage.mouse.up();
     assert.ok((await replyLog(mpage)) === "mouse", `${tag}: mouse release past threshold replies`);

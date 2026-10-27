@@ -2,15 +2,15 @@
 // resistance; on release it springs home carrying the finger's velocity. Pure functions so they can be unit-tested.
 
 /** Raw horizontal travel (px) that arms the reply. Release past it → reply; drag back below it → cancelled. */
-export const REPLY_THRESHOLD = 44;
+export const REPLY_THRESHOLD = 56;
 /** Hard cap on how far the bubble can travel (px). */
-export const REPLY_MAX_OFFSET = 88;
+export const REPLY_MAX_OFFSET = 96;
 /** Resistance past the threshold: each extra px of finger travel moves the bubble this much. */
 export const REPLY_RESISTANCE = 0.32;
 /** Axis lock distance (px). Below this nothing moves, so taps, long-presses and vertical scrolls stay native. */
-export const AXIS_LOCK_PX = 5;
+export const AXIS_LOCK_PX = 8;
 /** Release spring: critically-damped-ish (WhatsApp settles with no visible overshoot in ~250 ms). */
-export const RELEASE_SPRING = { stiffness: 800, damping: 56, mass: 1 } // damping ≈ 2·√k → critically damped, ~250 ms;
+export const RELEASE_SPRING = { stiffness: 520, damping: 40, mass: 1 };
 
 /** Finger travel → bubble offset (rubber band past the threshold, never negative, capped). */
 export function rubberBand(raw: number, threshold = REPLY_THRESHOLD, max = REPLY_MAX_OFFSET, k = REPLY_RESISTANCE) {
@@ -65,10 +65,10 @@ export function releaseVelocity(samples: { t: number; x: number }[]) {
 }
 
 /** |dy| must exceed |dx| by this factor before the gesture counts as a vertical scroll (a light swipe's arc is fine). */
-export const AXIS_BIAS = 1 / 0.6 // horizontal if dx >= 0.6·|dy|;
+export const AXIS_BIAS = 1.2;
 /** Flick: a quick swipe past this share of the threshold replies when it is released faster than REPLY_FLICK_VELOCITY. */
-export const REPLY_FLICK_RATIO = 0.55;
-export const REPLY_FLICK_VELOCITY = 300; // px/s (0.3 px/ms)
+export const REPLY_FLICK_RATIO = 0.6;
+export const REPLY_FLICK_VELOCITY = 400; // px/s
 
 /** Direction lock once past the dead zone: rightward and not clearly vertical → "x" (swipe), otherwise "y" (scroll). */
 export function lockAxis(dx: number, dy: number): "x" | "y" | null {
