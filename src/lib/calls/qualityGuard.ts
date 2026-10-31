@@ -23,6 +23,9 @@ export interface QualityCounters {
   audioPacketsReceived?: number;
   audioPacketsLost?: number;
   audioBytesReceived?: number;
+  /** cumulative outbound-rtp audio (our mic) and the far end's RTCP receiver report for it (remote-inbound-rtp) */
+  audioPacketsSent?: number;
+  audioRemotePacketsLost?: number;
   /** selected candidate-pair */
   currentRoundTripTimeSeconds?: number;
   availableOutgoingBitrate?: number;
@@ -30,15 +33,27 @@ export interface QualityCounters {
 
 export type QualityVerdict = { bad: boolean; reasons: string[]; lossPercent: number | null; rttMs: number | null; outKbps: number | null; inAudioKbps: number | null };
 
-export function judgeQuality(prev: QualityCounters | null, cur: QualityCounters, opts: { remoteMuted?: boolean } = {}): QualityVerdict {
+/**
+ * lossFrom "inbound" (default): loss on the audio we RECEIVE (QualityGuard's "is this call audible" check).
+ * lossFrom "uplink": loss on the audio we SEND, from the SFU's receiver reports. The send ladder must use this one:
+ * Keiko's calls (Oct 27–31) had 30–90 % inbound bursts on her downlink while her uplink was clean (~1 %, SFU-in 0 %),
+ * and the inbound figure crushed HER mic to the 16 kbps floor and kept firing reconnects (her voice sounded poor).
+ */
+export function judgeQuality(prev: QualityCounters | null, cur: QualityCounters, opts: { remoteMuted?: boolean; lossFrom?: "inbound" | "uplink" } = {}): QualityVerdict {
   const reasons: string[] = [];
   let lossPercent: number | null = null;
   let inAudioKbps: number | null = null;
   if (prev) {
     const secs = Math.max(0.001, (cur.timestampMs - prev.timestampMs) / 1000);
-    const rx = Math.max(0, (cur.audioPacketsReceived ?? 0) - (prev.audioPacketsReceived ?? 0));
-    const lost = Math.max(0, (cur.audioPacketsLost ?? 0) - (prev.audioPacketsLost ?? 0));
-    if (rx + lost >= 10) lossPercent = (lost / (rx + lost)) * 100;
+    if (opts.lossFrom === "uplink") {
+      const sent = Math.max(0, (cur.audioPacketsSent ?? 0) - (prev.audioPacketsSent ?? 0));
+      const lost = Math.max(0, (cur.audioRemotePacketsLost ?? 0) - (prev.audioRemotePacketsLost ?? 0));
+      if (sent >= 10 && cur.audioRemotePacketsLost !== undefined && prev.audioRemotePacketsLost !== undefined) lossPercent = Math.min(100, (lost / sent) * 100);
+    } else {
+      const rx = Math.max(0, (cur.audioPacketsReceived ?? 0) - (prev.audioPacketsReceived ?? 0));
+      const lost = Math.max(0, (cur.audioPacketsLost ?? 0) - (prev.audioPacketsLost ?? 0));
+      if (rx + lost >= 10) lossPercent = (lost / (rx + lost)) * 100;
+    }
     if (cur.audioBytesReceived !== undefined && prev.audioBytesReceived !== undefined)
       inAudioKbps = (Math.max(0, cur.audioBytesReceived - prev.audioBytesReceived) * 8) / secs / 1000;
   }
@@ -78,6 +93,10 @@ export function countersFromStats(reports: Iterable<RTCStatsReport | Map<string,
         c.audioPacketsReceived! += Number(s.packetsReceived ?? 0);
         c.audioPacketsLost! += Math.max(0, Number(s.packetsLost ?? 0));
         c.audioBytesReceived! += Number(s.bytesReceived ?? 0);
+      } else if (s.type === "outbound-rtp" && (s.kind === "audio" || s.mediaType === "audio")) {
+        c.audioPacketsSent = (c.audioPacketsSent ?? 0) + Number(s.packetsSent ?? 0);
+      } else if (s.type === "remote-inbound-rtp" && (s.kind === "audio" || s.mediaType === "audio")) {
+        c.audioRemotePacketsLost = (c.audioRemotePacketsLost ?? 0) + Math.max(0, Number(s.packetsLost ?? 0));
       } else if (s.type === "candidate-pair" && (s.nominated || s.selected) && s.state === "succeeded") {
         if (typeof s.currentRoundTripTime === "number") c.currentRoundTripTimeSeconds = Math.max(c.currentRoundTripTimeSeconds ?? 0, s.currentRoundTripTime);
         if (typeof s.availableOutgoingBitrate === "number")
