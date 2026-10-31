@@ -1260,7 +1260,7 @@ export class CallEngine {
       void session.getTransportStats().then((reports) => {
         if (this.mediasoup !== session || !this.mediasoupConnected || this.msRecovering) return;
         const cur = countersFromStats(reports);
-        const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted });
+        const v = judgeQuality(prev, cur, { remoteMuted: this.s.remoteMuted, lossFrom: "uplink" }); // send ladder: OUR uplink loss only
         prev = cur;
         const a = this.netLadder.push(v);
         if (a.type === "none" && this.s.camOn) {
