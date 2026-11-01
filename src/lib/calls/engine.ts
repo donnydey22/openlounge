@@ -520,6 +520,7 @@ export class CallEngine {
     // Glare: both people tapped Call at once. The server hands back the OTHER person's ringing call (we are its
     // callee) — answer it instead of ringing back forever on a call nobody on this side can accept.
     if (this.meId && r.call.callerId !== this.meId && r.call.calleeId === this.meId && r.call.phase !== "ended") {
+      this.ringStop("glare");
       stopTones();
       this.media = r.media ?? this.media;
       if (r.call.phase === "active") {
@@ -534,6 +535,7 @@ export class CallEngine {
       return { ok: true };
     }
     if (ringing() !== "outgoing") playRingback({ video, untilMs: ringUntil(r.call) });
+    this.diag("ring-start", { tone: "ringback" });
     this.media = r.media ?? null;
     // A default-off or unsupported server response remains on the WebView baseline, but capture begins only before
     // call:outgoing asks CallKit to activate. A granted iOS native-video call never invokes page getUserMedia.
@@ -576,6 +578,7 @@ export class CallEngine {
     this.set({ ...initial(), call, role: "callee", ui: "incoming", v: this.s.v + 1 });
     void this.req("call:ack", { callId: call.id }).catch(() => {});
     playRingtone({ video: call.video, untilMs: ringUntil(call) });
+    this.diag("ring-start", { tone: "ringtone" });
     mark("ring");
     // Pre-warm only the existing LiveKit path. The brokered Mediasoup path must wait for Accept so it does not create
     // a UDP transport before the user consents to answer.
@@ -599,6 +602,7 @@ export class CallEngine {
     const call = this.s.call;
     if (!call || this.s.ui !== "incoming") return;
     unlockAudio();
+    this.ringStop("accept");
     stopTones();
     buzz("medium");
     this.acceptT0 = performance.now();
@@ -607,6 +611,8 @@ export class CallEngine {
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     this.diag("answered", {});
+    // iOS build 72+: CallKit is answered at the tap (stops the system ring now, not at media connect). Older apps ignore it.
+    postNative({ type: "call:answering", callId: call.id, video: !!(withVideo || call.video) });
     if (useNativeMedia(withVideo || call.video, this.media)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
@@ -657,6 +663,7 @@ export class CallEngine {
   async decline(message?: string) {
     const call = this.s.call;
     if (!call) return;
+    this.ringStop("decline");
     stopTones();
     buzz("light");
     void this.req("call:decline", { callId: call.id, ...(message ? { message } : {}) }).catch(() => {});
@@ -698,6 +705,7 @@ export class CallEngine {
         // answered on another device (same account): stop EVERY local ring surface within one event —
         // in-page tone + ring element (stopTones → releaseRingAudio), the SW notification (CallProvider sync →
         // stopBackgroundRing on ui change) and the native ring UI (CallKit / full-screen notification) here.
+        this.ringStop("answered-elsewhere");
         stopTones();
         postNative({ type: "call:ended", callId: call.id, reason: "answered_elsewhere" });
         this.teardownMedia();
@@ -705,6 +713,7 @@ export class CallEngine {
         return;
       }
       if (role === "caller" && this.s.ui === "outgoing") {
+        this.ringStop("accept");
         stopTones();
         this.acceptT0 = performance.now();
         mark("accepted");
@@ -728,9 +737,11 @@ export class CallEngine {
     if (!call || !this.busy) return;
     const role = this.s.role;
     const wasIncoming = this.s.ui === "incoming";
+    this.ringStop(outcome === "cancelled" || outcome === "missed" ? "cancel" : "end");
     stopTones();
     this.teardownMedia();
-    postNative({ type: "call:ended", callId: call.id });
+    // a call answered early in CallKit (iOS b72) whose media never came up ends as failed, not as a normal hang-up
+    postNative({ type: "call:ended", callId: call.id, ...(outcome === "failed" ? { reason: "failed" } : {}) });
     if (wasIncoming || quiet) {
       this.set({ ...initial(), v: this.s.v + 1 });
       return;
@@ -1923,6 +1934,11 @@ export class CallEngine {
 
   /** failure-reason telemetry to the server log (fire-and-forget; never affects the call) */
   private static DIAG_EVENTS = new Set(["ms-connect-failed", "ms-recover", "ms-recovered", "ms-rebuild", "ms-no-fallback-recover", "ms-quality-fallback", "ms-failed", "ms-disconnected", "still-reconnecting", "net-change"]);
+  /** ring diag (Oct 31): exact ring start/stop per side, with the reason, for the call-initiation gap table */
+  private ringStop(reason: string) {
+    const tone = ringing();
+    if (tone) this.diag("ring-stop", { tone, reason });
+  }
   private diag(ev: string, extra: Record<string, unknown> = {}) {
     try {
       const callId = this.s.call?.id;
