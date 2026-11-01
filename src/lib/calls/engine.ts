@@ -607,6 +607,8 @@ export class CallEngine {
     rememberAccepted(call.id);
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     this.diag("answered", {});
+    // iOS build 72+: CallKit is answered at the tap (stops the system ring now, not at media connect). Older apps ignore it.
+    postNative({ type: "call:answering", callId: call.id, video: !!(withVideo || call.video) });
     if (useNativeMedia(withVideo || call.video, this.media)) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     else if (this.media?.provider === "mediasoup" && !this.tapMic && typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       // Safari/web: bind the mic inside the Answer tap (unlockAudio() above resumed the AudioContext in the same gesture)
