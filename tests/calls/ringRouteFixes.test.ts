@@ -15,7 +15,11 @@ test("first ring still sends iOS alert when VoIP did not ring", () => {
 });
 
 test("app video call that lands on earpiece without a user pick is put back on speaker once", () => {
-  assert.match(eng, /!this\.routeUserPick && !this\.routeReasserted && route\.kind === "earpiece" && \(this\.s\.camOn \|\| this\.s\.call\?\.video\)/);
+  assert.match(eng, /this\.routeUserPick \|\| this\.routeReasserted \|\| route\.kind !== "earpiece" \|\| !\(this\.s\.camOn \|\| this\.s\.call\?\.video\)/);
   assert.match(eng, /this\.diag\("route init"/);
   assert.match(eng, /this\.diag\("route user"/);
+});
+
+test("app sends the video flag with call:connected (iOS in-app answer activation)", () => {
+  assert.match(eng, /type: "call:connected", callId: this\.s\.call\?\.id, video:/);
 });

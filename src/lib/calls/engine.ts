@@ -710,7 +710,7 @@ export class CallEngine {
         mark("accepted");
         this.set({ call, ui: this.mediaConnected() ? "active" : "connecting", connectedAt: Date.now() });
         if (this.mediaConnected()) playConnected();
-        postNative({ type: "call:connected", callId: call.id });
+        postNative({ type: "call:connected", callId: call.id, video: !!call.video });
         this.diag("answered", { deferred: this.deferNativeConnect });
         if (this.metricSent) this.maybeWatchIosMic(); // first audio already arrived before the active state
         if (this.deferNativeConnect) {
@@ -926,7 +926,7 @@ export class CallEngine {
           if (this.s.ui === "connecting") {
             this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now() });
             playConnected();
-            postNative({ type: "call:connected", callId: this.s.call?.id });
+            postNative({ type: "call:connected", callId: this.s.call?.id, video: !!(this.s.camOn || this.s.call?.video) });
           }
         }
         return room;
@@ -1025,7 +1025,7 @@ export class CallEngine {
         if (this.s.ui === "connecting") {
           this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
           playConnected();
-          postNative({ type: "call:connected", callId: this.s.call?.id });
+          postNative({ type: "call:connected", callId: this.s.call?.id, video: !!(this.s.camOn || this.s.call?.video) });
         }
       }
       return session;
@@ -2336,14 +2336,17 @@ export class CallEngine {
     // a device appeared/disappeared: that is a new situation, so automatic routing takes over again
     if (auto && prev && (isHeadsetKind(route.kind) || isHeadsetKind(prev.kind)) && prev.id !== route.id) this.routeUserPick = false;
     this.set({ route, routes, speaker: route.kind === "speaker", speakerSupported: true, routeSwitchable: true });
-    // Video call on the app landed on the earpiece without a user pick (Oct 31, call 0d363cbd): put it back on the
-    // speaker once. A headset/Bluetooth route is never overridden (it is not "earpiece").
-    if (auto && !this.routeUserPick && !this.routeReasserted && route.kind === "earpiece" && (this.s.camOn || this.s.call?.video)) {
-      this.routeReasserted = true;
-      this.diag("route reassert", { from: route.kind, to: "speaker", reason: String(d.reason ?? "") });
-      postNative({ type: "call:audioRoute", speaker: true, route: "speaker", auto: true });
-    }
     if (auto && prev && this.s.ui === "active") this.announceRoute(routeAnnouncement(prev, route));
+    if (auto) this.reassertVideoSpeaker(route, d);
+  }
+
+  /** Video call on the app landed on the earpiece without a user pick (Oct 31, call 0d363cbd): put it back on the
+   *  speaker once. A headset/Bluetooth route is never overridden (it is not "earpiece"). */
+  private reassertVideoSpeaker(route: AudioRoute, d: NativeRouteDetail) {
+    if (this.routeUserPick || this.routeReasserted || route.kind !== "earpiece" || !(this.s.camOn || this.s.call?.video)) return;
+    this.routeReasserted = true;
+    this.diag("route reassert", { from: route.kind, to: "speaker", reason: String(d.reason ?? "") });
+    postNative({ type: "call:audioRoute", speaker: true, route: "speaker", auto: true });
   }
 
   /** Web: enumerate audio outputs → routes; the current one is the picked sinkId, else the system default. */
