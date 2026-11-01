@@ -1,12 +1,13 @@
-// Browser support floor: the last 2 major versions of Chrome, Edge, Firefox and Safari (as of Oct 14, 2026:
-// Chrome/Edge 155 → floor 154, Firefox 158 → floor 157, Safari 27 → floor 26). Raise these with each release.
+// Browser support floor: the last 2 major versions of Chrome, Edge, Firefox and Safari (as of Nov 1, 2026:
+// Chrome 157 / Edge 156 → shared Chromium floor 155 so Edge's previous major stays supported, Firefox 159 → floor 158,
+// Safari 27 → floor 26). Raise these with each release.
 // Detection is by ENGINE version, not brand: every iOS browser is WebKit (judged by the iOS version, which Safari
 // tracks since 26), every Chromium browser (Chrome, Edge, Samsung Internet, Opera, Android WebView) by its Chrome/NN
 // token, Gecko by Firefox/NN. The Open Lounge wrapper apps are never gated. Unknown engines are let through.
 
-export const BROWSER_FLOOR = { chromium: 154, firefox: 157, webkit: 26 } as const;
+export const BROWSER_FLOOR = { chromium: 155, firefox: 158, webkit: 26 } as const;
 /** Same floor for build targets (package.json "browserslist" must match; asserted in tests). */
-export const BROWSERSLIST_FLOOR = ["chrome >= 154", "and_chr >= 154", "edge >= 154", "firefox >= 157", "safari >= 26", "ios_saf >= 26"];
+export const BROWSERSLIST_FLOOR = ["chrome >= 155", "and_chr >= 155", "edge >= 155", "firefox >= 158", "safari >= 26", "ios_saf >= 26"];
 
 export type EngineInfo = { engine: "chromium" | "firefox" | "webkit" | "unknown"; version: number | null; ios: boolean; wrapper: boolean };
 

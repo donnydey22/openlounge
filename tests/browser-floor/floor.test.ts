@@ -8,6 +8,12 @@ import * as lite from "caniuse-lite";
 import { BROWSER_FLOOR, BROWSERSLIST_FLOOR, belowFloor, detectEngine, gateExempt, shouldShowSupportedNote, unsupportedPageHtml, UPDATE_LINKS, SUPPORTED_NOTE_KEY } from "../../src/lib/browserFloor";
 
 const UA = {
+  chrome157: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.27 Safari/537.36",
+  chrome156: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.80 Safari/537.36",
+  edge156: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.4314.58",
+  edge155prev: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.4283.45",
+  ff159: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0",
+  samsungOnChromium155: "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/30.0 Chrome/155.0.0.0 Mobile Safari/537.36",
   chrome155: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.8059.79 Safari/537.36",
   chrome154: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.8037.151 Safari/537.36",
   chrome120: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -34,11 +40,11 @@ const UA = {
 };
 
 test("passes: current and previous major of every browser, by engine", () => {
-  for (const k of ["chrome155", "chrome154", "edge155", "ff158", "ff157", "safari27", "safari26", "iosSafari26", "iosChrome156on26", "iosFirefoxOn26", "androidChrome155", "samsungOnChromium154"] as const)
+  for (const k of ["chrome157", "chrome156", "chrome155", "edge156", "edge155prev", "ff159", "ff158", "safari27", "safari26", "iosSafari26", "iosChrome156on26", "iosFirefoxOn26", "androidChrome155", "samsungOnChromium155"] as const)
     assert.equal(belowFloor(UA[k]), false, k);
 });
 test("blocked: older engines (brand doesn't matter: iOS Chrome on old iOS, Samsung on old Chromium, Edge 150)", () => {
-  for (const k of ["chrome120", "edge150", "ff140esr", "safari18", "iosSafari17", "iosChrome156on17", "samsungOnChromium130"] as const) assert.equal(belowFloor(UA[k]), true, k);
+  for (const k of ["chrome154", "chrome120", "edge150", "ff157", "ff140esr", "safari18", "iosSafari17", "iosChrome156on17", "samsungOnChromium154", "samsungOnChromium130"] as const) assert.equal(belowFloor(UA[k]), true, k);
 });
 test("never blocked: wrapper apps (OpenLounge/ UA), unknown engines, no UA", () => {
   for (const k of ["wrapperAndroidOld", "wrapperIOSOld", "legacyWrapper", "bot"] as const) assert.equal(belowFloor(UA[k]), false, k);
@@ -48,7 +54,7 @@ test("never blocked: wrapper apps (OpenLounge/ UA), unknown engines, no UA", () 
 test("engine detection: iOS is always WebKit", () => {
   assert.deepEqual(detectEngine(UA.iosChrome156on17).engine, "webkit");
   assert.equal(detectEngine(UA.iosChrome156on17).version, 17);
-  assert.equal(detectEngine(UA.samsungOnChromium154).engine, "chromium");
+  assert.equal(detectEngine(UA.samsungOnChromium155).engine, "chromium");
 });
 test("gate exemptions: /download, legal pages, API, assets stay reachable; app pages are gated", () => {
   for (const p of ["/download", "/download/ios", "/terms", "/privacy", "/privacy-policy", "/api/health", "/_next/static/x.js", "/favicon.ico", "/healthz", "/foo.png"]) assert.equal(gateExempt(p), true, p);

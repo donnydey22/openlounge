@@ -79,10 +79,10 @@
     "typescript": "^5.9.3"
   },
   "browserslist": [
-    "chrome >= 154",
-    "and_chr >= 154",
-    "edge >= 154",
-    "firefox >= 157",
+    "chrome >= 155",
+    "and_chr >= 155",
+    "edge >= 155",
+    "firefox >= 158",
     "safari >= 26",
     "ios_saf >= 26"
   ]
