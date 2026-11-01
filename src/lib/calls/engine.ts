@@ -2281,6 +2281,8 @@ export class CallEngine {
 
   /** First connect of a web-path (mediasoup) call: offer the Speaker toggle (it was only detected on LiveKit, so
    *  Android/iOS app calls had none) and set the default route — video calls on speaker, voice on earpiece. */
+  private routeReasserted = false;
+
   private initCallRoute() {
     const callId = this.s.call?.id;
     const video = !!(this.s.camOn || this.s.call?.video);
@@ -2293,6 +2295,8 @@ export class CallEngine {
       const keep = this.s.route && isHeadsetKind(this.s.route.kind) ? this.s.route : null;
       this.set({ speaker: !keep && video, speakerSupported: true, routeSwitchable: true, route: keep ?? guess, routes: this.s.routes.length ? this.s.routes : nativeBuiltins(keep) });
       postNative({ type: "call:audioRoute", speaker: video, route: video ? "speaker" : "earpiece", auto: true });
+      this.routeReasserted = false;
+      this.diag("route init", { route: keep?.kind ?? guess.kind, video, camOn: !!this.s.camOn, callVideo: !!this.s.call?.video, kept: !!keep });
       return;
     }
     // Web: audio follows the system output (a plugged/paired headset already wins there); list the outputs so the
@@ -2332,6 +2336,13 @@ export class CallEngine {
     // a device appeared/disappeared: that is a new situation, so automatic routing takes over again
     if (auto && prev && (isHeadsetKind(route.kind) || isHeadsetKind(prev.kind)) && prev.id !== route.id) this.routeUserPick = false;
     this.set({ route, routes, speaker: route.kind === "speaker", speakerSupported: true, routeSwitchable: true });
+    // Video call on the app landed on the earpiece without a user pick (Oct 31, call 0d363cbd): put it back on the
+    // speaker once. A headset/Bluetooth route is never overridden (it is not "earpiece").
+    if (auto && !this.routeUserPick && !this.routeReasserted && route.kind === "earpiece" && (this.s.camOn || this.s.call?.video)) {
+      this.routeReasserted = true;
+      this.diag("route reassert", { from: route.kind, to: "speaker", reason: String(d.reason ?? "") });
+      postNative({ type: "call:audioRoute", speaker: true, route: "speaker", auto: true });
+    }
     if (auto && prev && this.s.ui === "active") this.announceRoute(routeAnnouncement(prev, route));
   }
 
@@ -2612,6 +2623,7 @@ export class CallEngine {
   async selectRoute(id: string) {
     const r = this.s.routes.find((x) => x.id === id);
     if (!r) return;
+    this.diag("route user", { to: r.kind });
     buzz("light");
     this.routeUserPick = true;
     this.announceRoute(null);

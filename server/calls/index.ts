@@ -33,6 +33,8 @@ import { isBenignMediaFailure } from "./mediaLog";
 
 /** user -> last socket close (code / cause / liveness context): lets "call peer offline" say WHY a socket dropped */
 const lastClose = new Map<string, Record<string, unknown>>();
+/** call ids whose VoIP (CallKit) push already rang the callee's iPhone; bounded by a 2 min expiry */
+const voipRang = new Set<string>();
 
 type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
@@ -143,13 +145,18 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
             // one single-use, call+callee-scoped token shared by both surfaces: Decline works even with an expired session
             const declineToken = declineTokens().mint(call.id, calleeId, call.expiresAt);
             const rang = await (voipService()?.ring(calleeId, voipPayload(call, declineToken), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
+            if (rang > 0) {
+              voipRang.add(call.id);
+              setTimeout(() => voipRang.delete(call.id), 120_000).unref?.();
+            }
             await push()?.callIncoming(calleeId, call, { skipIos: rang > 0, declineToken });
           })(),
         ),
       // ring retry (service callRepushMs): FCM / web push / iOS alert only — never a second VoIP push
       repush: (calleeId, call) =>
-        bg(push()?.callIncoming(calleeId, call, { declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt) })),
-      cancel: (calleeId, callId, reason) => bg(push()?.callCancel(calleeId, callId, reason)),
+        // CallKit already rang on iOS: a second iOS alert push is a duplicate ring (Oct 31, b22f5441) — Android/web only
+        bg(push()?.callIncoming(calleeId, call, { skipIos: voipRang.has(call.id), declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt) })),
+      cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
     log: (msg, extra) => log.info(`[calls] ${msg}`, extra),
   });
