@@ -196,6 +196,9 @@ export class NativeMediaSession {
       rebuild?: boolean;
       /** LiveKit credentials carry no callId */
       callId?: string;
+      /** iOS 75: this device is the callee and the caller's platform (routes Android→iPhone audio to the Swift lane) */
+      incoming?: boolean;
+      peerPlatform?: string;
       /** Explicit msid shared by this caller's audio and camera producers. */
       streamId?: string;
       /** Android 0.3.17+: the app's mediasoup failed in a way a retry can't fix → hand over to LiveKit now */
@@ -313,7 +316,7 @@ export class NativeMediaSession {
     // TURN relay UDP -> TCP -> TLS 443). A LiveKit grant never reaches the app; rejecting lets the engine keep its
     // non-native path. LiveKit drop-in rooms are a separate code path and are untouched.
     if (m.provider === "livekit") throw new Error("native media: livekit calling removed");
-    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}), ...(nativeVideo && simulcastEnabled() ? { simulcast: true } : {}) });
+    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}), ...(this.opts.incoming && this.opts.peerPlatform ? { incoming: true, peerPlatform: this.opts.peerPlatform } : {}), ...(nativeVideo && simulcastEnabled() ? { simulcast: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }

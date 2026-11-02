@@ -119,6 +119,8 @@ interface CallRec {
   answeredConn?: string | null;
   /** platform the answering device reported on accept ("ios" | "android" | "web"); absent = unknown */
   calleePlatform?: "ios" | "android" | "web";
+  /** platform the calling device reported on call:start (iOS 75: Android→iPhone native audio lane); absent = unknown */
+  callerPlatform?: "ios" | "android" | "web";
   /** Server-issued one-call grant; no caller platform or client capability is retained. */
   iosNativeVideo?: boolean;
   endedAt: number | null;
@@ -242,6 +244,7 @@ export class CallService {
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
       ...(c.goneSince?.size ? { offline: [...c.goneSince.keys()] } : {}),
       ...(c.calleePlatform ? { calleePlatform: c.calleePlatform } : {}),
+      ...(c.callerPlatform ? { callerPlatform: c.callerPlatform } : {}),
     };
   }
 
@@ -316,7 +319,7 @@ export class CallService {
     return !!set && set.size === 0;
   }
 
-  async start(callerId: string, calleeId: string, video: boolean, connId?: string, iosNativeVideo?: unknown): Promise<StartResult> {
+  async start(callerId: string, calleeId: string, video: boolean, connId?: string, iosNativeVideo?: unknown, platform?: unknown): Promise<StartResult> {
     const pol = this.d.policy(callerId, calleeId);
     if (!pol.ok) return { ok: false, error: pol.error, reason: pol.reason };
     // already in a call with this same person (double tap / second tab) → hand back that call
@@ -351,6 +354,7 @@ export class CallService {
       createdAt: now,
       ackAt: null,
       ...(wantsIosNativeVideo ? { iosNativeVideo: true } : {}),
+      ...(platform === "ios" || platform === "android" || platform === "web" ? { callerPlatform: platform } : {}),
       answeredAt: null,
       endedAt: null,
       outcome: null,

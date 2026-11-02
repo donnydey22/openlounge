@@ -360,7 +360,7 @@ export class CallEngine {
     for (;;) {
       let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string } | null = null;
       try {
-        r = await this.req("call:start", { peerId, video, nativeVideo: iosNativeVideo }, Math.max(1_000, Math.min(10_000, until - Date.now())));
+        r = await this.req("call:start", { peerId, video, nativeVideo: iosNativeVideo, platform: nativePlatform() ?? "web" }, Math.max(1_000, Math.min(10_000, until - Date.now())));
       } catch {
         r = null;
       }
@@ -974,6 +974,7 @@ export class CallEngine {
       setSimulcastGrant(media); // FX-082: test-account grant only; false for everyone else
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
+        ...(this.s.role === "callee" && this.s.call?.callerPlatform ? { incoming: true, peerPlatform: this.s.call.callerPlatform } : {}),
         ...(this.iosNativeVideoLatched() && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}`, nativeVideo: true } : {}),
         ...(this.msRecovering ? { rebuild: true } : {}),
         ...(relayOnly ? { relayOnly: true } : {}),

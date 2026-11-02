@@ -70,7 +70,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "dropin:start": { peerId: "id" },
   "room:cards": { roomIds: "string-array?" },
   "room:current": {},
-  "call:start": { peerId: "id", video: "bool?" },
+  "call:start": { peerId: "id", video: "bool?", platform: "string?" },
   "call:ack": { callId: "id" },
   "call:accept": { callId: "id" },
   "call:decline": { callId: "id", message: "string?" },

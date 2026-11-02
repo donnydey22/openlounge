@@ -112,3 +112,17 @@ test("called parties cannot obtain or relay direct media before explicitly accep
     service.dispose();
   }
 });
+
+test("iOS 75: call:incoming carries the caller platform reported on call:start; unknown values are dropped", async () => {
+  for (const [platform, want] of [["android", "android"], ["ios", "ios"], ["bogus", undefined], [undefined, undefined]] as const) {
+    const { service, events } = setup();
+    try {
+      const start = await service.start("a", "b", false, "conn-a", false, platform);
+      assert.equal(start.ok, true);
+      const incoming = events.find((event) => event.userId === "b" && event.ev === "call:incoming");
+      assert.equal(incoming?.data.call.callerPlatform, want);
+    } finally {
+      service.dispose();
+    }
+  }
+});

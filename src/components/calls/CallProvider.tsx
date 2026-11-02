@@ -177,6 +177,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
             photo: s.call.caller?.photoUrl || "",
             video: !!s.call.video,
             expiresAt: s.call.expiresAt || Date.now() + 45_000,
+            ...(s.call.callerPlatform ? { callerPlatform: s.call.callerPlatform } : {}),
           });
         }
       } else {
