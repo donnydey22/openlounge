@@ -268,6 +268,8 @@ export interface CallInfo {
   offline?: string[];
   /** platform the answering device reported on accept; absent = unknown (iOS mic re-acquire gate) */
   calleePlatform?: "ios" | "android" | "web";
+  /** platform the calling device reported on call:start; absent = unknown (iOS 75 Android→iPhone native audio lane) */
+  callerPlatform?: "ios" | "android" | "web";
 }
 /** A public, short-lived TURN credential handed to an authenticated call participant. */
 export interface TurnIceServer {

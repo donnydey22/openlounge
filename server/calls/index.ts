@@ -273,8 +273,8 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     if (rows.length) log.info("[calls] telemetry", { callId: t.callId, src: "sfu", s: rows.map(({ src: _s, t: _t, platform: _p, net: _n, ...r }) => r) });
     ack({ ok: true });
   });
-  socket.on("call:start", ({ peerId, video, nativeVideo }: { peerId: string; video?: boolean; nativeVideo?: unknown }, ack: AckFn = noop) =>
-    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled())).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+  socket.on("call:start", ({ peerId, video, nativeVideo, platform }: { peerId: string; video?: boolean; nativeVideo?: unknown; platform?: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled(), platform)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
