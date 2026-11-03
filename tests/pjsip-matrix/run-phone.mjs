@@ -10,6 +10,7 @@ import { chromium } from "playwright";
 import { startCiSfu } from "./ci-sfu.mjs";
 const run = promisify(execFile);
 const PHONE = process.env.PHONE || "linux", SECONDS = Number(process.env.CELL_SECONDS || 30);
+const SLACK = Number(process.env.PHONE_SLACK || { linux: 3, android: 20, ios: 90 }[PHONE]); // phone process launch time
 const out = path.resolve("tests/pjsip-matrix/results"); fs.mkdirSync(out, { recursive: true });
 const tone = path.resolve("tests/pjsip-matrix/tone.wav");
 const key = () => Buffer.from(Array.from({ length: 30 }, () => Math.floor(Math.random() * 256))).toString("base64");
@@ -42,7 +43,7 @@ async function oneCall(phoneCalls) {
   let callId;
   if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: "audio", route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
   else { await W.evaluate(() => window.__sig.send({ t: "call:new", to: "phone", kind: "audio", route: "sfu" })); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
-  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + 5 });
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK });
   const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
