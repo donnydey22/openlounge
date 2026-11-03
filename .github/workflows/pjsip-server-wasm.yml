@@ -45,9 +45,9 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q libopus-dev
           git clone -q --depth 1 -b 2.17 https://github.com/pjsip/pjproject.git /tmp/pjproject
           cd /tmp/pjproject && echo '#define PJMEDIA_HAS_SRTP 1' > pjlib/include/pj/config_site.h
-          ./configure --disable-video --disable-sound --with-opus --disable-ssl >/dev/null && make dep >/dev/null 2>&1 && make -j4 >/dev/null && sudo make install >/dev/null
+          ./configure --disable-video --disable-sound --with-opus --disable-ssl >/dev/null && make dep >/dev/null 2>&1 && make -j4 >/dev/null
           cd $GITHUB_WORKSPACE/tests/pjsip-matrix/engine
-          gcc -O2 -o olsfu_cli olsfu_cli.c ol_sfu.c $(pkg-config --cflags --libs libpjproject)
+          printf 'include /tmp/pjproject/build.mak\nall:\n\tgcc -O2 -o olsfu_cli olsfu_cli.c ol_sfu.c $(PJ_CFLAGS) $(PJ_LDFLAGS) $(PJ_LDLIBS) -lm\n' > Makefile.ci && make -f Makefile.ci
           cd $GITHUB_WORKSPACE && PHONE=linux CELL_SECONDS=20 node tests/pjsip-matrix/run-phone.mjs
       - uses: actions/download-artifact@v4
         continue-on-error: true
