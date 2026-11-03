@@ -15,3 +15,7 @@ test("v2 ladders: iOS 150/800/2400, Android 120/600/1600, browser 720p single la
   assert.equal(BROWSER_VIDEO.height, 720); assert.equal(BROWSER_VIDEO.layers, 1);
   assert.deepEqual([...PEER_TRANSPORTS], ["audio", "video", "backup"]);
 });
+test("v2 layer tick inputs: producer advertises REMB + transport-cc feedback", () => {
+  const fb = simulcastProducerParams({ ssrcs: [1, 2, 3] }).codecs[0].rtcpFeedback.map((f) => f.type);
+  assert.ok(fb.includes("goog-remb") && fb.includes("transport-cc"));
+});

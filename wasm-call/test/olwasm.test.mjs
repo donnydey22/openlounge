@@ -42,3 +42,15 @@ test("H.264 RTP in WASM: FU-A packetize -> SRTP -> depacketize, IDR flagged, wro
   const c = (await MediaCore.load(factory)).open({ txKeyB64: k, rxKeyB64: newKeyB64(), ssrc: 13 }).openVideo({ ssrc: 14 });
   assert.throws(() => c.videoRecv(a.videoSend(au, 93000)[0]), /vrecv -100/);
 });
+test("WASM H.264 encode (openh264): 720p single layer -> RTP/SRTP -> reassembled AUs, IDR every 2 s; >720p rejected", async () => {
+  const k = newKeyB64(); const a = (await MediaCore.load(factory)).open({ txKeyB64: k, rxKeyB64: k, ssrc: 9 }).openVideo({ ssrc: 99, pt: 102 });
+  assert.throws(() => a.videoEncoder({ width: 1920, height: 1080 }), /venc init/);
+  const W = 1280, H = 720, enc = a.videoEncoder({ width: W, height: H, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 });
+  const f = new Uint8Array(W * H * 3 / 2); let aus = 0, keys = 0, got = 0, gotKey = 0, bytes = 0;
+  for (let i = 0; i < 90; i++) { for (let y = 0; y < H; y++) f.fill((y + i * 4) & 255, y * W, y * W + W); f.fill(128, W * H);
+    const r = enc.encode(f, i * 33, i === 0); if (!r) continue; aus++; if (r.key) keys++; bytes += r.au.length;
+    for (const p of a.videoSend(r.au, i * 3000)) { const x = a.videoRecv(p); if (x && !x.lost) { got++; if (x.key) gotKey++; } } }
+  enc.close();
+  assert.ok(aus >= 85, `aus ${aus}`); assert.ok(keys >= 2 && keys <= 3, `keys ${keys}`); assert.equal(got, aus); assert.equal(gotKey, keys);
+  assert.ok(bytes * 8 / 3 < 800_000 * 2.5, `bitrate ${bytes * 8 / 3}`);
+});

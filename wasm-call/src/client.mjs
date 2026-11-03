@@ -30,6 +30,13 @@ export class MediaCore {
   videoRecv(pkt) { const M = this.M; M.HEAPU8.set(pkt, this.buf); const n = M._ol_video_recv(this.c, this.buf, pkt.length, this.vframe, this.vkey);
     if (n === -102) return { lost: true }; if (n < 0) throw new Error(`vrecv ${n}`); if (n === 0) return null;
     return { frame: M.HEAPU8.slice(this.vframe, this.vframe + n), key: M.HEAP32[this.vkey >> 2] === 1 }; }
+  /** WASM H.264 encoder (openh264), single layer, <=1280x720 (PLAN §14 browser). Returns {encode(i420, tsMs, key) -> {au, key}|null, close}. */
+  videoEncoder({ width, height, bitrate = 800_000, fps = 30, keyIntervalFrames = 60 }) { const M = this.M;
+    const e = M._ol_venc_new(width, height, bitrate, fps, keyIntervalFrames); if (!e) throw new Error(`venc init ${width}x${height}`);
+    const inp = M._malloc(width * height * 3 / 2), out = M._malloc(1 << 20), key = M._malloc(4);
+    return { encode: (i420, tsMs, forceKey = false) => { M.HEAPU8.set(i420, inp); const n = M._ol_venc_encode(e, inp, tsMs >>> 0, forceKey ? 1 : 0, out, 1 << 20, key);
+        if (n < 0) throw new Error(`venc ${n}`); return n === 0 ? null : { au: M.HEAPU8.slice(out, out + n), key: M.HEAP32[key >> 2] === 1 }; },
+      close: () => { M._ol_venc_free(e); M._free(inp); M._free(out); M._free(key); } }; }
   close() { if (this.c) this.M._ol_call_free(this.c); this.c = 0; }
 }
 /** Wire a live call: mic (capture only) -> worklet -> core -> WS relay -> core -> worklet -> speaker. */

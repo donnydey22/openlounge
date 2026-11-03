@@ -28,7 +28,7 @@ export function simulcastProducerParams({ codec = "h264", payloadType = 102, ssr
   const L = LADDERS[platform] ?? LADDERS.ios;
   if (!Array.isArray(ssrcs) || ssrcs.length !== L.length) throw new Error("need 3 ssrcs");
   const c = VIDEO_CODECS[codec]; if (!c) throw new Error("codec");
-  return { codecs: [{ mimeType: c.mimeType, payloadType, clockRate: c.clockRate, parameters: c.parameters, rtcpFeedback: [{ type: "nack" }, { type: "nack", parameter: "pli" }, { type: "ccm", parameter: "fir" }] }],
+  return { codecs: [{ mimeType: c.mimeType, payloadType, clockRate: c.clockRate, parameters: c.parameters, rtcpFeedback: [{ type: "nack" }, { type: "nack", parameter: "pli" }, { type: "ccm", parameter: "fir" }, { type: "goog-remb" }, { type: "transport-cc" }] }],
     encodings: ssrcs.map((ssrc, i) => ({ ssrc, maxBitrate: L[i].maxBitrate, scaleResolutionDownBy: L[i].scale })), rtcp: { cname: `ol-${ssrcs[0]}`, reducedSize: true } };
 }
 /** Top-layer cap at time t after call start (QuickHD burst, then steady). */

@@ -9,7 +9,7 @@ jobs:
         with: { node-version: 22 }
       - run: cd call-signal && npm install --no-audit --no-fund && npm test
       - run: cd ws-media-relay && npm install --no-audit --no-fund && npm test
-      - run: cd media-sfu && npm install --no-audit --no-fund && node --test test/plain.test.mjs
+      - run: cd media-sfu && npm install --no-audit --no-fund && node --test test/plain.test.mjs test/video-v2.test.mjs
   wasm:
     runs-on: ubuntu-24.04
     steps:
@@ -23,6 +23,8 @@ jobs:
       - run: cd wasm-call && npm install --no-audit --no-fund && npm test
       - name: no WebRTC in browser call path
         run: "! grep -rEn 'RTCPeerConnection|webrtc' wasm-call/src ws-media-relay/src"
+      - name: no Chrome encode in browser call path (WASM H.264 only, PLAN §14)
+        run: "! grep -rEn 'new VideoEncoder|RTCRtpSender' wasm-call/src tests/pjsip-matrix/browser"
       - uses: actions/upload-artifact@v4
         with: { name: olwasm, path: wasm-call/dist }
   matrix:

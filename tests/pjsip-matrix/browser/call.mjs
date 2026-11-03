@@ -1,5 +1,5 @@
 // Browser leg for the matrix: getUserMedia (capture only) -> AudioWorklet PCM / MediaStreamTrackProcessor frames ->
-// WASM Opus or WebCodecs H.264 encode -> WASM RTP+SRTP -> WS relay -> mediasoup PlainTransport -> back the same way.
+// WASM Opus / WASM H.264 (openh264) encode, single layer, 720p cap (PLAN §14) -> WASM RTP+SRTP -> WS relay -> mediasoup PlainTransport -> back the same way.
 // No RTCPeerConnection anywhere. window.olCall(opts) resolves with measured receive stats.
 import factory from "/wasm-call/dist/olwasm.mjs";
 import { MediaCore, newKeyB64 } from "/wasm-call/src/client.mjs";
@@ -11,6 +11,10 @@ window.olSignal = (userId) => new Promise((ok) => { const ws = new WebSocket(`${
     send: (m) => ws.send(JSON.stringify(m)) };
   ws.onmessage = (e) => box.msgs.push(JSON.parse(e.data)); ws.onopen = () => { window.__sig = box; ok(true); }; });
 
+function rgbaToI420(d, w, h) { const o = new Uint8Array(w * h * 3 / 2), U = w * h, V = U + U / 4;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; o[y * w + x] = (66 * d[i] + 129 * d[i + 1] + 25 * d[i + 2] + 4224) >> 8;
+    if (!(x & 1) && !(y & 1)) { const c = (y >> 1) * (w >> 1) + (x >> 1); o[U + c] = (-38 * d[i] - 74 * d[i + 1] + 112 * d[i + 2] + 32896) >> 8; o[V + c] = (112 * d[i] - 94 * d[i + 1] - 18 * d[i + 2] + 32896) >> 8; } }
+  return o; }
 window.olStop = () => { window.__olStop = true; };
 window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headlessPacing = false }) => {
   window.__olStop = false;
@@ -25,7 +29,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   await new Promise((ok, no) => { ws.onopen = ok; ws.onclose = (e) => no(new Error(`relay closed ${e.code}`)); });
   const send = (p) => { if (ws.readyState === 1) { ws.send(p); stats.sent++; } };
   // capture (getUserMedia only)
-  const ms = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: video ? { width: 640, height: 480, frameRate: 30 } : false });
+  const ms = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: video ? { width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 }, frameRate: 30 } : false });
   const ctx = new AudioContext({ sampleRate: 48000 }); await ctx.audioWorklet.addModule("/wasm-call/src/pcm-worklet.js");
   const node = new AudioWorkletNode(ctx, "ol-pcm"); ctx.createMediaStreamSource(ms).connect(node); node.connect(ctx.destination);
   let live = true; node.port.onmessage = (e) => { if (live && !headlessPacing) send(core.send(e.data)); };
@@ -38,13 +42,20 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
       paceTimer = setTimeout(tick, Math.max(0, t0 + n * 20 - performance.now())); };
     tick(); stats.headlessPacing = true; }
   await rpc(callId, userId, "plain:produce", { kind: "audio", ssrc: assrc, payloadType: 111 });
-  let enc, reader, encStop = false;
+  let enc, reader, encLoop, encStop = false;
   if (video) {
     await rpc(callId, userId, "plain:produce", { kind: "video", ssrc: vssrc, payloadType: 102 });
-    let n = 0; enc = new VideoEncoder({ output: (chunk) => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); for (const p of core.videoSend(b, Math.round(chunk.timestamp * 0.09))) send(p); }, error: () => stats.decodeErr++ });
-    enc.configure({ codec: "avc1.42001f", width: 640, height: 480, bitrate: 800_000, framerate: 30, latencyMode: "realtime", avc: { format: "annexb" } });
-    reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
-    (async () => { while (!encStop) { const { value, done } = await reader.read(); if (done) break; if (enc.encodeQueueSize < 3) enc.encode(value, { keyFrame: n++ % 30 === 0 }); value.close(); } })();
+    // WASM H.264 encode (no WebCodecs/WebRTC encode): VideoFrame -> I420 -> openh264 in WASM -> RTP/SRTP in WASM
+    let n = 0, cv = null, g2 = null; reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
+    encLoop = (async () => { while (!encStop) { const { value: fr, done } = await reader.read(); if (done) break;
+      try { const w = Math.min(1280, fr.displayWidth) & ~1, h = Math.min(720, fr.displayHeight) & ~1;
+        if (!enc) { enc = core.videoEncoder({ width: w, height: h, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 }); stats.encW = w; stats.encH = h; stats.encoder = "wasm-openh264"; }
+        let i420;
+        if (fr.format === "I420" && fr.codedWidth === w && fr.codedHeight === h) { i420 = new Uint8Array(w * h * 3 / 2); await fr.copyTo(i420); }
+        else { if (!cv) { cv = new OffscreenCanvas(w, h); g2 = cv.getContext("2d", { willReadFrequently: true }); } g2.drawImage(fr, 0, 0, w, h); i420 = rgbaToI420(g2.getImageData(0, 0, w, h).data, w, h); }
+        const r = enc.encode(i420, Math.round(fr.timestamp / 1000), n++ === 0);
+        if (r) { stats.encFrames = (stats.encFrames || 0) + 1; if (r.key) stats.encKeys = (stats.encKeys || 0) + 1; for (const p of core.videoSend(r.au, Math.round(fr.timestamp * 0.09))) send(p); }
+      } catch (e) { stats.encErr = String(e.message || e); } finally { fr.close(); } } enc?.close(); enc = null; })();
   }
   // consume the peer (poll until its producers exist)
   let consumers = [];
@@ -62,7 +73,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
     } catch { stats.srtpErr++; } };
   const start = performance.now(), until = start + seconds * 1000; // runs until olStop() or the cap (phone launch time varies)
   while (!window.__olStop && performance.now() < until) await sleep(100); const end = performance.now();
-  live = false; node.port.onmessage = null; encStop = true; reader?.cancel(); enc?.close(); dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
+  live = false; node.port.onmessage = null; encStop = true; reader?.cancel().catch(() => {}); await encLoop; dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
   await rpc(callId, userId, "plain:close");
   return { ...stats, rms: stats.rmsN ? stats.audioRms / stats.rmsN : 0, fps: stats.firstFrameAt ? stats.videoFrames / ((end - stats.firstFrameAt) / 1000) : 0, firstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - start : null, consumers: consumers.map((c) => c.kind) };
 };
