@@ -39,7 +39,8 @@ function crashHead(text) {
 }
 const phonePass = (r) => !r.error && r.rxPkt >= SECONDS * 50 * 0.8 && r.avgLevel > 10;
 // Video (PLAN §14 matrix): phone HW-decoded the browser's WASM H.264 at >= 15 fps, non-black, no decode errors, keyframes seen.
-const phoneVideoPass = (r) => !r.error && !r.videoError && r.decFps >= 15 && r.nonBlack > 0 && r.decErr === 0 && r.rxKey >= 2;
+// Linux sanity cli has no H.264 decoder (it only reassembles and echoes AUs): judge it on reassembled AUs + keyframes, no decode bar.
+const phoneVideoPass = (r) => PHONE === "linux" ? !r.error && !r.videoError && r.rxAu >= 15 * SECONDS * 0.5 && r.rxKey >= 2 && (r.rxGap ?? 0) === 0 : !r.error && !r.videoError && r.decFps >= 15 && r.nonBlack > 0 && r.decErr === 0 && r.rxKey >= 2;
 const webVideoPass = (w) => w.srtpErr === 0 && w.fps >= 15 && w.nonBlack > 0 && w.decodeErr === 0;
 
 if (!fs.existsSync(tone)) await import("./run-browser.mjs?tone-only").catch(() => {});
