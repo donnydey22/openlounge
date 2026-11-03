@@ -77,7 +77,7 @@ for (const phoneCalls of [true, false]) {
     const r = { id, run: runId, ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
     if (PHONE !== "linux") fs.writeFileSync(path.join(out, `${id}.json`), JSON.stringify(r, null, 1));
     if (!(r.pass && r.redialPass && r.teardownClean)) failed++;
-    console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error }));
+    console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, diag: r.diag }));
   }
 }
 await browser.close(); await stack.close(); process.exit(failed && process.env.CELLS_ENFORCE !== "0" ? 1 : 0);
