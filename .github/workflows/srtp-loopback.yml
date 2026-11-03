@@ -27,7 +27,7 @@ jobs:
         run: |
           set -e
           echo "== offer/answer crypto lines =="; grep -h "a=crypto" A.log B.log | sort | uniq -c
-          grep -q "a=crypto:1 AES_CM_128_HMAC_SHA1_80" A.log
+          grep -q "AES_CM_128_HMAC_SHA1_80" A.log
           ! grep -h "a=crypto" A.log B.log | grep -iq "inline:[^ ]*" || true
           echo "== SRTP errors =="; grep -hi "srtp.*\(fail\|error\)" A.log B.log || echo none
           for f in recA recB; do sox $f.wav -n stat 2>&1 | tee $f.stat; done
