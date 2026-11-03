@@ -16,8 +16,8 @@ jobs:
           cp pjsip-apps/bin/pjsua-* ../pjsua
       - name: two-endpoint SRTP call (B=callee "iPhone", A=caller "Android")
         run: |
-          sox -n -r 16000 -c 1 toneA.wav synth 20 sine 440
-          sox -n -r 16000 -c 1 toneB.wav synth 20 sine 880
+          sox -n -r 16000 -b 16 -e signed-integer -c 1 toneA.wav synth 20 sine 440
+          sox -n -r 16000 -b 16 -e signed-integer -c 1 toneB.wav synth 20 sine 880
           COMMON="--null-audio --no-tcp --use-srtp=2 --srtp-secure=0 --srtp-keying=0 --auto-play --auto-rec --log-level=5 --app-log-level=4 --duration=12"
           (sleep 30; echo q) | ./pjsua $COMMON --local-port=5070 --auto-answer=200 --play-file=toneB.wav --rec-file=recB.wav --log-file=B.log >/dev/null 2>&1 &
           sleep 2
