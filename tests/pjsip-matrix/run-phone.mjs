@@ -16,7 +16,8 @@ const tone = path.resolve("tests/pjsip-matrix/tone.wav");
 const key = () => Buffer.from(Array.from({ length: 30 }, () => Math.floor(Math.random() * 256))).toString("base64");
 
 const drivers = {
-  linux: async (p) => JSON.parse((await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, SECONDS], { timeout: (SECONDS + 30) * 1000 })).stdout.trim().split("\n").pop()),
+  linux: async (p) => { const { stdout, stderr } = await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, SECONDS], { timeout: (SECONDS + 30) * 1000, maxBuffer: 1 << 26 });
+    const lines = stdout.trim().split("\n"); console.log("[olsfu_cli]", lines.slice(-40).join("\n"), stderr.slice(-2000)); return JSON.parse(lines.pop()); },
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", "com.donnydey.openlounge.pjsip.SfuLegTest"];
     for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", seconds: SECONDS })) args.push("-e", k, String(v));
     const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: (SECONDS + 90) * 1000 });
@@ -63,7 +64,7 @@ for (const phoneCalls of [true, false]) {
   for (const [id, [side, x, y]] of Object.entries(cells)) {
     const r = { id, run: runId, ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
     if (PHONE !== "linux") fs.writeFileSync(path.join(out, `${id}.json`), JSON.stringify(r, null, 1));
-    console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, avgLevel: r.avgLevel, error: r.error }));
+    console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error }));
   }
 }
 await browser.close(); await stack.close(); process.exit(0);
