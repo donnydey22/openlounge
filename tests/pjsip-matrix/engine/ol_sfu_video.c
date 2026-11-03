@@ -17,7 +17,7 @@ static unsigned vssrc[3], vnl; static pj_uint16_t vseq[3]; static int vpt;
 static pj_uint8_t *au; static int aulen, auloss, have, auKey; static pj_uint16_t lastseq; static pj_uint32_t rxssrc;
 static ol_video_sink_cb sink; static void *sink_user;
 static ol_video_keyframe_cb kfcb; static void *kf_user; static pj_mutex_t *txmx; static pj_timestamp last_pli;
-static unsigned st_pli_rx, st_pli_tx, st_tx_drop;
+static unsigned st_pli_rx, st_pli_tx, st_tx_drop; static volatile unsigned keyreq; static int needKey;
 static void send_pli(pj_uint32_t media);
 static unsigned st_rx_pkt, st_rx_au, st_rx_key, st_rx_gap, st_tx_pkt, st_tx_au[3], st_tx_key[3];
 static pj_sockaddr vrem;
@@ -34,17 +34,19 @@ static void on_rtp(pjmedia_tp_cb_param *prm) {
   if (pkt[0] & 0x20) len -= pkt[len - 1]; if (hl >= len) return;
   pj_mutex_lock(vmx); st_rx_pkt++;
   pj_uint16_t seq = (pj_uint16_t)(pkt[2] << 8 | pkt[3]); pj_uint32_t ss = (pj_uint32_t)pkt[8] << 24 | pkt[9] << 16 | pkt[10] << 8 | pkt[11];
-  if (have && ss == rxssrc && (pj_uint16_t)(lastseq + 1) != seq) { auloss = 1; st_rx_gap++; send_pli(ss); }
-  if (!have || ss != rxssrc) send_pli(ss);
+  if (have && ss == rxssrc && (pj_uint16_t)(lastseq + 1) != seq) { auloss = 1; st_rx_gap++; needKey = 1; }
+  if (!have || ss != rxssrc) needKey = 1;
   if (ss != rxssrc) { aulen = 0; auloss = 0; auKey = 0; } /* SFU layer switch: new SSRC never (mediasoup rewrites), but be safe */
   lastseq = seq; have = 1; rxssrc = ss;
   const pj_uint8_t *p = pkt + hl; int l = len - hl, t = p[0] & 0x1f;
   if (t == 28 && l > 2) { if (p[1] & 0x80) { pj_uint8_t h = (p[0] & 0xe0) | (p[1] & 0x1f); au_put(&h, 1, 1); } au_put(p + 2, l - 2, 0); }
   else if (t == 24) { int o = 1; while (o + 2 < l) { int sz = p[o] << 8 | p[o + 1]; o += 2; if (o + sz > l) break; au_put(p + o, sz, 1); o += sz; } }
   else au_put(p, l, 1);
-  if (pkt[1] & 0x80) { if (!auloss && aulen) { st_rx_au++; if (auKey) st_rx_key++;
+  if (pkt[1] & 0x80) { if (!auloss && aulen && auKey) needKey = 0;
+    if (!auloss && aulen) { st_rx_au++; if (auKey) st_rx_key++;
       pj_uint32_t ts = (pj_uint32_t)pkt[4] << 24 | pkt[5] << 16 | pkt[6] << 8 | pkt[7]; if (sink) sink(sink_user, au, aulen, auKey, ts); }
     aulen = 0; auloss = 0; auKey = 0; }
+  if (needKey) send_pli(ss); /* until a complete keyframe decodes: start, freeze, gap (rate-limited) */
   pj_mutex_unlock(vmx);
 }
 /* RFC 4585 PLI to the SFU for the SSRC we receive: on first packet and on any gap (rate-limited 300 ms), so the
@@ -62,7 +64,7 @@ static void on_rtcp(void *u, void *p, pj_ssize_t n) { (void)u; const pj_uint8_t 
     if (pt == 206 && (fmt == 1 || fmt == 4) && len >= 12) {
       pj_uint32_t m = fmt == 1 ? ((pj_uint32_t)b[o + 8] << 24 | b[o + 9] << 16 | b[o + 10] << 8 | b[o + 11])
                                : (len >= 20 ? ((pj_uint32_t)b[o + 12] << 24 | b[o + 13] << 16 | b[o + 14] << 8 | b[o + 15]) : 0);
-      for (unsigned i = 0; i < vnl; i++) if (vssrc[i] == m || m == 0) { st_pli_rx++; if (kfcb) kfcb(kf_user, (int)i); } }
+      for (unsigned i = 0; i < vnl; i++) if (vssrc[i] == m || m == 0) { st_pli_rx++; keyreq |= 1u << i; if (kfcb) kfcb(kf_user, (int)i); } }
     o += len; } }
 
 void ol_sfu_video_set_sink(ol_video_sink_cb cb, void *user) { OLV_REG(); sink = cb; sink_user = user; }
@@ -70,7 +72,7 @@ void ol_sfu_video_set_sink(ol_video_sink_cb cb, void *user) { OLV_REG(); sink = 
 int ol_sfu_video_start(const char *ip, int port, const char *tx_b64, const char *rx_b64, const unsigned *ssrcs, int nlayers, int pt) { OLV_REG();
   pjmedia_endpt *ep = pjsua_get_pjmedia_endpt(); if (!ep) return -1; if (nlayers < 1 || nlayers > 3) return -12;
   ol_sfu_video_stop();
-  vpool = pjsua_pool_create("olsfuv", 4000, 4000); pj_mutex_create_simple(vpool, "olv", &vmx); pj_mutex_create_simple(vpool, "olvt", &txmx); last_pli.u64 = 0; st_pli_rx = st_pli_tx = st_tx_drop = 0;
+  vpool = pjsua_pool_create("olsfuv", 4000, 4000); pj_mutex_create_simple(vpool, "olv", &vmx); pj_mutex_create_simple(vpool, "olvt", &txmx); last_pli.u64 = 0; keyreq = 0; needKey = 1; st_pli_rx = st_pli_tx = st_tx_drop = 0;
   au = (pj_uint8_t *)pj_pool_alloc(vpool, OL_AU_MAX);
   pj_str_t any = pj_str("0.0.0.0");
   { int base = 46000 + (int)(pj_rand() % 4000) * 2, ok = 0;
@@ -143,3 +145,5 @@ void ol_sfu_video_stop(void) { OLV_REG();
 }
 void ol_sfu_video_set_keyframe_cb(ol_video_keyframe_cb cb, void *user) { OLV_REG(); kfcb = cb; kf_user = user; }
 void ol_sfu_video_fb_stats(unsigned *pli_rx, unsigned *pli_tx, unsigned *tx_drop) { *pli_rx = st_pli_rx; *pli_tx = st_pli_tx; *tx_drop = st_tx_drop; }
+/* Polling alternative to the callback: layers the SFU asked to refresh since the last call (bitmask). */
+unsigned ol_sfu_video_take_keyreq(void) { return __atomic_exchange_n(&keyreq, 0u, __ATOMIC_SEQ_CST); }

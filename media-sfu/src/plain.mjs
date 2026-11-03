@@ -95,6 +95,7 @@ export async function handlePlainRpc({ method, payload = {}, s, router, peers, a
         const c = await ct.consume({ producerId: producer.id, rtpCapabilities: router.rtpCapabilities, paused: false, appData: { callId: s.callId, userId: s.userId } });
         c.on("producerclose", () => { s.consumers.delete(producer.id); c.close(); });
         s.consumers.set(producer.id, c);
+        if (c.kind === "video") c.requestKeyFrame().catch(() => {}); // new subscriber: ask the sender for an IDR now
         consumers.push({ id: c.id, producerId: producer.id, kind: c.kind, ssrc: c.rtpParameters.encodings[0].ssrc, payloadType: c.rtpParameters.codecs[0].payloadType, mimeType: c.rtpParameters.codecs[0].mimeType });
       }
     }

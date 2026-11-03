@@ -12,6 +12,7 @@ void ol_sfu_video_stop(void);
 /* Keyframe request from the SFU (RTCP PLI/FIR) for simulcast layer `layer`: platform forces an IDR on that encoder. */
 typedef void (*ol_video_keyframe_cb)(void *user, int layer);
 void ol_sfu_video_set_keyframe_cb(ol_video_keyframe_cb cb, void *user);
+unsigned ol_sfu_video_take_keyreq(void);
 void ol_sfu_video_fb_stats(unsigned *pli_rx, unsigned *pli_tx, unsigned *tx_drop);
 #ifdef __cplusplus
 }
