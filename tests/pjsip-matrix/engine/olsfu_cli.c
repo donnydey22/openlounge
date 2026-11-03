@@ -7,7 +7,7 @@
 int main(int c, char **v) {
   if (c < 9) return 2;
   pjsua_config cfg; pjsua_logging_config lc; pjsua_media_config mc; pjsua_config_default(&cfg); pjsua_logging_config_default(&lc); pjsua_media_config_default(&mc);
-  lc.console_level = 5; mc.clock_rate = 48000; mc.no_vad = 1;
+  lc.console_level = 0; lc.level = 5; lc.log_filename = pj_str("/tmp/olsfu.log"); mc.clock_rate = 48000; mc.no_vad = 1;
   if (pjsua_create() || pjsua_init(&cfg, &lc, &mc) || pjsua_start()) return 3;
   pjsua_set_null_snd_dev();
   int r = ol_sfu_audio_start(v[1], atoi(v[2]), v[3], v[4], (unsigned)strtoul(v[5], 0, 10), atoi(v[6]), atoi(v[7]), 440);
