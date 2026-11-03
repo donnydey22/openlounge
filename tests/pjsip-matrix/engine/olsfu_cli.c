@@ -22,8 +22,8 @@ int main(int c, char **v) {
   int secs = atoi(v[8]), maxl = 0; long sum = 0; int n = 0;
   for (int i = 0; i < secs * 10; i++) { pj_thread_sleep(100); int l = ol_sfu_rx_level(); if (i > 20) { sum += l; n++; if (l > maxl) maxl = l; } }
   unsigned rx = 0, lost = 0, tx = 0; ol_sfu_stats(&rx, &lost, &tx);
-  char vj[256] = ""; if (vip) { unsigned vrp, va, vk, vg, vtp, ta[3], tk[3]; ol_sfu_video_stats(&vrp, &va, &vk, &vg, &vtp, ta, tk);
-    snprintf(vj, sizeof vj, ",\"videoError\":%d,\"vRxPkt\":%u,\"rxAu\":%u,\"rxKey\":%u,\"rxGap\":%u,\"vTxPkt\":%u,\"txAu\":[%u,%u,%u]", vr, vrp, va, vk, vg, vtp, ta[0], ta[1], ta[2]); ol_sfu_video_stop(); }
+  char vj[384] = ""; if (vip) { unsigned vrp, va, vk, vg, vtp, ta[3], tk[3]; ol_sfu_video_stats(&vrp, &va, &vk, &vg, &vtp, ta, tk); unsigned pr, pt, td; ol_sfu_video_fb_stats(&pr, &pt, &td);
+    snprintf(vj, sizeof vj, ",\"videoError\":%d,\"vRxPkt\":%u,\"rxAu\":%u,\"rxKey\":%u,\"rxGap\":%u,\"vTxPkt\":%u,\"txAu\":[%u,%u,%u],\"pliRx\":%u,\"pliTx\":%u,\"txDrop\":%u", vr, vrp, va, vk, vg, vtp, ta[0], ta[1], ta[2], pr, pt, td); ol_sfu_video_stop(); }
   printf("{\"rxPkt\":%u,\"rxLost\":%u,\"txPkt\":%u,\"avgLevel\":%.1f,\"maxLevel\":%d%s}\n", rx, lost, tx, n ? (double)sum / n : 0.0, maxl, vj);
   ol_sfu_stop(); pjsua_destroy(); return 0;
 }
