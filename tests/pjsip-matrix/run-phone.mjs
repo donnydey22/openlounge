@@ -27,7 +27,7 @@ const drivers = {
     const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = crashHead((await run("adb", ["logcat", "-d", "-b", "all", "-t", "3000"], { maxBuffer: 1 << 26 })).stdout); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
   ios: async (p) => { const f = "/tmp/olsfu-ios.json"; fs.rmSync(f, { force: true });
     const env = { ...process.env }; for (const [k, v] of Object.entries({ ...p, seconds: SECONDS, out: f })) env[`TEST_RUNNER_OL_${k.toUpperCase()}`] = String(v);
-    await run("bash", ["-c", process.env.IOS_TEST_CMD], { env, timeout: (SECONDS + 300) * 1000, maxBuffer: 1 << 26 });
+    await run("bash", ["-c", p.vip ? process.env.IOS_TEST_CMD.replace("testAudioLeg", "testVideoLeg") : process.env.IOS_TEST_CMD], { env, timeout: (SECONDS + 300) * 1000, maxBuffer: 1 << 26 });
     return JSON.parse(fs.readFileSync(f, "utf8")); },
 };
 /** Tombstone head: signal/abort/cause lines + the first 25 native frames (the deep ART/JUnit frames are noise). */
