@@ -39,7 +39,9 @@ const phonePass = (r) => !r.error && r.rxPkt >= SECONDS * 50 * 0.8 && r.avgLevel
 
 if (!fs.existsSync(tone)) await import("./run-browser.mjs?tone-only").catch(() => {});
 const stack = await startCiSfu({ httpPort: 8099 });
-const browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${tone}`, "--autoplay-policy=no-user-gesture-required"] });
+const browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${tone}`, "--autoplay-policy=no-user-gesture-required",
+  // macOS runner: the simulator starves a backgrounded Chrome; without these the WASM capture/encode loop drops to ~24-38 pkt/s
+  "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", "--disable-features=IntensiveWakeUpThrottling"] });
 const ctx = await browser.newContext({ permissions: ["microphone", "camera"] }); const W = await ctx.newPage();
 W.on("pageerror", (e) => console.log("[web] pageerror", e.message));
 await W.goto(`${stack.base}/tests/pjsip-matrix/browser/call.html`); await W.waitForFunction(() => window.olReady); await W.evaluate(() => window.olSignal("web"));
