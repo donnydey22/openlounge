@@ -10,7 +10,7 @@ import { chromium } from "playwright";
 import { startCiSfu } from "./ci-sfu.mjs";
 const run = promisify(execFile);
 const PHONE = process.env.PHONE || "linux", SECONDS = Number(process.env.CELL_SECONDS || 30);
-const SLACK = Number(process.env.PHONE_SLACK || { linux: 3, android: 20, ios: 90 }[PHONE]); // phone process launch time
+const SLACK = Number(process.env.PHONE_SLACK || { linux: 3, android: 20, ios: 240 }[PHONE]); // phone process launch time
 const out = path.resolve("tests/pjsip-matrix/results"); fs.mkdirSync(out, { recursive: true });
 const tone = path.resolve("tests/pjsip-matrix/tone.wav");
 const key = () => Buffer.from(Array.from({ length: 30 }, () => Math.floor(Math.random() * 256))).toString("base64");
