@@ -52,6 +52,14 @@ jobs:
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with: { pattern: "matrix-*", path: tests/pjsip-matrix/results, merge-multiple: true }
+      - name: merge iPhone + Android cell results (latest completed pjsip-rebuild run in each repo)
+        continue-on-error: true
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          for x in "openlounge-ios ios-xcframework.yml matrix-ios" "openlounge-android android-prefab.yml matrix-android"; do
+            set -- $x; id=$(gh run list -R donnydey22/$1 -b pjsip-rebuild -w $2 -s completed -L 1 --json databaseId -q '.[0].databaseId')
+            echo "$1 run $id"; [ -n "$id" ] && gh run download $id -R donnydey22/$1 -n $3 -D tests/pjsip-matrix/results || echo "no $3 artifact"
+          done
       - name: must-pass matrix report (ship gate reported, not enforced on branch CI)
         run: node tests/pjsip-matrix/matrix.mjs
       - if: always()

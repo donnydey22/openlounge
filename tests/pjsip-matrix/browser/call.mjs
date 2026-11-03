@@ -11,7 +11,9 @@ window.olSignal = (userId) => new Promise((ok) => { const ws = new WebSocket(`${
     send: (m) => ws.send(JSON.stringify(m)) };
   ws.onmessage = (e) => box.msgs.push(JSON.parse(e.data)); ws.onopen = () => { window.__sig = box; ok(true); }; });
 
+window.olStop = () => { window.__olStop = true; };
 window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30 }) => {
+  window.__olStop = false;
   const stats = { audioPkts: 0, audioRms: 0, rmsN: 0, videoFrames: 0, videoKey: 0, nonBlack: 0, srtpErr: 0, decodeErr: 0, sent: 0 };
   const created = await rpc(callId, userId, "plain:create");
   const tx = newKeyB64();
@@ -50,7 +52,8 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30 }) => {
         dec.decode(new EncodedVideoChunk({ type: r.key ? "key" : "delta", timestamp: (t0 += 33_333), data: r.frame })); }
       else if (pt === apt) { const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; stats.audioRms += Math.sqrt(s / pcm.length) / 32768; stats.rmsN++; }
     } catch { stats.srtpErr++; } };
-  const start = performance.now(); await sleep(seconds * 1000); const end = performance.now();
+  const start = performance.now(), until = start + seconds * 1000; // runs until olStop() or the cap (phone launch time varies)
+  while (!window.__olStop && performance.now() < until) await sleep(100); const end = performance.now();
   live = false; node.port.onmessage = null; encStop = true; reader?.cancel(); enc?.close(); dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
   await rpc(callId, userId, "plain:close");
   return { ...stats, rms: stats.rmsN ? stats.audioRms / stats.rmsN : 0, fps: stats.firstFrameAt ? stats.videoFrames / ((end - stats.firstFrameAt) / 1000) : 0, firstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - start : null, consumers: consumers.map((c) => c.kind) };

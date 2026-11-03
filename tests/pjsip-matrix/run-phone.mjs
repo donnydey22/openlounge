@@ -52,7 +52,7 @@ async function oneCall(phoneCalls) {
   let callId;
   if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: "audio", route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
   else { await W.evaluate(() => window.__sig.send({ t: "call:new", to: "phone", kind: "audio", route: "sfu" })); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
-  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK });
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK + 600 }); // cap only; stopped right after the phone leg ends
   const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
@@ -60,12 +60,13 @@ async function oneCall(phoneCalls) {
   if (!cons.length) throw new Error("phone: browser producer never appeared");
   const phone = await drivers[PHONE]({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: cons[0].payloadType }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
   if (process.env.TSTATS !== "0") console.log("[tstats]", JSON.stringify(await (await fetch(`${stack.base}/tstats`)).json()).slice(0, 6000));
-  await rpc(callId, "plain:close"); const web = await webP;
+  await W.evaluate(() => window.olStop()); await rpc(callId, "plain:close"); const web = await webP;
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
   const st = await (await fetch(`${stack.base}/stats`)).json(); const clean = st.sessions === 0 && st.transports === 0 && st.calls === 0;
   const webOk = web.srtpErr === 0 && web.rms > 0.05;
   return { phone: { ...phone, pass: phonePass(phone), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, pass: webOk, teardownClean: clean } };
 }
+let failed = 0;
 const runId = process.env.GITHUB_RUN_ID ?? "local"; const name = PHONE === "ios" ? "iphone" : PHONE;
 for (const phoneCalls of [true, false]) {
   const a = await oneCall(phoneCalls), b = await oneCall(phoneCalls);
@@ -73,7 +74,8 @@ for (const phoneCalls of [true, false]) {
   for (const [id, [side, x, y]] of Object.entries(cells)) {
     const r = { id, run: runId, ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
     if (PHONE !== "linux") fs.writeFileSync(path.join(out, `${id}.json`), JSON.stringify(r, null, 1));
+    if (!(r.pass && r.redialPass && r.teardownClean)) failed++;
     console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error }));
   }
 }
-await browser.close(); await stack.close(); process.exit(0);
+await browser.close(); await stack.close(); process.exit(failed && process.env.CELLS_ENFORCE !== "0" ? 1 : 0);
