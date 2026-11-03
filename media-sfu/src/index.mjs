@@ -55,7 +55,17 @@ function verifyAdmission(token, callId, userId) {
 }
 
 let worker;
-let router;
+let router; // capabilities template only; media lives on one router per call room (Video spec v2)
+const rooms = new Map(); // callId -> Promise<Router>
+function routerFor(callId) {
+  let r = rooms.get(callId);
+  if (!r) { r = worker.createRouter({ mediaCodecs: ROUTER_CODECS }); rooms.set(callId, r); r.catch(() => rooms.delete(callId)); }
+  return r;
+}
+function releaseRoom(callId) {
+  if ([...sessions.values()].some((x) => x.callId === callId && !x.closed)) return;
+  const r = rooms.get(callId); rooms.delete(callId); r?.then((x) => x.close()).catch(() => {});
+}
 let webRtcServer;
 let shuttingDown = false;
 let gatewayOnline = false;
@@ -94,6 +104,7 @@ function closeSession(s, reason = "closed") {
   sessions.delete(s.connectionId);
   if (sessionsByParticipant.get(s.participantKey) === s.connectionId) sessionsByParticipant.delete(s.participantKey);
   safeLog("session_closed", { reason, call: b64(s.callId).slice(0, 12) });
+  releaseRoom(s.callId);
 }
 
 function closeCall(callId) {
@@ -167,7 +178,7 @@ async function routeRpc(input) {
       sessionsByParticipant.set(participant, connectionId);
       safeLog("session_joined", { call: b64(callId).slice(0, 12), sessions: sessions.size });
     }
-    return { routerRtpCapabilities: router.rtpCapabilities };
+    return { routerRtpCapabilities: (await routerFor(callId)).rtpCapabilities };
   }
   const s = sessionOf({ callId, userId, connectionId });
   if (method === "leave") {
@@ -175,7 +186,7 @@ async function routeRpc(input) {
     return {};
   }
   if (method.startsWith("plain:")) { // PJSIP phones / WASM browsers (PLAN §13): PlainTransport, SRTP SDES, no ICE
-    return handlePlainRpc({ method, payload, s, router, peers: sessions.values(), announcedAddress: cfg.announcedAddress, bindIp: cfg.bindIp,
+    return handlePlainRpc({ method, payload, s, router: await routerFor(s.callId), peers: sessions.values(), announcedAddress: cfg.announcedAddress, bindIp: cfg.bindIp,
       emitTarget: (t) => emitGateway("ms:gateway:plainTarget", t), notify: (ev) => notifyPeers(s, ev) });
   }
   if (method === "transport:create") {
@@ -188,7 +199,7 @@ async function routeRpc(input) {
     // fallback (netAdapt floor / repeated UDP failure) on this same SFU instead of a different provider.
     const tcpOnly = payload.tcpOnly === true;
     if (tcpOnly && cfg.tcpPort === null) throw new Error("TCP transport not enabled");
-    const transport = await router.createWebRtcTransport({
+    const transport = await (await routerFor(s.callId)).createWebRtcTransport({
       webRtcServer,
       enableUdp: !tcpOnly,
       enableTcp: cfg.tcpPort !== null,
@@ -238,7 +249,7 @@ async function routeRpc(input) {
     for (const peer of sessions.values()) {
       if (peer.callId !== callId || peer.connectionId === connectionId) continue;
       for (const producer of peer.producers.values()) {
-        if (s.consumers.has(producer.id) || !router.canConsume({ producerId: producer.id, rtpCapabilities: payload.rtpCapabilities })) continue;
+        if (s.consumers.has(producer.id) || !(await routerFor(s.callId)).canConsume({ producerId: producer.id, rtpCapabilities: payload.rtpCapabilities })) continue;
         const consumer = await transport.consume({ producerId: producer.id, rtpCapabilities: payload.rtpCapabilities, paused: true, appData: { callId, userId, connectionId } });
         if (s.closed) {
           consumer.close();
@@ -297,7 +308,7 @@ async function steerAndReport() {
   const perCall = new Map();
   for (const s of sessions.values()) {
     if (s.closed) continue;
-    const recv = s.transports.get("recv");
+    const recv = s.transports.get("recv") ?? s.transports.get("video");
     let availableBps = null;
     try { const ts = recv ? await recv.getStats() : []; const t = ts.find((x) => Number.isFinite(x.availableOutgoingBitrate)); availableBps = t ? t.availableOutgoingBitrate : null; } catch { /* closed */ }
     const rows = perCall.get(s.callId) ?? perCall.set(s.callId, []).get(s.callId);
@@ -447,6 +458,7 @@ async function main() {
     gateway?.close();
     for (const s of [...sessions.values()]) closeSession(s, "shutdown");
     webRtcServer?.close();
+    for (const r of rooms.values()) r.then((x) => x.close()).catch(() => {});
     router?.close();
     worker?.close();
     health.close(() => process.exit(0));
