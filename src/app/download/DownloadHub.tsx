@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
-import { ANDROID_RELEASE, IOS_MANIFEST_URL, IOS_RELEASE, releaseLabel } from "@/lib/releases";
+import { ANDROID_RELEASE, releaseLabel } from "@/lib/releases";
 
 const ANDROID = { ...ANDROID_RELEASE, version: releaseLabel(ANDROID_RELEASE) };
-const IOS = { ...IOS_RELEASE, version: releaseLabel(IOS_RELEASE), install: `itms-services://?action=download-manifest&url=${IOS_MANIFEST_URL}` };
 
 function Sha({ value }: { value: string }) {
   return (
@@ -85,26 +84,9 @@ export function DownloadHub() {
           <Sha value={ANDROID.sha256} />
         </section>
 
-        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-          <h2 className="text-base font-semibold text-zinc-100">iPhone: Direct install (registered devices only)</h2>
-          <p className="text-zinc-500">Version {IOS.version} · {IOS.size}</p>
-          <a
-            href={IOS.install}
-            className="mt-4 block rounded-full border border-sky-500/60 px-5 py-3 text-center font-semibold text-sky-300"
-            data-testid="download-ios"
-          >
-            Install on iPhone
-          </a>
-          <p className="mt-3 text-zinc-500">Latest: version {IOS.version}</p>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-zinc-400">
-            <li>Only iPhones registered for this test build can install it.</li>
-            <li>Open this page in Safari, tap Install, then check your home screen.</li>
-            <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
-          </ul>
-          <p className="mt-3 text-xs text-zinc-500">
-            Direct file: <a className="underline" href={IOS.file}>{IOS.file.split("/").pop()}</a>
-          </p>
-          <Sha value={IOS.sha256} />
+        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="download-ios-soon">
+          <h2 className="text-base font-semibold text-zinc-100">iPhone</h2>
+          <p className="mt-2 text-zinc-400">iPhone build coming soon.</p>
         </section>
 
       </div>
