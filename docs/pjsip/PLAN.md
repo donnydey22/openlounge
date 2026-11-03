@@ -124,3 +124,23 @@ CI stage 1: Linux pjsua⇄pjsua (exists, green) + pjsua⇄WASM-in-headless-Chrom
 - **Done (branch, CI only):** `plain:*` RPC wired into media-sfu `routeRpc` and the relay resolving its UDP target from the gateway `/plain-target` (ff70370); WASM H.264 RTP/SRTP + WebCodecs browser video; Playwright headless-Chrome browser cells; `ol_sfu.c` engine leg with Linux sanity (browser↔linux audio passes both ways); Android emulator instrumented harness (`SfuLegTest`) and iOS simulator XCTest harness wired into their repos' CI.
 - **Matrix (branch CI, 3:35–4:15 AM MST Nov 3):** openlounge run 41619946166 @ 29a4df0: browser↔browser audio + video all 4 pass. openlounge-android run 41623038029 @ 5a8dc51: all 4 android↔browser audio cells pass (fixed SIGABRT: `pjsua_acc_add` asserted with no SIP transport → loopback UDP transport added). openlounge-ios run 41619956158 @ 8bfc226: iPhone→browser and browser→iPhone send legs pass, but the iPhone **receive** legs fail (rxPkt ~450–550 of ≥1200 needed in 30 s). Total 10/36 real passes, 2 fail, 24 pending. The openlounge matrix report still shows phone cells pending because the iOS/Android repo results aren't merged in yet.
 - **Not done:** iOS simulator receive path (rx short), phone↔phone cells, video on phone legs, cross-repo result merge. Nothing is deployed.
+
+## 14. Video spec v2 (Donny, Nov 3 6:51 AM) — supersedes §10 where they differ
+**iOS (Swift, PJSIP + VideoToolbox)**
+- AV1 via VideoToolbox hardware on A17+ only; H.264 otherwise. Hardware encoder only (`RequireHardwareAcceleratedVideoEncoder`), no software fallback: if HW session creation fails, the call fails video setup.
+- 3 simulcast layers: 180p @150 kbps, 720p @800 kbps, 1080p @2400 kbps.
+- Preset: ultrafast-equivalent (realtime, no frame reordering, max speed) for 180p; fast for 720p/1080p.
+- Keyframe every 2 s (`MaxKeyFrameIntervalDuration = 2`).
+- AVCaptureSession opened only after CallKit `didActivate`.
+**Android (Kotlin, PJSIP + MediaCodec)**
+- MediaCodec H.264 everywhere; AV1 only on Tensor G3+ hardware encoders (`c2.google.av1` HW, `isHardwareAccelerated`).
+- 3 layers 120/600/1600 kbps; capped at 720p on mid-range chips (top layer = 720p).
+- CBR (`BITRATE_MODE_CBR`), keyframe every 1 s (`KEY_I_FRAME_INTERVAL=1`), B-frames off (`max-bframes=0`), surface input (`createInputSurface`), high-priority send (`KEY_PRIORITY=0` realtime + high-priority send thread).
+- If MediaCodec fails to configure: fail the call (no fallback).
+**Browser (WASM)**
+- getUserMedia capture only; WASM H.264 encode, 720p max, single layer; RTP over WebSocket. No Chrome WebRTC encode (WebCodecs encode in the CI peer to be replaced by WASM H.264).
+**mediasoup**
+- One router per call room. Three transports per peer: audio, video, backup.
+- 1 s layer tick driven by REMB / transport-cc; downgrade at >2% loss, upgrade after 5 clean seconds.
+- Separate audio and video SSRCs.
+**Matrix** — video cells per pairing (iphone/android/browser, both directions): pass = decoded frames ≥80% of expected at the selected layer, keyframe interval within spec, layer switch observed on injected 3% loss and recovery after 5 s clean.
