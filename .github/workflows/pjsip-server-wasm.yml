@@ -49,8 +49,8 @@ jobs:
           cd /tmp/pjproject && echo '#define PJMEDIA_HAS_SRTP 1' > pjlib/include/pj/config_site.h
           ./configure --disable-video --disable-sound --with-opus --disable-ssl >/dev/null && make dep >/dev/null 2>&1 && make -j4 >/dev/null
           cd $GITHUB_WORKSPACE/tests/pjsip-matrix/engine
-          printf 'include /tmp/pjproject/build.mak\nall:\n\tgcc -O2 -o olsfu_cli olsfu_cli.c ol_sfu.c $(PJ_CFLAGS) $(PJ_LDFLAGS) $(PJ_LDLIBS) -lm\n' > Makefile.ci && make -f Makefile.ci
-          cd $GITHUB_WORKSPACE && PHONE=linux CELL_SECONDS=20 node tests/pjsip-matrix/run-phone.mjs
+          printf 'include /tmp/pjproject/build.mak\nall:\n\tgcc -O2 -o olsfu_cli olsfu_cli.c ol_sfu.c ol_sfu_video.c $(PJ_CFLAGS) $(PJ_LDFLAGS) $(PJ_LDLIBS) -lm\n' > Makefile.ci && make -f Makefile.ci
+          cd $GITHUB_WORKSPACE && PHONE=linux MEDIA=audio,video CELL_SECONDS=20 node tests/pjsip-matrix/run-phone.mjs
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with: { pattern: "matrix-*", path: tests/pjsip-matrix/results, merge-multiple: true }

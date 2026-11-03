@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { chromium } from "playwright";
 import { startCiSfu } from "./ci-sfu.mjs";
 const run = promisify(execFile);
-const PHONE = process.env.PHONE || "linux", SECONDS = Number(process.env.CELL_SECONDS || 30);
+const PHONE = process.env.PHONE || "linux", MEDIA = (process.env.MEDIA || "audio").split(","), SECONDS = Number(process.env.CELL_SECONDS || 30);
 const HEADLESS_PACING = process.env.HEADLESS_PACING ? process.env.HEADLESS_PACING === "1" : process.platform === "darwin"; // CI test peer only
 const SLACK = Number(process.env.PHONE_SLACK || { linux: 3, android: 20, ios: 240 }[PHONE]); // phone process launch time
 const out = path.resolve("tests/pjsip-matrix/results"); fs.mkdirSync(out, { recursive: true });
@@ -17,7 +17,8 @@ const tone = path.resolve("tests/pjsip-matrix/tone.wav");
 const key = () => Buffer.from(Array.from({ length: 30 }, () => Math.floor(Math.random() * 256))).toString("base64");
 
 const drivers = {
-  linux: async (p) => { const { stdout, stderr } = await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, SECONDS], { timeout: (SECONDS + 30) * 1000, maxBuffer: 1 << 26 });
+  linux: async (p) => { const env = { ...process.env }; for (const k of ["vip", "vport", "vtx", "vrx", "vssrcs", "vpt"]) if (p[k] !== undefined) env[`OL_${k.toUpperCase()}`] = String(p[k]);
+    const { stdout, stderr } = await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, SECONDS], { env, timeout: (SECONDS + 30) * 1000, maxBuffer: 1 << 26 });
     const log = fs.existsSync("/tmp/olsfu.log") ? fs.readFileSync("/tmp/olsfu.log", "utf8").split("\n").filter((l) => /strm|srtp|udp|conf|Error|fail|pkt|RX|TX/i.test(l)).slice(0, 80).join("\n") : "";
     console.log("[olsfu_cli]", log, stderr.slice(-2000)); return JSON.parse(stdout.split("\n").find((l) => l.startsWith("{"))); },
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", "com.donnydey.openlounge.pjsip.SfuLegTest"];
@@ -37,6 +38,9 @@ function crashHead(text) {
   return keep.slice(0, 80).join("\n");
 }
 const phonePass = (r) => !r.error && r.rxPkt >= SECONDS * 50 * 0.8 && r.avgLevel > 10;
+// Video (PLAN §14 matrix): phone HW-decoded the browser's WASM H.264 at >= 15 fps, non-black, no decode errors, keyframes seen.
+const phoneVideoPass = (r) => !r.error && !r.videoError && r.decFps >= 15 && r.nonBlack > 0 && r.decErr === 0 && r.rxKey >= 2;
+const webVideoPass = (w) => w.srtpErr === 0 && w.fps >= 15 && w.nonBlack > 0 && w.decodeErr === 0;
 
 if (!fs.existsSync(tone)) await import("./run-browser.mjs?tone-only").catch(() => {});
 const stack = await startCiSfu({ httpPort: 8099 });
@@ -51,34 +55,43 @@ await new Promise((r) => phoneWs.on("open", r));
 const pwait = async (t) => { for (let i = 0; i < 300; i++) { const k = pmsgs.findIndex((m) => m.t === t); if (k >= 0) return pmsgs.splice(k, 1)[0]; await new Promise((r) => setTimeout(r, 100)); } throw new Error(`phone: no ${t}`); };
 const rpc = async (callId, method, payload = {}) => { const r = await fetch(`${stack.base}/rpc`, { method: "POST", body: JSON.stringify({ callId, userId: "phone", method, payload }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error); return j; };
 
-async function oneCall(phoneCalls) {
+async function oneCall(phoneCalls, media = "audio") {
   let callId;
-  if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: "audio", route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
-  else { await W.evaluate(() => window.__sig.send({ t: "call:new", to: "phone", kind: "audio", route: "sfu" })); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
-  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK + 600, headlessPacing: HEADLESS_PACING }); // cap only; stopped right after the phone leg ends
+  if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: media, route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
+  else { await W.evaluate((k) => window.__sig.send({ t: "call:new", to: "phone", kind: k, route: "sfu" }), media); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: media === "video", seconds: SECONDS + SLACK + 600, headlessPacing: HEADLESS_PACING }); // cap only; stopped right after the phone leg ends
   const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
+  let v = {};
+  if (media === "video") { // Video spec v2: own "video" transport, own SRTP key, 3 simulcast SSRCs distinct from audio
+    const vc = await rpc(callId, "plain:create", { purpose: "video" }); const vtx = key(); const vs = [1, 2, 3].map((i) => 7_000_000 + i * 100_000 + Math.floor(Math.random() * 90_000));
+    await rpc(callId, "plain:connect", { purpose: "video", srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: vtx } });
+    await rpc(callId, "plain:produce", { kind: "video", ssrcs: vs, payloadType: 102, platform: PHONE === "android" ? "android" : "ios" });
+    v = { vip: vc.ip, vport: vc.port, vtx, vrx: vc.srtpParameters.keyBase64, vssrcs: vs.join(","), vpt: 102 }; }
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
-  let cons = []; for (let i = 0; i < 100 && !cons.length; i++) { cons = (await rpc(callId, "plain:consume")).consumers; if (!cons.length) await new Promise((r) => setTimeout(r, 200)); }
-  if (!cons.length) throw new Error("phone: browser producer never appeared");
-  const phone = await drivers[PHONE]({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: cons[0].payloadType }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
+  const want = media === "video" ? 2 : 1;
+  let cons = []; for (let i = 0; i < 100 && cons.length < want; i++) { cons = cons.concat((await rpc(callId, "plain:consume")).consumers); if (cons.length < want) await new Promise((r) => setTimeout(r, 200)); }
+  if (cons.length < want) throw new Error("phone: browser producer never appeared");
+  const acons = cons.find((x) => x.kind === "audio");
+  const phone = await drivers[PHONE]({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: acons.payloadType, ...v }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
   if (process.env.TSTATS !== "0") console.log("[tstats]", JSON.stringify(await (await fetch(`${stack.base}/tstats`)).json()).slice(0, 6000));
   await W.evaluate(() => window.olStop()); await rpc(callId, "plain:close"); const web = await webP;
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
   const st = await (await fetch(`${stack.base}/stats`)).json(); const clean = st.sessions === 0 && st.transports === 0 && st.calls === 0;
-  const webOk = web.srtpErr === 0 && web.rms > 0.05;
-  return { phone: { ...phone, pass: phonePass(phone), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, pass: webOk, teardownClean: clean } };
+  const webOk = web.srtpErr === 0 && web.rms > 0.05 && (media === "audio" || webVideoPass(web));
+  return { phone: { ...phone, pass: phonePass(phone) && (media === "audio" || phoneVideoPass(phone)), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, pass: webOk, teardownClean: clean } };
 }
 let failed = 0;
 const runId = process.env.GITHUB_RUN_ID ?? "local"; const name = PHONE === "ios" ? "iphone" : PHONE;
-for (const phoneCalls of [true, false]) {
-  const a = await oneCall(phoneCalls), b = await oneCall(phoneCalls);
-  const cells = phoneCalls ? { [`${name}-browser-audio-fwd`]: ["web", a, b], [`${name}-browser-audio-rev`]: ["phone", a, b] } : { [`browser-${name}-audio-fwd`]: ["phone", a, b], [`browser-${name}-audio-rev`]: ["web", a, b] };
+for (const media of MEDIA) for (const phoneCalls of [true, false]) {
+  const a = await oneCall(phoneCalls, media), b = await oneCall(phoneCalls, media);
+  const cells = phoneCalls ? { [`${name}-browser-${media}-fwd`]: ["web", a, b], [`${name}-browser-${media}-rev`]: ["phone", a, b] } : { [`browser-${name}-${media}-fwd`]: ["phone", a, b], [`browser-${name}-${media}-rev`]: ["web", a, b] };
   for (const [id, [side, x, y]] of Object.entries(cells)) {
     const r = { id, run: runId, pacing: HEADLESS_PACING ? "headless pacing" : "audio clock", ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
     if (PHONE !== "linux") fs.writeFileSync(path.join(out, `${id}.json`), JSON.stringify(r, null, 1));
     if (!(r.pass && r.redialPass && r.teardownClean)) failed++;
-    console.log(id, HEADLESS_PACING ? "[headless pacing]" : "", JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, diag: r.diag }));
+    const vk = media === "video" ? { fps: r.fps, nonBlack: r.nonBlack, decodeErr: r.decodeErr, encoder: r.encoder, decFps: r.decFps, decErr: r.decErr, rxAu: r.rxAu, rxKey: r.rxKey, txAu: r.txAu, codec: r.codec, videoError: r.videoError } : {};
+    console.log(id, HEADLESS_PACING ? "[headless pacing]" : "", JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, ...vk, diag: r.diag }));
   }
 }
 await browser.close(); await stack.close(); process.exit(failed && process.env.CELLS_ENFORCE !== "0" ? 1 : 0);
