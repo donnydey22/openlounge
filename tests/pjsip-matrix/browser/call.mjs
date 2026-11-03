@@ -46,7 +46,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   if (video) {
     await rpc(callId, userId, "plain:produce", { kind: "video", ssrc: vssrc, payloadType: 102 });
     // WASM H.264 encode (no WebCodecs/WebRTC encode): VideoFrame -> I420 -> openh264 in WASM -> RTP/SRTP in WASM
-    let n = 0, cv = null, g2 = null; const maxW = headlessPacing ? 640 : 1280, maxH = headlessPacing ? 360 : 720; // macOS CI: WASM 720p encode starves under the simulator reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
+    let n = 0, cv = null, g2 = null; const maxW = headlessPacing ? 640 : 1280, maxH = headlessPacing ? 360 : 720; /* macOS CI: WASM 720p encode starves next to the simulator */ reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
     encLoop = (async () => { while (!encStop) { const { value: fr, done } = await reader.read(); if (done) break;
       try { const w = Math.min(maxW, fr.displayWidth) & ~1, h = Math.min(maxH, fr.displayHeight) & ~1;
         if (!enc) { enc = core.videoEncoder({ width: w, height: h, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 }); stats.encW = w; stats.encH = h; stats.encoder = "wasm-openh264"; }
