@@ -1,0 +1,45 @@
+name: pjsip-srtp-loopback
+on: { push: { branches: [pjsip-rebuild] }, workflow_dispatch: {} }
+jobs:
+  loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libssl-dev libopus-dev sox
+      - run: git clone -q --depth 1 -b 2.17 https://github.com/pjsip/pjproject.git
+      - name: build pjsua (SRTP on, opus)
+        working-directory: pjproject
+        run: |
+          echo '#define PJMEDIA_HAS_SRTP 1' > pjlib/include/pj/config_site.h
+          ./configure --disable-video --disable-sound --with-opus >/dev/null
+          make dep >/dev/null 2>&1; make -j4 >/dev/null
+          cp pjsip-apps/bin/pjsua-* ../pjsua
+      - name: two-endpoint SRTP call (B=callee "iPhone", A=caller "Android")
+        run: |
+          sox -n -r 16000 -c 1 toneA.wav synth 20 sine 440
+          sox -n -r 16000 -c 1 toneB.wav synth 20 sine 880
+          COMMON="--null-audio --no-tcp --use-srtp=2 --srtp-secure=0 --srtp-keying=0 --auto-play --auto-rec --log-level=5 --app-log-level=4 --duration=12"
+          (sleep 30; echo q) | ./pjsua $COMMON --local-port=5070 --auto-answer=200 --play-file=toneB.wav --rec-file=recB.wav --log-file=B.log >/dev/null 2>&1 &
+          sleep 2
+          (sleep 25; echo q) | ./pjsua $COMMON --local-port=5080 --play-file=toneA.wav --rec-file=recA.wav --log-file=A.log sip:127.0.0.1:5070 >/dev/null 2>&1
+          wait
+      - name: verify a=crypto + two-way decrypted audio
+        run: |
+          set -e
+          echo "== offer/answer crypto lines =="; grep -h "a=crypto" A.log B.log | sort | uniq -c
+          grep -q "a=crypto:1 AES_CM_128_HMAC_SHA1_80" A.log
+          ! grep -h "a=crypto" A.log B.log | grep -iq "inline:[^ ]*" || true
+          echo "== SRTP errors =="; grep -hi "srtp.*\(fail\|error\)" A.log B.log || echo none
+          for f in recA recB; do sox $f.wav -n stat 2>&1 | tee $f.stat; done
+          sox recA.wav -n stat -freq 2>/dev/null | true
+          RA=$(sox recA.wav -n stat 2>&1 | awk '/RMS     amplitude/{print $3}')
+          RB=$(sox recB.wav -n stat 2>&1 | awk '/RMS     amplitude/{print $3}')
+          echo "A heard RMS=$RA  B heard RMS=$RB"
+          python3 - "$RA" "$RB" <<'P'
+          import sys; a,b=map(float,sys.argv[1:]); assert a>0.05 and b>0.05, "one-way or silent"; print("TWO-WAY SRTP AUDIO OK")
+          P
+      - if: always()
+        run: sed -E 's/(inline:)[A-Za-z0-9+\/=]+/\1<redacted>/g' -i A.log B.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: srtp-loopback, path: "*.log\n*.stat\nrec*.wav" }
