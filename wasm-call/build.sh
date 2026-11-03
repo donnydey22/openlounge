@@ -9,7 +9,7 @@ cd "$(dirname "$0")"; mkdir -p build dist; P=$PWD/build/prefix
 ( cd build && [ -d openh264 ] || git clone -q --depth 1 -b v2.4.1 https://github.com/cisco/openh264.git )
 ( cd build/openh264 && [ -f libolh264enc.a ] || { mkdir -p o; I="-Icodec/api/wels -Icodec/common/inc -Icodec/encoder/core/inc -Icodec/encoder/plus/inc -Icodec/processing/interface"; for d in common adaptivequantization downsample scrolldetection vaacalc backgrounddetection complexityanalysis denoise imagerotate scenechangedetection; do I="$I -Icodec/processing/src/$d"; done
   { ls codec/common/src/*.cpp codec/encoder/core/src/*.cpp codec/encoder/plus/src/welsEncoderExt.cpp; find codec/processing/src -name '*.cpp' -not -path '*/x86/*' -not -path '*/arm*' -not -path '*/mips/*' -not -path '*/loongarch/*'; } \
-    | xargs -P4 -I{} sh -c 'em++ -O3 -c {} '"$I"' -o o/$(echo {} | tr / _).o'; emar rcs libolh264enc.a o/*.o; } )
+    | xargs -P4 -n1 sh -c 'em++ -O3 -c "$1" '"$I"' -o o/$(echo "$1" | tr / _).o' _; emar rcs libolh264enc.a o/*.o; } )
 em++ -O3 -c src/ol_venc.cpp -Ibuild/openh264/codec/api/wels -o build/ol_venc.o
 emcc -O3 src/olwasm.c build/ol_venc.o build/openh264/libolh264enc.a -I$P/include -I$P/include/opus $P/lib/libopus.a $P/lib/libsrtp2.a \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH=1 \
