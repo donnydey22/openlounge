@@ -22,7 +22,7 @@ const drivers = {
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", "com.donnydey.openlounge.pjsip.SfuLegTest"];
     for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", seconds: SECONDS })) args.push("-e", k, String(v));
     const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: (SECONDS + 90) * 1000 });
-    const m = /olresult=(\{.*\})/.exec(stdout); if (!m) throw new Error(`no olresult: ${stdout.slice(-800)}`); return JSON.parse(m[1]); },
+    const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = (await run("adb", ["logcat", "-d", "-t", "400"], { maxBuffer: 1 << 26 })).stdout.split("\n").filter((l) => /DEBUG|libc|AndroidRuntime|olpjsip|pjsua|backtrace|#\d\d pc/.test(l)).slice(-60).join("\n"); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
   ios: async (p) => { const f = "/tmp/olsfu-ios.json"; fs.rmSync(f, { force: true });
     const env = { ...process.env }; for (const [k, v] of Object.entries({ ...p, seconds: SECONDS, out: f })) env[`TEST_RUNNER_OL_${k.toUpperCase()}`] = String(v);
     await run("bash", ["-c", process.env.IOS_TEST_CMD], { env, timeout: (SECONDS + 300) * 1000, maxBuffer: 1 << 26 });
