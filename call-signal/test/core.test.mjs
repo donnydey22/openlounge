@@ -34,5 +34,12 @@ test("ICE: short-lived HMAC creds, order UDP -> TCP -> TLS 443, ChatSwap policy"
   assert.deepEqual(c.iceServers.slice(1).map((x) => x.urls[0]), ["turn:turn.openlounge.app:3478?transport=udp", "turn:turn.openlounge.app:3478?transport=tcp", "turns:turn.openlounge.app:443?transport=tcp"]);
   const u = c.iceServers[1].username; assert.equal(u, "1600:u1");
   assert.equal(c.iceServers[1].credential, crypto.createHmac("sha1", "s").update(u).digest("base64"));
-  assert.deepEqual(c.policy, { sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require", iceTransportPolicy: "all", continualGathering: true });
+  assert.deepEqual(c.policy, { sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require", iceTransportPolicy: "relay", continualGathering: true });
+});
+test("phone-to-phone relay-only; SFU leg not relay-forced; sfu:plain goes to gateway only", () => {
+  assert.equal(iceConfig({ secret: "s", userId: "u", mode: "sfu" }).policy.iceTransportPolicy, "all");
+  const got = []; const r = rig({ sfu: (x) => got.push(x) }); const { callId } = r.s.handle("a", { t: "call:new", to: "b", route: "sfu" });
+  assert.equal(r.out[0][1].route, "sfu"); r.s.handle("b", { t: "call:accept", callId });
+  const n = r.out.length; assert.equal(r.s.handle("a", { t: "sfu:plain", callId, sdp: "v=0" }).ok, true);
+  assert.equal(r.out.length, n, "not relayed to peer"); assert.deepEqual(got, [{ callId, userId: "a", sdp: "v=0" }]);
 });

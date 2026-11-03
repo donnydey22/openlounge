@@ -26,7 +26,8 @@ const signal = createSignal({
 
 const server = http.createServer((req, res) => {
   const uid = verify((req.headers.authorization || "").replace(/^Bearer /, ""));
-  if (req.url === "/ice" && uid) { res.setHeader("content-type", "application/json"); return res.end(JSON.stringify(iceConfig({ secret: TURN_SECRET, userId: uid }))); }
+  const u = new URL(req.url, "http://x");
+  if (u.pathname === "/ice" && uid) { res.setHeader("content-type", "application/json"); return res.end(JSON.stringify(iceConfig({ secret: TURN_SECRET, userId: uid, mode: u.searchParams.get("mode") === "sfu" ? "sfu" : "p2p" }))); }
   if (req.url === "/health") return res.end("ok");
   res.statusCode = 401; res.end();
 });

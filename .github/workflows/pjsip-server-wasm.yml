@@ -1,0 +1,37 @@
+name: pjsip-server-wasm
+on: { push: { branches: [pjsip-rebuild] }, workflow_dispatch: {} }
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cd call-signal && npm install --no-audit --no-fund && npm test
+      - run: cd ws-media-relay && npm install --no-audit --no-fund && npm test
+      - run: cd media-sfu && npm install --no-audit --no-fund && node --test test/plain.test.mjs
+  wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: mymindstorm/setup-emsdk@v14
+        with: { version: 3.1.74, actions-cache-folder: "" }
+      - run: wasm-call/build.sh
+      - run: cd ws-media-relay && npm install --no-audit --no-fund
+      - run: cd wasm-call && npm install --no-audit --no-fund && npm test
+      - name: no WebRTC in browser call path
+        run: "! grep -rEn 'RTCPeerConnection|webrtc' wasm-call/src ws-media-relay/src"
+      - uses: actions/upload-artifact@v4
+        with: { name: olwasm, path: wasm-call/dist }
+  matrix:
+    needs: [server, wasm]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --test tests/pjsip-matrix/matrix.test.mjs
+      - name: must-pass matrix report (ship gate reported, not enforced on branch CI)
+        run: node tests/pjsip-matrix/matrix.mjs

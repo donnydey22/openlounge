@@ -5,13 +5,14 @@ import crypto from "node:crypto";
 
 export const RING_TIMEOUT_MS = 30_000;
 
-export function iceConfig({ secret, userId, host = "turn.openlounge.app", ttlSec = 600, now = Date.now() }) {
+// Donny 12:37 AM: phone<->phone = relay-only ICE via coturn; phone<->SFU = direct mediasoup PlainTransport (no ICE).
+export function iceConfig({ secret, userId, host = "turn.openlounge.app", ttlSec = 600, now = Date.now(), mode = "p2p" }) {
   const username = `${Math.floor(now / 1000) + ttlSec}:${userId}`;
   const credential = crypto.createHmac("sha1", secret).update(username).digest("base64");
   return {
     ttlSec,
     // ChatSwap WebRtcBaseActivity.kt:329-345 parity: UNIFIED_PLAN, MAXBUNDLE, rtcpMux REQUIRE, ICE ALL, GATHER_CONTINUALLY
-    policy: { sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require", iceTransportPolicy: "all", continualGathering: true },
+    policy: { sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require", iceTransportPolicy: mode === "p2p" ? "relay" : "all", continualGathering: true },
     iceServers: [
       { urls: [`stun:${host}:3478`] },
       { urls: [`turn:${host}:3478?transport=udp`], username, credential },
@@ -21,7 +22,7 @@ export function iceConfig({ secret, userId, host = "turn.openlounge.app", ttlSec
   };
 }
 
-export function createSignal({ send, push = () => {}, online = () => true, setTimer = setTimeout, clearTimer = clearTimeout, ringMs = RING_TIMEOUT_MS }) {
+export function createSignal({ send, sfu = () => {}, push = () => {}, online = () => true, setTimer = setTimeout, clearTimer = clearTimeout, ringMs = RING_TIMEOUT_MS }) {
   const calls = new Map(); // callId -> {id, caller, callee, kind, state, timer}
   const byUser = new Map(); // userId -> callId
   const peer = (c, u) => (c.caller === u ? c.callee : c.caller);
@@ -42,10 +43,10 @@ export function createSignal({ send, push = () => {}, online = () => true, setTi
           if (!m.to || m.to === u) return { ok: false, error: "bad_target" };
           if (byUser.has(u)) return { ok: false, error: "busy_self" };
           if (byUser.has(m.to)) { send(u, { t: "call:busy", to: m.to }); return { ok: false, error: "busy" }; }
-          const c = { id: crypto.randomUUID(), caller: u, callee: m.to, kind: m.kind === "audio" ? "audio" : "video", state: "ringing" };
+          const c = { id: crypto.randomUUID(), caller: u, callee: m.to, kind: m.kind === "audio" ? "audio" : "video", route: m.route === "sfu" ? "sfu" : "p2p", state: "ringing" };
           calls.set(c.id, c); byUser.set(u, c.id); byUser.set(m.to, c.id);
           c.timer = setTimer(() => end(c, "timeout"), ringMs);
-          send(m.to, { t: "call:incoming", callId: c.id, from: u, kind: c.kind });
+          send(m.to, { t: "call:incoming", callId: c.id, from: u, kind: c.kind, route: c.route });
           if (!online(m.to)) push(m.to, { callId: c.id, from: u, kind: c.kind, ttlSec: Math.ceil(ringMs / 1000) });
           return { ok: true, callId: c.id };
         }
@@ -56,6 +57,9 @@ export function createSignal({ send, push = () => {}, online = () => true, setTi
         case "offer": case "answer": case "ice": { // :1788-1830 relay, peer only
           const c = own(u, m.callId); if (!c) return { ok: false };
           send(peer(c, u), { t: m.t, callId: c.id, from: u, sdp: m.sdp, candidate: m.candidate }); return { ok: true }; }
+        case "sfu:plain": { // phone -> SFU leg: forward PlainTransport request to the mediasoup gateway (no ICE)
+          const c = own(u, m.callId); if (!c) return { ok: false };
+          sfu({ callId: c.id, userId: u, sdp: m.sdp }); return { ok: true }; }
         default: return { ok: false, error: "unknown" };
       }
     },

@@ -17,6 +17,7 @@ const ROUTER_CODECS = [
   { kind: "audio", mimeType: "audio/opus", clockRate: 48_000, channels: 2, parameters: { minptime: 10, useinbandfec: 1, usedtx: 1 } },
   { kind: "video", mimeType: "video/VP8", clockRate: 90_000, parameters: {} },
   { kind: "video", mimeType: "video/H264", clockRate: 90_000, parameters: { "packetization-mode": 1, "profile-level-id": "42e01f", "level-asymmetry-allowed": 1 } },
+  { kind: "video", mimeType: "video/AV1", clockRate: 90_000, parameters: {} }, // PJSIP legs w/ hardware AV1 only (plain.mjs)
 ];
 
 const safeLog = (event, extra = {}) => console.log(JSON.stringify({ service: "openlounge-mediasoup", event, ...extra }));

@@ -1,0 +1,9 @@
+{
+  "name": "openlounge-ws-media-relay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser WASM call media over WebSocket -> UDP to mediasoup PlainTransport (Donny 12:37 AM). Calling only. Not deployed.",
+  "scripts": { "start": "node src/index.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "ws": "8.18.3" }
+}
