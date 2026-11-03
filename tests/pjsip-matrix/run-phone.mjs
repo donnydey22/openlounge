@@ -22,12 +22,19 @@ const drivers = {
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", "com.donnydey.openlounge.pjsip.SfuLegTest"];
     for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", seconds: SECONDS })) args.push("-e", k, String(v));
     const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: (SECONDS + 90) * 1000 });
-    const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = (await run("adb", ["logcat", "-d", "-t", "400"], { maxBuffer: 1 << 26 })).stdout.split("\n").filter((l) => /DEBUG|libc|AndroidRuntime|olpjsip|pjsua|backtrace|#\d\d pc/.test(l)).slice(-60).join("\n"); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
+    const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = crashHead((await run("adb", ["logcat", "-d", "-b", "all", "-t", "3000"], { maxBuffer: 1 << 26 })).stdout); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
   ios: async (p) => { const f = "/tmp/olsfu-ios.json"; fs.rmSync(f, { force: true });
     const env = { ...process.env }; for (const [k, v] of Object.entries({ ...p, seconds: SECONDS, out: f })) env[`TEST_RUNNER_OL_${k.toUpperCase()}`] = String(v);
     await run("bash", ["-c", process.env.IOS_TEST_CMD], { env, timeout: (SECONDS + 300) * 1000, maxBuffer: 1 << 26 });
     return JSON.parse(fs.readFileSync(f, "utf8")); },
 };
+/** Tombstone head: signal/abort/cause lines + the first 25 native frames (the deep ART/JUnit frames are noise). */
+function crashHead(text) {
+  const L = text.split("\n"); const i = L.findIndex((l) => /\*\*\* \*\*\* \*\*\*|Fatal signal/.test(l)); const keep = [];
+  for (const l of i < 0 ? L : L.slice(i)) { if (/#(\d+) pc/.test(l) && Number(/#(\d+) pc/.exec(l)[1]) >= 25) continue;
+    if (/Fatal signal|signal \d+|Abort message|Cause:|backtrace:|#\d+ pc|AndroidRuntime|UnsatisfiedLink|olpjsip|pjsua|ol_sfu/.test(l)) keep.push(l); }
+  return keep.slice(0, 80).join("\n");
+}
 const phonePass = (r) => !r.error && r.rxPkt >= SECONDS * 50 * 0.8 && r.avgLevel > 10;
 
 if (!fs.existsSync(tone)) await import("./run-browser.mjs?tone-only").catch(() => {});
