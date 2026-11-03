@@ -36,6 +36,10 @@ export async function startCiSfu({ httpPort = 0, relayPort = 0 } = {}) {
         r.setHeader("content-type", "application/json"); return r.end(JSON.stringify(out)); }
       if (u.pathname === "/plain-target") { if (q.headers.authorization !== `Bearer ${RELAY_SECRET}`) { r.statusCode = 401; return r.end(); }
         const t = targets.get(`${u.searchParams.get("callId")}:${u.searchParams.get("userId")}`); if (!t) { r.statusCode = 404; return r.end(); } return r.end(JSON.stringify(t)); }
+      if (u.pathname === "/tstats") { const o = {}; for (const [k, s] of sessions) { o[k] = { transports: [], producers: [], consumers: [] };
+          for (const t of s.transports.values()) o[k].transports.push({ tuple: t.tuple, stats: await t.getStats() });
+          for (const p of s.producers.values()) o[k].producers.push(await p.getStats()); for (const c of s.consumers.values()) o[k].consumers.push(await c.getStats()); }
+        return r.end(JSON.stringify(o)); }
       if (u.pathname === "/stats") { let tr = 0; for (const s of sessions.values()) tr += s.transports.size; return r.end(JSON.stringify({ sessions: sessions.size, transports: tr, calls: signal.calls.size })); }
       const f = path.join(ROOT, path.normalize(u.pathname)); if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.statusCode = 404; return r.end(); }
       r.setHeader("content-type", TYPES[path.extname(f)] ?? "application/octet-stream"); fs.createReadStream(f).pipe(r);

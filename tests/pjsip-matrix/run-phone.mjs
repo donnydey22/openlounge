@@ -52,6 +52,7 @@ async function oneCall(phoneCalls) {
   let cons = []; for (let i = 0; i < 100 && !cons.length; i++) { cons = (await rpc(callId, "plain:consume")).consumers; if (!cons.length) await new Promise((r) => setTimeout(r, 200)); }
   if (!cons.length) throw new Error("phone: browser producer never appeared");
   const phone = await drivers[PHONE]({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: cons[0].payloadType }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
+  if (process.env.TSTATS !== "0") console.log("[tstats]", JSON.stringify(await (await fetch(`${stack.base}/tstats`)).json()).slice(0, 6000));
   await rpc(callId, "plain:close"); const web = await webP;
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
   const st = await (await fetch(`${stack.base}/stats`)).json(); const clean = st.sessions === 0 && st.transports === 0 && st.calls === 0;
