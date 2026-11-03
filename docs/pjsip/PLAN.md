@@ -32,3 +32,24 @@ Done only after M5 passes and with Donny's direct confirmation: remove legacy ca
 ## 7. Decisions (relayed 11:46 PM)
 - pjproject 2.17 kept. Opus to be added to iOS/Android CI builds (libopus 1.5.x cross-built, `--with-opus`) — next step.
 - Simulcast = 1:1 layered send (2 H.264 layers), receiver picks layer via `call.layer` WS message; media relayed by coturn. No SFU.
+
+## 8. mediasoup SFU for simulcast (Donny t4451u, 11:54 PM) — replaces §7 simulcast note
+- PJSIP is still the media engine on the phones. mediasoup sits between PJSIP endpoints: **PlainTransport** per endpoint (`comedia: true`, `rtcpMux: true`, `enableSrtp: true`, `srtpCryptoSuite: 'AES_CM_128_HMAC_SHA1_80'`). The phone sends 2 H.264 simulcast layers (distinct SSRCs); mediasoup forwards the right layer per subscriber. Opus audio is forwarded as-is.
+- SRTP compatibility: mediasoup PlainTransport supports AES_CM_128_HMAC_SHA1_80/32 and AEAD_AES_128/256_GCM. **It does not support AES_256_CM_HMAC_SHA1_80, which pjmedia offers first.** The phones must therefore restrict `srtp_opt.crypto` to AES_CM_128_HMAC_SHA1_80. The server maps `a=crypto` ⇄ `transport.connect({srtpParameters})` / `transport.srtpParameters`.
+- SRTP is hop-by-hop phone⇄SFU, not end-to-end: mediasoup decrypts in order to forward. **Decision for Donny.**
+- **Spec conflict:** relay-only ICE vs PlainTransport. A PlainTransport has no ICE, so it is a plain UDP 5-tuple with comedia. The options are (a) phones reach mediasoup via a coturn TURN allocation (PJSIP ICE with relay-only candidates, mediasoup as the peer address), or (b) phones send directly to mediasoup's public UDP port. (a) keeps relay-only but doubles the hop. **Decision for Donny.**
+- Live droplet mediasoup is unchanged. All of this is branch-only (server changes go on openlounge `pjsip-rebuild`).
+- LiveKit on Railway: never touched (t4450u).
+
+## 9. WASM Browser Path (PERMANENT — Donny t4453u, 11:57 PM)
+A separate WASM VoIP stack, **not** PJSIP compiled to WASM:
+1. libopus compiled to WASM. Encode and decode happen entirely in WASM.
+2. A small custom RTP + SRTP layer in WASM covering packetization, sequencing, and SRTP with SDES keys taken from the SDP `a=crypto` line.
+3. Browser WebRTC is used ONLY for getUserMedia mic capture. No WebRTC transport, networking, or audio processing.
+4. The phone is the signaling anchor over the existing TLS WebSockets. Media flows browser→phone or browser→SFU directly.
+5. It is a parallel implementation to the phone PJSIP stack, with the same Opus, SRTP and signaling protocol. It is a separate codebase because PJSIP's sockets, threading and audio devices don't compile cleanly to WASM.
+
+**Engineering note: transport.** Browsers cannot open raw UDP sockets, so SRTP packets from the browser need a carrier. Candidates:
+- (A) a binary WebSocket (wss) to a small ws↔UDP relay on the droplet or in front of the SFU. Works in every browser, but TCP head-of-line blocking adds latency under loss.
+- (B) WebTransport (HTTP/3 datagrams) to the droplet/SFU. Unreliable datagrams give UDP-like behavior, but Safari support is recent.
+In both cases the SRTP stays encrypted end-to-end through the relay. **This is a decision for Donny.** WebRTC is not substituted.
