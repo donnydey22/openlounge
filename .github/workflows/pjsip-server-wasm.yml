@@ -28,10 +28,22 @@ jobs:
   matrix:
     needs: [server, wasm]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with: { name: olwasm, path: wasm-call/dist }
       - run: node --test tests/pjsip-matrix/matrix.test.mjs
+      - run: for d in media-sfu ws-media-relay tests/pjsip-matrix; do (cd $d && npm install --no-audit --no-fund); done
+      - name: browser cells (headless Google Chrome, real mediasoup PlainTransport, WS relay, 30 s + redial)
+        run: google-chrome --version && CELL_SECONDS=30 node tests/pjsip-matrix/run-browser.mjs
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { pattern: "matrix-*", path: tests/pjsip-matrix/results, merge-multiple: true }
       - name: must-pass matrix report (ship gate reported, not enforced on branch CI)
         run: node tests/pjsip-matrix/matrix.mjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: matrix-results, path: tests/pjsip-matrix/results }

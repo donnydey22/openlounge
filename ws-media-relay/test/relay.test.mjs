@@ -20,3 +20,14 @@ test("WS binary frames <-> UDP SFU leg, unchanged bytes, auth enforced", async (
   assert.deepEqual(Buffer.from(got), down);
   ws.close(); sfu.close(); wss.close();
 });
+import http from "node:http";
+import { gatewayTargetResolver } from "../src/relay.mjs";
+test("gateway target resolver: bearer auth, retries until SFU tuple published", async () => {
+  let n = 0; const srv = http.createServer((q, r) => { if (q.headers.authorization !== "Bearer k") { r.statusCode = 401; return r.end(); }
+    if (++n < 3) { r.statusCode = 404; return r.end(); } r.end(JSON.stringify({ ip: "10.0.0.5", port: 40001 })); });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const res = gatewayTargetResolver({ url: `http://127.0.0.1:${srv.address().port}/plain-target`, secret: "k", waitMs: 10 });
+  assert.deepEqual(await res({ callId: "c", userId: "u" }), { host: "10.0.0.5", port: 40001 });
+  assert.equal(await gatewayTargetResolver({ url: `http://127.0.0.1:${srv.address().port}/x`, secret: "bad", tries: 2, waitMs: 5 })({ callId: "c", userId: "u" }), null);
+  srv.close();
+});

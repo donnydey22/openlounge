@@ -32,3 +32,17 @@ export function createRelay({ server, port, verify, resolveTarget, log = () => {
   });
   return wss;
 }
+
+/** Target lookup from the gateway: GET <url>?callId&userId (bearer RELAY_SECRET) -> {ip,port} published by the SFU's
+ *  plain:create (ms:gateway:plainTarget). Short retry because the browser may open the WS just before plain:create lands. */
+export function gatewayTargetResolver({ url, secret, tries = 10, waitMs = 200, fetchImpl = fetch }) {
+  return async ({ callId, userId }) => {
+    for (let i = 0; i < tries; i++) {
+      const u = new URL(url); u.searchParams.set("callId", callId ?? ""); u.searchParams.set("userId", userId);
+      const r = await fetchImpl(u, { headers: { authorization: `Bearer ${secret}` } }).catch(() => null);
+      if (r?.ok) { const j = await r.json(); if (j?.ip && Number.isInteger(j.port)) return { host: j.ip, port: j.port }; }
+      await new Promise((res) => setTimeout(res, waitMs));
+    }
+    return null;
+  };
+}

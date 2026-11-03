@@ -21,6 +21,15 @@ export class MediaCore {
   /** SRTP packet (or null for loss -> PLC) -> Int16Array(960) */
   recv(pkt) { const M = this.M; if (pkt) M.HEAPU8.set(pkt, this.buf); const n = M._ol_recv(this.c, this.buf, pkt ? pkt.length : 0, this.pcm, pkt ? 0 : 1);
     if (n < 0) throw new Error(`recv ${n}`); return M.HEAP16.slice(this.pcm >> 1, (this.pcm >> 1) + n); }
+  /** Video on the same SRTP leg (H.264 RTP in WASM; WebCodecs does encode/decode). */
+  openVideo({ ssrc, pt = 102 }) { const M = this.M; M._ol_video_init(this.c, ssrc >>> 0, pt); this.vout = M._malloc(64 * 1500); this.vlens = M._malloc(64 * 4); this.vframe = M._malloc(1 << 20); this.vkey = M._malloc(4); this.vin = M._malloc(1 << 20); return this; }
+  /** Annex-B access unit + 90 kHz ts -> SRTP packets */
+  videoSend(au, ts90k) { const M = this.M; M.HEAPU8.set(au, this.vin); const n = M._ol_video_send(this.c, this.vin, au.length, ts90k >>> 0, this.vout, this.vlens, 64);
+    if (n < 0) throw new Error(`vsend ${n}`); const out = []; for (let i = 0; i < n; i++) { const l = M.HEAP32[(this.vlens >> 2) + i]; out.push(M.HEAPU8.slice(this.vout + i * 1500, this.vout + i * 1500 + l)); } return out; }
+  /** SRTP video packet -> {frame, key} when an access unit completes, null while assembling, {lost:true} on a gap */
+  videoRecv(pkt) { const M = this.M; M.HEAPU8.set(pkt, this.buf); const n = M._ol_video_recv(this.c, this.buf, pkt.length, this.vframe, this.vkey);
+    if (n === -102) return { lost: true }; if (n < 0) throw new Error(`vrecv ${n}`); if (n === 0) return null;
+    return { frame: M.HEAPU8.slice(this.vframe, this.vframe + n), key: M.HEAP32[this.vkey >> 2] === 1 }; }
   close() { if (this.c) this.M._ol_call_free(this.c); this.c = 0; }
 }
 /** Wire a live call: mic (capture only) -> worklet -> core -> WS relay -> core -> worklet -> speaker. */

@@ -27,3 +27,63 @@ export function simulcastProducerParams({ codec = "h264", payloadType = 102, ssr
 }
 /** Top-layer cap at time t after call start (QuickHD burst, then steady). */
 export function topLayerCap(msSinceStart) { return msSinceStart < QUICKHD.durationMs ? QUICKHD.topLayerBitrate : SIMULCAST[2].maxBitrate; }
+
+/**
+ * PJSIP/WASM legs over PlainTransport, dispatched from routeRpc for methods "plain:*". One plain transport per
+ * session (bundle: audio+video share the rtcp-mux tuple). `emitTarget` publishes the {ip,port} tuple to the gateway
+ * so ws-media-relay can resolve where to send a browser's packets.
+ *   plain:create  -> { transportId, ip, port, srtpParameters }  (srtpParameters = SFU's tx key = client's rx key)
+ *   plain:connect { srtpParameters:{cryptoSuite,keyBase64} }   (client's tx key, from its a=crypto)
+ *   plain:produce { kind, ssrc | ssrcs[3], codec?, payloadType? } -> { id }
+ *   plain:consume -> { consumers:[{id,producerId,kind,ssrc,payloadType}] }  (resumed immediately)
+ */
+export async function handlePlainRpc({ method, payload = {}, s, router, peers, announcedAddress, bindIp = "0.0.0.0", emitTarget = () => {}, notify = () => {} }) {
+  if (method === "plain:create") {
+    s.transports.get("plain")?.close();
+    const t = await router.createPlainTransport({ ...plainTransportOptions({ listenIp: bindIp, announcedAddress }), appData: { callId: s.callId, userId: s.userId } });
+    s.transports.set("plain", t);
+    const ip = announcedAddress || t.tuple.localAddress || t.tuple.localIp, port = t.tuple.localPort;
+    emitTarget({ callId: s.callId, userId: s.userId, ip, port });
+    return { transportId: t.id, ip, port, srtpParameters: t.srtpParameters };
+  }
+  const t = s.transports.get("plain");
+  if (!t) throw new Error("No plain transport");
+  if (method === "plain:connect") {
+    const sp = payload.srtpParameters;
+    if (!sp || sp.cryptoSuite !== PLAIN_SRTP_SUITE || typeof sp.keyBase64 !== "string") throw new Error("Invalid SRTP parameters");
+    await t.connect({ srtpParameters: sp });
+    return {};
+  }
+  if (method === "plain:produce") {
+    let rtpParameters;
+    if (payload.kind === "audio") {
+      if (!Number.isInteger(payload.ssrc)) throw new Error("ssrc");
+      rtpParameters = { codecs: [{ mimeType: "audio/opus", payloadType: payload.payloadType ?? 111, clockRate: 48000, channels: 2, parameters: { useinbandfec: 1 } }], encodings: [{ ssrc: payload.ssrc }] };
+    } else if (payload.kind === "video") {
+      const base = { codec: payload.codec ?? "h264", payloadType: payload.payloadType ?? 102 };
+      if (Array.isArray(payload.ssrcs)) rtpParameters = simulcastProducerParams({ ...base, ssrcs: payload.ssrcs }); // phones: 3-layer simulcast
+      else if (Number.isInteger(payload.ssrc)) rtpParameters = { ...simulcastProducerParams({ ...base, ssrcs: [1, 2, 3] }), encodings: [{ ssrc: payload.ssrc }] }; // browser: 1 layer
+      else throw new Error("ssrc");
+    } else throw new Error("Unsupported media kind");
+    s.producers.get(payload.kind)?.close();
+    const p = await t.produce({ kind: payload.kind, rtpParameters, appData: { callId: s.callId, userId: s.userId, kind: payload.kind } });
+    s.producers.set(payload.kind, p);
+    notify("ms:consumer:available");
+    return { id: p.id };
+  }
+  if (method === "plain:consume") {
+    const consumers = [];
+    for (const peer of peers) {
+      if (peer === s || peer.callId !== s.callId) continue;
+      for (const producer of peer.producers.values()) {
+        if (s.consumers.has(producer.id) || !router.canConsume({ producerId: producer.id, rtpCapabilities: router.rtpCapabilities })) continue;
+        const c = await t.consume({ producerId: producer.id, rtpCapabilities: router.rtpCapabilities, paused: false, appData: { callId: s.callId, userId: s.userId } });
+        c.on("producerclose", () => { s.consumers.delete(producer.id); c.close(); });
+        s.consumers.set(producer.id, c);
+        consumers.push({ id: c.id, producerId: producer.id, kind: c.kind, ssrc: c.rtpParameters.encodings[0].ssrc, payloadType: c.rtpParameters.codecs[0].payloadType, mimeType: c.rtpParameters.codecs[0].mimeType });
+      }
+    }
+    return { consumers };
+  }
+  throw new Error("Unsupported plain action");
+}

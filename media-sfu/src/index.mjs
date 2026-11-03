@@ -4,6 +4,7 @@ import { createWorker } from "mediasoup";
 import WebSocket from "ws";
 import { readConfig } from "./config.mjs";
 import { LAYER_POLICY, nextLayer } from "./layers.mjs";
+import { handlePlainRpc } from "./plain.mjs";
 
 const cfg = readConfig();
 const MAX_FRAME = 256_000;
@@ -172,6 +173,10 @@ async function routeRpc(input) {
   if (method === "leave") {
     closeSession(s, "browser_left");
     return {};
+  }
+  if (method.startsWith("plain:")) { // PJSIP phones / WASM browsers (PLAN §13): PlainTransport, SRTP SDES, no ICE
+    return handlePlainRpc({ method, payload, s, router, peers: sessions.values(), announcedAddress: cfg.announcedAddress, bindIp: cfg.bindIp,
+      emitTarget: (t) => emitGateway("ms:gateway:plainTarget", t), notify: (ev) => notifyPeers(s, ev) });
   }
   if (method === "transport:create") {
     const direction = payload.direction;

@@ -31,3 +31,14 @@ test("browser leg over WS relay to a UDP SFU tuple and back", async () => {
   assert.ok(heard.length >= 45, `got ${heard.length}`); assert.ok(rms(heard.at(-1)) > 0.05);
   ws.close(); sfu.close(); wss.close();
 });
+test("H.264 RTP in WASM: FU-A packetize -> SRTP -> depacketize, IDR flagged, wrong key rejected", async () => {
+  const k = newKeyB64(); const a = (await MediaCore.load(factory)).open({ txKeyB64: k, rxKeyB64: k, ssrc: 9 }).openVideo({ ssrc: 10 });
+  const b = (await MediaCore.load(factory)).open({ txKeyB64: k, rxKeyB64: k, ssrc: 11 }).openVideo({ ssrc: 12 });
+  const nal = (t, n) => [0, 0, 0, 1, t, ...Array.from({ length: n }, (_, i) => (i * 13 + 1) & 0xff | 1)];
+  const au = Uint8Array.from([...nal(0x67, 10), ...nal(0x68, 4), ...nal(0x65, 9000)]);
+  const pkts = a.videoSend(au, 90000); assert.ok(pkts.length >= 8);
+  let r; for (const p of pkts) r = b.videoRecv(p) ?? r;
+  assert.equal(r.key, true); assert.deepEqual(r.frame, au);
+  const c = (await MediaCore.load(factory)).open({ txKeyB64: k, rxKeyB64: newKeyB64(), ssrc: 13 }).openVideo({ ssrc: 14 });
+  assert.throws(() => c.videoRecv(a.videoSend(au, 93000)[0]), /vrecv -100/);
+});
