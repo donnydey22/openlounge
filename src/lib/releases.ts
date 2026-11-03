@@ -18,7 +18,8 @@ export const ANDROID_FALLBACK = {
 /** Every Android build on /download must be signed by this release certificate (SHA-256 of the signer cert), same as 0.3.19. */
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-02: b88 removed from /download (no iOS fallback). Asset kept on downloads-v1. Not linked anywhere. */
+export const IOS_ARCHIVED_B88 = {
   version: "0.3.19",
   build: 88,
   bundleId: "com.donnydey.openlounge",
@@ -26,8 +27,8 @@ export const IOS_RELEASE = {
   size: "14.0 MB",
   sha256: "397ba9f02b5ae11f236a00bcf1b7ffc72c815cac8b73b440b88d6db78a3ae596",
 } as const;
-/** Previous iOS build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
-export const IOS_FALLBACK = {
+/** ARCHIVED: b85, asset kept on downloads-v1, not linked. */
+export const IOS_ARCHIVED_B85 = {
   version: "0.3.19",
   build: 85,
   bundleId: "com.donnydey.openlounge",
@@ -35,6 +36,9 @@ export const IOS_FALLBACK = {
   size: "14.0 MB",
   sha256: "9dc2c109f105ed3a4cc691bbcba609f4b791f6fa14231a380f3eddba905bd2a7",
 } as const;
+
+/** No installable iOS build is offered until the PJSIP rebuild passes. Restore = set this back to IOS_ARCHIVED_B88 and restore the plist route. */
+export const IOS_RELEASE: null = null;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";
