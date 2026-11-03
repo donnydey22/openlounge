@@ -57,10 +57,10 @@ const pwait = async (t) => { for (let i = 0; i < 300; i++) { const k = pmsgs.fin
 const rpc = async (callId, method, payload = {}) => { const r = await fetch(`${stack.base}/rpc`, { method: "POST", body: JSON.stringify({ callId, userId: "phone", method, payload }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error); return j; };
 
 async function oneCall(phoneCalls, media = "audio") {
-  let callId;
-  if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: media, route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
-  else { await W.evaluate((k) => window.__sig.send({ t: "call:new", to: "phone", kind: k, route: "sfu" }), media); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
-  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: media === "video", seconds: SECONDS + SLACK + 600, headlessPacing: HEADLESS_PACING }); // cap only; stopped right after the phone leg ends
+  let callId; const tDial = Date.now(); let tRing, tAnswer;
+  if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: media, route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; tRing = Date.now(); tAnswer = Date.now(); await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
+  else { await W.evaluate((k) => window.__sig.send({ t: "call:new", to: "phone", kind: k, route: "sfu" }), media); callId = (await pwait("call:incoming")).callId; tRing = Date.now(); tAnswer = Date.now(); phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: media === "video", seconds: SECONDS + SLACK + 600, headlessPacing: HEADLESS_PACING, answerAt: tAnswer }); // cap only; stopped right after the phone leg ends
   const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
   let v = {};
@@ -80,7 +80,8 @@ async function oneCall(phoneCalls, media = "audio") {
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
   const st = await (await fetch(`${stack.base}/stats`)).json(); const clean = st.sessions === 0 && st.transports === 0 && st.calls === 0;
   const webOk = web.srtpErr === 0 && web.rms > 0.05 && (media === "audio" || webVideoPass(web));
-  return { phone: { ...phone, pass: phonePass(phone) && (media === "audio" || phoneVideoPass(phone)), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, pass: webOk, teardownClean: clean } };
+  const timing = { dialToRingMs: tRing - tDial, answerToFirstAudioMs: web.firstAudioAt ? web.firstAudioAt - tAnswer : null };
+  return { phone: { ...phone, ...timing, pass: phonePass(phone) && (media === "audio" || phoneVideoPass(phone)), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, ...timing, pass: webOk, teardownClean: clean } };
 }
 let failed = 0;
 const runId = process.env.GITHUB_RUN_ID ?? "local"; const name = PHONE === "ios" ? "iphone" : PHONE;
