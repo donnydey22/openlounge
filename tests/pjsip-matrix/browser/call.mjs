@@ -47,6 +47,15 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
     await rpc(callId, userId, "plain:produce", { kind: "video", ssrc: vssrc, payloadType: 102 });
     // WASM H.264 encode (no WebCodecs/WebRTC encode): VideoFrame -> I420 -> openh264 in WASM -> RTP/SRTP in WASM
     let n = 0, cv = null, g2 = null; const maxW = headlessPacing ? 640 : 1280, maxH = headlessPacing ? 360 : 720; /* macOS CI: WASM 720p encode starves next to the simulator */ reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
+    if (headlessPacing) { // macOS CI: the fake camera delivers ~3 fps next to the simulator, so pace a synthetic 30 fps I420 source (same encoder/RTP path)
+      reader.cancel().catch(() => {}); reader = null; const w = maxW, h = maxH; enc = core.videoEncoder({ width: w, height: h, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 }); stats.encW = w; stats.encH = h; stats.encoder = "wasm-openh264"; stats.synthSource = true;
+      const i420 = new Uint8Array(w * h * 3 / 2), vt0 = performance.now();
+      encLoop = (async () => { while (!encStop) { const ts = performance.now() - vt0;
+        for (let row = 0; row < h; row++) i420.fill(40 + ((row >> 3) * 23 + n * 3) % 180, row * w, (row + 1) * w); i420.fill(128, w * h);
+        try { const r = enc.encode(i420, Math.round(ts), n++ === 0 || keyReq); if (keyReq) { keyReq = false; stats.keyReqServed = (stats.keyReqServed || 0) + 1; }
+          if (r) { stats.encFrames = (stats.encFrames || 0) + 1; if (r.key) stats.encKeys = (stats.encKeys || 0) + 1; for (const p of core.videoSend(r.au, Math.round(ts * 90))) send(p); } } catch (e) { stats.encErr = String(e.message || e); }
+        await sleep(Math.max(0, vt0 + n * 1000 / 30 - performance.now())); } enc?.close(); enc = null; })();
+    } else
     encLoop = (async () => { while (!encStop) { const { value: fr, done } = await reader.read(); if (done) break;
       try { const w = Math.min(maxW, fr.displayWidth) & ~1, h = Math.min(maxH, fr.displayHeight) & ~1;
         if (!enc) { enc = core.videoEncoder({ width: w, height: h, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 }); stats.encW = w; stats.encH = h; stats.encoder = "wasm-openh264"; }
