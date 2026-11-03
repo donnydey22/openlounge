@@ -32,7 +32,7 @@ EMSCRIPTEN_KEEPALIVE int ol_init(void) { return srtp_init(); }
 EMSCRIPTEN_KEEPALIVE ol_call *ol_call_new(const uint8_t *txKey, const uint8_t *rxKey, uint32_t ssrc, int pt) {
   int e; ol_call *c = calloc(1, sizeof *c);
   c->enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &e); if (e) return 0;
-  opus_encoder_ctl(c->enc, OPUS_SET_INBAND_FEC(1)); opus_encoder_ctl(c->enc, OPUS_SET_PACKET_LOSS_PERC(10)); opus_encoder_ctl(c->enc, OPUS_SET_BITRATE(32000));
+  opus_encoder_ctl(c->enc, OPUS_SET_INBAND_FEC(1)); opus_encoder_ctl(c->enc, OPUS_SET_PACKET_LOSS_PERC(20)); opus_encoder_ctl(c->enc, OPUS_SET_BITRATE(32000));
   c->dec = opus_decoder_create(48000, 1, &e); if (e) return 0;
   if (mk_srtp(&c->tx, txKey, 0) || mk_srtp(&c->rx, rxKey, 1)) return 0;
   c->ssrc = ssrc; c->pt = (uint8_t)pt; c->seq = (uint16_t)(ssrc & 0xffff); return c;

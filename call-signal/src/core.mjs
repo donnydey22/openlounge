@@ -47,7 +47,7 @@ export function createSignal({ send, sfu = () => {}, push = () => {}, online = (
           calls.set(c.id, c); byUser.set(u, c.id); byUser.set(m.to, c.id);
           c.timer = setTimer(() => end(c, "timeout"), ringMs);
           send(m.to, { t: "call:incoming", callId: c.id, from: u, kind: c.kind, route: c.route });
-          if (!online(m.to)) push(m.to, { callId: c.id, from: u, kind: c.kind, ttlSec: Math.ceil(ringMs / 1000) });
+          if (!online(m.to)) { c.pushAt = Date.now(); push(m.to, { callId: c.id, from: u, kind: c.kind, ttlSec: Math.ceil(ringMs / 1000) }); }
           return { ok: true, callId: c.id };
         }
         case "call:accept": { const c = own(u, m.callId); if (!c || c.callee !== u || c.state !== "ringing") return { ok: false };
@@ -63,6 +63,11 @@ export function createSignal({ send, sfu = () => {}, push = () => {}, online = (
         default: return { ok: false, error: "unknown" };
       }
     },
+    // callee woken by the push opens its socket: re-deliver the ring and log push→connect latency ("delivered")
+    connected(u) { const c = calls.get(byUser.get(u)); if (!c || c.callee !== u || c.state !== "ringing") return null;
+      send(u, { t: "call:incoming", callId: c.id, from: c.caller, kind: c.kind, route: c.route });
+      if (c.pushAt && !c.deliveredMs) { c.deliveredMs = Date.now() - c.pushAt; console.log(`[push] delivered call=${c.id} to=${u} pushToConnectMs=${c.deliveredMs}`); }
+      return c.id; },
     disconnected(u) { const id = byUser.get(u); if (id) end(calls.get(id), "disconnected", u); },
   };
 }

@@ -55,7 +55,7 @@ export function isIosNativeVideoWrapper(userAgent: unknown): boolean {
 }
 
 /** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */
-function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, declineToken: string) {
+export function voipPayload(call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, declineToken: string) {
   return {
     type: "call_incoming",
     callId: call.id,

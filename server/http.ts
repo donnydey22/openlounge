@@ -1,6 +1,7 @@
 // HTTP API (everything under /api/* and /auth/*), shared by server/index.ts and the in-process tests.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleCallsHttp, handleTokenDecline, isCallsHttpPath } from "./calls/api";
+import { SIGNAL_PUSH_PATH, handleSignalPush } from "./calls/signalPush";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
 import { handleGroupsApi } from "./groups";
@@ -213,6 +214,8 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
     const m = r.message;
     return json(res, 200, { ok: true, unchanged: r.unchanged, message: { id: m.id, text: m.text, editedAt: m.editedAt ?? null, editCount: m.editCount ?? 0 } });
   }
+
+  if (url === SIGNAL_PUSH_PATH) return handleSignalPush(req, res, json, readJson); // call-signal → APNs VoIP + FCM (shared secret)
 
   // ---- native call ring UIs: decline / status / PushKit token (server/calls/api.ts) ----
   if (isCallsHttpPath(url)) {

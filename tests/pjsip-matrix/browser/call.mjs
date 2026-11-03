@@ -78,7 +78,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
     try {
       if (video && pt === vpt) { if (!stats.firstVideoPktAt) stats.firstVideoPktAt = performance.now(); const r = core.videoRecv(p); if (!r) return; if (r.lost) { haveKey = false; return; } if (r.key) { haveKey = true; stats.videoKey++; } if (!haveKey) return;
         dec.decode(new EncodedVideoChunk({ type: r.key ? "key" : "delta", timestamp: (t0 += 33_333), data: r.frame })); }
-      else if (pt === apt) { if (!stats.firstAudioAt) stats.firstAudioAt = Date.now(); const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; stats.audioRms += Math.sqrt(s / pcm.length) / 32768; stats.rmsN++; }
+      else if (pt === apt) { if (!stats.firstAudioAt) stats.firstAudioAt = Date.now(); { const sec = Math.floor(Date.now() / 1000); stats.audioSec = stats.audioSec || {}; stats.audioSec[sec] = (stats.audioSec[sec] || 0) + 1; } const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; stats.audioRms += Math.sqrt(s / pcm.length) / 32768; stats.rmsN++; }
     } catch { stats.srtpErr++; } };
   const start = performance.now(), until = start + seconds * 1000; // runs until olStop() or the cap (phone launch time varies)
   while (!window.__olStop && performance.now() < until) await sleep(100); const end = performance.now();

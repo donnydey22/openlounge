@@ -69,7 +69,7 @@ export async function handlePlainRpc({ method, payload = {}, s, router, peers, a
     let rtpParameters;
     if (payload.kind === "audio") {
       if (!Number.isInteger(payload.ssrc)) throw new Error("ssrc");
-      rtpParameters = { codecs: [{ mimeType: "audio/opus", payloadType: payload.payloadType ?? 111, clockRate: 48000, channels: 2, parameters: { useinbandfec: 1 } }], encodings: [{ ssrc: payload.ssrc }] };
+      rtpParameters = { codecs: [{ mimeType: "audio/opus", payloadType: payload.payloadType ?? 111, clockRate: 48000, channels: 2, parameters: { useinbandfec: 1, minptime: 10, stereo: 0, maxplaybackrate: 48000 } }], encodings: [{ ssrc: payload.ssrc }] };
     } else if (payload.kind === "video") {
       const base = { codec: payload.codec ?? "h264", payloadType: payload.payloadType ?? 102 };
       if (Array.isArray(payload.ssrcs)) rtpParameters = simulcastProducerParams({ ...base, ssrcs: payload.ssrcs, platform: payload.platform }); // phones: 3-layer simulcast

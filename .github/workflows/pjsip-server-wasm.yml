@@ -40,7 +40,7 @@ jobs:
       - run: node --test tests/pjsip-matrix/matrix.test.mjs
       - run: for d in media-sfu ws-media-relay tests/pjsip-matrix; do (cd $d && npm install --no-audit --no-fund); done
       - name: browser cells (headless Google Chrome, real mediasoup PlainTransport, WS relay, 30 s + redial)
-        run: google-chrome --version && CELL_SECONDS=30 node tests/pjsip-matrix/run-browser.mjs
+        run: google-chrome --version && CELL_SECONDS=30 LOSS_CELL=1 node tests/pjsip-matrix/run-browser.mjs
       - name: phone engine SFU leg on Linux (ol_sfu.c, same source as iOS/Android) <-> headless browser, sanity only
         continue-on-error: true
         run: |

@@ -17,11 +17,25 @@ export function verify(token, now = Date.now()) {
   return want.length === sig.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(sig)) ? uid : null;
 }
 
+// Callee offline → app server rings it: APNs VoIP (iOS CallKit) + FCM high-priority (Android). Logs sent/delivered.
+const PUSH_URL = process.env.CALL_SIGNAL_PUSH_URL; // e.g. https://<app>/api/internal/call-signal-push
+const PUSH_SECRET = process.env.CALL_SIGNAL_PUSH_SECRET;
+export async function signalPush(to, p, f = fetch) {
+  if (!PUSH_URL || !PUSH_SECRET) return console.log(`[push] disabled (no CALL_SIGNAL_PUSH_URL/SECRET) call ${p.callId}`);
+  const t0 = Date.now();
+  try {
+    const r = await f(PUSH_URL, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${PUSH_SECRET}` },
+      body: JSON.stringify({ to, ...p }), signal: AbortSignal.timeout(5000) });
+    const j = await r.json().catch(() => ({}));
+    console.log(`[push] sent call=${p.callId} to=${to} http=${r.status} voipSent=${j.voipSent ?? "-"} fcm=${j.fcm ?? "-"} ms=${Date.now() - t0}`);
+  } catch (e) { console.log(`[push] failed call=${p.callId} to=${to} ${String(e?.name || e)} ms=${Date.now() - t0}`); }
+}
+
 const sockets = new Map();
 const signal = createSignal({
   send: (u, msg) => { for (const ws of sockets.get(u) ?? []) ws.send(JSON.stringify(msg)); },
   online: (u) => (sockets.get(u)?.size ?? 0) > 0,
-  push: (u, p) => console.log(`[push] TODO wire FCM/VoIP for ${u} call ${p.callId}`),
+  push: (u, p) => signalPush(u, p),
 });
 
 // SFU PlainTransport tuples (ms:gateway:plainTarget), recorded by the gateway, read by ws-media-relay.
@@ -49,6 +63,7 @@ wss.on("connection", (ws, req) => {
   if (!uid) return ws.close(4001, "auth");
   if (!sockets.has(uid)) sockets.set(uid, new Set());
   sockets.get(uid).add(ws);
+  signal.connected(uid);
   ws.on("message", (raw) => { let m; try { m = JSON.parse(raw); } catch { return; } const r = signal.handle(uid, m); if (m.ack) ws.send(JSON.stringify({ t: "ack", ack: m.ack, ...r })); });
   ws.on("close", () => { for (const k of plainTargets.keys()) if (k.endsWith(`:${uid}`)) plainTargets.delete(k); const s = sockets.get(uid); s?.delete(ws); if (!s?.size) { sockets.delete(uid); signal.disconnected(uid); } });
 });

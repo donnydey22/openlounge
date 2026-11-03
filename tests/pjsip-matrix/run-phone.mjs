@@ -65,10 +65,10 @@ async function oneCall(phoneCalls, media = "audio") {
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
   let v = {};
   if (media === "video") { // Video spec v2: own "video" transport, own SRTP key, 3 simulcast SSRCs distinct from audio
-    const vc = await rpc(callId, "plain:create", { purpose: "video" }); const vtx = key(); const vs = [1, 2, 3].map((i) => 7_000_000 + i * 100_000 + Math.floor(Math.random() * 90_000));
+    const vc = await rpc(callId, "plain:create", { purpose: "video" }); const vtx = key(); /* ios CI: the simulator sends only layers 0-1 (180p+360p, simlayers) */ const vs = [1, 2, 3].map((i) => 7_000_000 + i * 100_000 + Math.floor(Math.random() * 90_000));
     await rpc(callId, "plain:connect", { purpose: "video", srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: vtx } });
     await rpc(callId, "plain:produce", { kind: "video", ssrcs: vs, payloadType: 102, platform: PHONE === "android" ? "android" : "ios" });
-    v = { vip: vc.ip, vport: vc.port, vtx, vrx: vc.srtpParameters.keyBase64, vssrcs: vs.join(","), vpt: 102 }; }
+    v = { vip: vc.ip, vport: vc.port, vtx, vrx: vc.srtpParameters.keyBase64, vssrcs: vs.join(","), vpt: 102, ...(PHONE === "ios" ? { simlayers: 2 } : {}) }; }
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
   const want = media === "video" ? 2 : 1;
   let cons = []; for (let i = 0; i < 100 && cons.length < want; i++) { cons = cons.concat((await rpc(callId, "plain:consume")).consumers); if (cons.length < want) await new Promise((r) => setTimeout(r, 200)); }
@@ -80,7 +80,7 @@ async function oneCall(phoneCalls, media = "audio") {
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
   const st = await (await fetch(`${stack.base}/stats`)).json(); const clean = st.sessions === 0 && st.transports === 0 && st.calls === 0;
   const webOk = web.srtpErr === 0 && web.rms > 0.05 && (media === "audio" || webVideoPass(web));
-  const timing = { dialToRingMs: tRing - tDial, answerToFirstAudioMs: web.firstAudioAt ? web.firstAudioAt - tAnswer : null };
+  const timing = { dialToRingMs: tRing - tDial, answerToFirstAudioMs: web.firstAudioAt ? web.firstAudioAt - Math.max(tAnswer, phone.phoneStartAt || 0) : null, phoneLaunchMs: phone.phoneStartAt ? phone.phoneStartAt - tAnswer : null };
   return { phone: { ...phone, ...timing, pass: phonePass(phone) && (media === "audio" || phoneVideoPass(phone)), srtpErr: phone.error ? 1 : 0, teardownClean: clean }, web: { ...web, ...timing, pass: webOk, teardownClean: clean } };
 }
 let failed = 0;

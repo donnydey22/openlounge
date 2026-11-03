@@ -40,5 +40,19 @@ for (const media of ["audio", "video"]) {
     fs.writeFileSync(path.join(out, `${r.id}.json`), JSON.stringify(r, null, 1)); console.log(r.id, JSON.stringify({ pass: r.pass, rms: +r.rms.toFixed(3), fps: +r.fps.toFixed(1), srtpErr: r.srtpErr, teardown: r.teardownClean, redial: r.redialPass }));
   }
 }
+if (process.env.LOSS_CELL === "1") { // 45 % UDP loss (tc netem on lo, UDP only = relay<->SFU media legs) for 10 s mid-call, then clean
+  const { execSync } = await import("node:child_process"); const sh = (c) => { try { execSync(c, { stdio: "pipe" }); } catch (e) { console.log("[netem]", c, String(e.stderr || e.message).slice(0, 200)); } };
+  const LOSS = Number(process.env.LOSS_PCT || 45); let lossOn = 0, lossOff = 0;
+  setTimeout(() => { sh("sudo tc qdisc add dev lo root handle 1: prio"); sh(`sudo tc qdisc add dev lo parent 1:3 handle 30: netem loss ${LOSS}%`);
+    sh("sudo tc filter add dev lo parent 1:0 protocol ip prio 1 u32 match ip protocol 17 0xff flowid 1:3"); lossOn = Date.now(); }, 10_000);
+  setTimeout(() => { sh("sudo tc qdisc del dev lo root"); lossOff = Date.now(); }, 20_000);
+  const r = await oneCall("audio"); sh("sudo tc qdisc del dev lo root");
+  const per = (x) => { const b = x.audioSec || {}; const ks = Object.keys(b).map(Number).sort((a, c) => a - c);
+    const inLoss = ks.filter((k) => k * 1000 >= lossOn + 1000 && (k + 1) * 1000 <= lossOff); const after = ks.filter((k) => k * 1000 >= lossOff);
+    const rec = after.find((k) => b[k] >= 45); return { lossRxPct: inLoss.length ? Math.round(inLoss.reduce((a, k) => a + b[k], 0) / (inLoss.length * 50) * 100) : null,
+      recoveryMs: rec !== undefined ? Math.max(0, (rec + 1) * 1000 - lossOff) : null, callSurvived: after.length > 0, rms: +x.rms.toFixed(3) }; };
+  for (const d of ["fwd", "rev"]) { const m = per(r[d]); const cell = { id: `browser-browser-loss${LOSS}-${d}`, run, lossPct: LOSS, ...m, pass: m.callSurvived && m.recoveryMs !== null && m.recoveryMs <= 2000 && r[d].srtpErr === 0 };
+    fs.writeFileSync(path.join(out, `${cell.id}.json`), JSON.stringify(cell, null, 1)); console.log(cell.id, JSON.stringify(cell)); }
+}
 await browser.close(); await stack.close(); process.exit(0);
 }

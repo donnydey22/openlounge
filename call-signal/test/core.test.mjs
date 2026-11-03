@@ -43,3 +43,13 @@ test("phone-to-phone relay-only; SFU leg not relay-forced; sfu:plain goes to gat
   const n = r.out.length; assert.equal(r.s.handle("a", { t: "sfu:plain", callId, sdp: "v=0" }).ok, true);
   assert.equal(r.out.length, n, "not relayed to peer"); assert.deepEqual(got, [{ callId, userId: "a", sdp: "v=0" }]);
 });
+
+test("offline callee: push once, re-ring + delivered on connect", () => {
+  const sent = [], pushes = []; let on = false;
+  const s = createSignal({ send: (u, m) => sent.push([u, m]), push: (u, p) => pushes.push([u, p]), online: () => on, setTimer: () => 0, clearTimer: () => {} });
+  const r = s.handle("a", { t: "call:new", to: "b", kind: "audio" });
+  assert.equal(pushes.length, 1); assert.equal(pushes[0][1].callId, r.callId);
+  on = true; assert.equal(s.connected("b"), r.callId);
+  assert.ok(sent.filter(([u, m]) => u === "b" && m.t === "call:incoming").length >= 2);
+  assert.equal(s.connected("a"), null);
+});
