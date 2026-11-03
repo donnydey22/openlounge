@@ -68,7 +68,7 @@ async function oneCall(phoneCalls, media = "audio") {
     const vc = await rpc(callId, "plain:create", { purpose: "video" }); const vtx = key(); /* ios CI: the simulator sends only layers 0-1 (180p+360p, simlayers) */ const vs = [1, 2, 3].map((i) => 7_000_000 + i * 100_000 + Math.floor(Math.random() * 90_000));
     await rpc(callId, "plain:connect", { purpose: "video", srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: vtx } });
     await rpc(callId, "plain:produce", { kind: "video", ssrcs: vs, payloadType: 102, platform: PHONE === "android" ? "android" : "ios" });
-    v = { vip: vc.ip, vport: vc.port, vtx, vrx: vc.srtpParameters.keyBase64, vssrcs: vs.join(","), vpt: 102, ...(PHONE === "ios" ? { simlayers: 2 } : {}) }; }
+    v = { vip: vc.ip, vport: vc.port, vtx, vrx: vc.srtpParameters.keyBase64, vssrcs: vs.join(","), vpt: 102, ...(PHONE === "ios" ? { simlayers: 2 } : PHONE === "android" ? { simlayers: "small" } : {}) }; }
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
   const want = media === "video" ? 2 : 1;
   let cons = []; for (let i = 0; i < 100 && cons.length < want; i++) { cons = cons.concat((await rpc(callId, "plain:consume")).consumers); if (cons.length < want) await new Promise((r) => setTimeout(r, 200)); }
