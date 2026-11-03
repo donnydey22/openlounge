@@ -2,7 +2,7 @@
 // WASM Opus / WASM H.264 (openh264) encode, single layer, 720p cap (PLAN §14) -> WASM RTP+SRTP -> WS relay -> mediasoup PlainTransport -> back the same way.
 // No RTCPeerConnection anywhere. window.olCall(opts) resolves with measured receive stats.
 import factory from "/wasm-call/dist/olwasm.mjs";
-import { MediaCore, newKeyB64 } from "/wasm-call/src/client.mjs";
+import { MediaCore, newKeyB64, isKeyRequest } from "/wasm-call/src/client.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rpc = async (callId, userId, method, payload = {}) => { const r = await fetch("/rpc", { method: "POST", body: JSON.stringify({ callId, userId, method, payload }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error); return j; };
 
@@ -42,18 +42,18 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
       paceTimer = setTimeout(tick, Math.max(0, t0 + n * 20 - performance.now())); };
     tick(); stats.headlessPacing = true; }
   await rpc(callId, userId, "plain:produce", { kind: "audio", ssrc: assrc, payloadType: 111 });
-  let enc, reader, encLoop, encStop = false;
+  let enc, reader, encLoop, encStop = false, keyReq = false;
   if (video) {
     await rpc(callId, userId, "plain:produce", { kind: "video", ssrc: vssrc, payloadType: 102 });
     // WASM H.264 encode (no WebCodecs/WebRTC encode): VideoFrame -> I420 -> openh264 in WASM -> RTP/SRTP in WASM
-    let n = 0, cv = null, g2 = null; reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
+    let n = 0, cv = null, g2 = null; const maxW = headlessPacing ? 640 : 1280, maxH = headlessPacing ? 360 : 720; // macOS CI: WASM 720p encode starves under the simulator reader = new MediaStreamTrackProcessor({ track: ms.getVideoTracks()[0] }).readable.getReader();
     encLoop = (async () => { while (!encStop) { const { value: fr, done } = await reader.read(); if (done) break;
-      try { const w = Math.min(1280, fr.displayWidth) & ~1, h = Math.min(720, fr.displayHeight) & ~1;
+      try { const w = Math.min(maxW, fr.displayWidth) & ~1, h = Math.min(maxH, fr.displayHeight) & ~1;
         if (!enc) { enc = core.videoEncoder({ width: w, height: h, bitrate: 800_000, fps: 30, keyIntervalFrames: 60 }); stats.encW = w; stats.encH = h; stats.encoder = "wasm-openh264"; }
         let i420;
         if (fr.format === "I420" && fr.codedWidth === w && fr.codedHeight === h) { i420 = new Uint8Array(w * h * 3 / 2); await fr.copyTo(i420); }
         else { if (!cv) { cv = new OffscreenCanvas(w, h); g2 = cv.getContext("2d", { willReadFrequently: true }); } g2.drawImage(fr, 0, 0, w, h); i420 = rgbaToI420(g2.getImageData(0, 0, w, h).data, w, h); }
-        const r = enc.encode(i420, Math.round(fr.timestamp / 1000), n++ === 0);
+        const r = enc.encode(i420, Math.round(fr.timestamp / 1000), n++ === 0 || keyReq); if (keyReq) { keyReq = false; stats.keyReqServed = (stats.keyReqServed || 0) + 1; };
         if (r) { stats.encFrames = (stats.encFrames || 0) + 1; if (r.key) stats.encKeys = (stats.encKeys || 0) + 1; for (const p of core.videoSend(r.au, Math.round(fr.timestamp * 0.09))) send(p); }
       } catch (e) { stats.encErr = String(e.message || e); } finally { fr.close(); } } enc?.close(); enc = null; })();
   }
@@ -65,9 +65,9 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   const dec = video ? new VideoDecoder({ output: (f) => { if (!stats.firstFrameAt) stats.firstFrameAt = performance.now(); stats.videoFrames++; if (stats.videoFrames % 10 === 0) { g.drawImage(f, 0, 0, 64, 48); const d = g.getImageData(0, 0, 64, 48).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; if (s / (d.length / 4) / 3 > 16) stats.nonBlack++; } f.close(); }, error: () => stats.decodeErr++ }) : null;
   dec?.configure({ codec: "avc1.42001f", optimizeForLatency: true });
   let haveKey = false, t0 = 0;
-  ws.onmessage = (e) => { const p = new Uint8Array(e.data); if (p[1] >= 192 && p[1] <= 223) return; /* RTCP */ const pt = p[1] & 0x7f;
+  ws.onmessage = (e) => { const p = new Uint8Array(e.data); if (p[1] >= 192 && p[1] <= 223) { if (isKeyRequest(p)) { keyReq = true; stats.pliRx = (stats.pliRx || 0) + 1; } return; } /* RTCP: PLI/FIR -> IDR on next frame */ const pt = p[1] & 0x7f;
     try {
-      if (video && pt === vpt) { const r = core.videoRecv(p); if (!r) return; if (r.lost) { haveKey = false; return; } if (r.key) { haveKey = true; stats.videoKey++; } if (!haveKey) return;
+      if (video && pt === vpt) { if (!stats.firstVideoPktAt) stats.firstVideoPktAt = performance.now(); const r = core.videoRecv(p); if (!r) return; if (r.lost) { haveKey = false; return; } if (r.key) { haveKey = true; stats.videoKey++; } if (!haveKey) return;
         dec.decode(new EncodedVideoChunk({ type: r.key ? "key" : "delta", timestamp: (t0 += 33_333), data: r.frame })); }
       else if (pt === apt) { const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; stats.audioRms += Math.sqrt(s / pcm.length) / 32768; stats.rmsN++; }
     } catch { stats.srtpErr++; } };
@@ -75,6 +75,6 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   while (!window.__olStop && performance.now() < until) await sleep(100); const end = performance.now();
   live = false; node.port.onmessage = null; encStop = true; reader?.cancel().catch(() => {}); await encLoop; dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
   await rpc(callId, userId, "plain:close");
-  return { ...stats, rms: stats.rmsN ? stats.audioRms / stats.rmsN : 0, fps: stats.firstFrameAt ? stats.videoFrames / ((end - stats.firstFrameAt) / 1000) : 0, firstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - start : null, consumers: consumers.map((c) => c.kind) };
+  return { ...stats, rms: stats.rmsN ? stats.audioRms / stats.rmsN : 0, fps: stats.firstFrameAt ? stats.videoFrames / ((end - stats.firstFrameAt) / 1000) : 0, firstFrameMs: stats.firstFrameAt && stats.firstVideoPktAt ? stats.firstFrameAt - stats.firstVideoPktAt : null, callToFirstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - start : null, firstVideoPktMs: stats.firstVideoPktAt ? stats.firstVideoPktAt - start : null, consumers: consumers.map((c) => c.kind) };
 };
 window.olReady = true;

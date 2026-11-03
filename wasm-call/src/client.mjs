@@ -3,6 +3,9 @@
 // call-signal protocol as phones (call:new/accept/offer/answer/sfu:plain/leave) with a=crypto in the SDP.
 export function cryptoLine(keyB64) { return `a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:${keyB64}`; }
 export function parseCrypto(sdp) { const m = /a=crypto:\d+ AES_CM_128_HMAC_SHA1_80 inline:([A-Za-z0-9+/=]{40})/.exec(sdp); return m ? m[1] : null; }
+/** SRTCP packet from the SFU is a keyframe request (PSFB PLI fmt 1 / FIR fmt 4). The first RTCP header stays clear in
+ *  SRTCP and mediasoup sends PLI/FIR as their own packets, so this needs no decrypt. The encoder answers with an IDR. */
+export function isKeyRequest(p) { return p.length >= 12 && p[1] === 206 && ((p[0] & 0x1f) === 1 || (p[0] & 0x1f) === 4); }
 export function newKeyB64() { const k = new Uint8Array(30); crypto.getRandomValues(k); return btoa(String.fromCharCode(...k)); }
 const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 export function audioOfferSdp({ keyB64, ssrc }) {
