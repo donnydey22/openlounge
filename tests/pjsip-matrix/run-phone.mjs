@@ -10,6 +10,7 @@ import { chromium } from "playwright";
 import { startCiSfu } from "./ci-sfu.mjs";
 const run = promisify(execFile);
 const PHONE = process.env.PHONE || "linux", SECONDS = Number(process.env.CELL_SECONDS || 30);
+const HEADLESS_PACING = process.env.HEADLESS_PACING ? process.env.HEADLESS_PACING === "1" : process.platform === "darwin"; // CI test peer only
 const SLACK = Number(process.env.PHONE_SLACK || { linux: 3, android: 20, ios: 240 }[PHONE]); // phone process launch time
 const out = path.resolve("tests/pjsip-matrix/results"); fs.mkdirSync(out, { recursive: true });
 const tone = path.resolve("tests/pjsip-matrix/tone.wav");
@@ -54,7 +55,7 @@ async function oneCall(phoneCalls) {
   let callId;
   if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: "audio", route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
   else { await W.evaluate(() => window.__sig.send({ t: "call:new", to: "phone", kind: "audio", route: "sfu" })); callId = (await pwait("call:incoming")).callId; phoneWs.send(JSON.stringify({ t: "call:accept", callId })); await W.evaluate(() => window.__sig.wait("call:accepted")); }
-  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK + 600 }); // cap only; stopped right after the phone leg ends
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: SECONDS + SLACK + 600, headlessPacing: HEADLESS_PACING }); // cap only; stopped right after the phone leg ends
   const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
   await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } });
   await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
@@ -74,10 +75,10 @@ for (const phoneCalls of [true, false]) {
   const a = await oneCall(phoneCalls), b = await oneCall(phoneCalls);
   const cells = phoneCalls ? { [`${name}-browser-audio-fwd`]: ["web", a, b], [`${name}-browser-audio-rev`]: ["phone", a, b] } : { [`browser-${name}-audio-fwd`]: ["phone", a, b], [`browser-${name}-audio-rev`]: ["web", a, b] };
   for (const [id, [side, x, y]] of Object.entries(cells)) {
-    const r = { id, run: runId, ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
+    const r = { id, run: runId, pacing: HEADLESS_PACING ? "headless pacing" : "audio clock", ...x[side], redialPass: y[side].pass && y[side].teardownClean, redial: y[side] };
     if (PHONE !== "linux") fs.writeFileSync(path.join(out, `${id}.json`), JSON.stringify(r, null, 1));
     if (!(r.pass && r.redialPass && r.teardownClean)) failed++;
-    console.log(id, JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, diag: r.diag }));
+    console.log(id, HEADLESS_PACING ? "[headless pacing]" : "", JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, diag: r.diag }));
   }
 }
 await browser.close(); await stack.close(); process.exit(failed && process.env.CELLS_ENFORCE !== "0" ? 1 : 0);

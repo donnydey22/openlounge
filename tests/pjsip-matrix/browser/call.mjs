@@ -12,7 +12,7 @@ window.olSignal = (userId) => new Promise((ok) => { const ws = new WebSocket(`${
   ws.onmessage = (e) => box.msgs.push(JSON.parse(e.data)); ws.onopen = () => { window.__sig = box; ok(true); }; });
 
 window.olStop = () => { window.__olStop = true; };
-window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30 }) => {
+window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headlessPacing = false }) => {
   window.__olStop = false;
   const stats = { audioPkts: 0, audioRms: 0, rmsN: 0, videoFrames: 0, videoKey: 0, nonBlack: 0, srtpErr: 0, decodeErr: 0, sent: 0 };
   const created = await rpc(callId, userId, "plain:create");
@@ -28,7 +28,15 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30 }) => {
   const ms = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: video ? { width: 640, height: 480, frameRate: 30 } : false });
   const ctx = new AudioContext({ sampleRate: 48000 }); await ctx.audioWorklet.addModule("/wasm-call/src/pcm-worklet.js");
   const node = new AudioWorkletNode(ctx, "ol-pcm"); ctx.createMediaStreamSource(ms).connect(node); node.connect(ctx.destination);
-  let live = true; node.port.onmessage = (e) => { if (live) send(core.send(e.data)); };
+  let live = true; node.port.onmessage = (e) => { if (live && !headlessPacing) send(core.send(e.data)); };
+  // CI-only "headless pacing": macOS runners have no audio hardware, so the AudioWorklet render clock runs slow and starves
+  // sends. Feed synthesized 440 Hz 20 ms frames on a drift-corrected 20 ms timer into the SAME core.send (WASM Opus/RTP/SRTP).
+  let paceTimer = null;
+  if (headlessPacing) { let ph = 0, n = 0; const t0 = performance.now();
+    const tick = () => { if (!live) return; const due = Math.floor((performance.now() - t0) / 20) + 1;
+      while (n < due) { const f = new Int16Array(960); for (let k = 0; k < 960; k++) { f[k] = Math.round(Math.sin(ph) * 16000); ph += 2 * Math.PI * 440 / 48000; } send(core.send(f)); n++; }
+      paceTimer = setTimeout(tick, Math.max(0, t0 + n * 20 - performance.now())); };
+    tick(); stats.headlessPacing = true; }
   await rpc(callId, userId, "plain:produce", { kind: "audio", ssrc: assrc, payloadType: 111 });
   let enc, reader, encStop = false;
   if (video) {
