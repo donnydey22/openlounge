@@ -22,7 +22,7 @@ const drivers = {
     const log = fs.existsSync("/tmp/olsfu.log") ? fs.readFileSync("/tmp/olsfu.log", "utf8").split("\n").filter((l) => /strm|srtp|udp|conf|Error|fail|pkt|RX|TX/i.test(l)).slice(0, 80).join("\n") : "";
     console.log("[olsfu_cli]", log, stderr.slice(-2000)); return JSON.parse(stdout.split("\n").find((l) => l.startsWith("{"))); },
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", `com.donnydey.openlounge.pjsip.SfuLegTest#${p.vip ? "videoLeg" : "audioLeg"}`];
-    for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", seconds: SECONDS })) args.push("-e", k, String(v));
+    for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", ...(p.vip ? { vip: "10.0.2.2" } : {}), seconds: SECONDS })) args.push("-e", k, String(v));
     const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: (SECONDS + 90) * 1000 });
     const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = crashHead((await run("adb", ["logcat", "-d", "-b", "all", "-t", "3000"], { maxBuffer: 1 << 26 })).stdout); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
   ios: async (p) => { const f = "/tmp/olsfu-ios.json"; fs.rmSync(f, { force: true });
