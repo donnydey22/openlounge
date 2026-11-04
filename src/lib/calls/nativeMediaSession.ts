@@ -360,3 +360,26 @@ export class NativeMediaSession {
     void nativeMediaCmd({ op: "close" }).catch(() => {});
   }
 }
+
+/** PJSIP M4: page -> native engine call control. The native side owns signaling + SRTP; the page only issues
+ * UI intents and keeps an authenticated ms:* relay up for the SFU PlainTransport RPCs (ms:join, ms:plain:*). */
+export const pjsipCall = {
+  connect: (url: string, token: string) => nativeMediaCmd({ op: "connect", url, token }),
+  call: (to: string, video = false, route = "sfu") => nativeMediaCmd({ op: "call", to, video, route }),
+  accept: (callId: string) => nativeMediaCmd({ op: "accept", callId }),
+  reject: (callId: string) => nativeMediaCmd({ op: "reject", callId }),
+  end: () => nativeMediaCmd({ op: "end" }),
+};
+
+/** Keep the ms:* relay installed for a PJSIP call (scoped to callId); returns an uninstall function. */
+export function installPjsipRelay(socket: RealtimeClient, callId: string): () => void {
+  const b = bridge();
+  if (!b?.msReply) return () => {};
+  const relay = (id: string, event: string, data: Record<string, unknown>) => {
+    if (!MS_EVENT.test(event) || data?.callId !== callId) return b.msReply?.(id, false, null, "relay refused");
+    socket.request(event, data, 8_000).then((r) => b.msReply?.(id, true, r ?? null), (e: unknown) => b.msReply?.(id, false, null, String((e as Error)?.message ?? e)));
+  };
+  const w = window as unknown as { __olNativeMsReq?: typeof relay };
+  w.__olNativeMsReq = relay;
+  return () => { if (w.__olNativeMsReq === relay) delete w.__olNativeMsReq; };
+}

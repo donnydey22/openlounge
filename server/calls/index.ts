@@ -398,4 +398,9 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("ms:consume", relay("consume"));
   socket.on("ms:consumer:resume", relay("consumer:resume"));
   socket.on("ms:consumer:requestKeyFrame", relay("consumer:requestKeyFrame")); // FX-079 anti-freeze
+  // PJSIP native legs (M4): phone engine -> SFU PlainTransport over the same authenticated socket
+  socket.on("ms:plain:create", relay("plain:create"));
+  socket.on("ms:plain:connect", relay("plain:connect"));
+  socket.on("ms:plain:produce", relay("plain:produce"));
+  socket.on("ms:plain:consume", relay("plain:consume"));
 }
