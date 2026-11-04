@@ -58,7 +58,11 @@ export function readConfig(env = process.env) {
   if (maxSessions > maxCalls * 2) throw new Error("MEDIASOUP_MAX_SESSIONS may not exceed two sessions per pilot call");
   const healthHost = env.MEDIASOUP_HEALTH_HOST ?? "127.0.0.1";
   if (healthHost !== "127.0.0.1") throw new Error("MEDIASOUP_HEALTH_HOST must remain 127.0.0.1");
+  // optional IPv6 listen alongside IPv4 (NAT64/IPv6-only clients); concrete global address, never ::
+  const bindIp6 = env.MEDIASOUP_LISTEN_IP6 ?? null;
+  if (bindIp6 !== null && !/^[0-9a-f:]+$/i.test(bindIp6) || bindIp6 === "::") throw new Error("MEDIASOUP_LISTEN_IP6 must be a global IPv6 address");
   return {
+    bindIp6,
     gatewayUrl: gatewayUrl(env),
     gatewaySecret,
     admissionSecret,

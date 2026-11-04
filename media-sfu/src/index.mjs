@@ -441,6 +441,8 @@ async function main() {
     listenInfos: [
       { protocol: "udp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, portRange: { min: cfg.minPort, max: cfg.maxPort } },
       ...(cfg.tcpPort !== null ? [{ protocol: "tcp", ip: cfg.bindIp, announcedAddress: cfg.announcedAddress, port: cfg.tcpPort }] : []),
+      ...(cfg.bindIp6 ? [{ protocol: "udp", ip: cfg.bindIp6, portRange: { min: cfg.minPort, max: cfg.maxPort } }] : []),
+      ...(cfg.bindIp6 && cfg.tcpPort !== null ? [{ protocol: "tcp", ip: cfg.bindIp6, port: cfg.tcpPort }] : []),
     ],
   });
   router = await worker.createRouter({ mediaCodecs: ROUTER_CODECS });
