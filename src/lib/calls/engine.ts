@@ -916,6 +916,7 @@ export class CallEngine {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
+    if ((media.provider as string) === "livekit") { this.diag("livekit-call-refused", {}); return Promise.resolve(null); } // no call ever uses LiveKit
     // Native iPhone voice retains its existing app-owned audio path. A granted iPhone video caller stays app-owned
     // across direct-SFU recovery and native LiveKit migration; the page remains signaling and controls only.
     if (media.provider === "mediasoup" || this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {

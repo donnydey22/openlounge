@@ -4,16 +4,15 @@
  * production while every other call stays on LiveKit.
  */
 export function sfuSelected(participants?: { callerId: string; calleeId: string }, env: Record<string, string | undefined> = process.env): boolean {
-  if (env.CALL_SFU === "layered") return true;
-  if (!participants) return false;
-  const allow = new Set((env.CALL_SFU_TEST_USERS ?? "").split(",").map((x) => x.trim()).filter(Boolean));
-  return allow.has(participants.callerId) && allow.has(participants.calleeId);
+  void participants; void env;
+  return true; // 11/4 (Donny): every call uses the mediasoup/PJSIP SFU; no call ever uses LiveKit
 }
 
 
 /** CALL_LIVEKIT=off: primary mediasoup SFU only. No LiveKit at call start or as an in-call fallback (reconnects retry the SFU). */
 export function liveKitAllowed(env: Record<string, string | undefined> = process.env): boolean {
-  return env.CALL_LIVEKIT !== "off";
+  void env;
+  return false; // 11/4 (Donny): LiveKit calling removed (no start, no in-call fallback). Live-room audio is separate.
 }
 
 /** CALL_ANDROID_NATIVE=on opts Android app builds into native (app-owned) call media. Default OFF: Android uses the

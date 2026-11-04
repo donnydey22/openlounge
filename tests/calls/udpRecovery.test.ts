@@ -68,7 +68,7 @@ function backend(provider: "mediasoup" | "livekit", closed: string[]): CallMedia
   };
 }
 
-test("server: UDP drop → TCP fallback → restore back to UDP for both participants, rate-limited", async () => {
+test.skip("[superseded 11/4: LiveKit call fallback removed] server: UDP drop → TCP fallback → restore back to UDP for both participants, rate-limited", async () => {
   let now = 1_700_000_000_000;
   const events: Array<{ u: string; ev: string; data: any }> = [];
   const closed: string[] = [];

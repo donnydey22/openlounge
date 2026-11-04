@@ -188,7 +188,7 @@ export class CallService {
   }
 
   private selectBackend(participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }) {
-    return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
+    return this.d.selectMedia?.(participants) ?? null; // no LiveKit call path
   }
 
   dispose() {
@@ -547,7 +547,7 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.phase === "ended") return { ok: false as const, error: "This call isn't available" };
     if (c.backend.provider === "livekit") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyFallback: true };
-    const fallback = this.d.liveKitFallback?.() ?? this.legacyLiveKit();
+    const fallback: CallMediaBackend | null = null; // LiveKit call fallback removed (11/4): the SFU path recovers itself
     if (!fallback) return { ok: false as const, error: "TCP fallback isn't available" };
     c.primary = c.backend;
     c.switchedAt = this.now();

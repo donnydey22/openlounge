@@ -38,7 +38,7 @@ function setup() {
   return { service, events, state };
 }
 
-test("layered selection starts on brokered UDP and atomically moves both participants to existing LiveKit", async () => {
+test.skip("[superseded 11/4: LiveKit call fallback removed] layered selection starts on brokered UDP and atomically moves both participants to existing LiveKit", async () => {
   const { service, events, state } = setup();
   try {
     const start = await service.start("a", "b", false);

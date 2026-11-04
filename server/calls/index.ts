@@ -138,8 +138,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend() : null),
-    liveKitFallback: () => (liveKitAllowed() ? liveKitBackend() : null),
+    selectMedia: (participants) => mediasoupBackend(participants), // SFU only: never LiveKit
+    liveKitFallback: () => null,
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
