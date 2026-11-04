@@ -36,8 +36,6 @@ export default function GroupInfoPage() {
   const amAdmin = canAdmin(group?.myRole);
   const isOwner = group?.myRole === "owner";
   // group call: open a room for the group and ring every member (server/calls/groupRing.ts)
-  // FROZEN 11/4 (Donny): group calling off; kept for when it returns
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const callGroup = async () => {
     try {
       const r = await request<{ roomId: string }>("room:create", { title: group?.title || "Group call", topic: "Other", description: "" });
@@ -115,7 +113,7 @@ export default function GroupInfoPage() {
             {group.description && <p className="mt-3 max-w-md text-[15px] leading-relaxed whitespace-pre-wrap text-zinc-300 [overflow-wrap:anywhere]">{group.description}</p>}
             <div className="mt-4 grid w-full max-w-sm grid-cols-3 gap-2">
               <QuickAction icon={<MessageCircle className="h-5 w-5" />} label="Message" onClick={back} />
-              <QuickAction icon={<Phone className="h-5 w-5" />} label="Call" onClick={() => toast("Group calls coming soon")} disabled title="Group calls coming soon" testId="group-call-quick" />
+              <QuickAction icon={<Phone className="h-5 w-5" />} label="Call" onClick={() => void callGroup()} />
               <QuickAction
                 icon={<Bell className={cn("h-5 w-5", group.muted && "opacity-50")} />}
                 label={group.muted ? "Unmute" : "Mute"}
@@ -218,10 +216,9 @@ export default function GroupInfoPage() {
   );
 }
 
-function QuickAction({ icon, label, onClick, testId, disabled, title }: { icon: React.ReactNode; label: string; onClick: () => void; testId?: string; disabled?: boolean; title?: string }) {
-  // disabled = greyed + aria-disabled but still tappable for the explanatory toast (no call starts)
+function QuickAction({ icon, label, onClick, testId }: { icon: React.ReactNode; label: string; onClick: () => void; testId?: string }) {
   return (
-    <button type="button" onClick={onClick} title={title} aria-disabled={disabled || undefined} className={cn("flex min-w-0 flex-col items-center gap-1 rounded-2xl bg-white/[0.05] px-1 py-2.5", disabled ? "cursor-not-allowed text-zinc-500 opacity-50" : "text-emerald-400 hover:bg-white/[0.08]")} data-testid={testId}>
+    <button type="button" onClick={onClick} className="flex min-w-0 flex-col items-center gap-1 rounded-2xl bg-white/[0.05] px-1 py-2.5 text-emerald-400 hover:bg-white/[0.08]" data-testid={testId}>
       {icon}
       <span className="max-w-full truncate text-[12px] font-medium text-zinc-300">{label}</span>
     </button>
