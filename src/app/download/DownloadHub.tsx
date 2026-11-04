@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
-import { ANDROID_RELEASE, releaseLabel } from "@/lib/releases";
+import { ANDROID_RELEASE, IOS_RELEASE, IOS_MANIFEST_URL, releaseLabel } from "@/lib/releases";
 
 const ANDROID = { ...ANDROID_RELEASE, version: releaseLabel(ANDROID_RELEASE) };
 
@@ -84,9 +84,14 @@ export function DownloadHub() {
           <Sha value={ANDROID.sha256} />
         </section>
 
-        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="download-ios-soon">
+        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="download-ios">
           <h2 className="text-base font-semibold text-zinc-100">iPhone</h2>
-          <p className="mt-2 text-zinc-400">iPhone build coming soon.</p>
+          <p className="text-zinc-500">Version {releaseLabel(IOS_RELEASE)} · {IOS_RELEASE.size}</p>
+          <a href={`itms-services://?action=download-manifest&url=${encodeURIComponent(IOS_MANIFEST_URL)}`} className="mt-4 block rounded-full bg-emerald-500 px-5 py-3 text-center font-semibold text-black" data-testid="download-ios-install">
+            Install on iPhone
+          </a>
+          <p className="mt-3 text-zinc-400">Open this page in Safari on a registered iPhone. After install, trust the developer in Settings &gt; General &gt; VPN &amp; Device Management.</p>
+          <Sha value={IOS_RELEASE.sha256} />
         </section>
 
       </div>

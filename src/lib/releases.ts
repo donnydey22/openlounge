@@ -37,7 +37,14 @@ export const IOS_ARCHIVED_B85 = {
 } as const;
 
 /** No installable iOS build is offered until the PJSIP rebuild passes. Restore = set this back to IOS_ARCHIVED_B88 and restore the plist route. */
-export const IOS_RELEASE: null = null;
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 91,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b91.ipa",
+  size: "10.3 MB",
+  sha256: "43b6485fc37801f33ae6dd9c83061c660746e10646a2c6810a6362f78c3d8cef",
+} as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";

@@ -43,10 +43,10 @@ test("FX-download-latest: /download serves the latest Android build; label, file
   assert.equal(a.file, `/downloads/openlounge-${a.version}-${a.build}.apk`);
   assert.equal(f.file, `/downloads/openlounge-${f.version}-${f.build}.apk`);
   assert.ok(a.build > f.build, "latest build is newer than the fallback");
-  assert.equal(r.IOS_RELEASE, null, "no installable iOS build on /download");
+  assert.equal(r.IOS_RELEASE.file, `/downloads/openlounge-ios-${r.IOS_RELEASE.version}-b${r.IOS_RELEASE.build}.ipa`);
   for (const x of [a, f]) assert.match(x.sha256, /^[0-9a-f]{64}$/);
   assert.match(r.ANDROID_SIGNER_SHA256, /^[0-9a-f]{64}$/);
-  assert.ok(!R("src/app/download/DownloadHub.tsx").includes("itms-services"), "no iOS install link");
+  assert.ok(R("src/app/download/DownloadHub.tsx").includes("itms-services"), "iOS install link");
   assert.equal(r.binaryUrl(a.file), `${r.BINARY_HOST}/openlounge-${a.version}-${a.build}.apk`);
   assert.match(R("src/app/download/DownloadHub.tsx"), /ANDROID_RELEASE/);
 });
