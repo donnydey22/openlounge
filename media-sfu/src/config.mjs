@@ -22,6 +22,12 @@ const ip = (value, key) => {
 };
 
 const gatewayUrl = (env) => {
+  // Isolated pjsip test instance on the same droplet: loopback ws only, explicit opt-in.
+  if (env.OL_TEST_LOOPBACK_GATEWAY === "1") {
+    const v = new URL(required(env, "OPENLOUNGE_GATEWAY_WS_URL"));
+    if (v.protocol !== "ws:" || v.hostname !== "127.0.0.1") throw new Error("test gateway must be ws://127.0.0.1");
+    return v.toString();
+  }
   const expectedHost = required(env, "OPENLOUNGE_GATEWAY_HOST").toLowerCase();
   if (!new Set(["openlounge.app", "staging.openlounge.app"]).has(expectedHost)) throw new Error("OPENLOUNGE_GATEWAY_HOST is not an approved Open Lounge gateway");
   let value;
