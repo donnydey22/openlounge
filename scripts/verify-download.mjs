@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ANDROID_FALLBACK, ANDROID_RELEASE, ANDROID_SIGNER_SHA256, IOS_FALLBACK, IOS_RELEASE, binaryUrl, releaseLabel } from "../src/lib/releases.ts";
+import { ANDROID_FALLBACK, ANDROID_RELEASE, ANDROID_SIGNER_SHA256, binaryUrl, releaseLabel } from "../src/lib/releases.ts";
 
 const base = process.argv[2] || "https://openlounge.app";
 let fail = 0;
@@ -17,10 +17,10 @@ const UAS = { desktop: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWeb
 for (const [k, ua] of Object.entries(UAS)) {
   const r = await fetch(`${base}/download`, { headers: { "user-agent": ua } });
   const html = await r.text();
-  ok(r.status === 200 && html.includes(releaseLabel(ANDROID_RELEASE)) && html.includes(releaseLabel(IOS_RELEASE)), `/download (${k}) ${r.status}, labels Android ${releaseLabel(ANDROID_RELEASE)} / iOS ${releaseLabel(IOS_RELEASE)}`);
+  ok(r.status === 200 && html.includes(releaseLabel(ANDROID_RELEASE)) && html.includes("iPhone build coming soon") && !html.includes("itms-services"), `/download (${k}) ${r.status}, Android ${releaseLabel(ANDROID_RELEASE)}, iOS coming soon, no install link`);
 }
 const tmp = mkdtempSync(path.join(tmpdir(), "oldl-"));
-for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK, IOS_RELEASE, IOS_FALLBACK]) {
+for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK]) {
   const r = await fetch(`${base}${rel.file}`, { redirect: "follow" });
   const h = createHash("sha256");
   const out = path.join(tmp, path.basename(rel.file));
@@ -39,8 +39,7 @@ for (const rel of [ANDROID_RELEASE, ANDROID_FALLBACK, IOS_RELEASE, IOS_FALLBACK]
 }
 {
   const r = await fetch(`${base}/downloads/openlounge-ios.plist`);
-  const xml = await r.text();
-  ok(r.status === 200 && xml.includes(binaryUrl(IOS_RELEASE.file)) && xml.includes(`<string>${IOS_RELEASE.bundleId}</string>`), `/downloads/openlounge-ios.plist ${r.status} -> ${binaryUrl(IOS_RELEASE.file).split("/").pop()}`);
+  ok(r.status === 404, `/downloads/openlounge-ios.plist ${r.status} (expect 404, no iOS install)`);
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `verify-download FAILED (${fail})` : "verify-download PASSED");
