@@ -962,8 +962,8 @@ export class CallEngine {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
       const nativeLane = this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media);
-      // Web without a native app: the WASM leg (no RTCPeerConnection) when enabled for this build, audio calls only for now
-      const Session = nativeLane ? NativeMediaSession : wasmCallEnabled() && !this.s.call?.video && !this.s.camOn ? WasmCallSession : MediasoupCallSession;
+      // Web without a native app: the WASM leg (no RTCPeerConnection, audio + video) when enabled for this build
+      const Session = nativeLane ? NativeMediaSession : wasmCallEnabled() ? WasmCallSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;
