@@ -6,7 +6,8 @@ import type { CallMedia } from "@/lib/types";
 
 const BASE = "/wasm-call";
 export const wasmCallEnabled = () =>
-  typeof window !== "undefined" && process.env.NEXT_PUBLIC_OL_WASM_CALL === "1" && typeof AudioWorkletNode !== "undefined" && typeof WebAssembly !== "undefined" && typeof VideoDecoder !== "undefined";
+  typeof window !== "undefined" && process.env.NEXT_PUBLIC_OL_WASM_CALL === "1" && typeof AudioWorkletNode !== "undefined" && typeof WebAssembly !== "undefined" &&
+  !!navigator.mediaDevices?.getUserMedia && window.isSecureContext !== false; // VideoDecoder optional: no WebCodecs -> audio + send-only video
 
 type Core = { send(pcm: Float32Array | Int16Array): Uint8Array; recv(p: Uint8Array): Float32Array | Int16Array; close(): void };
 type Opts = {
@@ -59,6 +60,9 @@ export class WasmCallSession {
   private vpt = -1;
   private apt = -1;
   private dec: VideoDecoder | null = null;
+  private decCodec: string | null = null;
+  private facing: "user" | "environment" = "user";
+  private unlock: (() => void) | null = null;
   private remoteCanvas: HTMLCanvasElement | null = null;
   private remoteTrack: MediaStreamTrack | null = null;
   private haveKey = false;
@@ -83,12 +87,10 @@ export class WasmCallSession {
     const ssrc = 1000 + Math.floor(Math.random() * 1e6);
     this.core = (await mod.MediaCore.load(factory)).open({ txKeyB64: tx, rxKeyB64: created.srtpParameters.keyBase64, ssrc });
     this.core!.openVideo({ ssrc: this.vssrc, pt: 102 });
-    this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
-    this.ctx = new AudioContext({ sampleRate: 48000 });
-    await this.ctx.audioWorklet.addModule(`${BASE}/src/pcm-worklet.js`);
-    const node = new AudioWorkletNode(this.ctx, "ol-pcm");
-    this.ctx.createMediaStreamSource(this.mic).connect(node);
-    node.connect(this.ctx.destination);
+    void pickH264Decoder().then((c) => { this.decCodec = c; });
+    this.mic = await getMic();
+    const { ctx, node } = await openAudioGraph(this.mic);
+    this.ctx = ctx; this.unlock = armAudioUnlock(ctx);
     const ws = (this.ws = new WebSocket(`${relayUrl()}/?token=${encodeURIComponent(created.relayToken)}&callId=${encodeURIComponent(String(this.callId))}`));
     ws.binaryType = "arraybuffer";
     await new Promise<void>((ok, no) => { ws.onopen = () => ok(); ws.onclose = (e) => no(new Error(`relay closed ${e.code}`)); });
@@ -130,13 +132,14 @@ export class WasmCallSession {
     const r = this.core!.videoRecv(p); if (!r) return;
     if ("lost" in r) { this.haveKey = false; return; }
     if (r.key) this.haveKey = true; if (!this.haveKey) return;
+    if (typeof VideoDecoder === "undefined") return; // audio-only browser: video receive unavailable
     if (!this.dec) {
       const cv = (this.remoteCanvas = document.createElement("canvas")); cv.width = 1280; cv.height = 720;
       const g = cv.getContext("2d")!;
       this.dec = new VideoDecoder({ output: (f) => { if (cv.width !== f.displayWidth) { cv.width = f.displayWidth; cv.height = f.displayHeight; } g.drawImage(f, 0, 0); f.close(); this.stats.vFrames++;
           if (!this.remoteTrack) { const t = (this.remoteTrack = cv.captureStream(30).getVideoTracks()[0]); this.opts.onRemoteTrack?.({ kind: "video", track: t, close: () => t.stop() }); } },
         error: () => { this.haveKey = false; } });
-      this.dec.configure({ codec: "avc1.42001f", optimizeForLatency: true });
+      this.dec.configure({ codec: this.decCodec ?? "avc1.42001f", optimizeForLatency: true });
     }
     this.dec.decode(new EncodedVideoChunk({ type: r.key ? "key" : "delta", timestamp: (this.vts += 33_333), data: r.frame }));
   }
@@ -144,27 +147,32 @@ export class WasmCallSession {
   async enableCamera(facing?: string) {
     if (!this.core || this.closed) return;
     this.stopCamera();
-    const cam = (this.cam = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing === "environment" ? "environment" : "user", width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 }, frameRate: 30 } }));
+    const prof = sendProfile();
+    const cam = (this.cam = await getCamera(facing === "environment" ? "environment" : "user", prof));
+    this.facing = facing === "environment" ? "environment" : "user";
     const track = cam.getVideoTracks()[0];
     if (!this.videoProduced) { await this.req("ms:plain:produce", { kind: "video", ssrc: this.vssrc, payloadType: 102 }); this.videoProduced = true; }
     this.opts.onLocalVideo?.(track);
     this.camStop = false;
     // capture -> I420 -> WASM openh264 -> WASM RTP/SRTP (no WebCodecs encode, no RTCPeerConnection)
     const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.srcObject = cam; await v.play().catch(() => {});
-    let enc: VEnc | null = null, n = 0, cv: OffscreenCanvas | null = null, g: OffscreenCanvasRenderingContext2D | null = null; const t0 = performance.now();
+    let enc: VEnc | null = null, n = 0, g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null; const t0 = performance.now();
+    let encW = 0, encH = 0;
     const tick = () => {
       if (this.camStop || this.closed || !this.core) { enc?.close(); return; }
-      const w = Math.min(1280, v.videoWidth) & ~1, h = Math.min(720, v.videoHeight) & ~1;
+      const sc = Math.min(1, prof.w / Math.max(1, Math.max(v.videoWidth, v.videoHeight)), prof.h / Math.max(1, Math.min(v.videoWidth, v.videoHeight)) || 1);
+      const w = Math.round(v.videoWidth * sc) & ~1, h = Math.round(v.videoHeight * sc) & ~1;
+      if (enc && (w !== encW || h !== encH)) { enc.close(); enc = null; } // rotation / camera switch
       if (w > 0 && h > 0) {
         try {
-          if (!enc) { enc = this.core.videoEncoder({ width: w, height: h, bitrate: 900_000, fps: 30, keyIntervalFrames: 60 }); cv = new OffscreenCanvas(w, h); g = cv.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D; }
+          if (!enc) { enc = this.core.videoEncoder({ width: w, height: h, bitrate: prof.bps, fps: prof.fps, keyIntervalFrames: prof.fps * 2 }); encW = w; encH = h; g = makeCanvas2d(w, h); n = 0; }
           g!.drawImage(v, 0, 0, w, h);
           const ts = performance.now() - t0;
           const r = enc.encode(rgbaToI420(g!.getImageData(0, 0, w, h).data, w, h), Math.round(ts), n++ === 0 || this.keyReq); this.keyReq = false;
           if (r && this.ws?.readyState === 1) for (const pk of this.core.videoSend(r.au, Math.round(ts * 90))) { this.ws.send(pk); this.stats.vSent++; }
         } catch { /* keep going; next frame */ }
       }
-      setTimeout(tick, Math.max(0, t0 + n * (1000 / 30) - performance.now()));
+      setTimeout(tick, Math.max(0, t0 + n * (1000 / prof.fps) - performance.now()));
     };
     tick();
   }
@@ -180,8 +188,81 @@ export class WasmCallSession {
     try { this.ws?.close(); } catch {}
     this.mic?.getTracks().forEach((t) => t.stop());
     this.stopCamera(); try { this.dec?.close(); } catch {} this.remoteTrack?.stop();
-    void this.ctx?.close().catch(() => {});
+    this.unlock?.(); void this.ctx?.close().catch(() => {});
     try { this.core?.close(); } catch {}
     void this.req("ms:leave").catch(() => {});
   }
+}
+
+// ---- cross-browser paths (Chrome/Edge/Samsung Internet, Firefox, Safari macOS + iOS, Chrome Android) ----
+type AnyWin = typeof window & { webkitAudioContext?: typeof AudioContext };
+/** Mic with full voice processing; Firefox/Safari reject some constraint combos -> progressively looser asks. */
+async function getMic(): Promise<MediaStream> {
+  const asks: MediaStreamConstraints[] = [
+    { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } },
+    { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
+    { audio: true },
+  ];
+  let last: unknown;
+  for (const c of asks) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { last = e; if ((e as Error)?.name === "NotAllowedError" || (e as Error)?.name === "NotFoundError") break; } }
+  throw last;
+}
+/** iOS Safari: ask for the call audio session (speaker/earpiece routing + echo cancel), 48 kHz context where allowed.
+ *  Firefox can't mix a 48 kHz context with a 44.1 kHz mic -> fall back to the device rate (the worklet resamples). */
+async function openAudioGraph(mic: MediaStream): Promise<{ ctx: AudioContext; node: AudioWorkletNode }> {
+  try { (navigator as unknown as { audioSession?: { type: string } }).audioSession!.type = "play-and-record"; } catch { /* not Safari */ }
+  const AC = window.AudioContext ?? (window as AnyWin).webkitAudioContext!;
+  const build = async (opts?: AudioContextOptions) => {
+    const ctx = new AC({ latencyHint: "interactive", ...(opts ?? {}) });
+    try {
+      await ctx.audioWorklet.addModule(`${BASE}/src/pcm-worklet.js`);
+      const node = new AudioWorkletNode(ctx, "ol-pcm", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      ctx.createMediaStreamSource(mic).connect(node);
+      node.connect(ctx.destination);
+      return { ctx, node };
+    } catch (e) { void ctx.close().catch(() => {}); throw e; }
+  };
+  try { return await build({ sampleRate: 48000 }); } catch { return await build(); }
+}
+/** Autoplay policies (Safari, Chrome Android, Samsung Internet, Firefox): a context created outside a user gesture
+ *  starts suspended. Resume on the next tap/key, when the tab comes back, and when iOS interrupts it. */
+function armAudioUnlock(ctx: AudioContext): () => void {
+  const kick = () => { if (ctx.state !== "running" && ctx.state !== "closed") void ctx.resume().catch(() => {}); };
+  const evs = ["pointerdown", "touchend", "keydown", "click"] as const;
+  evs.forEach((e) => window.addEventListener(e, kick, { capture: true, passive: true }));
+  document.addEventListener("visibilitychange", kick);
+  ctx.addEventListener?.("statechange", kick);
+  kick();
+  return () => { evs.forEach((e) => window.removeEventListener(e, kick, { capture: true })); document.removeEventListener("visibilitychange", kick); ctx.removeEventListener?.("statechange", kick); };
+}
+type SendProfile = { w: number; h: number; fps: number; bps: number };
+/** Phones / low-core devices encode in WASM on the CPU: 640x360@24 there, 1280x720@30 on desktops. */
+function sendProfile(): SendProfile {
+  const mobile = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  const cores = navigator.hardwareConcurrency || 4;
+  if (mobile || cores <= 4) return { w: 640, h: 360, fps: 24, bps: 600_000 };
+  return { w: 1280, h: 720, fps: 30, bps: 1_200_000 };
+}
+async function getCamera(facing: "user" | "environment", p: SendProfile): Promise<MediaStream> {
+  const asks: MediaStreamConstraints[] = [
+    { video: { facingMode: { ideal: facing }, width: { ideal: p.w }, height: { ideal: p.h }, frameRate: { ideal: p.fps, max: 30 } } },
+    { video: { facingMode: facing } },
+    { video: true },
+  ];
+  let last: unknown;
+  for (const c of asks) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { last = e; if ((e as Error)?.name === "NotAllowedError") break; } }
+  throw last;
+}
+/** OffscreenCanvas where available (Safari 16.4+, all Chromium, Firefox 105+), else a detached <canvas>. */
+function makeCanvas2d(w: number, h: number): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+  if (typeof OffscreenCanvas !== "undefined") { const c = new OffscreenCanvas(w, h); const g = c.getContext("2d", { willReadFrequently: true }); if (g) return g as OffscreenCanvasRenderingContext2D; }
+  const c = document.createElement("canvas"); c.width = w; c.height = h; return c.getContext("2d", { willReadFrequently: true })!;
+}
+/** First H.264 decoder profile the browser actually supports (Firefox Android / some Linux builds lack one). */
+export async function pickH264Decoder(): Promise<string | null> {
+  if (typeof VideoDecoder === "undefined") return null;
+  for (const codec of ["avc1.42001f", "avc1.42e01f", "avc1.4d001f", "avc1.640028"]) {
+    try { if ((await VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true })).supported) return codec; } catch { /* next */ }
+  }
+  return null;
 }
