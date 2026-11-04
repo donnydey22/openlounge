@@ -12,28 +12,20 @@ export default function CallLinkPage() {
   const { id } = useParams<{ id: string }>();
   const q = useSearchParams();
   const router = useRouter();
-  const { connected, me, request } = useApp();
+  const { connected, me } = useApp();
   const [ended, setEnded] = useState(false);
   const done = useRef(false);
 
   useEffect(() => {
     if (done.current || !connected || !me || !id) return;
     done.current = true;
-    if (String(id).startsWith("gr_")) {
-      // group / room ring (server/calls/groupRing.ts): answering = joining the room
-      void request<{ ok: boolean; roomId?: string }>("ring:respond", { id, answer: true }).then((r) => {
-        try { (window as unknown as { ReactNativeWebView?: { postMessage(s: string): void } }).ReactNativeWebView?.postMessage(JSON.stringify({ type: "call:ended", callId: id })); } catch {}
-        router.replace(r.ok && r.roomId ? `/room/${r.roomId}` : "/");
-      }, () => router.replace("/"));
-      return;
-    }
     void callEngine.openFromLink(String(id), q.get("accept") === "1").then(({ peerId, ended }) => {
       if (ended) {
         setEnded(true);
         setTimeout(() => router.replace(peerId ? `/messages/${peerId}` : "/messages"), 1500);
       } else router.replace(peerId ? `/messages/${peerId}` : "/messages");
     });
-  }, [connected, me, id, q, router, request]);
+  }, [connected, me, id, q, router]);
 
   return (
     <div className="flex h-full min-h-[60dvh] flex-col items-center justify-center gap-3 text-zinc-400">

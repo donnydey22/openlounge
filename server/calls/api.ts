@@ -8,7 +8,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { calls } from "./index";
 import { voipService } from "./voip";
 import { DECLINE_TOKEN_HEADER, declineTokens } from "./declineToken";
-import { groupRinger, isGroupRingId } from "./groupRing";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
 type ReadJson = (req: IncomingMessage) => Promise<Record<string, unknown>>;
@@ -43,12 +42,6 @@ export async function handleCallsHttp(req: IncomingMessage, res: ServerResponse,
   if (!m) return json(res, 404, { ok: false, error: "Not found" });
   if (!s) return json(res, 503, { ok: false, error: "Unavailable" });
   const [, callId, decline] = m;
-  if (isGroupRingId(callId)) {
-    const g = groupRinger();
-    if (decline) return req.method !== "POST" ? json(res, 405, { ok: false }) : json(res, 200, { ok: true, phase: "ended", ...g?.respond(callId, uid, false) });
-    const r = g?.get(callId, uid);
-    return r ? json(res, 200, { ok: true, call: { ...r, calleeId: uid } }) : json(res, 404, { ok: false, error: "Not found" });
-  }
   if (decline) {
     if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method not allowed" });
     const r = s.decline(callId, uid);
@@ -86,11 +79,6 @@ export async function handleTokenDecline(req: IncomingMessage, res: ServerRespon
   };
   const v = tokens.inspect(token, callId);
   if (!v.ok) return fail(v.reason === "replayed" ? 409 : 401, v.reason);
-  if (isGroupRingId(callId)) {
-    if (!tokens.consume(v.nonce!, v.exp!)) return fail(409, "replayed");
-    groupRinger()?.respond(callId, v.userId, false);
-    return json(res, 200, { ok: true, phase: "ended" }), true;
-  }
   const s = calls();
   if (!s) return json(res, 503, { ok: false, error: "Unavailable" }), true;
   const c = s.peek(callId, v.userId);

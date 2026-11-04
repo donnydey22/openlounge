@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Bell, Camera, Phone, Copy, Flag, Link2, LogOut, MessageCircle, Pin, Share2, Shield, Trash2, UserPlus, Users } from "lucide-react";
+import { Bell, Camera, Copy, Flag, Link2, LogOut, MessageCircle, Pin, Share2, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import type { PublicUser } from "@/lib/types";
 import { GROUP_DESCRIPTION_MAX, GROUP_TITLE_MAX, canAdmin, type GroupInvite, type GroupMember } from "@/lib/groups";
 import { fileToAvatarDataUrl } from "@/lib/image";
@@ -35,18 +35,6 @@ export default function GroupInfoPage() {
   const [memberSheet, setMemberSheet] = useState<GroupMember | null>(null);
   const amAdmin = canAdmin(group?.myRole);
   const isOwner = group?.myRole === "owner";
-  // group call: open a room for the group and ring every member (server/calls/groupRing.ts)
-  const callGroup = async () => {
-    try {
-      const r = await request<{ roomId: string }>("room:create", { title: group?.title || "Group call", topic: "Other", description: "" });
-      if (!r.roomId) throw new Error("Couldn't start the call");
-      const g = await request<{ ok: boolean; error?: string }>("ring:start", { groupId: id, roomId: r.roomId });
-      if (!g.ok) toast(g.error ?? "Couldn't ring the group");
-      router.push(`/room/${r.roomId}`);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Couldn't start the call");
-    }
-  };
 
   const members = useMemo(() => {
     if (!group) return [];
@@ -113,7 +101,6 @@ export default function GroupInfoPage() {
             {group.description && <p className="mt-3 max-w-md text-[15px] leading-relaxed whitespace-pre-wrap text-zinc-300 [overflow-wrap:anywhere]">{group.description}</p>}
             <div className="mt-4 grid w-full max-w-sm grid-cols-3 gap-2">
               <QuickAction icon={<MessageCircle className="h-5 w-5" />} label="Message" onClick={back} />
-              <QuickAction icon={<Phone className="h-5 w-5" />} label="Call" onClick={() => void callGroup()} />
               <QuickAction
                 icon={<Bell className={cn("h-5 w-5", group.muted && "opacity-50")} />}
                 label={group.muted ? "Unmute" : "Mute"}

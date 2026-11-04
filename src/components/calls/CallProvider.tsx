@@ -14,7 +14,6 @@ import { native } from "@/lib/native";
 import { checkMediaPermissionsSilently } from "@/lib/calls/permissions";
 import { useCall } from "./useCall";
 import css from "./calls.module.css";
-import { GroupRingBanner } from "./GroupRingBanner";
 
 // the call UI (and livekit-client inside the engine's dynamic import) only loads when a call exists
 const CallOverlay = dynamic(() => import("./CallOverlay").then((m) => m.CallOverlay), { ssr: false });
@@ -201,7 +200,6 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     <>
       <div className={nativeFullscreen ? `${css.appShellSlot} ${css.nativeVideoUnderlay}` : css.appShellSlot} aria-hidden={nativeFullscreen || undefined}>{children}</div>
       {s.ui && <CallOverlay />}
-      <GroupRingBanner />
     </>
   );
 }
