@@ -280,7 +280,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled(), platform)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
   // group / room ringing (server/calls/groupRing.ts)
-  socket.on("ring:start", (d: { groupId?: unknown; userIds?: unknown; video?: unknown; roomId?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.start(uid, d ?? {}) ?? { ok: false })));
+  socket.on("ring:start", (d: { groupId?: unknown; userIds?: unknown; video?: unknown; roomId?: unknown }, ack: AckFn = noop) => authed(ack, () => ack({ ok: false, error: "Group calls coming soon", reason: "group_calls_frozen" }))); // frozen 11/4: nothing rings
   socket.on("ring:respond", (d: { id?: unknown; answer?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.respond(String(d?.id ?? ""), uid, d?.answer === true) ?? { ok: false })));
   socket.on("ring:cancel", (d: { id?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.cancel(String(d?.id ?? ""), uid) ?? { ok: false })));
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
