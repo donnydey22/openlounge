@@ -15,6 +15,10 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# WASM call leg (Railway passes service variables as build args when declared)
+ARG NEXT_PUBLIC_OL_WASM_CALL
+ARG NEXT_PUBLIC_OL_WS_RELAY
+ENV NEXT_PUBLIC_OL_WASM_CALL=$NEXT_PUBLIC_OL_WASM_CALL NEXT_PUBLIC_OL_WS_RELAY=$NEXT_PUBLIC_OL_WS_RELAY
 RUN npm run build && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner

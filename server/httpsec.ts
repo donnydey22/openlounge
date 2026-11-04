@@ -60,6 +60,9 @@ export function buildCsp(env: Record<string, string | undefined> = process.env, 
     d["frame-src"].push("https://*.paypal.com", "https://pay.google.com");
     d["img-src"].push("https://*.paypal.com", "https://*.paypalobjects.com");
   }
+  // WASM call leg: browser WS -> UDP media relay on the SFU host (NEXT_PUBLIC_OL_WS_RELAY, wss://host:port)
+  const relay = env.NEXT_PUBLIC_OL_WS_RELAY ?? "";
+  if (/^wss:\/\/[a-z0-9.-]+(:\d+)?(\/.*)?$/i.test(relay)) d["connect-src"].push(new URL(relay).origin.replace(/^https:/, "wss:"));
   // self-hosted media cache (MEDIA_CDN_BASE): photos/videos/HLS come from its origin
   const mediaCdn = hostOf(env.MEDIA_CDN_BASE) ? new URL(env.MEDIA_CDN_BASE!).origin : "";
   if (mediaCdn) for (const k of ["img-src", "media-src", "connect-src"]) d[k].push(mediaCdn);
