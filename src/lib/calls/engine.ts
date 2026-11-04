@@ -39,6 +39,7 @@ import { QUALITY_SAMPLE_MS, QualityGuard, countersFromStats, judgeQuality, type 
 import { ADAPT, LADDER, NetLadder, nativeAdaptiveEnabled, videoBpsFor, videoBpsRecovering } from "./netAdapt";
 import { followAudioDevices } from "../audioDevices";
 import { TurnRefresher } from "./turnRefresh";
+import { watchTwoWay } from "./twoWayRtp";
 
 type LK = typeof import("livekit-client");
 let lk: LK | null = null;
@@ -718,9 +719,8 @@ export class CallEngine {
         stopTones();
         this.acceptT0 = performance.now();
         mark("accepted");
-        this.set({ call, ui: this.mediaConnected() ? "active" : "connecting", connectedAt: Date.now() });
-        if (this.mediaConnected()) playConnected();
-        postNative({ type: "call:connected", callId: call.id, video: !!call.video });
+        this.set({ call, ui: "connecting" });
+        if (this.mediaConnected()) this.promoteWhenTwoWay(); // "connected" only once two-way RTP flows
         this.diag("answered", { deferred: this.deferNativeConnect });
         if (this.metricSent) this.maybeWatchIosMic(); // first audio already arrived before the active state
         if (this.deferNativeConnect) {
@@ -883,6 +883,30 @@ export class CallEngine {
     }
   }
 
+  /** 11/4 standard: an answered call shows "connected" (UI + CallKit/native) only once audio RTP flows BOTH ways.
+   *  Until then it stays "connecting" while the session's own recovery keeps running; no cap (ends with the call). */
+  private twoWay: { stop(): void } | null = null;
+  private twoWayCall: string | null = null;
+  private promoteWhenTwoWay() {
+    const id = this.s.call?.id ?? null;
+    const session = this.mediasoup as unknown as { getTransportStats?: () => Promise<Iterable<unknown>> } | null;
+    if (!id || this.twoWayCall === id || !session?.getTransportStats) return;
+    this.twoWay?.stop();
+    this.twoWayCall = id;
+    this.twoWay = watchTwoWay(
+      () => ((this.mediasoup as unknown as { getTransportStats?: () => Promise<Iterable<unknown>> } | null)?.getTransportStats?.() ?? Promise.resolve([])) as Promise<Iterable<any>>,
+      () => {
+        this.twoWay = null;
+        if (!this.busy || this.s.call?.id !== id || this.s.ui !== "connecting") return;
+        this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
+        playConnected();
+        postNative({ type: "call:connected", callId: id, video: !!(this.s.camOn || this.s.call?.video) });
+        this.diag("two-way-rtp", {});
+      },
+      (c, ms) => this.diag("connecting-no-two-way-rtp", { rx: c.rx, tx: c.tx, ms }),
+    );
+  }
+
   private mediaConnected() {
     return this.room?.state === "connected" || this.mediasoupConnected;
   }
@@ -1037,11 +1061,7 @@ export class CallEngine {
       if (media.provider === "mediasoup" && this.s.call?.id) this.turnRefresh.start(this.s.call.id);
       this.startAndroidLifecycle(session);
       if (answer || this.s.call?.phase === "active") {
-        if (this.s.ui === "connecting") {
-          this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
-          playConnected();
-          postNative({ type: "call:connected", callId: this.s.call?.id, video: !!(this.s.camOn || this.s.call?.video) });
-        }
+        if (this.s.ui === "connecting") this.promoteWhenTwoWay();
       }
       return session;
     } catch (e) {
@@ -2487,6 +2507,7 @@ export class CallEngine {
   }
 
   private teardownMedia() {
+    this.twoWay?.stop(); this.twoWay = null; this.twoWayCall = null;
     stopTones();
     this.msTcp = false;
     this.turnRefresh.stop();
