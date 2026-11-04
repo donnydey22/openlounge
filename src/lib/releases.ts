@@ -36,14 +36,24 @@ export const IOS_ARCHIVED_B85 = {
   sha256: "9dc2c109f105ed3a4cc691bbcba609f4b791f6fa14231a380f3eddba905bd2a7",
 } as const;
 
-/** No installable iOS build is offered until the PJSIP rebuild passes. Restore = set this back to IOS_ARCHIVED_B88 and restore the plist route. */
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-04: b91, asset kept on downloads-v1, not linked. Rollback = set IOS_RELEASE back to these values. */
+export const IOS_ARCHIVED_B91 = {
   version: "0.3.19",
   build: 91,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b91.ipa",
   size: "10.3 MB",
   sha256: "43b6485fc37801f33ae6dd9c83061c660746e10646a2c6810a6362f78c3d8cef",
+} as const;
+
+/** iOS b94 deletions (pj-openlounge-ios 619c92e); EAS remote counter assigned CFBundleVersion 95. */
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 95,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b95.ipa",
+  size: "9.9 MB",
+  sha256: "da1a313159f5b6a16785c0bb0c5b832e24aa0f44b02f3791531994785cb163c2",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
