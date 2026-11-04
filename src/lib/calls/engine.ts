@@ -30,7 +30,8 @@ import { CallTelemetry } from "./callTelemetry";
 import { isAndroidApp } from "@/lib/notify";
 
 /** WebView media session or the iOS app's native media proxy (same surface) */
-type CallMediaSession = MediasoupCallSession | NativeMediaSession;
+type CallMediaSession = MediasoupCallSession | NativeMediaSession | WasmCallSession;
+import { WasmCallSession, wasmCallEnabled } from "./wasmCallSession";
 import { flipCameraTrack } from "./cameraFlip";
 import { IosMicWatch, iosMicReacquireEligible } from "./iosMicReacquire";
 import { CALL_AUDIO_CONSTRAINTS, resumePausedCallAudio, useRawDirectCallMicrophone } from "./audioPolicy";
@@ -960,7 +961,9 @@ export class CallEngine {
   private async connectMediasoup(media: CallMedia, answer: boolean, tcpOnly = false, relayOnly = false): Promise<CallMediaSession | null> {
     try {
       // iOS app with native call media + audio-only call: the app owns mic/transports/audio session (no WebView media)
-      const Session = this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media) ? NativeMediaSession : MediasoupCallSession;
+      const nativeLane = this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media);
+      // Web without a native app: the WASM leg (no RTCPeerConnection) when enabled for this build, audio calls only for now
+      const Session = nativeLane ? NativeMediaSession : wasmCallEnabled() && !this.s.call?.video && !this.s.camOn ? WasmCallSession : MediasoupCallSession;
       // Web/Safari: hand the mic captured inside the Call/Answer tap to the UDP session (one capture, bound at the
       // gesture) instead of releasing it and capturing again later outside the gesture.
       const tapMic = Session === MediasoupCallSession && media.provider === "mediasoup" ? this.tapMic ?? this.preMic?.then((t) => t?.mediaStreamTrack ?? null) ?? null : null;

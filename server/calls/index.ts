@@ -14,6 +14,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
+import { mintRelayToken } from "./relayToken";
 import { androidNativeEnabled, iosMicReacquireEnabled, iosNativeVideoEnabled, liveKitAllowed, sfuSelected } from "./sfuSelect";
 
 /** Mediasoup call TURN logins live at most 10 minutes (Donny, Oct 24). Rejoins/call:get mint fresh ones. */
@@ -378,7 +379,14 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
             log.warn("[calls] media request failed", { callId: callId.slice(0, 36), method, native: connectionId !== socket.id, error: String((r as { error?: unknown }).error ?? "").slice(0, 160) });
             return ack(r);
           }
-          const value = udpOnlyResult(method, r.result);
+          let value = udpOnlyResult(method, r.result);
+          // Option B browser leg: pin the WS->UDP relay to exactly this SFU PlainTransport tuple
+          const relaySecret = process.env.WS_RELAY_SECRET;
+          if (method === "plain:create" && relaySecret && value && typeof value === "object") {
+            const v = value as { ip?: unknown; port?: unknown };
+            if (typeof v.ip === "string" && typeof v.port === "number")
+              value = { ...(value as Record<string, unknown>), relayToken: mintRelayToken(relaySecret, { userId: uid, callId, host: v.ip, port: v.port }) };
+          }
           ack(value && typeof value === "object" && !Array.isArray(value) ? { ok: true, ...(value as Record<string, unknown>) } : { ok: true, result: value });
         })
         .catch((e: unknown) => {
