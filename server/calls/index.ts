@@ -10,6 +10,7 @@ import { CallService } from "./service";
 import type { CallMediaBackend } from "./mediaBackend";
 import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
+import { groupRinger, initGroupRinger } from "./groupRing";
 import { mintTurnIceServers } from "../turnCredentials";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
@@ -73,6 +74,7 @@ export function voipPayload(call: { id: string; callerId: string; video: boolean
 export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) {
   svc?.dispose();
   if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
+  initGroupRinger((userId, ev, data) => io.to(`user:${userId}`).emit(ev, data));
   const gw = mediaGateway();
   // native-media connections (iOS app owns the SFU peer) are delivered to whichever page socket currently relays them
   gw.setNotifier(({ connectionId, event, data }) => io.get(nativeConns.get(connectionId)?.socketId ?? connectionId)?.emit(event, data));
@@ -277,6 +279,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:start", ({ peerId, video, nativeVideo, platform }: { peerId: string; video?: boolean; nativeVideo?: unknown; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled(), platform)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
+  // group / room ringing (server/calls/groupRing.ts)
+  socket.on("ring:start", (d: { groupId?: unknown; userIds?: unknown; video?: unknown; roomId?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.start(uid, d ?? {}) ?? { ok: false })));
+  socket.on("ring:respond", (d: { id?: unknown; answer?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.respond(String(d?.id ?? ""), uid, d?.answer === true) ?? { ok: false })));
+  socket.on("ring:cancel", (d: { id?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(groupRinger()?.cancel(String(d?.id ?? ""), uid) ?? { ok: false })));
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().accept(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
