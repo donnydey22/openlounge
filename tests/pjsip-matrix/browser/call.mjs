@@ -16,7 +16,7 @@ function rgbaToI420(d, w, h) { const o = new Uint8Array(w * h * 3 / 2), U = w * 
     if (!(x & 1) && !(y & 1)) { const c = (y >> 1) * (w >> 1) + (x >> 1); o[U + c] = (-38 * d[i] - 74 * d[i + 1] + 112 * d[i + 2] + 32896) >> 8; o[V + c] = (112 * d[i] - 94 * d[i + 1] - 18 * d[i + 2] + 32896) >> 8; } }
   return o; }
 window.olStop = () => { window.__olStop = true; };
-window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headlessPacing = false }) => {
+window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headlessPacing = false, pulse = false, repoll = false }) => {
   window.__olStop = false;
   const stats = { audioPkts: 0, audioRms: 0, rmsN: 0, videoFrames: 0, videoKey: 0, nonBlack: 0, srtpErr: 0, decodeErr: 0, sent: 0 };
   const created = await rpc(callId, userId, "plain:create");
@@ -38,7 +38,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   let paceTimer = null;
   if (headlessPacing) { let ph = 0, n = 0; const t0 = performance.now();
     const tick = () => { if (!live) return; const due = Math.floor((performance.now() - t0) / 20) + 1;
-      while (n < due) { const f = new Int16Array(960); for (let k = 0; k < 960; k++) { f[k] = Math.round(Math.sin(ph) * 16000); ph += 2 * Math.PI * 440 / 48000; } send(core.send(f)); n++; }
+      while (n < due) { const f = new Int16Array(960); const amp = pulse ? (n % 100 < 5 ? 16000 : 0) : 16000; if (pulse && n % 100 === 0) (stats.pulseTx = stats.pulseTx || []).push(Date.now()); for (let k = 0; k < 960; k++) { f[k] = Math.round(Math.sin(ph) * amp); ph += 2 * Math.PI * 440 / 48000; } send(core.send(f)); n++; }
       paceTimer = setTimeout(tick, Math.max(0, t0 + n * 20 - performance.now())); };
     tick(); stats.headlessPacing = true; }
   await rpc(callId, userId, "plain:produce", { kind: "audio", ssrc: assrc, payloadType: 111 });
@@ -69,7 +69,7 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
   // consume the peer (poll until its producers exist)
   let consumers = [];
   for (let i = 0; i < 100 && consumers.length < (video ? 2 : 1); i++) { consumers = consumers.concat((await rpc(callId, userId, "plain:consume")).consumers); await sleep(200); }
-  const vpt = consumers.find((c) => c.kind === "video")?.payloadType, apt = consumers.find((c) => c.kind === "audio")?.payloadType;
+  const vpt = consumers.find((c) => c.kind === "video")?.payloadType; let apt = consumers.find((c) => c.kind === "audio")?.payloadType;
   const canvas = new OffscreenCanvas(64, 48); const g = canvas.getContext("2d", { willReadFrequently: true });
   const dec = video ? new VideoDecoder({ output: (f) => { if (!stats.firstFrameAt) stats.firstFrameAt = performance.now(); stats.videoFrames++; if (stats.videoFrames % 10 === 0) { g.drawImage(f, 0, 0, 64, 48); const d = g.getImageData(0, 0, 64, 48).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; if (s / (d.length / 4) / 3 > 16) stats.nonBlack++; } f.close(); }, error: () => stats.decodeErr++ }) : null;
   dec?.configure({ codec: "avc1.42001f", optimizeForLatency: true });
@@ -78,11 +78,14 @@ window.olCall = async ({ callId, userId, relayUrl, video, seconds = 30, headless
     try {
       if (video && pt === vpt) { if (!stats.firstVideoPktAt) stats.firstVideoPktAt = performance.now(); const r = core.videoRecv(p); if (!r) return; if (r.lost) { haveKey = false; return; } if (r.key) { haveKey = true; stats.videoKey++; } if (!haveKey) return;
         dec.decode(new EncodedVideoChunk({ type: r.key ? "key" : "delta", timestamp: (t0 += 33_333), data: r.frame })); }
-      else if (pt === apt) { if (!stats.firstAudioAt) stats.firstAudioAt = Date.now(); { const sec = Math.floor(Date.now() / 1000); stats.audioSec = stats.audioSec || {}; stats.audioSec[sec] = (stats.audioSec[sec] || 0) + 1; } const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; stats.audioRms += Math.sqrt(s / pcm.length) / 32768; stats.rmsN++; }
+      else if (pt === apt) { if (!stats.firstAudioAt) stats.firstAudioAt = Date.now(); { const sec = Math.floor(Date.now() / 1000); stats.audioSec = stats.audioSec || {}; stats.audioSec[sec] = (stats.audioSec[sec] || 0) + 1; } const now = Date.now(); if (stats.lastAudioAt) { const g = now - stats.lastAudioAt; if (g > (stats.maxGapMs || 0)) { stats.maxGapMs = g; stats.maxGapAt = now; } } stats.lastAudioAt = now;
+        const pcm = core.recv(p); stats.audioPkts++; let s = 0; for (const x of pcm) s += x * x; const lv = Math.sqrt(s / pcm.length) / 32768; stats.audioRms += lv; stats.rmsN++;
+        if (pulse) { if (lv > 0.05 && !stats._on) { stats._on = true; (stats.pulseRx = stats.pulseRx || []).push(now); } else if (lv < 0.01) stats._on = false; } }
     } catch { stats.srtpErr++; } };
+  let repollT = null; if (repoll) { const rp = async () => { if (window.__olStop) return; try { const c = (await rpc(callId, userId, "plain:consume")).consumers; const a = c.find((x) => x.kind === "audio"); if (a) { apt = a.payloadType; stats.reconsumed = (stats.reconsumed || 0) + 1; } } catch {} repollT = setTimeout(rp, 250); }; repollT = setTimeout(rp, 250); }
   const start = performance.now(), until = start + seconds * 1000; // runs until olStop() or the cap (phone launch time varies)
   while (!window.__olStop && performance.now() < until) await sleep(100); const end = performance.now();
-  live = false; node.port.onmessage = null; encStop = true; reader?.cancel().catch(() => {}); await encLoop; dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
+  clearTimeout(repollT); live = false; node.port.onmessage = null; encStop = true; reader?.cancel().catch(() => {}); await encLoop; dec?.close(); ms.getTracks().forEach((t) => t.stop()); await ctx.close(); ws.close(); core.close();
   await rpc(callId, userId, "plain:close");
   return { ...stats, rms: stats.rmsN ? stats.audioRms / stats.rmsN : 0, fps: stats.firstFrameAt ? stats.videoFrames / ((end - stats.firstFrameAt) / 1000) : 0, firstFrameMs: stats.firstFrameAt && stats.firstVideoPktAt ? stats.firstFrameAt - stats.firstVideoPktAt : null, callToFirstFrameMs: stats.firstFrameAt ? stats.firstFrameAt - start : null, firstVideoPktMs: stats.firstVideoPktAt ? stats.firstVideoPktAt - start : null, consumers: consumers.map((c) => c.kind) };
 };

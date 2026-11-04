@@ -19,7 +19,21 @@ const authed = (req: IncomingMessage, secret = process.env.CALL_SIGNAL_PUSH_SECR
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 };
 
-export async function handleSignalPush(req: IncomingMessage, res: ServerResponse, json: (r: ServerResponse, s: number, b: unknown) => void, readJson: (r: IncomingMessage) => Promise<Record<string, unknown>>) {
+type Call = { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } };
+export interface SignalPushDeps {
+  voipRing: (to: string, payload: Record<string, string>, expiresAt: number) => Promise<number>;
+  fcmIncoming: (to: string, call: Call, opts: { skipIos: boolean; declineToken: string }) => Promise<string>;
+  user: (id: string) => { name: string; photoUrl?: string | null } | null | undefined;
+  mintDecline: (callId: string, to: string, expiresAt: number) => string;
+}
+const defaultDeps = (): SignalPushDeps => ({
+  voipRing: (to, p, e) => voipService()?.ring(to, p, e) ?? Promise.resolve(0),
+  fcmIncoming: async (to, c, o) => String((await push()?.callIncoming(to, c, o)) ?? "no-notifier"),
+  user: (id) => store.publicUser(id),
+  mintDecline: (c, t, e) => declineTokens().mint(c, t, e),
+});
+
+export async function handleSignalPush(req: IncomingMessage, res: ServerResponse, json: (r: ServerResponse, s: number, b: unknown) => void, readJson: (r: IncomingMessage) => Promise<Record<string, unknown>>, deps: SignalPushDeps = defaultDeps()) {
   if (!process.env.CALL_SIGNAL_PUSH_SECRET) return json(res, 404, { ok: false });
   if (req.method !== "POST") return json(res, 405, { ok: false });
   if (!authed(req)) return json(res, 401, { ok: false });
@@ -27,11 +41,11 @@ export async function handleSignalPush(req: IncomingMessage, res: ServerResponse
   const to = String(b.to ?? ""), callId = String(b.callId ?? ""), from = String(b.from ?? "");
   if (!ID.test(to) || !ID.test(callId) || !ID.test(from)) return json(res, 400, { ok: false, error: "bad ids" });
   const t0 = Date.now(), ttl = Math.min(Math.max(Number(b.ttlSec) || 45, 5), 120);
-  const u = store.publicUser(from);
-  const call = { id: callId, callerId: from, video: b.kind === "video", expiresAt: t0 + ttl * 1000, caller: { name: u?.name ?? "Open Lounge", photoUrl: u?.photoUrl ?? null } };
-  const declineToken = declineTokens().mint(call.id, to, call.expiresAt);
-  const voipSent = await (voipService()?.ring(to, voipPayload(call, declineToken), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
-  const fcm = await (push()?.callIncoming(to, call, { skipIos: voipSent > 0, declineToken }) ?? Promise.resolve("no-notifier")).catch((e) => `error:${(e as Error).message}`.slice(0, 80));
+  const u = deps.user(from);
+  const call: Call = { id: callId, callerId: from, video: b.kind === "video", expiresAt: t0 + ttl * 1000, caller: { name: u?.name ?? "Open Lounge", photoUrl: u?.photoUrl ?? null } };
+  const declineToken = deps.mintDecline(call.id, to, call.expiresAt);
+  const voipSent = await deps.voipRing(to, voipPayload(call, declineToken), call.expiresAt).catch(() => 0);
+  const fcm = await deps.fcmIncoming(to, call, { skipIos: voipSent > 0, declineToken }).catch((e) => `error:${(e as Error).message}`.slice(0, 80));
   const r = { ok: true, callId, voipSent, fcm, ms: Date.now() - t0 };
   console.log(`[signal-push] ${JSON.stringify(r)}`); // ids + outcomes only
   return json(res, 200, r);

@@ -18,12 +18,12 @@ const key = () => Buffer.from(Array.from({ length: 30 }, () => Math.floor(Math.r
 
 const drivers = {
   linux: async (p) => { const env = { ...process.env }; for (const k of ["vip", "vport", "vtx", "vrx", "vssrcs", "vpt"]) if (p[k] !== undefined) env[`OL_${k.toUpperCase()}`] = String(p[k]);
-    const { stdout, stderr } = await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, SECONDS], { env, timeout: (SECONDS + 30) * 1000, maxBuffer: 1 << 26 });
+    const { stdout, stderr } = await run(path.resolve("tests/pjsip-matrix/engine/olsfu_cli"), [p.ip, p.port, p.tx, p.rx, p.ssrc, p.txPt, p.rxPt, p.secondsOverride ?? SECONDS], { env, timeout: (SECONDS + 30) * 1000, maxBuffer: 1 << 26 });
     const log = fs.existsSync("/tmp/olsfu.log") ? fs.readFileSync("/tmp/olsfu.log", "utf8").split("\n").filter((l) => /strm|srtp|udp|conf|Error|fail|pkt|RX|TX/i.test(l)).slice(0, 80).join("\n") : "";
     console.log("[olsfu_cli]", log, stderr.slice(-2000)); return JSON.parse(stdout.split("\n").find((l) => l.startsWith("{"))); },
   android: async (p) => { const args = ["shell", "am", "instrument", "-w", "-e", "class", `com.donnydey.openlounge.pjsip.SfuLegTest#${p.vip ? "videoLeg" : "audioLeg"}`];
-    for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", ...(p.vip ? { vip: "10.0.2.2" } : {}), seconds: SECONDS })) args.push("-e", k, String(v));
-    const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: (SECONDS + 90) * 1000 });
+    for (const [k, v] of Object.entries({ ...p, ip: "10.0.2.2", ...(p.vip ? { vip: "10.0.2.2" } : {}), seconds: p.secondsOverride ?? SECONDS })) args.push("-e", k, String(v));
+    const { stdout } = await run("adb", [...args, "com.donnydey.openlounge.callengine.test/androidx.test.runner.AndroidJUnitRunner"], { timeout: ((p.secondsOverride ?? SECONDS) + 90) * 1000 });
     const m = /olresult=(\{.*\})/.exec(stdout); if (!m) { const lc = crashHead((await run("adb", ["logcat", "-d", "-b", "all", "-t", "3000"], { maxBuffer: 1 << 26 })).stdout); console.log("[logcat]\n" + lc); throw new Error(`no olresult: ${stdout.slice(-800)}`); } return JSON.parse(m[1]); },
   ios: async (p) => { const f = "/tmp/olsfu-ios.json"; fs.rmSync(f, { force: true });
     const env = { ...process.env }; for (const [k, v] of Object.entries({ ...p, seconds: SECONDS, out: f })) env[`TEST_RUNNER_OL_${k.toUpperCase()}`] = String(v);
@@ -56,6 +56,7 @@ await new Promise((r) => phoneWs.on("open", r));
 const pwait = async (t) => { for (let i = 0; i < 300; i++) { const k = pmsgs.findIndex((m) => m.t === t); if (k >= 0) return pmsgs.splice(k, 1)[0]; await new Promise((r) => setTimeout(r, 100)); } throw new Error(`phone: no ${t}`); };
 const rpc = async (callId, method, payload = {}) => { const r = await fetch(`${stack.base}/rpc`, { method: "POST", body: JSON.stringify({ callId, userId: "phone", method, payload }) }); const j = await r.json(); if (!r.ok) throw new Error(j.error); return j; };
 
+let LEG_SECONDS; // per-call override (background cell)
 async function oneCall(phoneCalls, media = "audio") {
   let callId; const tDial = Date.now(); let tRing, tAnswer;
   if (phoneCalls) { phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: media, route: "sfu" })); callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; tRing = Date.now(); tAnswer = Date.now(); await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted"); }
@@ -74,7 +75,7 @@ async function oneCall(phoneCalls, media = "audio") {
   let cons = []; for (let i = 0; i < 100 && cons.length < want; i++) { cons = cons.concat((await rpc(callId, "plain:consume")).consumers); if (cons.length < want) await new Promise((r) => setTimeout(r, 200)); }
   if (cons.length < want) throw new Error("phone: browser producer never appeared");
   const acons = cons.find((x) => x.kind === "audio");
-  const phone = await drivers[PHONE]({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: acons.payloadType, ...v }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
+  const phone = await drivers[PHONE]({ secondsOverride: LEG_SECONDS, ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: acons.payloadType, ...v }).catch((e) => ({ error: String(e.message).slice(0, 400) }));
   if (process.env.TSTATS !== "0") console.log("[tstats]", JSON.stringify(await (await fetch(`${stack.base}/tstats`)).json()).slice(0, 6000));
   await W.evaluate(() => window.olStop()); await rpc(callId, "plain:close"); const web = await webP;
   phoneWs.send(JSON.stringify({ t: "call:leave", callId })); await new Promise((r) => setTimeout(r, 800));
@@ -95,5 +96,29 @@ for (const media of MEDIA) for (const phoneCalls of [true, false]) {
     const vk = media === "video" ? { fps: r.fps, nonBlack: r.nonBlack, decodeErr: r.decodeErr, encoder: r.encoder, decFps: r.decFps, decErr: r.decErr, rxAu: r.rxAu, rxKey: r.rxKey, txAu: r.txAu, codec: r.codec, videoError: r.videoError } : {};
     console.log(id, HEADLESS_PACING ? "[headless pacing]" : "", JSON.stringify({ pass: r.pass, redial: r.redialPass, teardown: r.teardownClean, rms: r.rms, rxPkt: r.rxPkt, txPkt: r.txPkt, avgLevel: r.avgLevel, error: r.error, ...vk, diag: r.diag }));
   }
+}
+if (PHONE === "android" && process.env.BG_CELL === "1") { // 5 min with the device backgrounded + screen off (HOME, SLEEP) mid-call
+  LEG_SECONDS = Number(process.env.BG_SECONDS || 300); const LEG_SECONDS_USED = LEG_SECONDS;
+  const bg = setTimeout(() => { run("adb", ["shell", "input", "keyevent", "KEYCODE_HOME"]).catch(() => {}); run("adb", ["shell", "input", "keyevent", "KEYCODE_SLEEP"]).catch(() => {}); }, 8000);
+  const r = await oneCall(true, "audio"); clearTimeout(bg); LEG_SECONDS = undefined; run("adb", ["shell", "input", "keyevent", "KEYCODE_WAKEUP"]).catch(() => {});
+  const want = LEG_SECONDS_USED * 50; const cell = { id: "android-browser-background5m", run: runId, seconds: LEG_SECONDS_USED, phoneRxPkt: r.phone.rxPkt, phoneTxPkt: r.phone.txPkt, webAudioPkts: r.web.audioPkts, webMaxGapMs: r.web.maxGapMs, rms: r.web.rms, error: r.phone.error,
+    pass: !r.phone.error && r.phone.rxPkt >= want * 0.95 && r.web.audioPkts >= want * 0.95 && (r.web.maxGapMs ?? 1e9) < 1000 };
+  fs.writeFileSync(path.join(out, `${cell.id}.json`), JSON.stringify(cell, null, 1)); console.log(cell.id, JSON.stringify(cell)); if (!cell.pass) failed++;
+}
+if (PHONE === "linux" && process.env.NETSWITCH === "1") { // network change: phone leg drops its socket+transport mid-call and re-joins on a NEW
+  // local port + new PlainTransport/producer (what the app does on Wi-Fi<->cellular); browser keeps the call and re-consumes.
+  const LEG = 8; phoneWs.send(JSON.stringify({ t: "call:new", to: "web", kind: "audio", route: "sfu" }));
+  const callId = (await W.evaluate(() => window.__sig.wait("call:incoming"))).callId; await W.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), callId); await pwait("call:accepted");
+  const webP = W.evaluate((o) => window.olCall(o), { callId, userId: "web", relayUrl: stack.relayUrl, video: false, seconds: 600, repoll: true });
+  const leg = async () => { const c = await rpc(callId, "plain:create"); const tx = key(); const ssrc = 100000 + Math.floor(Math.random() * 1e6);
+    await rpc(callId, "plain:connect", { srtpParameters: { cryptoSuite: "AES_CM_128_HMAC_SHA1_80", keyBase64: tx } }); await rpc(callId, "plain:produce", { kind: "audio", ssrc, payloadType: 111 });
+    let cons = []; for (let i = 0; i < 50 && !cons.length; i++) { cons = (await rpc(callId, "plain:consume")).consumers; if (!cons.length) await new Promise((r) => setTimeout(r, 100)); }
+    const prev = process.env.CELL_SECONDS; return drivers.linux({ ip: c.ip, port: c.port, tx, rx: c.srtpParameters.keyBase64, ssrc, txPt: 111, rxPt: cons[0].payloadType, secondsOverride: LEG }); };
+  const a = await leg(); const tSwitch = Date.now(); await rpc(callId, "plain:close"); const b = await leg();
+  await W.evaluate(() => window.olStop()); const web = await webP; await rpc(callId, "plain:close"); phoneWs.send(JSON.stringify({ t: "call:leave", callId }));
+  const resumeMs = web.maxGapAt && web.maxGapAt > tSwitch ? web.maxGapMs : null;
+  const cell = { id: "linux-browser-netswitch", run: runId, legA: { rxPkt: a.rxPkt, txPkt: a.txPkt }, legB: { rxPkt: b.rxPkt, txPkt: b.txPkt, error: b.error }, browserAudioGapMs: web.maxGapMs, resumeMs, rms: web.rms,
+    pass: !a.error && !b.error && b.rxPkt > LEG * 50 * 0.8 && resumeMs !== null && resumeMs < 2000 };
+  fs.writeFileSync(path.join(out, `${cell.id}.json`), JSON.stringify(cell, null, 1)); console.log(cell.id, JSON.stringify(cell)); if (!cell.pass) failed++;
 }
 await browser.close(); await stack.close(); process.exit(failed && process.env.CELLS_ENFORCE !== "0" ? 1 : 0);

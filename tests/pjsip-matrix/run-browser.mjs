@@ -19,12 +19,12 @@ const page = async (u) => { const ctx = await browser.newContext({ permissions: 
   await p.goto(`${stack.base}/tests/pjsip-matrix/browser/call.html`); await p.waitForFunction(() => window.olReady); await p.evaluate((x) => window.olSignal(x), u); return p; };
 const A = await page("alice"), B = await page("bob");
 const stats = async () => (await fetch(`${stack.base}/stats`)).json();
-async function oneCall(media) {
+async function oneCall(media, extra = {}) {
   await A.evaluate((k) => window.__sig.send({ t: "call:new", to: "bob", kind: k, route: "sfu", ack: 1 }), media);
   const inc = await B.evaluate(() => window.__sig.wait("call:incoming"));
   await B.evaluate((id) => window.__sig.send({ t: "call:accept", callId: id }), inc.callId);
   await A.evaluate(() => window.__sig.wait("call:accepted"));
-  const opts = (u) => ({ callId: inc.callId, userId: u, relayUrl: stack.relayUrl, video: media === "video", seconds: SECONDS });
+  const opts = (u) => ({ callId: inc.callId, userId: u, relayUrl: stack.relayUrl, video: media === "video", seconds: SECONDS, ...extra });
   const [ra, rb] = await Promise.all([A.evaluate((o) => window.olCall(o), opts("alice")), B.evaluate((o) => window.olCall(o), opts("bob"))]);
   await A.evaluate((id) => window.__sig.send({ t: "call:leave", callId: id }), inc.callId);
   await B.evaluate(() => window.__sig.wait("call:ended")); await new Promise((r) => setTimeout(r, 500));
@@ -52,6 +52,14 @@ if (process.env.LOSS_CELL === "1") { // 45 % UDP loss (tc netem on lo, UDP only 
     const rec = after.find((k) => b[k] >= 45); return { lossRxPct: inLoss.length ? Math.round(inLoss.reduce((a, k) => a + b[k], 0) / (inLoss.length * 50) * 100) : null,
       recoveryMs: rec !== undefined ? Math.max(0, (rec + 1) * 1000 - lossOff) : null, callSurvived: after.length > 0, rms: +x.rms.toFixed(3) }; };
   for (const d of ["fwd", "rev"]) { const m = per(r[d]); const cell = { id: `browser-browser-loss${LOSS}-${d}`, run, lossPct: LOSS, ...m, pass: m.callSurvived && m.recoveryMs !== null && m.recoveryMs <= 2000 && r[d].srtpErr === 0 };
+    fs.writeFileSync(path.join(out, `${cell.id}.json`), JSON.stringify(cell, null, 1)); console.log(cell.id, JSON.stringify(cell)); }
+}
+if (process.env.DELAY_CELL === "1") { // one-way audio delay: 100 ms tone pulses every 2 s, same-clock tx/rx (encode+SRTP+relay+SFU+decode; no device I/O)
+  const r = await oneCall("audio", { headlessPacing: true, pulse: true });
+  for (const d of ["fwd", "rev"]) { const x = r[d], peer = r[d === "fwd" ? "rev" : "fwd"]; const tx = peer.pulseTx || [], rx = x.pulseRx || [];
+    const ds = rx.map((t) => { const s = tx.filter((u) => u <= t).pop(); return s === undefined ? null : t - s; }).filter((v) => v !== null && v < 1000).sort((a, b) => a - b);
+    const med = ds.length ? ds[ds.length >> 1] : null, p95 = ds.length ? ds[Math.floor(ds.length * 0.95)] : null;
+    const cell = { id: `browser-browser-delay-${d}`, run, pulses: ds.length, oneWayMedianMs: med, oneWayP95Ms: p95, pass: med !== null && med <= 45 && ds.length >= 5 };
     fs.writeFileSync(path.join(out, `${cell.id}.json`), JSON.stringify(cell, null, 1)); console.log(cell.id, JSON.stringify(cell)); }
 }
 await browser.close(); await stack.close(); process.exit(0);

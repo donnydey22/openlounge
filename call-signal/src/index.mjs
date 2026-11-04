@@ -4,6 +4,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { createSignal, iceConfig } from "./core.mjs";
+import { signalPushFor } from "./push.mjs";
 
 const PORT = Number(process.env.PORT || 8090);
 const SIGNAL_SECRET = process.env.CALL_SIGNAL_SECRET;
@@ -17,19 +18,7 @@ export function verify(token, now = Date.now()) {
   return want.length === sig.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(sig)) ? uid : null;
 }
 
-// Callee offline → app server rings it: APNs VoIP (iOS CallKit) + FCM high-priority (Android). Logs sent/delivered.
-const PUSH_URL = process.env.CALL_SIGNAL_PUSH_URL; // e.g. https://<app>/api/internal/call-signal-push
-const PUSH_SECRET = process.env.CALL_SIGNAL_PUSH_SECRET;
-export async function signalPush(to, p, f = fetch) {
-  if (!PUSH_URL || !PUSH_SECRET) return console.log(`[push] disabled (no CALL_SIGNAL_PUSH_URL/SECRET) call ${p.callId}`);
-  const t0 = Date.now();
-  try {
-    const r = await f(PUSH_URL, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${PUSH_SECRET}` },
-      body: JSON.stringify({ to, ...p }), signal: AbortSignal.timeout(5000) });
-    const j = await r.json().catch(() => ({}));
-    console.log(`[push] sent call=${p.callId} to=${to} http=${r.status} voipSent=${j.voipSent ?? "-"} fcm=${j.fcm ?? "-"} ms=${Date.now() - t0}`);
-  } catch (e) { console.log(`[push] failed call=${p.callId} to=${to} ${String(e?.name || e)} ms=${Date.now() - t0}`); }
-}
+const signalPush = signalPushFor({ url: process.env.CALL_SIGNAL_PUSH_URL, secret: process.env.CALL_SIGNAL_PUSH_SECRET });
 
 const sockets = new Map();
 const signal = createSignal({
