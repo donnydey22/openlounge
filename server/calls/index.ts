@@ -52,7 +52,7 @@ const CALL_ROOM_RE = /^openlounge-call-([0-9a-f-]{36})$/;
 /** WebSocket upgrade headers, unlike page request bodies, are set by the iOS wrapper itself. */
 export function isIosNativeVideoWrapper(userAgent: unknown): boolean {
   const ua = typeof userAgent === "string" ? userAgent : "";
-  return /\bOpenLounge\/ios\/[^\s(]+\(\d+\)/i.test(ua);
+  return /\bOpenLounge\/(ios|android)\/[^\s(]+\(\d+\)/i.test(ua);
 }
 
 /** Same fields as the FCM call_incoming data message (NATIVE_SPEC.md §1). */

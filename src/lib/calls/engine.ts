@@ -483,7 +483,7 @@ export class CallEngine {
     // mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
     // Native-media iOS app: the APP grabs the mic + loads WebRTC now (before the invite); the page never captures.
     this.deferNativeConnect = false;
-    const deferIosVideoCapture = video && nativePlatform() === "ios" && nativeVideoAvailable();
+    const deferIosVideoCapture = video && (nativePlatform() === "ios" || nativePlatform() === "android") && nativeVideoAvailable();
     this.iosNativeVideoCaptureFenced = deferIosVideoCapture;
     if (deferIosVideoCapture) {
       // The server grants app-owned video only after call:start. Do not let WKWebView seize the microphone at tap

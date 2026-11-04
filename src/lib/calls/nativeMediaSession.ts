@@ -127,7 +127,8 @@ export function resetAndroidNativeMedia() {
 
 /** iPhone video is app-owned only for an explicit current-call grant; this is the default-off production gate. */
 export function iosNativeVideoGranted(media: CallMedia | null | undefined): boolean {
-  return !!media?.iosNativeVideo && !nativeMediaIsAndroid() && nativeVideoAvailable();
+  // Android app joins once it advertises "nativeVideo" (pjsip-rebuild in-app video); older Android builds never do.
+  return !!media?.iosNativeVideo && nativeVideoAvailable();
 }
 /** Audio-only calls in the native-media iOS app use app-owned media; iPhone video is allowed only by its grant.
  * Android stays behind its independent opt-in and never inherits the iPhone path. */
