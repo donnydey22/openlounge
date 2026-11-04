@@ -1021,7 +1021,7 @@ export class CallEngine {
       await (media.provider === "livekit"
         ? Promise.race([session.connect(this.s.camOn), new Promise<never>((_, rej) => setTimeout(() => rej(new Error("livekit join budget")), CallEngine.LIVEKIT_JOIN_BUDGET_MS))])
         : first
-        ? Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])
+        ? Promise.race([session.connect(this.s.camOn), session instanceof WasmCallSession ? new Promise<never>((_, rej) => setTimeout(() => rej(new Error("wasm connect budget")), 12_000)) : this.firstConnectBudget()])
         : session.connect(this.s.camOn));
       if (this.mediasoup !== session || !this.busy) {
         session.close();

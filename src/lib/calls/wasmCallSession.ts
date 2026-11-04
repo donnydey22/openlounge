@@ -33,6 +33,18 @@ const relayUrl = () => {
   return env || `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/media-relay`;
 };
 
+// Fetch + compile the WASM core once per page (prewarmed when a call screen opens, reused by every session/retry).
+type Loaded = { mod: any; factory: unknown }; // eslint-disable-line @typescript-eslint/no-explicit-any
+let loading: Promise<Loaded> | null = null;
+export function prewarmWasmCall(): Promise<Loaded> {
+  if (!loading) loading = (async () => {
+    const mod = await import(/* webpackIgnore: true */ `${BASE}/src/client.mjs` as string);
+    const factory = (await import(/* webpackIgnore: true */ `${BASE}/dist/olwasm.mjs` as string)).default;
+    return { mod, factory };
+  })().catch((e) => { loading = null; throw e; });
+  return loading;
+}
+
 export class WasmCallSession {
   private closed = false;
   private ws: WebSocket | null = null;
@@ -55,7 +67,7 @@ export class WasmCallSession {
   private poll: ReturnType<typeof setInterval> | null = null;
   private stats = { sent: 0, recv: 0, recvErr: 0, vSent: 0, vFrames: 0 };
 
-  constructor(private socket: RealtimeClient, private media: CallMedia, private opts: Opts) {}
+  constructor(private socket: RealtimeClient, private media: CallMedia, private opts: Opts) { void prewarmWasmCall().catch(() => {}); }
 
   private get callId() { return (this.media as CallMedia & { callId?: string }).callId ?? this.opts.callId; }
   private req<T>(event: string, data: Record<string, unknown> = {}) {
@@ -63,9 +75,7 @@ export class WasmCallSession {
   }
 
   async connect(_withVideo: boolean) {
-    const mod = await import(/* webpackIgnore: true */ `${BASE}/src/client.mjs` as string);
-    const factory = (await import(/* webpackIgnore: true */ `${BASE}/dist/olwasm.mjs` as string)).default;
-    await this.req("ms:join");
+    const [{ mod, factory }] = await Promise.all([prewarmWasmCall(), this.req("ms:join")]);
     const created = await this.req<{ ip: string; port: number; srtpParameters: { keyBase64: string }; relayToken?: string }>("ms:plain:create");
     if (!created?.relayToken) throw new Error("wasm call: no relay token");
     const tx: string = mod.newKeyB64();
@@ -100,11 +110,11 @@ export class WasmCallSession {
       for (const c of r?.consumers ?? []) { if (c.kind === "audio") { this.apt = c.payloadType; have = true; } if (c.kind === "video") this.vpt = c.payloadType; } };
     this.socket.on("ms:consumer:available", consume);
     this.poll = setInterval(consume, 1000);
-    await consume();
+    void consume();
     void have;
     if (this.ctx.state === "suspended") await this.ctx.resume().catch(() => {});
     this.opts.onState("connected");
-    if (_withVideo) await this.enableCamera().catch(() => this.opts.onCameraUnavailable?.());
+    if (_withVideo) void this.enableCamera().catch(() => this.opts.onCameraUnavailable?.());
   }
 
   rebindMic() {}
