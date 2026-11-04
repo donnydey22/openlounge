@@ -291,7 +291,7 @@ test("CALL_IOS_NATIVE_VIDEO=off leaves Android native-audio opt-in and Android-t
 test("baseline regression (a8a754e): Android WebView path keeps the 5 s first-connect budget from answer, mic handling, LiveKit pin", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.ok(src.includes("static FIRST_CONNECT_BUDGET_MS = 5_000;"));
-  assert.ok(src.includes("Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])"));
+  assert.match(src, /Promise\.race\(\[session\.connect\(this\.s\.camOn\), session instanceof WasmCallSession \? [^\n]*12_000\)\) : this\.firstConnectBudget\(\)\]\)/, "5 s budget for WebView, 12 s for the WASM leg");
   assert.ok(/while \(ringing\(\)\) await[\s\S]{0,80}this\.firstConnectT0 = Date\.now\(\)/.test(src));
   assert.ok(/: CallEngine\.FIRST_CONNECT_BUDGET_MS;/.test(src), "WebView session gets the unchanged 5 s base");
   assert.ok(src.includes("} else this.preMic = this.acquireMic();"), "WebView caller still captures the mic at dial (unchanged)");
@@ -306,7 +306,7 @@ test("Android app: WebView media path, caller budget from answer, LiveKit pinned
   installWindow(null);
   assert.equal(m.useNativeMedia(false), false, "web unchanged");
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.ok(src.includes("Promise.race([session.connect(this.s.camOn), this.firstConnectBudget()])"));
+  assert.match(src, /Promise\.race\(\[session\.connect\(this\.s\.camOn\), session instanceof WasmCallSession \? [^\n]*12_000\)\) : this\.firstConnectBudget\(\)\]\)/, "5 s budget for WebView, 12 s for the WASM leg");
   assert.ok(/while \(ringing\(\)\) await[\s\S]{0,80}this\.firstConnectT0 = Date\.now\(\)/.test(src), "caller budget starts at answer");
   assert.ok(!/shouldTryUdp\(now\)\) void this\.requestUdpRestore\(\)/.test(src), "no LiveKit → SFU flap-back");
 });

@@ -31,17 +31,17 @@ test("simulcast ladder: low layer always on, upper layers switch on only when th
   assert.deepEqual(floor.map((x) => x.active), [true, false, false]);
 });
 
-test("SFU layer policy: severe loss -> low at once; 2 lossy samples -> one down; 3 clean -> one up; BWE ceiling", () => {
+test("SFU layer policy (video spec v2): severe loss -> low at once; loss > 2% -> one down; 5 clean -> one up; BWE ceiling", () => {
   let s = nextLayer(undefined, { lossPct: 0, availableBps: 5e6 });
   assert.equal(s.spatial, 2);
   s = nextLayer(s, { lossPct: 25, availableBps: 5e6 });
   assert.equal(s.spatial, 0);
   for (let i = 0; i < LAYER_POLICY.upAfter; i++) s = nextLayer(s, { lossPct: 0, availableBps: 5e6 });
   assert.equal(s.spatial, 1);
-  s = nextLayer(s, { lossPct: 10, availableBps: 5e6 }); assert.equal(s.spatial, 1);
-  s = nextLayer(s, { lossPct: 10, availableBps: 5e6 }); assert.equal(s.spatial, 0);
+  s = nextLayer(s, { lossPct: 2, availableBps: 5e6 }); assert.equal(s.spatial, 1, "2% is not > 2%");
+  s = nextLayer(s, { lossPct: 3, availableBps: 5e6 }); assert.equal(s.spatial, 0);
   assert.equal(nextLayer({ spatial: 2, bad: 0, good: 0 }, { lossPct: 0, availableBps: 300_000 }).spatial, 0);
-  assert.equal(nextLayer({ spatial: 2, bad: 0, good: 0 }, { lossPct: 0, availableBps: 600_000 }).spatial, 1);
+  assert.equal(nextLayer({ spatial: 2, bad: 0, good: 0 }, { lossPct: 0, availableBps: 1_000_000 }).spatial, 1);
 });
 
 test("wiring: SFU steers only simulcast consumers and never closes anything", () => {

@@ -72,11 +72,12 @@ test("cors: allowlist, same-origin, app schemes, foreign origin", () => {
   assert.equal(originAllowed("https://openlounge.app.evil.com", "openlounge.app"), false);
 });
 
-test("csp: production policy covers LiveKit (self-hosted + cloud), Firebase, /ws; no unsafe-eval", () => {
+test("csp: production policy covers LiveKit (self-hosted + cloud), Firebase, /ws; wasm-unsafe-eval only", () => {
   const csp = buildCsp({ LIVEKIT_URL: "wss://livekit-production-5c67.up.railway.app", LIVEKIT_CLOUD_URL: "wss://x.livekit.cloud" }, false);
   for (const s of ["wss://livekit-production-5c67.up.railway.app", "https://livekit-production-5c67.up.railway.app", "wss://x.livekit.cloud", "https://*.googleapis.com", "https://www.gstatic.com", "https://www.google.com/recaptcha/", "https://*.firebaseapp.com", "wss://openlounge.app", "frame-ancestors 'none'"])
     assert.ok(csp.includes(s), s);
-  assert.ok(!csp.includes("unsafe-eval"));
+  assert.ok(!csp.includes("'unsafe-eval'"), "no bare unsafe-eval in production");
+  assert.ok(csp.includes("'wasm-unsafe-eval'"), "WASM call engine needs wasm-unsafe-eval");
   assert.ok(!csp.includes("raw.githubusercontent.com"), "Telegram remote emoji host must stay out of CSP");
   assert.ok(buildCsp({}, true).includes("'unsafe-eval'"));
 });

@@ -12,9 +12,9 @@ const load = () => {
   const logs: string[] = []; const timers: Array<() => void> = [];
   const sessions = new Map<string, S>(); const byP = new Map<string, string>();
   const fakeSetTimeout = (fn: () => void) => { timers.push(fn); return { unref() {} }; };
-  const api = new Function("sessions", "sessionsByParticipant", "safeLog", "b64", "setTimeout", "clearTimeout",
+  const api = new Function("sessions", "sessionsByParticipant", "safeLog", "b64", "setTimeout", "clearTimeout", "releaseRoom",
     `${body}; return { sessionOf, closeConnection, closeSession, closeCall, participantKey };`)(
-    sessions, byP, (ev: string) => logs.push(ev), (x: string) => x, fakeSetTimeout, () => {});
+    sessions, byP, (ev: string) => logs.push(ev), (x: string) => x, fakeSetTimeout, () => {}, () => {});
   const add = (conn: string, user: string) => {
     const s: S = { callId: "c1", userId: user, connectionId: conn, participantKey: `c1:${user}`, closed: false, transports: new Map([["t", { close() {} }]]), producers: new Map(), consumers: new Map() };
     sessions.set(conn, s); byP.set(s.participantKey, conn); return s;
