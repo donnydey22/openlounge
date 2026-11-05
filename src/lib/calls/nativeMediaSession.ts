@@ -169,7 +169,12 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
   }
 }
 
-const MS_EVENT = /^ms:[a-z:]+$/i;
+// call:p2p = phone-to-phone ICE/SRTP details for the native P2P leg (server forwards verbatim to the other phone)
+const MS_EVENT = /^(ms:[a-z:]+|call:p2p)$/i;
+/** server -> page -> app: the other phone's call:p2p message for this call */
+function p2pForward(callId: string) {
+  return (d: unknown) => { const m = d as { callId?: string; msg?: unknown }; if (m?.callId === callId) void nativeMediaCmd({ op: "p2p", callId, msg: m.msg }).catch(() => {}); };
+}
 
 /** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
 export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced", "session-gone", "frame-stall", "ice-restart-coalesced"]);
@@ -242,6 +247,7 @@ export class NativeMediaSession {
   /** FX-078: set when the app reports the SFU no longer has this session; the engine's recovery skips to a rebuild. */
   sessionGone = false;
 
+  private readonly onP2p = (d: unknown) => p2pForward((this.media as { callId?: string }).callId ?? this.opts.callId ?? "")(d);
   /** app → page: one ms:* request relayed over the page socket; the answer goes back via msReply */
   private readonly relay = (id: string, event: string, data: Record<string, unknown>) => {
     const b = bridge();
@@ -308,6 +314,7 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
+    this.socket.on("call:p2p", this.onP2p);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
     const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
@@ -354,6 +361,7 @@ export class NativeMediaSession {
     if (this.closed) return;
     this.closed = true;
     this.socket.off("ms:consumer:available", this.onAvailable);
+    this.socket.off("call:p2p", this.onP2p);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;
@@ -381,5 +389,6 @@ export function installPjsipRelay(socket: RealtimeClient, callId: string): () =>
   };
   const w = window as unknown as { __olNativeMsReq?: typeof relay };
   w.__olNativeMsReq = relay;
-  return () => { if (w.__olNativeMsReq === relay) delete w.__olNativeMsReq; };
+  const onP2p = p2pForward(callId); socket.on("call:p2p", onP2p);
+  return () => { socket.off("call:p2p", onP2p); if (w.__olNativeMsReq === relay) delete w.__olNativeMsReq; };
 }
