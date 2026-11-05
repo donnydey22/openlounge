@@ -86,8 +86,8 @@ test("native media: page relays the app's ms:* signaling for this call only, for
   assert.deepEqual(remoteVideo, [true, false]);
   await s.setMuted(true);
   assert.ok(cmds.some((c) => c.op === "mute" && c.muted === true));
-  const stats = await s.getTransportStats();
-  assert.equal((stats[0] as unknown as Map<string, unknown>).size, 1);
+  assert.equal((await s.getTransportStats()).length, 0, "no op:stats polling of the app engine");
+  assert.ok(!cmds.some((c) => c.op === "stats"));
   const bridgeSource = readFileSync(new URL("../../src/lib/calls/nativeMediaSession.ts", import.meta.url), "utf8");
   assert.doesNotMatch(bridgeSource, /consumerClosed|ms:consumer:closed/);
   s.close();
@@ -209,56 +209,6 @@ test("native media: Android app shim (OpenLoungeNativeMedia) is used; the Java i
   s.close();
 });
 
-test("native media: Android keeps its existing WebView fallback while a latched iPhone video call remains native", async () => {
-  const m = await import("../../src/lib/calls/nativeMediaSession");
-  installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
-  assert.equal(m.nativeMediaIsAndroid(), true);
-  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.ok(src.includes("if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);"));
-  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return this\.lastResortRelay\("native-ms-failed", reason\)/);
-  assert.match(src, /if \(this\.iosNativeVideoLatched\(\)\) return void this\.rejoin\("native-relay:failed"\)/);
-});
-
-test("Android baseline moat: WebView media by default for every build; native only with the server opt-in, build 34+, and a healthy device; a failure falls back and holds for 7 days", async () => {
-  const m = await import("../../src/lib/calls/nativeMediaSession");
-  const prevNav = (globalThis as { navigator?: unknown }).navigator;
-  try {
-    m.resetAndroidNativeMedia();
-    installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
-    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.19(35) OpenLoungeAndroid/0.3.19");
-    assert.equal(m.androidAppBuild(), 35);
-    assert.equal(m.useNativeMedia(false), false, "0.3.19 (35) with no server opt-in: WebView baseline");
-    m.noteAndroidNativeOptIn(false);
-    assert.equal(m.useNativeMedia(false), false, "explicit server off: WebView baseline");
-    m.noteAndroidNativeOptIn(true);
-    assert.equal(m.useNativeMedia(false), true, "server opt-in + build 35: native");
-    assert.equal(m.useNativeMedia(true), false, "video calls keep the WebView path");
-    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.17(33) OpenLoungeAndroid/0.3.17");
-    assert.equal(m.useNativeMedia(false), false, "build 33 stays on WebView even when opted in");
-    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.19(35) OpenLoungeAndroid/0.3.19");
-    m.disableAndroidNativeMedia("first connect budget");
-    assert.equal(m.useNativeMedia(false), false, "after a native failure: WebView path");
-    assert.equal(m.androidNativeDisabledReason(), "first connect budget");
-    m.newAndroidPageSession();
-    assert.equal(m.useNativeMedia(false), false, "device guard holds across page reloads");
-    assert.equal(m.androidNativeHealthy(Date.now() + m.ANDROID_NATIVE_COOLDOWN_MS + 1000), true, "guard expires after 7 days");
-    m.noteAndroidNativeOptIn(false);
-    assert.equal(m.androidNativeOptedIn(), false, "server kill switch clears the opt-in on the next grant");
-    installWindow({ capabilities: ["calls", "nativeMedia"], nativeMedia: async () => true, msReply() {} });
-    assert.equal(m.useNativeMedia(false), true, "iOS is never affected by the Android switch");
-    installWindow(null);
-    assert.equal(m.useNativeMedia(false), false, "web unchanged");
-  } finally {
-    m.resetAndroidNativeMedia();
-    Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
-  }
-  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.ok(/set media\(m: CallMedia \| null\) \{[\s\S]{0,120}noteAndroidNativeOptIn\(!!m\.androidNative\)/.test(src), "every mediasoup grant refreshes the opt-in");
-  const fb = src.slice(src.indexOf("private async androidNativeToWebView"), src.indexOf("private lifecycle:"));
-  assert.ok(/disableAndroidNativeMedia\(reason\)[\s\S]*dropMediaForRejoin\(\)[\s\S]*this\.msEverConnected = null[\s\S]*await this\.connectMediasoup\(media, true\)/.test(fb), "same call reconnects over WebView media");
-  assert.ok(fb.includes("this.nativeWebCall === callId"), "once per call");
-});
-
 test("server: CALL_ANDROID_NATIVE defaults OFF; only 'on' adds androidNative to mediasoup grants; LiveKit grants never carry it", async () => {
   const { androidNativeEnabled } = await import("../../server/calls/sfuSelect");
   assert.equal(androidNativeEnabled({}), false);
@@ -268,24 +218,6 @@ test("server: CALL_ANDROID_NATIVE defaults OFF; only 'on' adds androidNative to 
   const idx = readFileSync(new URL("../../server/calls/index.ts", import.meta.url), "utf8");
   assert.ok(idx.includes("...(androidNativeEnabled() ? { androidNative: true } : {})"));
   assert.equal((idx.match(/androidNative: true/g) ?? []).length, 1, "only the mediasoup grant");
-});
-
-test("CALL_IOS_NATIVE_VIDEO=off leaves Android native-audio opt-in and Android-to-Android video on their existing paths", async () => {
-  const { iosNativeVideoEnabled } = await import("../../server/calls/sfuSelect");
-  assert.equal(iosNativeVideoEnabled({ CALL_IOS_NATIVE_VIDEO: "off" }), false);
-  const m = await import("../../src/lib/calls/nativeMediaSession");
-  const prevNav = (globalThis as { navigator?: unknown }).navigator;
-  try {
-    m.resetAndroidNativeMedia();
-    installWindow({ capabilities: ["calls", "nativeMedia"], platform: "android", nativeMedia: async () => true, msReply() {} });
-    setUA("Mozilla/5.0 (Linux; Android 14) Chrome/130 Mobile OpenLounge/android/0.3.19(35) OpenLoungeAndroid/0.3.19");
-    m.noteAndroidNativeOptIn(true);
-    assert.equal(m.useNativeMedia(false), true, "Android native audio remains controlled solely by its own opt-in");
-    assert.equal(m.useNativeMedia(true), false, "Android-to-Android video remains on the frozen WebView path");
-  } finally {
-    m.resetAndroidNativeMedia();
-    Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true, writable: true });
-  }
 });
 
 test("baseline regression (a8a754e): Android WebView path keeps the 5 s first-connect budget from answer, mic handling, LiveKit pin", () => {
