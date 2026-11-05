@@ -532,7 +532,7 @@ export class CallService {
     return { ok: true as const };
   }
 
-  /** Phone-to-phone P2P: relay one ICE/SRTP message (pjnath candidates, SDES key) to the other participant, verbatim.
+  /** Phone-to-phone P2P: relay one ICE message (pjnath candidates in SDP; no encryption) to the other participant, verbatim.
    *  Pure forwarder over the existing call socket; no state, no change to dial/ring/active/end. */
   p2p(callId: unknown, userId: string, msg: unknown) {
     const c = this.get(callId, userId);
