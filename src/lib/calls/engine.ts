@@ -24,7 +24,7 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
-import { NativeMediaSession, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { CallTelemetry } from "./callTelemetry";
 import { isAndroidApp } from "@/lib/notify";
@@ -893,20 +893,16 @@ export class CallEngine {
     if (!id || this.twoWayCall === id || !session?.getTransportStats) return;
     this.twoWay?.stop();
     this.twoWayCall = id;
-    const promote = () => {
-      this.twoWay = null;
-      if (!this.busy || this.s.call?.id !== id || this.s.ui !== "connecting") return;
-      this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
-      playConnected();
-      postNative({ type: "call:connected", callId: id, video: !!(this.s.camOn || this.s.call?.video) });
-      this.diag("two-way-rtp", { src: this.mediasoup instanceof NativeMediaSession ? "engine-connected" : "stats" });
-    };
-    // App-owned media (iPhone/Android pjsip): active when the engine finishes connecting (Telegram PresentationCall
-    // updateSessionState: callContextState .connected -> .active). No stats polling of the app engine.
-    if (this.mediasoup instanceof NativeMediaSession) return promote();
     this.twoWay = watchTwoWay(
       () => ((this.mediasoup as unknown as { getTransportStats?: () => Promise<Iterable<unknown>> } | null)?.getTransportStats?.() ?? Promise.resolve([])) as Promise<Iterable<any>>,
-      promote,
+      () => {
+        this.twoWay = null;
+        if (!this.busy || this.s.call?.id !== id || this.s.ui !== "connecting") return;
+        this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now(), reconnecting: false });
+        playConnected();
+        postNative({ type: "call:connected", callId: id, video: !!(this.s.camOn || this.s.call?.video) });
+        this.diag("two-way-rtp", {});
+      },
       (c, ms) => this.diag("connecting-no-two-way-rtp", { rx: c.rx, tx: c.tx, ms }),
     );
   }
@@ -1083,6 +1079,7 @@ export class CallEngine {
         // repeats on every retry). Web and iOS keep the silent 5 s retry budget below.
         if (this.iosNativeVideoLatched()) void this.rejoin("native-media-connect-failed");
         else if (media.provider === "livekit") this.failUdpUnreachable("livekit-native", String((e as Error)?.message ?? e));
+        else if (this.mediasoup instanceof NativeMediaSession && nativeMediaIsAndroid()) void this.androidNativeToWebView(String((e as Error)?.message ?? e));
         else if (!recovering && !this.inFirstRetry) void this.retryFirstConnect(String((e as Error)?.message ?? e));
       }
       return null;
@@ -1853,6 +1850,7 @@ export class CallEngine {
 
   /** Native media failures keep a granted caller on app-owned media; Android retains its existing WebView escape. */
   private nativeFailed(reason: string) {
+    if (nativeMediaIsAndroid()) return this.androidNativeToWebView(reason);
     if (this.iosNativeVideoLatched()) return this.lastResortRelay("native-ms-failed", reason);
     return this.nativeRelayNow(reason);
   }
@@ -1860,6 +1858,23 @@ export class CallEngine {
   /** True only for the server-granted caller video call whose capture is permanently app-owned for this call. */
   private iosNativeVideoOwnsCamera() {
     return this.iosNativeVideoLatched();
+  }
+
+  /** Android-only existing WebView fallback guard; unrelated to the iPhone native-video latch. */
+  private nativeWebCall: string | null = null;
+  private async androidNativeToWebView(reason: string) {
+    const callId = this.s.call?.id;
+    const media = this.media;
+    if (!callId || !this.busy || this.nativeWebCall === callId || media?.provider !== "mediasoup") return;
+    this.nativeWebCall = callId;
+    disableAndroidNativeMedia(reason);
+    this.diag("native-fallback-webview", { reason: reason.slice(0, 160) });
+    // mid-call recovery loop already running: its next rebuild picks the WebView session (native is now off)
+    if (this.msRecovering) return;
+    this.dropMediaForRejoin();
+    this.media = media;
+    this.msEverConnected = null; // fresh first connect (own budget) on the WebView path
+    await this.connectMediasoup(media, true);
   }
 
   /** Android app on the WebView media path: Phase A suspension hardening (heartbeat, stall detection, recovery ladder). */
