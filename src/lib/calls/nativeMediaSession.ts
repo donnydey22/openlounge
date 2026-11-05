@@ -128,15 +128,15 @@ export function resetAndroidNativeMedia() {
 /** iPhone video is app-owned only for an explicit current-call grant; this is the default-off production gate. */
 export function iosNativeVideoGranted(media: CallMedia | null | undefined): boolean {
   // Android app joins once it advertises "nativeVideo" (pjsip-rebuild in-app video); older Android builds never do.
-  return (!!media?.iosNativeVideo || nativeMediaIsAndroid()) && nativeVideoAvailable();
+  return !!media?.iosNativeVideo && nativeVideoAvailable();
 }
 /** Audio-only calls in the native-media iOS app use app-owned media; iPhone video is allowed only by its grant.
  * Android stays behind its independent opt-in and never inherits the iPhone path. */
 export function useNativeMedia(video: boolean, media?: CallMedia | null): boolean {
   if (!nativeMediaAvailable()) return false;
-  if (nativeMediaIsAndroid()) return nativeVideoAvailable(); // pjsip Android app: native for 1:1 audio and video
   if (video) return iosNativeVideoGranted(media);
-  return true;
+  if (!nativeMediaIsAndroid()) return true;
+  return androidNativeOff === null && androidNativeOptedIn() && androidNativeHealthy() && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
 }
 
 /** Android app (0.3.16+ shim sets platform:'android'); the iOS bridge carries no platform */
@@ -212,10 +212,6 @@ export class NativeMediaSession {
   ) {
   }
 
-  /** SFU reports two-way audio (both users' audio producers receiving RTP): the engine's own state, pushed, never polled. */
-  flowing = false;
-  onFlowing: (() => void) | null = null;
-  private readonly onMediaFlowing = () => { if (this.closed || this.flowing) return; this.flowing = true; this.onFlowing?.(); };
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
@@ -312,7 +308,6 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
-    this.socket.on("ms:media:flowing", this.onMediaFlowing);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
     const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
@@ -347,7 +342,8 @@ export class NativeMediaSession {
     return (await nativeMediaCmd({ op: "ladder", audioBps: step.audioBps, voiceBps: voiceLadderBps(step.audioBps) }).catch(() => false)) === true;
   }
   async getTransportStats(): Promise<RTCStatsReport[]> {
-    return []; // the app's engine owns transport state; no cross-thread stats polling (iOS b93 crash)
+    const raw = (await nativeMediaCmd({ op: "stats" }).catch(() => [])) as Array<Array<Record<string, unknown> & { id?: string }>>;
+    return (Array.isArray(raw) ? raw : []).map((list) => new Map((list ?? []).map((s, i) => [String(s.id ?? i), s])) as unknown as RTCStatsReport);
   }
   async enableCamera(facing?: string) { await nativeMediaCmd({ op: "camera", on: true, facing: facing === "environment" ? "environment" : "user" }); }
   async disableCamera() { await nativeMediaCmd({ op: "camera", on: false }); }
@@ -359,7 +355,6 @@ export class NativeMediaSession {
     if (this.closed) return;
     this.closed = true;
     this.socket.off("ms:consumer:available", this.onAvailable);
-    this.socket.off("ms:media:flowing", this.onMediaFlowing);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;

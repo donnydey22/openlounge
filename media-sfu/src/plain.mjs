@@ -43,7 +43,7 @@ export function topLayerCap(msSinceStart) { return msSinceStart < QUICKHD.durati
  *   plain:produce { kind, ssrc | ssrcs[3], codec?, payloadType? } -> { id }
  *   plain:consume -> { consumers:[{id,producerId,kind,ssrc,payloadType}] }  (resumed immediately)
  */
-export async function handlePlainRpc({ method, payload = {}, s, router, peers, announcedAddress, bindIp = "0.0.0.0", emitTarget = () => {}, notify = () => {}, onProducer = () => {} }) {
+export async function handlePlainRpc({ method, payload = {}, s, router, peers, announcedAddress, bindIp = "0.0.0.0", emitTarget = () => {}, notify = () => {} }) {
   // Video spec v2: three transports per peer (audio, video, backup). Legacy calls without `purpose` = audio.
   const purpose = payload.purpose ?? "audio";
   if (!PEER_TRANSPORTS.includes(purpose)) throw new Error("Invalid transport purpose");
@@ -81,7 +81,6 @@ export async function handlePlainRpc({ method, payload = {}, s, router, peers, a
     s.producers.get(payload.kind)?.close();
     const p = await t.produce({ kind: payload.kind, rtpParameters, appData: { callId: s.callId, userId: s.userId, kind: payload.kind } });
     s.producers.set(payload.kind, p);
-    onProducer(p);
     notify("ms:consumer:available");
     return { id: p.id };
   }

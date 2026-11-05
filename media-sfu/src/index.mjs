@@ -156,20 +156,6 @@ function notifyPeers(source, event, data = {}) {
   }
 }
 
-/** Two-way audio, reported by mediasoup itself: each user's audio producer gets a score > 0 the moment its RTP arrives
- *  (event, no polling). When every user in the call is flowing, both pages get ms:media:flowing at the same moment. */
-function watchAudioFlow(s, producer) {
-  if (producer.kind !== "audio") return;
-  producer.on("score", (sc) => {
-    if (s.audioFlowing || !sc.some((x) => x.score > 0)) return;
-    s.audioFlowing = true;
-    const ps = [...sessions.values()].filter((p) => p.callId === s.callId && !p.closed);
-    const users = new Set(ps.map((p) => p.userId)), flowing = new Set(ps.filter((p) => p.audioFlowing).map((p) => p.userId));
-    if (users.size < 2 || flowing.size < users.size) return;
-    for (const p of ps) emitGateway("ms:gateway:notice", { connectionId: p.connectionId, event: "ms:media:flowing", data: { callId: s.callId } });
-  });
-}
-
 async function routeRpc(input) {
   if (!input || typeof input !== "object") throw new Error("Invalid gateway request");
   const { callId, userId, connectionId, method, payload = {}, token } = input;
@@ -201,7 +187,7 @@ async function routeRpc(input) {
   }
   if (method.startsWith("plain:")) { // PJSIP phones / WASM browsers (PLAN §13): PlainTransport, SRTP SDES, no ICE
     return handlePlainRpc({ method, payload, s, router: await routerFor(s.callId), peers: sessions.values(), announcedAddress: cfg.announcedAddress, bindIp: cfg.bindIp,
-      emitTarget: (t) => emitGateway("ms:gateway:plainTarget", t), notify: (ev) => notifyPeers(s, ev), onProducer: (p) => watchAudioFlow(s, p) });
+      emitTarget: (t) => emitGateway("ms:gateway:plainTarget", t), notify: (ev) => notifyPeers(s, ev) });
   }
   if (method === "transport:create") {
     const direction = payload.direction;
@@ -253,7 +239,6 @@ async function routeRpc(input) {
     }
     producer.on("transportclose", () => s.producers.delete(payload.kind));
     s.producers.set(payload.kind, producer);
-    watchAudioFlow(s, producer);
     notifyPeers(s, "ms:consumer:available");
     return { id: producer.id };
   }
@@ -294,8 +279,6 @@ async function routeRpc(input) {
   if (method === "consumer:resume") {
     for (const consumer of s.consumers.values()) if (consumer.id === payload.consumerId) {
       await consumer.resume();
-      // 1:1 video: ask the sender for an IDR the moment a viewer starts, so the first frame paints at once (no grey wait).
-      if (consumer.kind === "video") consumer.requestKeyFrame().catch(() => {});
       return {};
     }
     throw new Error("Unknown consumer");
