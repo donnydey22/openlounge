@@ -104,8 +104,9 @@ export class WasmCallSession {
     this.core!.openVideo({ ssrc: this.vssrc, pt: 102 });
     void pickH264Decoder().then((c) => { this.decCodec = c; });
     this.mic = await getMic();
-    const { ctx, node } = await openAudioGraph(this.mic);
-    this.ctx = ctx; this.unlock = armAudioUnlock(ctx);
+    const { ctx, node, src } = await openAudioGraph(this.mic); this.micSrc = src;
+    this.ctx = ctx; this.unlock = armAudioUnlock(ctx); this.node = node;
+    this.watchMic();
     this.wsUrl = `${relayUrl()}/?token=${encodeURIComponent(created.relayToken)}&callId=${encodeURIComponent(String(this.callId))}`;
     // Disabled mic track = silence frames, still sent (as a WebRTC sender does), so the peer's "audio received" gate
     // below also opens for a caller who starts muted.
@@ -140,7 +141,39 @@ export class WasmCallSession {
     if (_withVideo) void this.enableCamera().catch(() => this.opts.onCameraUnavailable?.());
   }
 
-  rebindMic() {}
+  // Mic loss + device change (tweb callInstance.ts:272-356 replaceP2pInputDevice / runInputDeviceSwap; tweb
+  // callInstanceBase.ts:286 track 'ended'): re-acquire the mic and swap it into the same audio graph; the WASM core,
+  // SSRC and media WS are untouched. A generation counter drops a stale swap (tweb isMediaDeviceChangeCurrent).
+  private node: AudioWorkletNode | null = null;
+  private micSrc: MediaStreamAudioSourceNode | null = null;
+  private micGen = 0;
+  private onDeviceChange = () => {
+    const id = this.mic?.getAudioTracks()[0]?.getSettings?.().deviceId;
+    void navigator.mediaDevices.enumerateDevices().then((ds) => {
+      const live = this.mic?.getAudioTracks()[0]?.readyState === "live";
+      if (!live || (id && !ds.some((d) => d.kind === "audioinput" && d.deviceId === id))) void this.swapMic();
+    }).catch(() => {});
+  };
+  private watchMic() {
+    this.mic?.getAudioTracks()[0]?.addEventListener("ended", () => void this.swapMic(), { once: true });
+    if (this.micGen === 0) navigator.mediaDevices.addEventListener?.("devicechange", this.onDeviceChange);
+  }
+  private async swapMic() {
+    if (this.closed || !this.ctx || !this.node) return;
+    const gen = ++this.micGen;
+    const fresh = await getMic().catch(() => null);
+    if (!fresh) return;
+    if (this.closed || gen !== this.micGen) { fresh.getTracks().forEach((t) => t.stop()); return; }
+    const old = this.mic;
+    fresh.getAudioTracks().forEach((t) => (t.enabled = !this.muted));
+    this.mic = fresh;
+    try { this.micSrc?.disconnect(); } catch {}
+    this.micSrc = this.ctx.createMediaStreamSource(fresh); this.micSrc.connect(this.node);
+    old?.getTracks().forEach((t) => t.stop());
+    this.watchMic();
+  }
+
+  rebindMic() {} // engine calls this right after connect; the WASM leg follows the mic itself (swapMic)
   checkMicAlive() {}
   async setMuted(muted: boolean) { this.muted = muted; this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted)); }
   async startAudio() { await this.ctx?.resume().catch(() => {}); return this.ctx?.state === "running"; }
@@ -274,6 +307,7 @@ export class WasmCallSession {
     if (this.consume) this.socket.off("ms:consumer:available", this.consume);
     this.clearRecoveryTimers(); this.gotAudio?.();
     if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} }
+    navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange); this.micGen++;
     this.mic?.getTracks().forEach((t) => t.stop());
     this.stopCamera(); try { this.dec?.close(); } catch {} this.remoteTrack?.stop();
     this.unlock?.(); void this.ctx?.close().catch(() => {});
@@ -297,7 +331,7 @@ async function getMic(): Promise<MediaStream> {
 }
 /** iOS Safari: ask for the call audio session (speaker/earpiece routing + echo cancel), 48 kHz context where allowed.
  *  Firefox can't mix a 48 kHz context with a 44.1 kHz mic -> fall back to the device rate (the worklet resamples). */
-async function openAudioGraph(mic: MediaStream): Promise<{ ctx: AudioContext; node: AudioWorkletNode }> {
+async function openAudioGraph(mic: MediaStream): Promise<{ ctx: AudioContext; node: AudioWorkletNode; src: MediaStreamAudioSourceNode }> {
   try { (navigator as unknown as { audioSession?: { type: string } }).audioSession!.type = "play-and-record"; } catch { /* not Safari */ }
   const AC = window.AudioContext ?? (window as AnyWin).webkitAudioContext!;
   const build = async (opts?: AudioContextOptions) => {
@@ -305,9 +339,9 @@ async function openAudioGraph(mic: MediaStream): Promise<{ ctx: AudioContext; no
     try {
       await ctx.audioWorklet.addModule(`${BASE}/src/pcm-worklet.js`);
       const node = new AudioWorkletNode(ctx, "ol-pcm", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
-      ctx.createMediaStreamSource(mic).connect(node);
+      const src = ctx.createMediaStreamSource(mic); src.connect(node);
       node.connect(ctx.destination);
-      return { ctx, node };
+      return { ctx, node, src };
     } catch (e) { void ctx.close().catch(() => {}); throw e; }
   };
   try { return await build({ sampleRate: 48000 }); } catch { return await build(); }
