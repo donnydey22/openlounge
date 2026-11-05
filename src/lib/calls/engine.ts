@@ -1008,6 +1008,7 @@ export class CallEngine {
       setSimulcastGrant(media); // FX-082: test-account grant only; false for everyone else
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
+        p2pOfferer: this.s.role === "caller",
         ...(this.s.role === "callee" && this.s.call?.callerPlatform ? { incoming: true, peerPlatform: this.s.call.callerPlatform } : {}),
         ...(this.iosNativeVideoLatched() && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}`, nativeVideo: true } : {}),
         ...(this.msRecovering ? { rebuild: true } : {}),
