@@ -22,7 +22,7 @@ test("reject / timeout / hangup / disconnect clean up, next call works", () => {
     if (finish === "reject") r.s.handle("b", { t: "call:reject", callId });
     if (finish === "timeout") r.timeout();
     if (finish === "hangup") { r.s.handle("b", { t: "call:accept", callId }); r.s.handle("a", { t: "call:leave", callId }); }
-    if (finish === "disconnect") r.s.disconnected("b");
+    if (finish === "disconnect") { r.s.handle("b", { t: "call:accept", callId }); r.s.disconnected("b"); assert.equal(r.s.calls.size, 1, "signaling drop alone keeps the call"); r.timeout(); }
     assert.equal(r.s.calls.size, 0, finish); assert.equal(r.s.byUser.size, 0, finish);
     assert.equal(r.s.handle("a", { t: "call:new", to: "b" }).ok, true, `${finish}: clean next call`);
   }
@@ -52,4 +52,21 @@ test("offline callee: push once, re-ring + delivered on connect", () => {
   on = true; assert.equal(s.connected("b"), r.callId);
   assert.ok(sent.filter(([u, m]) => u === "b" && m.t === "call:incoming").length >= 2);
   assert.equal(s.connected("a"), null);
+});
+
+test("signaling drop alone does not end a call; reconnect re-attaches inside the 45 s grace (tweb parity)", () => {
+  const timers = []; const r = rig({ setTimer: (f, ms) => { timers.push({ f, ms }); return timers.length; } });
+  const { callId } = r.s.handle("a", { t: "call:new", to: "b" });
+  assert.equal(timers[0].ms, 45_000, "ring timeout = tweb CALL_REQUEST_TIMEOUT");
+  r.s.handle("b", { t: "call:accept", callId });
+  r.s.disconnected("a");
+  assert.equal(r.s.calls.size, 1); assert.equal(timers.at(-1).ms, 45_000);
+  assert.deepEqual(r.out.at(-1), ["b", { t: "call:peer", callId, userId: "a", online: false, graceMs: 45_000 }]);
+  assert.equal(r.s.connected("a"), callId, "reconnecting socket re-attaches to the live call");
+  assert.deepEqual(r.out.at(-1), ["b", { t: "call:peer", callId, userId: "a", online: true }]);
+  timers.at(-1).f(); // stale grace timer firing after re-attach does nothing
+  assert.equal(r.s.calls.size, 1);
+  assert.equal(r.s.handle("a", { t: "offer", callId, sdp: "x" }).ok, true);
+  r.s.disconnected("b"); timers.at(-1).f();
+  assert.equal(r.s.calls.size, 0); assert.equal(r.out.at(-1)[1].reason, "disconnected");
 });

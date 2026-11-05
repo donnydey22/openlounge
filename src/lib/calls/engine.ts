@@ -21,7 +21,7 @@ import { native, nativePlatform } from "@/lib/native";
 import { applyCameraCaptureQuality, applyCameraQualityHint, browserNetworkTier, browserUsesNativeMobileCameraFrame, captureResolution, currentCodecChoice, micPublishOptions, publishCamera, publishDefaults, type NetworkTier } from "./videoPolicy";
 import { audioContext, unlockAudio } from "@/lib/audioUnlock";
 import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProcessing";
-import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
+import { nativeRingbackMode, playBusy, playConnected, playHangup, playReconnecting, playRingback, playRingtone, rearmRing, ringing, stopReconnecting, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { NativeMediaSession, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
@@ -308,6 +308,8 @@ export class CallEngine {
         if (r?.call && this.s.call?.id === call.id) this.onState({ call: r.call });
         if (!this.busy || this.s.call?.id !== call.id) return;
         if (this.s.ui !== "active" && this.s.ui !== "connecting") return;
+        // web WASM leg: a signaling drop alone does nothing; its media recovery is self-contained (tweb parity)
+        if (this.mediasoup instanceof WasmCallSession) return;
         if (this.deferNativeConnect || this.mediaConnected() || this.rejoining || this.msRecovering || this.fallbackInFlight) return;
         const firstConnectSpent = !this.firstConnectT0 || Date.now() - this.firstConnectT0 > this.firstConnectBudgetMs();
         if (firstConnectSpent) void this.rejoin("socket-back");
@@ -1220,6 +1222,25 @@ export class CallEngine {
 
   private onMediasoupState(state: "connected" | "disconnected" | "failed") {
     if (!this.busy) return;
+    if (this.mediasoup instanceof WasmCallSession) {
+      // Web WASM leg: the session runs tweb's recovery itself (wasmCallSession.ts: 2 s restart, 5 s retries, 45 s
+      // hang-up; tweb connectionRecovery.ts:148-185,312-336). Here only the UI state + tone, as tweb's controller does
+      // (callsController.ts:493-498 hang-up timer, 533-542 looping 'connecting' tone once the call has connected).
+      if (state === "connected") {
+        this.mediasoupConnected = true;
+        stopReconnecting();
+        return void this.set({ reconnecting: false });
+      }
+      if (state === "disconnected") {
+        this.mediasoupConnected = false;
+        this.netLog("wasm-reconnecting");
+        if (this.s.connectedAt) playReconnecting();
+        return void this.set({ reconnecting: true });
+      }
+      this.netLog("wasm-reconnect-timeout");
+      stopReconnecting();
+      return void this.hangup(); // tweb: CALL_REQUEST_TIMEOUT hang-up with discard reason 'disconnect'
+    }
     if (this.media?.provider !== "mediasoup") {
       // native-media app on the emergency LiveKit path: its own reconnects failed → keep reconnecting via rejoin
       if (!(this.mediasoup instanceof NativeMediaSession)) return;

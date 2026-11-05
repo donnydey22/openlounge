@@ -114,7 +114,9 @@ function closeCall(callId) {
 // FX-078 (call bbbe198f): a dropped browser socket (Wi-Fi <-> cellular) no longer kills the peer's media at once.
 // The session (transports, producers, consumers) is kept for DETACH_GRACE_MS; a request from the same user for the
 // same call on a new connection re-attaches it (sessionOf), so an ICE restart resumes media. Expiry closes as before.
-const DETACH_GRACE_MS = 30_000;
+// 45 s (was 30 s): a signaling drop alone must not end media (tweb parity, Donny 10:17 PM); matches the server's
+// CALL_RECONNECT_GRACE_MS, the relay's GRACE_MS and tweb's CALL_REQUEST_TIMEOUT (tweb src/lib/calls/constants.ts:33).
+const DETACH_GRACE_MS = 45_000;
 function closeConnection(connectionId) {
   const s = sessions.get(connectionId);
   if (!s || s.closed) return;

@@ -408,6 +408,7 @@ if (typeof window !== "undefined")
   };
 
 export function stopTones() {
+  stopReconnecting();
   const c = cur;
   cur = null;
   c?.stop();
@@ -439,3 +440,22 @@ function blip(seq: [number[], number, number][]) {
 export const playBusy = () => blip([0, 1, 2].map((i) => [[480, 620], i * 0.5, 0.25] as [number[], number, number]));
 export const playConnected = () => blip([[[660], 0, 0.09], [[990], 0.1, 0.12]]);
 export const playHangup = () => blip([[[620], 0, 0.12], [[440], 0.14, 0.18]]);
+
+// Reconnect tone (Donny 10:16 PM, tweb parity). tweb loops its 'connecting' asset while a call that already connected
+// is back in CONNECTING (tweb src/lib/calls/callsController.ts:533-542: playIfDifferent({name:'connecting', loop:true})
+// only when hasConnected) and stops it on any other state. We had no reconnect tone, so this loops a short soft
+// two-note tone built with the same synth as the other call tones (tweb's voip_connecting.mp3 is GPL-3.0 and is not
+// copied). playIfDifferent semantics: a second call while it is looping does nothing.
+let reconnectLoop: ReturnType<typeof setInterval> | null = null;
+export function playReconnecting() {
+  if (reconnectLoop) return;
+  const beat = () => { const c = resumeAudio(); if (!c) return; const t = c.currentTime + 0.02;
+    tone(c, c.destination, [440], t, 0.12, 0.06); tone(c, c.destination, [440], t + 0.2, 0.12, 0.06); };
+  beat();
+  reconnectLoop = setInterval(beat, 1_500);
+}
+export function stopReconnecting() {
+  if (reconnectLoop) clearInterval(reconnectLoop);
+  reconnectLoop = null;
+}
+export const reconnectToneOn = () => reconnectLoop !== null;

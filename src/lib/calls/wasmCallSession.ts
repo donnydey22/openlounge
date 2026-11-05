@@ -5,6 +5,10 @@ import type { RealtimeClient } from "@/lib/realtime";
 import type { CallMedia } from "@/lib/types";
 
 const BASE = "/wasm-call";
+// tweb@28bba1b src/lib/calls/p2P/connectionRecovery.ts:34-35 and src/lib/calls/constants.ts:33
+export const P2P_ICE_RESTART_MIN_INTERVAL_MS = 5000;
+export const P2P_ICE_DISCONNECTED_RESTART_DELAY_MS = 2000;
+export const CALL_REQUEST_TIMEOUT = 45e3;
 export const wasmCallEnabled = () =>
   typeof window !== "undefined" && process.env.NEXT_PUBLIC_OL_WASM_CALL === "1" && typeof AudioWorkletNode !== "undefined" && typeof WebAssembly !== "undefined" &&
   !!navigator.mediaDevices?.getUserMedia && window.isSecureContext !== false; // VideoDecoder optional: no WebCodecs -> audio + send-only video
@@ -69,6 +73,17 @@ export class WasmCallSession {
   private vts = 0;
   private muted = false;
   private poll: ReturnType<typeof setInterval> | null = null;
+  private wsUrl = "";
+  private onPacket: ((e: MessageEvent) => void) | null = null;
+  private consume: (() => Promise<void>) | null = null;
+  private gotAudio: (() => void) | null = null;
+  private hasConnected = false;
+  // reconnect state (tweb src/lib/calls/p2P/connectionRecovery.ts)
+  private disconnectedTimer: ReturnType<typeof setTimeout> | undefined;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private failureTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastRestartAt: number | undefined;
+  private restartCount = 0;
   private stats = { sent: 0, recv: 0, recvErr: 0, vSent: 0, vFrames: 0 };
 
   constructor(private socket: RealtimeClient, private media: CallMedia, private opts: Opts) { void prewarmWasmCall().catch(() => {}); }
@@ -91,30 +106,36 @@ export class WasmCallSession {
     this.mic = await getMic();
     const { ctx, node } = await openAudioGraph(this.mic);
     this.ctx = ctx; this.unlock = armAudioUnlock(ctx);
-    const ws = (this.ws = new WebSocket(`${relayUrl()}/?token=${encodeURIComponent(created.relayToken)}&callId=${encodeURIComponent(String(this.callId))}`));
-    ws.binaryType = "arraybuffer";
-    await new Promise<void>((ok, no) => { ws.onopen = () => ok(); ws.onclose = (e) => no(new Error(`relay closed ${e.code}`)); });
-    ws.onclose = () => { if (!this.closed) this.opts.onState("disconnected"); };
-    node.port.onmessage = (e) => { if (!this.muted && ws.readyState === 1 && this.core) { ws.send(this.core.send(e.data)); this.stats.sent++; } };
-    ws.onmessage = (e) => {
+    this.wsUrl = `${relayUrl()}/?token=${encodeURIComponent(created.relayToken)}&callId=${encodeURIComponent(String(this.callId))}`;
+    // Disabled mic track = silence frames, still sent (as a WebRTC sender does), so the peer's "audio received" gate
+    // below also opens for a caller who starts muted.
+    node.port.onmessage = (e) => { const ws = this.ws; if (ws?.readyState === 1 && this.core) { ws.send(this.core.send(e.data)); this.stats.sent++; } };
+    this.onPacket = (e) => {
       const p = new Uint8Array(e.data as ArrayBuffer); if (!this.core || p.length < 12) return;
       if (p[1] >= 192 && p[1] <= 223) { if (mod.isKeyRequest(p)) this.keyReq = true; return; } // RTCP: PLI/FIR -> IDR next frame
       const pt = p[1] & 0x7f;
       try {
         if (pt === this.vpt) this.onVideoPacket(p);
-        else if (this.apt < 0 || pt === this.apt) { node.port.postMessage(this.core.recv(p)); this.stats.recv++; }
+        else if (this.apt >= 0 && pt === this.apt) { node.port.postMessage(this.core.recv(p)); this.stats.recv++; this.gotAudio?.(); }
+        else if (this.apt < 0) { node.port.postMessage(this.core.recv(p)); this.stats.recv++; }
       } catch { this.stats.recvErr++; }
     };
+    await this.openMediaWs();
     await this.req("ms:plain:produce", { kind: "audio", ssrc, payloadType: 111 });
     // the peer may produce after us: consume until its audio arrives, and on every availability nudge
-    let have = false;
-    const consume = async () => { if (this.closed) return; const r = await this.req<{ consumers?: Array<{ kind: string; payloadType: number }> }>("ms:plain:consume").catch(() => null);
-      for (const c of r?.consumers ?? []) { if (c.kind === "audio") { this.apt = c.payloadType; have = true; } if (c.kind === "video") this.vpt = c.payloadType; } };
-    this.socket.on("ms:consumer:available", consume);
-    this.poll = setInterval(consume, 1000);
-    void consume();
-    void have;
+    this.consume = async () => { if (this.closed) return; const r = await this.req<{ consumers?: Array<{ kind: string; payloadType: number }> }>("ms:plain:consume").catch(() => null);
+      for (const c of r?.consumers ?? []) { if (c.kind === "audio") this.apt = c.payloadType; if (c.kind === "video") this.vpt = c.payloadType; } };
+    this.socket.on("ms:consumer:available", this.consume);
+    this.poll = setInterval(this.consume, 1000);
+    void this.consume();
     if (this.ctx.state === "suspended") await this.ctx.resume().catch(() => {});
+    // Connected only once the peer's audio actually arrives (decoded from its consumer's payload type), with our own
+    // send path open — telegram-tt reports 'connected' from ontrack + ICE connected (src/lib/vibecalls/phone/
+    // phoneCall.ts:524,579); here the equivalent proof is a received packet, not a negotiated consumer. The engine's
+    // 12 s connect budget bounds this wait.
+    await new Promise<void>((ok) => { this.gotAudio = () => { this.gotAudio = null; ok(); }; });
+    if (this.closed) return;
+    this.hasConnected = true;
     this.opts.onState("connected");
     if (_withVideo) void this.enableCamera().catch(() => this.opts.onCameraUnavailable?.());
   }
@@ -123,7 +144,72 @@ export class WasmCallSession {
   checkMicAlive() {}
   async setMuted(muted: boolean) { this.muted = muted; this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted)); }
   async startAudio() { await this.ctx?.resume().catch(() => {}); return this.ctx?.state === "running"; }
-  async restartIceAll() {}
+  /** tweb restartIce equivalent for the WASM leg: reopen the media WS to the same relay URL with the same token. The
+   *  relay reattaches it to the same UDP socket (ws-media-relay GRACE_MS), so mediasoup's comedia tuple, our SRTP keys,
+   *  SSRCs and RTP sequence state all carry on; no server message, no new transport. Only acts while media is down. */
+  async restartIceAll() { if (this.mediaDown()) this.requestRestart(0); }
+
+  private mediaDown() { return !this.closed && this.hasConnected && (!this.ws || this.ws.readyState > 1); }
+
+  private openMediaWs(): Promise<void> {
+    const ws = (this.ws = new WebSocket(this.wsUrl));
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (e) => { if (this.ws === ws) this.onPacket?.(e); };
+    return new Promise<void>((ok, no) => {
+      ws.onopen = () => { ws.onclose = () => { if (this.ws === ws) this.onMediaDisconnected(); }; ok(); if (this.hasConnected) this.onMediaRecovered(); };
+      ws.onclose = (e) => no(new Error(`relay closed ${e.code}`));
+    });
+  }
+
+  /** tweb connectionRecovery.ts:165-176 ('disconnected'): restart once the media has been down for 2 s; and
+   *  callsController.ts:493-498: a call that had connected and is CONNECTING again arms the 45 s hang-up
+   *  (CALL_REQUEST_TIMEOUT, constants.ts:33). The engine shows "Reconnecting…" + loops the tone on "disconnected". */
+  private onMediaDisconnected() {
+    if (this.closed || !this.hasConnected) return;
+    this.opts.onState("disconnected");
+    if (this.disconnectedTimer === undefined) this.disconnectedTimer = setTimeout(() => {
+      this.disconnectedTimer = undefined;
+      if (this.mediaDown()) this.requestRestart(0);
+    }, P2P_ICE_DISCONNECTED_RESTART_DELAY_MS);
+    if (this.failureTimer === undefined) this.failureTimer = setTimeout(() => {
+      this.failureTimer = undefined;
+      if (this.mediaDown()) { this.clearRecoveryTimers(); this.opts.onState("failed"); } // engine hangs up
+    }, CALL_REQUEST_TIMEOUT);
+  }
+
+  /** tweb connectionRecovery.ts:148-163 ('connected'): clear every timer, reset the restart pacing, back to active. */
+  private onMediaRecovered() {
+    this.clearRecoveryTimers();
+    this.lastRestartAt = undefined;
+    this.opts.onState("connected");
+  }
+
+  /** tweb connectionRecovery.ts requestRestart: never restart more often than P2P_ICE_RESTART_MIN_INTERVAL_MS. */
+  private requestRestart(delay: number) {
+    if (this.retryTimer !== undefined && delay === 0 && this.lastRestartAt !== undefined) return;
+    const sinceLast = this.lastRestartAt === undefined ? Infinity : Date.now() - this.lastRestartAt;
+    const wait = Math.max(delay, sinceLast >= P2P_ICE_RESTART_MIN_INTERVAL_MS ? 0 : P2P_ICE_RESTART_MIN_INTERVAL_MS - sinceLast);
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => this.attemptRestart(), wait);
+  }
+
+  /** tweb connectionRecovery.ts:312-336 attemptRestart: restart, then re-check after P2P_ICE_RESTART_MIN_INTERVAL_MS
+   *  (5 s) and restart again while still down. */
+  private attemptRestart() {
+    this.retryTimer = undefined;
+    if (!this.mediaDown()) return;
+    this.lastRestartAt = Date.now();
+    this.restartCount++;
+    const old = this.ws; if (old) { old.onclose = null; old.onmessage = null; try { old.close(); } catch {} }
+    void this.openMediaWs().catch(() => {});
+    this.retryTimer = setTimeout(() => { this.retryTimer = undefined; if (this.mediaDown()) this.attemptRestart(); }, P2P_ICE_RESTART_MIN_INTERVAL_MS);
+  }
+
+  private clearRecoveryTimers() {
+    clearTimeout(this.disconnectedTimer); this.disconnectedTimer = undefined;
+    clearTimeout(this.retryTimer); this.retryTimer = undefined;
+    clearTimeout(this.failureTimer); this.failureTimer = undefined;
+  }
   async applyLadderStep(): Promise<boolean> { return false; }
   async getTransportStats(): Promise<RTCStatsReport[]> {
     return [new Map([["wasm", { id: "wasm", type: "wasm-call", packetsSent: this.stats.sent, packetsReceived: this.stats.recv, recvErrors: this.stats.recvErr, videoPacketsSent: this.stats.vSent, framesDecoded: this.stats.vFrames }]]) as unknown as RTCStatsReport];
@@ -185,7 +271,9 @@ export class WasmCallSession {
     if (this.closed) return;
     this.closed = true;
     if (this.poll) clearInterval(this.poll);
-    try { this.ws?.close(); } catch {}
+    if (this.consume) this.socket.off("ms:consumer:available", this.consume);
+    this.clearRecoveryTimers(); this.gotAudio?.();
+    if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} }
     this.mic?.getTracks().forEach((t) => t.stop());
     this.stopCamera(); try { this.dec?.close(); } catch {} this.remoteTrack?.stop();
     this.unlock?.(); void this.ctx?.close().catch(() => {});
@@ -241,7 +329,7 @@ function sendProfile(): SendProfile {
   const mobile = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
   const cores = navigator.hardwareConcurrency || 4;
   if (mobile || cores <= 4) return { w: 640, h: 360, fps: 24, bps: 600_000 };
-  return { w: 1280, h: 720, fps: 30, bps: 1_200_000 };
+  return { w: 1280, h: 720, fps: 30, bps: 1000 * 1024 }; // Telegram tgcalls v2/InstanceV2Impl.cpp:2141 video max bitrate (olpj 52496ee)
 }
 async function getCamera(facing: "user" | "environment", p: SendProfile): Promise<MediaStream> {
   const asks: MediaStreamConstraints[] = [
