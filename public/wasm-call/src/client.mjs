@@ -42,14 +42,3 @@ export class MediaCore {
       close: () => { M._ol_venc_free(e); M._free(inp); M._free(out); M._free(key); } }; }
   close() { if (this.c) this.M._ol_call_free(this.c); this.c = 0; }
 }
-/** Wire a live call: mic (capture only) -> worklet -> core -> WS relay -> core -> worklet -> speaker. */
-export async function startBrowserCall({ factory, relayUrl, txKeyB64, rxKeyB64, ssrc, workletUrl }) {
-  const core = (await MediaCore.load(factory)).open({ txKeyB64, rxKeyB64, ssrc });
-  const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000, channelCount: 1 } });
-  const ctx = new AudioContext({ sampleRate: 48000 }); await ctx.audioWorklet.addModule(workletUrl);
-  const node = new AudioWorkletNode(ctx, "ol-pcm"); ctx.createMediaStreamSource(mic).connect(node); node.connect(ctx.destination);
-  const ws = new WebSocket(relayUrl); ws.binaryType = "arraybuffer";
-  node.port.onmessage = (e) => { if (ws.readyState === 1) ws.send(core.send(e.data)); };
-  ws.onmessage = (e) => { try { node.port.postMessage(core.recv(new Uint8Array(e.data))); } catch {} };
-  return { hangup() { ws.close(); mic.getTracks().forEach((t) => t.stop()); ctx.close(); core.close(); } };
-}
