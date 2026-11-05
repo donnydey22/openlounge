@@ -47,13 +47,22 @@ export const IOS_ARCHIVED_B91 = {
 } as const;
 
 /** iOS b94 deletions (pj-openlounge-ios 619c92e); EAS remote counter assigned CFBundleVersion 95. */
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-04: b95, asset kept on downloads-v1, not linked. Rollback = set IOS_RELEASE back to these values. */
+export const IOS_ARCHIVED_B95 = {
   version: "0.3.19",
   build: 95,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b95.ipa",
   size: "9.9 MB",
   sha256: "da1a313159f5b6a16785c0bb0c5b832e24aa0f44b02f3791531994785cb163c2",
+} as const;
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 98,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b98.ipa",
+  size: "10.4 MB",
+  sha256: "6e6c2713f9ef49232913dae4ae63a76836a1c86fecede6650d373a9e1bda7cbe",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
