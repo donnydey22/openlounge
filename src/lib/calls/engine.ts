@@ -561,7 +561,7 @@ export class CallEngine {
       void this.hangup();
       return { ok: false };
     }
-    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video, nativeMedia: iosNativeVideoGranted(this.media) });
+    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, photo: peer.photoUrl, video, nativeMedia: iosNativeVideoGranted(this.media) });
     this.diag("call-start", { video, app: appVersionFromUa() });
     if (!this.deferNativeConnect) void this.connect(false);
     return { ok: true };
@@ -2449,6 +2449,7 @@ export class CallEngine {
       let outB = 0, inB = 0;
       const n3 = (x: unknown) => (typeof x === "number" ? Math.round(x * 1000) / 1000 : "");
       for (const rep of reports) rep.forEach((st: Record<string, unknown>) => {
+        if (st.type === "wasm-call") { outB += Number(st.packetsSent ?? 0) * 80; inB += Number(st.packetsReceived ?? 0) * 80; return; } // WASM path: packets only; ~80 B/20 ms Opus estimate
         if (st.kind !== "audio") return;
         if (st.type === "media-source") { r.micLevel = n3(st.audioLevel); r.micEnergy = n3(st.totalAudioEnergy); }
         else if (st.type === "outbound-rtp") outB += Number(st.bytesSent ?? 0);
