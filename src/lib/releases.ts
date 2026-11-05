@@ -1,19 +1,19 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
 export const ANDROID_RELEASE = {
+  version: "0.3.25",
+  build: 42,
+  file: "/downloads/openlounge-0.3.25-42.apk",
+  size: "24.4 MB",
+  sha256: "e38e51083adbd405d156df64db8df5135c1f68b16d6c83fee3d44ce1e6a31c89",
+} as const;
+/** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
+export const ANDROID_FALLBACK = {
   version: "0.3.24",
   build: 41,
   file: "/downloads/openlounge-0.3.24-41.apk",
   size: "25.6 MB",
   sha256: "1d4a7855627e558d778d27bd20065fef8c273dd2aad07bd68e0bdd412d5bb61a",
-} as const;
-/** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
-export const ANDROID_FALLBACK = {
-  version: "0.3.23",
-  build: 40,
-  file: "/downloads/openlounge-0.3.23-40.apk",
-  size: "25.6 MB",
-  sha256: "048dd640e4702ea4134e896519c766d0ea66bf3b205d9aecab90b31064621f29",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -65,13 +65,22 @@ export const IOS_ARCHIVED_B98 = {
   size: "10.4 MB",
   sha256: "6e6c2713f9ef49232913dae4ae63a76836a1c86fecede6650d373a9e1bda7cbe",
 } as const;
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-04: b100, asset kept on downloads-v1, not linked. Rollback = set IOS_RELEASE back to these values. */
+export const IOS_ARCHIVED_B100 = {
   version: "0.3.19",
   build: 100,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b100.ipa",
   size: "9.9 MB",
   sha256: "e8b2cc10171a9ca4eee0c9396acc5ccf7c7eb1014e2d5e6c45246ef94807c5ae",
+} as const;
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 101,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b101.ipa",
+  size: "9.9 MB",
+  sha256: "c23dd4e2bfab9a3d164e861310d6538b78989fb37530116b7053e9e5200af1f5",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
