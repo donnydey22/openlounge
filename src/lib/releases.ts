@@ -1,19 +1,19 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
 export const ANDROID_RELEASE = {
+  version: "0.3.26",
+  build: 43,
+  file: "/downloads/openlounge-0.3.26-43.apk",
+  size: "24.4 MB",
+  sha256: "17207e9ed1e9e11cb4586871b0fcb2b155e41bb4ee140c1189a7a4626938cf54",
+} as const;
+/** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
+export const ANDROID_FALLBACK = {
   version: "0.3.25",
   build: 42,
   file: "/downloads/openlounge-0.3.25-42.apk",
   size: "24.4 MB",
   sha256: "e38e51083adbd405d156df64db8df5135c1f68b16d6c83fee3d44ce1e6a31c89",
-} as const;
-/** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
-export const ANDROID_FALLBACK = {
-  version: "0.3.24",
-  build: 41,
-  file: "/downloads/openlounge-0.3.24-41.apk",
-  size: "25.6 MB",
-  sha256: "1d4a7855627e558d778d27bd20065fef8c273dd2aad07bd68e0bdd412d5bb61a",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
