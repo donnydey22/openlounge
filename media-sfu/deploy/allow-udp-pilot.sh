@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # REVIEW-ONLY. This opens ONLY direct UDP media after MEDIASOUP_FIREWALL_APPROVED=YES.
-# TCP is deliberately not opened: a Mediasoup TCP candidate would bypass the required LiveKit-over-TCP fallback.
+# TCP is deliberately not opened: a Mediasoup TCP candidate would bypass the required coturn TURN-over-TCP/443 relay fallback.
 set -euo pipefail
 [[ ${MEDIASOUP_FIREWALL_APPROVED:-} == YES ]] || { echo "Refusing: set MEDIASOUP_FIREWALL_APPROVED=YES only after review." >&2; exit 64; }
 [[ $EUID -eq 0 ]] || { echo "Run with sudo after review." >&2; exit 64; }

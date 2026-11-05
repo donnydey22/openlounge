@@ -10,7 +10,7 @@ const cfg = readConfig();
 const MAX_FRAME = 256_000;
 const RECONNECT_DELAYS = [500, 1_000, 2_000, 5_000, 10_000];
 // Gateway liveness: a proxy/redeploy can leave the control socket half-open (no close event), and the app server
-// would then silently route every call to LiveKit. Ping on an interval; no pong/frame within the timeout → terminate
+// would then silently fail every call. Ping on an interval; no pong/frame within the timeout → terminate
 // (the close handler reconnects with backoff).
 const GATEWAY_PING_MS = Number(process.env.MEDIASOUP_GATEWAY_PING_MS) || 10_000;
 const GATEWAY_DEAD_MS = Number(process.env.MEDIASOUP_GATEWAY_DEAD_MS) || 25_000;
@@ -432,7 +432,7 @@ async function main() {
   worker.on("died", () => {
     safeLog("worker_died");
     process.exitCode = 1;
-    // A dead worker invalidates every UDP transport. App-side 4-second failure detection selects LiveKit for each call.
+    // A dead worker invalidates every UDP transport. App-side failure detection falls back to the coturn relay for each call.
     for (const s of [...sessions.values()]) closeSession(s, "worker_died");
     setTimeout(() => process.exit(1), 500).unref();
   });

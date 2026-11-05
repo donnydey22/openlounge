@@ -82,7 +82,7 @@ export function readConfig(env = process.env) {
     healthHost,
     healthPort: port(env, "MEDIASOUP_HEALTH_PORT", 8081),
     // Opt-in (default OFF, prepared — not applied to the live SFU): also offer an ICE-TCP candidate on one port so a
-    // UDP-hostile network still reaches the direct SFU. Off keeps the reviewed UDP-only pilot + LiveKit/TURN-443 fallback.
+    // UDP-hostile network still reaches the direct SFU. Off keeps the reviewed UDP-only pilot + coturn TURN-443 relay fallback.
     tcpPort: env.MEDIASOUP_ENABLE_TCP === "1" ? port(env, "MEDIASOUP_TCP_PORT", 40443) : null,
   };
 }

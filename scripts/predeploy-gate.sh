@@ -45,7 +45,6 @@ stage(){ n=$(grep -iE "^ *ok [0-9]+ - .*($2)" "$LOG/calls" | wc -l); bad=$(grep 
 stage ring/push "ring|push|voip|fcm"
 stage background-wake "background|hidden|appVisible|app lock"
 stage connect-tcp-fallback "tcp"
-stage livekit-fallback "livekit"
 stage ice-restart "ice restart|ice down|outage"
 stage no-audio-recovery "stall|black-hole|no inbound|mic recovery|muted mic"
 stage quality-guard "quality guard|loss|bandwidth"
@@ -95,7 +94,7 @@ fi
 echo "== 5. prod [calls] log scan (current deployment)"
 timeout 120 railway logs -s "$SVC" -e "$ENVID" -n 5000 >"$LOG/prod" 2>/dev/null
 C=$(grep -c '\[calls\]' "$LOG/prod"); echo "   [calls] lines: $C"
-for k in "native=true" "native-fallback-webview" "ring-retry\|repush" "busy" "livekit"; do echo "   $k: $(grep '\[calls\]' "$LOG/prod" | grep -c "$k")"; done
+for k in "native=true" "native-fallback-webview" "ring-retry\|repush" "busy"; do echo "   $k: $(grep '\[calls\]' "$LOG/prod" | grep -c "$k")"; done
 E=$(grep -E '\[calls\]|"calls' "$LOG/prod" | grep -ciE 'level="?error|uncaught|unhandled|exception')
 [[ $E == 0 ]] && pass "no [calls] errors" || fail "$E [calls] error lines (see $LOG/prod)"
 grep -q 'boot failed' "$LOG/prod" && fail "boot failed in prod logs" || true
