@@ -74,13 +74,22 @@ export const IOS_ARCHIVED_B100 = {
   size: "9.9 MB",
   sha256: "e8b2cc10171a9ca4eee0c9396acc5ccf7c7eb1014e2d5e6c45246ef94807c5ae",
 } as const;
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-05: b101, asset kept on downloads-v1, not linked. Rollback = set IOS_RELEASE back to these values. */
+export const IOS_ARCHIVED_B101 = {
   version: "0.3.19",
   build: 101,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b101.ipa",
   size: "9.9 MB",
   sha256: "c23dd4e2bfab9a3d164e861310d6538b78989fb37530116b7053e9e5200af1f5",
+} as const;
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 104,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b104.ipa",
+  size: "10.4 MB",
+  sha256: "cac5d213d36a507d0e9b57549a35ae16080d3334082b9f768c5c10a61e2214a1",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
