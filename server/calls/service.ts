@@ -532,6 +532,18 @@ export class CallService {
     return { ok: true as const };
   }
 
+  /** Phone-to-phone P2P: relay one ICE/SRTP message (pjnath candidates, SDES key) to the other participant, verbatim.
+   *  Pure forwarder over the existing call socket; no state, no change to dial/ring/active/end. */
+  p2p(callId: unknown, userId: string, msg: unknown) {
+    const c = this.get(callId, userId);
+    if (!c || c.phase === "ended") return { ok: false as const, error: "No such call" };
+    const json = JSON.stringify(msg ?? null);
+    if (json.length > 8192) return { ok: false as const, error: "Too large" };
+    const other = userId === c.callerId ? c.calleeId : c.callerId;
+    this.d.emitUser(other, "call:p2p", { callId: c.id, from: userId, msg: JSON.parse(json) });
+    return { ok: true as const };
+  }
+
   async get_(callId: unknown, userId: string, connId?: string) {
     const c = this.get(callId, userId);
     if (!c) return { ok: false as const, error: "This call isn't available", reason: "unknown" };

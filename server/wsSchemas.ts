@@ -99,6 +99,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "ms:consume": { callId: "id", transportId: "id" },
   "ms:consumer:resume": { callId: "id", consumerId: "id" },
   // PJSIP native legs (PLAN §13): PlainTransport + SRTP SDES; SRTP/RTP params validated by media-sfu plain.mjs
+  "call:p2p": { callId: "id" },
   "ms:plain:create": { callId: "id" },
   "ms:plain:connect": { callId: "id" },
   "ms:plain:produce": { callId: "id", kind: "string" },

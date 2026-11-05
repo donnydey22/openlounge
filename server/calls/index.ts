@@ -290,6 +290,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     }),
   );
   socket.on("call:hangup", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().hangup(callId, uid))));
+  socket.on("call:p2p", ({ callId, msg }: { callId: string; msg?: unknown }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().p2p(callId, uid, msg))));
   socket.on("call:video", ({ callId, on }: { callId: string; on: boolean }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().setVideo(callId, uid, !!on))));
   // FX-081 per-stream telemetry (every 5 s per client): sanitized, bounded per call, one log line per sample
   socket.on("call:telemetry", (d: unknown, ack: AckFn = noop) =>
