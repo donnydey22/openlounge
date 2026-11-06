@@ -29,6 +29,12 @@ export function nativeMediaAvailable(): boolean {
   const b = bridge();
   return !!b && typeof b.nativeMedia === "function" && typeof b.msReply === "function" && !!b.capabilities?.includes("nativeMedia");
 }
+/** App build implements the P2P rtc contract (connect media+caller, op rtcSignal, rtc:* relay). Absent = older
+ *  APK/IPA: P2P calls stay on the browser CallSession inside the WebView. */
+export const RTC_P2P_CAPABILITY = "rtcP2P";
+export function nativeRtcP2PAvailable(): boolean {
+  return nativeMediaAvailable() && !!bridge()?.capabilities?.includes(RTC_P2P_CAPABILITY);
+}
 /** Present only in the paired-media iOS wrapper release; older audio-only native binaries stay on WebView video. */
 export function nativeVideoAvailable(): boolean {
   const b = bridge();
@@ -135,7 +141,7 @@ export function useNativeMedia(video: boolean, media?: CallMedia | null): boolea
   if (!nativeMediaAvailable()) return false;
   // P2P (rtc contract): any app with the native bridge owns the PeerConnection — no build/opt-in/video gates,
   // so an Android/iOS WebView never falls back to the browser CallSession.
-  if (media?.provider === "p2p") return true;
+  if (media?.provider === "p2p") return nativeRtcP2PAvailable();
   if (video) return iosNativeVideoGranted(media);
   if (!nativeMediaIsAndroid()) return true;
   return androidNativeOff === null && androidNativeOptedIn() && androidNativeHealthy() && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
