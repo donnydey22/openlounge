@@ -12,8 +12,10 @@ independent implementation of their *behavior*. Literal embeds live only behind 
 * Per message n: `mk=HMAC(ck,0x01)`, `nonce=HMAC(ck,0x03)[0..12)`, `ck'=HMAC(ck,0x02)`; header `0x01‖u32be(n)`;
   `AAD = IKdh_initiator ‖ IKdh_responder ‖ header`; AES-256-GCM. Skipped keys ≤256 (out-of-order ICE), replays rejected.
 * Envelope `{v:1, n, ct, pre?:{ikDh, ikSig, ek, spkId, opkId?}}`; `pre` attached until the first peer reply.
+* Wire `rc:msg {callId, dev, envs:{peerDeviceId: Envelope}}`: Signal multi-device — caller fans out to every callee
+  device bundle, locks to the first device that replies; others drop. Bundles are per (user, device).
 * Fresh session per call (one-time prekey consumed) — Signal calls likewise ride the messaging session; full Double
-  Ratchet DH steps are unnecessary inside one short call. Vectors: `tests/calls/olx3dh-vectors.json`.
+  Ratchet DH steps are unnecessary inside one short call. Vectors: `tests/calls/olx3dh-vectors.json` (verified: web node test, Android Robolectric, Swift swift-crypto on Linux).
 * Inner plaintext = the existing `rtc:signal` JSON (`ready/offer/answer/candidate/restart/bye`, callId/gen/seq).
 * Call state model = RingRTC `CallState`/`CallEvent`/`HangupType` (idle, starting, ringing, connecting, connected,
   reconnecting, ended; hangup normal/accepted/declined/busy/needPermission/timeout/failed). One active call; 2nd → busy.
@@ -21,7 +23,8 @@ independent implementation of their *behavior*. Literal embeds live only behind 
 ## Server (DigitalOcean calling droplet ONLY — historical 165.232.137.71; verify the host before any change)
 Socket events (server/calls/rcRelay.ts, wired in server/calls/index.ts):
 * `rc:keys:publish` → PreKeyDirectory (identity change wipes OPKs; ≤200 OPKs).
-* `rc:keys:fetch {userId, callId}` → only the *peer of a live call you are in* (no scraping / OPK drain); consumes 1 OPK.
+* `rc:keys:fetch {callId[, userId]}` → bundles for every device of the *peer of a live call you are in* (server derives
+  the peer; no scraping / OPK drain); consumes 1 OPK per device.
 * `rc:msg {callId, env}` → membership, size (96 KB), rate (300/10 s), per-sender monotonic `n`; forwarded opaque.
 * `rtc:iceConfig` unchanged: short-lived TURN creds = ICE transport (Signal also uses TURN), **not** the mediasoup ladder.
 
