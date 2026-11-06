@@ -46,6 +46,26 @@ export function nativeMediaCmd(cmd: Record<string, unknown>): Promise<unknown> {
 /** app→page requests the page may relay: the RingRTC session model (sealed rc:*) and OL ICE config. */
 const RELAY_EVENT = /^(rtc:signal|rtc:iceConfig|rc:msg|rc:keys:publish|rc:keys:fetch)$/i;
 
+/**
+ * Page realtime socket (re)connected: give the app a standing relay for rc:keys:publish ONLY (no call needed) and
+ * tell it to publish its OLX3DH-v1 bundle now. Fixes the Android race where keys were first published lazily on the
+ * first call op, so a caller could rc:keys:fetch before the callee's bundle existed. A live call session's relay
+ * (NativeMediaSession.connect) takes precedence; this one never relays call traffic.
+ */
+export function nativeSignalConnected(socket: RealtimeClient) {
+  if (!nativeRtcP2PAvailable()) return;
+  const w = window as unknown as { __olNativeMsReq?: (id: string, event: string, data: Record<string, unknown>) => void; __olNativeKeysRelay?: boolean };
+  if (!w.__olNativeMsReq || w.__olNativeKeysRelay) {
+    w.__olNativeKeysRelay = true;
+    w.__olNativeMsReq = (id, event, data) => {
+      const b = bridge();
+      if (event !== "rc:keys:publish") return b?.msReply?.(id, false, null, "relay refused");
+      socket.request(event, data, 8_000).then((r) => b?.msReply?.(id, true, r ?? null), (e: unknown) => b?.msReply?.(id, false, null, String((e as Error)?.message ?? e)));
+    };
+  }
+  void nativeMediaCmd({ op: "signalConnected" }).catch(() => {});
+}
+
 export class NativeMediaSession {
   private closed = false;
 
@@ -98,8 +118,9 @@ export class NativeMediaSession {
   };
 
   async connect(withVideo: boolean) {
-    const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"] };
+    const w = window as unknown as { __olNativeMsReq?: NativeMediaSession["relay"]; __olNativeKeysRelay?: boolean };
     w.__olNativeMsReq = this.relay;
+    w.__olNativeKeysRelay = false;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("rtc:signal", this.onRtcSignal);
     this.socket.on("rc:msg", this.onRcMsg);
@@ -122,7 +143,7 @@ export class NativeMediaSession {
     this.socket.off("rc:msg", this.onRcMsg);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
-    if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;
+    if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq; // next signalConnected re-installs the keys relay
     void nativeMediaCmd({ op: "close" }).catch(() => {});
   }
 }

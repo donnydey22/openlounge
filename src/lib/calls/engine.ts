@@ -14,7 +14,7 @@ import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, 
 import { CallSession } from "./rtc/CallSession";
 import { ensureRcKeysPublished, sealedFor } from "./ringrtc";
 import type { CallFailure } from "./rtc/CallFailures";
-import { NativeMediaSession, nativeMediaCmd, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, nativeMediaCmd, nativeSignalConnected, useNativeMedia } from "./nativeMediaSession";
 import { CallTelemetry } from "./callTelemetry";
 import { swapVideoTrack } from "./frameHold";
 
@@ -213,6 +213,7 @@ export class CallEngine {
    *  answer: re-bind this connection to the call right away, adopt the server's state, and if media never came up
    *  (or dropped) once the first-connect budget is spent, rebuild it instead of sitting silent. */
   private onSocketBack = () => {
+    if (this.socket) nativeSignalConnected(this.socket);
     const call = this.s.call;
     if (!call || !this.busy) return;
     this.diag("socket-back", { media: this.mediaConnected() });
@@ -245,6 +246,7 @@ export class CallEngine {
     this.socket = socket;
     if (!socket) return;
     void ensureRcKeysPublished(socket);
+    nativeSignalConnected(socket); // app-owned media: the app publishes its own keys now, not on its first call op
     socket.on("call:incoming", this.onIncoming);
     socket.on("call:state", this.onState);
     socket.on("call:video", this.onVideo);
