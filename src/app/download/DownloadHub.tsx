@@ -15,7 +15,7 @@ function Sha({ value }: { value: string }) {
 }
 
 export function DownloadHub() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   useScrollLock(open);
   const tabRef = useRef<HTMLButtonElement>(null);
   const firstRef = useRef<HTMLAnchorElement>(null);
@@ -87,10 +87,24 @@ export function DownloadHub() {
         <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="download-ios">
           <h2 className="text-base font-semibold text-zinc-100">iPhone</h2>
           <p className="text-zinc-500">Version {releaseLabel(IOS_RELEASE)} · {IOS_RELEASE.size}</p>
-          <a href={`itms-services://?action=download-manifest&url=${encodeURIComponent(IOS_MANIFEST_URL)}`} className="mt-4 block rounded-full bg-emerald-500 px-5 py-3 text-center font-semibold text-black" data-testid="download-ios-install">
+          <a
+            href={IOS_RELEASE.file}
+            download
+            className="mt-4 block rounded-full bg-emerald-500 px-5 py-3 text-center font-semibold text-black"
+            data-testid="download-ios-file"
+          >
+            Download for iPhone
+          </a>
+          <a
+            href={`itms-services://?action=download-manifest&url=${encodeURIComponent(IOS_MANIFEST_URL)}`}
+            className="mt-3 block rounded-full border border-emerald-500/60 px-5 py-3 text-center font-semibold text-emerald-300"
+            data-testid="download-ios-install"
+          >
             Install on iPhone
           </a>
-          <p className="mt-3 text-zinc-400">Open this page in Safari on a registered iPhone. After install, trust the developer in Settings &gt; General &gt; VPN &amp; Device Management.</p>
+          <p className="mt-3 text-zinc-400">
+            Prefer Safari on a registered iPhone and tap Install for one-tap OTA. Or download the IPA file directly (same path as Android). After install, trust the developer in Settings &gt; General &gt; VPN &amp; Device Management.
+          </p>
           <Sha value={IOS_RELEASE.sha256} />
         </section>
 
