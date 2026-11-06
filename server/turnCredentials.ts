@@ -1,12 +1,12 @@
-// Server-only coturn REST credentials for 1:1 calls. The static secret never leaves this module:
+// Server-only TURN REST credentials for the DO-owned Pion relay for 1:1 calls. The static secret never leaves this module:
 // clients receive only a short-lived username and its HMAC-SHA1 credential.
 import { createHmac } from "node:crypto";
 import type { TurnIceServer } from "../src/lib/types";
 
 export const TURN_URLS = [
-  "turn:turn.openlounge.app:3478?transport=udp",
-  "turn:turn.openlounge.app:3478?transport=tcp",
-  "turns:turn.openlounge.app:443?transport=tcp",
+  "turn:turn.openlounge.app:13478?transport=udp",
+  "turn:turn.openlounge.app:13478?transport=tcp",
+  "turns:turn.openlounge.app:14443?transport=tcp",
 ] as const;
 
 /**

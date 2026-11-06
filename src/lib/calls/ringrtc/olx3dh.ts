@@ -56,6 +56,8 @@ export interface Envelope { v: 1; n: number; ct: string; pre?: PreKeyHeader }
 
 /** Per-call session (Signal calling also derives fresh per-call state); skipped keys bounded for out-of-order delivery. */
 export class OlSession {
+  private sendQueue: Promise<unknown> = Promise.resolve();
+  private recvQueue: Promise<unknown> = Promise.resolve();
   private sendN = 0;
   private recvN = 0;
   private skipped = new Map<number, Uint8Array>();
@@ -83,7 +85,13 @@ export class OlSession {
 
   private static header(n: number) { const h = new Uint8Array(5); h[0] = 1; new DataView(h.buffer).setUint32(1, n); return h; }
 
-  async seal(plain: Uint8Array): Promise<Envelope> {
+  seal(plain: Uint8Array): Promise<Envelope> {
+    const result = this.sendQueue.then(() => this.sealNext(plain));
+    this.sendQueue = result.catch(() => {});
+    return result;
+  }
+
+  private async sealNext(plain: Uint8Array): Promise<Envelope> {
     const n = this.sendN++;
     const mk = await hmac(this.sendCk, 1), nonce = (await hmac(this.sendCk, 3)).slice(0, 12);
     this.sendCk = await hmac(this.sendCk, 2);
@@ -94,18 +102,29 @@ export class OlSession {
   /** responder confirmed: stop attaching prekey header */
   confirmed() { this.pre = undefined; }
 
-  async open(e: Envelope): Promise<Uint8Array> {
+  open(e: Envelope): Promise<Uint8Array> {
+    const result = this.recvQueue.then(() => this.openNext(e));
+    this.recvQueue = result.catch(() => {});
+    return result;
+  }
+
+  private async openNext(e: Envelope): Promise<Uint8Array> {
     if (e.v !== 1 || !Number.isInteger(e.n) || e.n < 0) throw new Error("olx3dh: bad envelope");
-    let ck: Uint8Array | undefined;
-    if (e.n < this.recvN) { ck = this.skipped.get(e.n); if (!ck) throw new Error("olx3dh: replay"); this.skipped.delete(e.n); }
+    // Derive against a snapshot: unauthenticated packets must not burn receive/skipped keys.
+    let recvN = this.recvN, recvCk = this.recvCk;
+    const skipped = new Map(this.skipped);
+    let ck: Uint8Array;
+    if (e.n < recvN) { const old = skipped.get(e.n); if (!old) throw new Error("olx3dh: replay"); ck = old; skipped.delete(e.n); }
     else {
-      if (e.n - this.recvN > 256) throw new Error("olx3dh: too far ahead");
-      while (this.recvN < e.n) { this.skipped.set(this.recvN++, this.recvCk); this.recvCk = await hmac(this.recvCk, 2); }
-      ck = this.recvCk; this.recvCk = await hmac(this.recvCk, 2); this.recvN++;
-      while (this.skipped.size > 256) this.skipped.delete(this.skipped.keys().next().value as number);
+      if (e.n - recvN > 256) throw new Error("olx3dh: too far ahead");
+      while (recvN < e.n) { skipped.set(recvN++, recvCk); recvCk = await hmac(recvCk, 2); }
+      ck = recvCk; recvCk = await hmac(recvCk, 2); recvN++;
+      while (skipped.size > 256) skipped.delete(skipped.keys().next().value as number);
     }
     const mk = await hmac(ck, 1), nonce = (await hmac(ck, 3)).slice(0, 12);
     const k = await subtle.importKey("raw", buf(mk), "AES-GCM", false, ["decrypt"]);
-    return new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: cat(this.ad, OlSession.header(e.n)) }, k, buf(unb64(e.ct))));
+    const plain = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: cat(this.ad, OlSession.header(e.n)) }, k, buf(unb64(e.ct))));
+    this.recvN = recvN; this.recvCk = recvCk; this.skipped = skipped;
+    return plain;
   }
 }

@@ -66,7 +66,7 @@ test("cold calls from strangers are refused; a reply or follow-back unlocks call
   assert.equal(self.reason, "self");
 });
 
-test("ring → ack → accept → hang up: tokens pre-minted at ring time, states fan out, service message with duration", async () => {
+test("ring → ack → accept → hang up: P2P media only after callee consent, states fan out, service message with duration", async () => {
   const t0 = Date.now();
   const r = await A.client.req("call:start", { peerId: id(B) });
   assert.ok(r.ok, JSON.stringify(r));
@@ -76,13 +76,13 @@ test("ring → ack → accept → hang up: tokens pre-minted at ring time, state
   assert.equal(call.callee.name, "Bea");
   assert.ok(call.expiresAt - call.createdAt === 1500);
   // caller media ready before the callee even answers
-  assert.equal(r.media.url, process.env.LIVEKIT_URL);
-  assert.equal(jwt(r.media.token).video.room, `openlounge-call-${call.id}`);
-  assert.equal(jwt(r.media.token).sub, id(A));
+  assert.equal(r.media.provider, "p2p");
+  assert.equal(r.media.url, "rtc");
+  assert.equal(r.media.token, "");
+  assert.equal(r.media.callId, call.id);
   // callee gets the ring with its own token already in hand
   const inc = await waitFor(() => inB.find((e) => e.ev === "call:incoming" && e.data.call.id === call.id));
-  assert.equal(jwt(inc.data.media.token).sub, id(B));
-  assert.equal(jwt(inc.data.media.token).video.canPublish, true);
+  assert.equal(inc.data.media, null, "callee receives no media/ICE credentials before explicit accept");
   assert.ok(inc.at - t0 < 1000, "ring delivered fast");
   // B's device acks → A sees Ringing…
   assert.ok((await B.client.req("call:ack", { callId: call.id })).ok);
@@ -93,7 +93,8 @@ test("ring → ack → accept → hang up: tokens pre-minted at ring time, state
   const acc = await B.client.req("call:accept", { callId: call.id });
   assert.ok(acc.ok);
   assert.equal(acc.call.phase, "active");
-  assert.equal(jwt(acc.media.token).sub, id(B));
+  assert.equal(acc.media.provider, "p2p");
+  assert.equal(acc.media.callId, call.id);
   await waitFor(() => stateOf(inA, call.id, "active"));
   // busy while in a call: D… needs a relationship first
   assert.ok((await A.client.req("user:follow", { userId: id(D), follow: true })).ok);

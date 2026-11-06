@@ -77,3 +77,8 @@ test("TURN credential lifetime: 6 h default, TURN_CREDENTIAL_TTL_S override clam
   const [s] = mintTurnIceServers("c", "u", { secret: "x", now: () => now, ttlS: 1234 })!;
   assert.equal(Number(s.username.split(":")[0]), now / 1000 + 1234);
 });
+
+// The replacement is a separate DO-only Pion process, not relabeled legacy coturn ports.
+test("calling TURN URLs select isolated DO Pion listeners, not shared coturn", () => {
+  assert.deepEqual([...TURN_URLS],["turn:turn.openlounge.app:13478?transport=udp","turn:turn.openlounge.app:13478?transport=tcp","turns:turn.openlounge.app:14443?transport=tcp"]);
+});

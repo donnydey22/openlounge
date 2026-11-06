@@ -1,13 +1,13 @@
 // OL-owned ICE configuration for 1:1 P2P calls (Signal-style: direct ICE first, OL TURN relay as an ICE candidate
-// class, never a separate "ladder"). Credentials are coturn REST creds minted per call+user and short-lived.
+// class, never a separate "ladder"). Credentials are TURN REST creds minted per call+user and short-lived.
 import type { CallMedia, TurnIceServer } from "../../src/lib/types";
 import { mintTurnIceServers, TURN_URLS } from "../turnCredentials";
 
 /** Calls re-fetch config (call:get / rtc:iceConfig) well before this; 10 min matches the prior call TURN TTL. */
 export const RTC_TURN_TTL_S = 600;
 
-/** OL STUN on the same coturn host — no third-party STUN. */
-export const RTC_STUN_URLS = ["stun:turn.openlounge.app:3478"] as const;
+/** OL STUN on the same DO Pion host — no third-party STUN. */
+export const RTC_STUN_URLS = ["stun:turn.openlounge.app:13478"] as const;
 
 export interface RtcIceConfig {
   iceServers: Array<TurnIceServer | { urls: string[] }>;

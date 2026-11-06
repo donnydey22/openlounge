@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "packageManager": "npm@10.9.2",
   "private": true,
-  "description": "Open Lounge — a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
+  "description": "Open Lounge \u2014 a Clubhouse-style social audio rooms MVP (Next.js + raw WebSockets + LiveKit)",
   "scripts": {
     "dev": "tsx server/index.ts",
     "build": "next build && node scripts/legacy-chunks.mjs",
@@ -41,7 +41,8 @@
     "test:turn:relay:config": "node --test tests/e2e/turn-relay-harness.test.mjs",
     "test:permanence": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=300000 tests/history/permanence.test.ts",
     "test:roomchat": "node --import tsx --test --test-force-exit --test-concurrency=1 --test-timeout=60000 tests/room-chat/*.test.ts",
-    "gate:fixed": "node scripts/gate-fixed.mjs"
+    "gate:fixed": "node scripts/gate-fixed.mjs",
+    "test:rtc:browser": "node scripts/run-rtc-browser-matrix.mjs"
   },
   "engines": {
     "node": ">=20.9"
@@ -72,6 +73,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.2",
+    "esbuild": "0.28.2",
     "playwright": "^1.51.1",
     "postcss-preset-env": "^10.6.1",
     "tailwindcss": "^4.3.3",

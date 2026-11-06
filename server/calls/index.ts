@@ -1,4 +1,4 @@
-// Wires CallService into the realtime layer (WS handlers) + store + LiveKit + push.
+// Wires the one-PC P2P CallService + sealed rcRelay into WS, platform store and push.
 import type { Conn, WsHub } from "../ws";
 import { store } from "../store";
 import { bg, push } from "../push";
@@ -10,7 +10,8 @@ import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
 import { mintTurnIceServers } from "../turnCredentials";
 import { RtcSessionHub } from "./rtcSession";
-import { RcRelay } from "./rcRelay";
+import { RcRelay, PreKeyDirectory } from "./rcRelay";
+import { filePreKeyStore } from "./preKeyFileStore";
 import { p2pMedia, rtcIceConfig } from "./rtcIceConfig";
 import { iosNativeVideoEnabled } from "./sfuSelect";
 
@@ -113,7 +114,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   metrics.gauge("calls_quality_one_way_total", () => cur.stats().quality["one-way"]);
   metrics.gauge("calls_quality_no_audio_total", () => cur.stats().quality["no-audio"]);
   metrics.gauge("calls_quality_no_data_total", () => cur.stats().quality["no-data"]);
-  rc = new RcRelay({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) });
+  rc = new RcRelay({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) }, new PreKeyDirectory(process.env.RC_PREKEY_DIR ? filePreKeyStore(process.env.RC_PREKEY_DIR) : undefined));
   rtc = new RtcSessionHub({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) });
   return svc;
 }

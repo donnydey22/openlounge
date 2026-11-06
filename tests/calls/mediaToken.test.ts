@@ -1,7 +1,4 @@
-// The call's media credential (its LiveKit join token) is short-lived and dies with the call:
-//   - minted at ring time with CALL_TOKEN_TTL_S (180 s in prod, 6 s here), scoped to the call's own room + identity
-//   - call:get / call:accept re-mint once a token is past half its life — only while the call is live
-//   - after hang-up nothing is handed out, and a join into the ended call's LiveKit room (webhook) is kicked
+// P2P calling authentication: live participants only, short-lived TURN, no retired media-server tokens.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
@@ -48,92 +45,53 @@ after(async () => {
   fakeLiveKit.close();
 });
 
-test("call tokens: short-lived, per call + per person, re-minted while live, never after the call ends; ended-call joins are kicked", async () => {
+test("P2P credentials: scoped to live participants, bounded TURN expiry, refreshed and revoked on end", async () => {
   const r = await A.client.req("call:start", { peerId: id(B) });
   assert.ok(r.ok, JSON.stringify(r));
   const callId = r.call.id as string;
-  const room = `openlounge-call-${callId}`;
-  const ta = jwt(r.media.token);
-  // minted at ring, lifetime = CALL_TOKEN_TTL_S, scoped to this call's room and the caller's identity
-  assert.equal(ta.video.room, room);
-  assert.equal(ta.sub, id(A));
-  assert.ok(Math.abs(ta.exp - now() - 6) <= 2, `exp in ${ta.exp - now()} s`);
-  // only this authenticated call participant receives short-lived coturn configuration; the static secret never does
-  assert.deepEqual(r.media.iceServers?.[0]?.urls, [
-    "turn:turn.openlounge.app:3478?transport=udp",
-    "turn:turn.openlounge.app:3478?transport=tcp",
-    "turns:turn.openlounge.app:443?transport=tcp",
-  ]);
-  assert.match(r.media.iceServers?.[0]?.username ?? "", /^\d{10}:call-[A-Za-z0-9_-]{32}$/);
+  assert.equal(r.media.provider, "p2p");
+  assert.equal(r.media.url, "rtc");
+  assert.equal(r.media.token, "");
+  const ca = r.media.iceServers[0];
+  assert.ok(Math.abs(Number(ca.username.split(":")[0]) - now() - 600) <= 2);
   assert.equal(JSON.stringify(r.media).includes(process.env.TURN_STATIC_SECRET!), false);
-
-  // a stranger can't get media for someone else's call
-  const g0 = await C.client.req("call:get", { callId });
-  assert.ok(!g0.ok || !g0.media, "non-participant got media");
-  assert.equal(g0.media?.iceServers, undefined, "non-participant got TURN configuration");
-
+  assert.equal((await C.client.req("call:get", { callId })).ok, false);
+  assert.equal((await C.client.req("rtc:iceConfig", { callId })).ok, false);
   const acc = await B.client.req("call:accept", { callId });
   assert.ok(acc.ok, JSON.stringify(acc));
-  const tb = jwt(acc.media.token);
-  assert.equal(tb.sub, id(B));
-  assert.equal(tb.video.room, room);
-
-  // a live participant joining its own call room is fine
-  let t0 = Date.now();
-  assert.equal(await webhook("participant_joined", room, id(B)), 200);
-  await sleep(300);
-  assert.equal(kicks(room, t0).length, 0, "live call participant was kicked");
-
-  // past half the lifetime, our rejoin path (call:get) hands out a FRESH token
-  await sleep(3500);
-  const g1 = await A.client.req("call:get", { callId });
-  assert.ok(g1.ok && g1.media, JSON.stringify(g1));
-  const ta2 = jwt(g1.media.token);
-  assert.ok(ta2.exp > ta.exp, "rejoin token not re-minted");
-  assert.ok(Math.abs(ta2.exp - now() - 6) <= 2);
-
-  // hang up → the credential dies with the call
+  assert.equal(acc.media.provider, "p2p");
+  assert.notEqual(acc.media.iceServers[0].username, ca.username, "credential bound to participant");
+  await sleep(1100);
+  const refreshed = await A.client.req("rtc:iceConfig", { callId });
+  assert.ok(refreshed.ok);
+  const turn = refreshed.config.iceServers.find((x: any) => x.credential);
+  assert.ok(Number(turn.username.split(":")[0]) > Number(ca.username.split(":")[0]));
+  assert.equal(JSON.stringify(refreshed).includes(process.env.TURN_STATIC_SECRET!), false);
   assert.ok((await A.client.req("call:hangup", { callId })).ok);
-  const g2 = await A.client.req("call:get", { callId });
-  assert.equal(g2.call?.phase ?? "ended", "ended");
-  assert.equal(g2.media ?? null, null, "media handed out for an ended call");
-  const acc2 = await B.client.req("call:accept", { callId });
-  assert.ok(!acc2.ok || !acc2.media, "accept on an ended call returned media");
-  const again = await A.client.req("call:start", { peerId: id(B) });
-  if (again.ok) {
-    assert.notEqual(again.call.id, callId, "a new call must get a new room");
-    assert.notEqual(jwt(again.media.token).video.room, room);
-    assert.ok((await A.client.req("call:hangup", { callId: again.call.id })).ok);
-  }
-
-  // someone still holding a valid (LiveKit-refreshed) token joins the ended call's room → removed + room closed
-  t0 = Date.now();
-  assert.equal(await webhook("participant_joined", room, id(B)), 200);
-  for (let i = 0; i < 40 && kicks(room, t0).length < 2; i++) await sleep(50);
-  const k = kicks(room, t0);
-  assert.ok(k.some((x) => x.path.endsWith("/RemoveParticipant") && x.body.identity === id(B)), JSON.stringify(k));
-  assert.ok(k.some((x) => x.path.endsWith("/DeleteRoom")), JSON.stringify(k));
-
-  // a forged (unsigned) webhook is rejected and kicks nobody
-  t0 = Date.now();
-  const forged = await fetch(`${app.base}/api/livekit/webhook`, { method: "POST", headers: { Authorization: "x" }, body: JSON.stringify({ event: "participant_joined", room: { name: room }, participant: { identity: id(A) } }) });
-  assert.equal(forged.status, 401);
-  // unknown call ids (e.g. after an app-server restart) are left alone
-  const unknown = `openlounge-call-${"0".repeat(8)}-0000-4000-8000-${"0".repeat(12)}`;
-  assert.equal(await webhook("participant_joined", unknown, id(A)), 200);
-  await sleep(300);
-  assert.equal(kicks(room, t0).length + kicks(unknown, t0).length, 0);
+  const ended = await A.client.req("call:get", { callId });
+  assert.equal(ended.call.phase, "ended");
+  assert.equal(ended.media, null);
+  assert.equal((await A.client.req("rtc:iceConfig", { callId })).ok, false);
+  assert.equal((await B.client.req("call:accept", { callId })).ok, false);
+  assert.equal((await A.client.req("rc:keys:fetch", { callId })).ok, false);
 });
 
-test("calls retain the explicit empty-ICE/TCP path when TURN_STATIC_SECRET is unset", async () => {
+test("missing TURN secret keeps P2P only, with no legacy media fallback", async () => {
+  // Restart the fixture to discard prior live-call media caches before changing the TURN configuration.
+  for (const x of [A, B, C]) x?.client.close();
+  await app.close();
   const saved = process.env.TURN_STATIC_SECRET;
   delete process.env.TURN_STATIC_SECRET;
   try {
+    app = await startApp();
+    A = await phoneLogin(app.wsUrl, phone(), { firstName: "Ana", username: `ana_${uniq()}` });
+    B = await phoneLogin(app.wsUrl, phone(), { firstName: "Ben", username: `ben_${uniq()}` });
+    assert.ok((await B.client.req("dm:send", { to: id(A), text: "call me" })).ok);
     const r = await A.client.req("call:start", { peerId: id(B) });
     assert.ok(r.ok, JSON.stringify(r));
-    assert.equal(r.media?.iceServers, undefined);
+    assert.equal(r.media.provider, "p2p");
+    assert.equal(r.media.iceServers, undefined);
+    assert.equal(r.media.token, "");
     assert.ok((await A.client.req("call:hangup", { callId: r.call.id })).ok);
-  } finally {
-    process.env.TURN_STATIC_SECRET = saved;
-  }
+  } finally { process.env.TURN_STATIC_SECRET = saved; }
 });

@@ -1,5 +1,15 @@
 # Open Lounge calling — RingRTC session model + Signal-model relay (clean-room)
 
+> **Current implementation/deployment status — November 6, 2026, MST (America/Phoenix).** Historical sections below describe earlier commits and do not override this status. User authorization t4997u covers scoped builds/deploys; no additional deploy approval is needed.
+>
+> All three clients have one-PC WebRTC audio/video and sealed rc:* signaling, with no PJSIP/mediasoup/LiveKit calling fallback. This is OLX3DH plus interim BSD M152 WebRTC, **not actual Signal/RingRTC binaries or certified parity**. Android startup executor deadlock, cold-start key retry, shared video-slot/SDP concurrency, and authenticated-before-ratchet mutation are being covered by regression gates.
+>
+> Server public-prekey storage is now optionally durable via `RC_PREKEY_DIR` (atomic per-user files, serialized directory operations). These are public keys; no native private keys are uploaded. Complete isolated PostgreSQL calls gate: **172/172 pass**, including updated P2P consent/auth/short-lived TURN assertions replacing obsolete LiveKit-token contracts, not deleted failing tests. Typecheck and production Next build pass.
+>
+> Verified DO droplet608073501 (`openlounge-media`,165.232.137.71) now has additive active `openlounge-rc-turn` (MIT Pion TURN4.1.4) and loopback-only `openlounge-rc-candidate` (isolated synthetic account store; not production). Authenticated rcRelay smoke verifies participant isolation, sealed roundtrip and ended-call denial. Pion unit/race tests plus real TCP and trusted-TLS two-peer payload relay pass. A real headless Chromium forced-relay synthetic audio-packet/decoded-video/camera-toggle/same-PC ICE-restart gate passes using the droplet public-IP TURN/TCP URL; the exact server-emitted hostname URL matrix currently gathers zero candidates in this box and times out (public Google DNS correctly resolves the hostname to the designated droplet, so do not claim this hostname matrix passed); this is **not physical audio/video or actual Wi-Fi/cellular switching**. See `rc-turn/README.md` for ports, notices, backups and rollback.
+>
+> **Production cutover is still outstanding:** current `openlounge.app` WS calling state is coupled to its main app/platform store, push, room gates and presence. The isolated DO candidate deliberately uses no production DB/auth data. A coherent authenticated platform bridge/direct calling route is required before changing production calling routes; deploying the whole current app to Railway would violate the DO-only calling boundary, while a second full app sharing the production DB/cache would endanger chats/rooms. Existing coturn/SFU/old signaling remain running for other consumers; production ICE URLs have not switched. No production web calling or native real-device verification is claimed. Existing `/download` Android47/iOS117 have not been relabeled or replaced. Required remaining native/browser matrix is documented in `/workspace/builds/calling-release-20261106/`.
+
 Branch `ringrtc-bindings` (web+server), `ringrtc-bindings` (Android), `ringrtc-bindings` (iOS). Oracle pins: RingRTC 2.74.0,
 signalapp/webrtc 8037b. **No RingRTC / libsignal code or binaries are included** (both AGPL-3.0). Everything here is an
 independent implementation of their *behavior*. Literal embeds live only behind LICENSE-GATED seams (below) and stay off.
@@ -28,7 +38,7 @@ Socket events (server/calls/rcRelay.ts, wired in server/calls/index.ts):
 * `rc:msg {callId, env}` → membership, size (96 KB), rate (300/10 s), per-sender monotonic `n`; forwarded opaque.
 * `rtc:iceConfig` unchanged: short-lived TURN creds = ICE transport (Signal also uses TURN), **not** the mediasoup ladder.
 
-Replacement steps on the droplet (not executed — Cos approval required):
+Historical planned replacement steps (superseded by current status below):
 1. Persist PreKeyStore in Postgres (`rc_identity(user_id, ik_dh, ik_sig, spk_id, spk, spk_sig)`, `rc_opk(user_id, id, pub)`).
 2. Stop routing calls through `media-sfu` (mediasoup PlainTransport) and `mediaBackend.ts`/`sfuSelect.ts`; delete those
    calling paths once all three clients ship `rc:msg` (old clients cannot interoperate — hard cut, no dual engine).
@@ -43,7 +53,7 @@ Replacement steps on the droplet (not executed — Cos approval required):
 * libsignal (`libsignal-client`) — seam is the session interface (`OlSession` / `OLX3DHSession` / `OlX3dhSession`).
 * Live now: interim BSD WebRTC M152 (already linked) + this clean-room session layer.
 
-## Not yet done (honest)
+## Historical pre-hard-cut status (superseded)
 * engine.ts still contains mediasoup/LiveKit/native-fallback branches; this branch seals the P2P path only. Deleting
   the legacy branches is the next Cos integration step (large, behavior-affecting).
 * PJSIP still vendored on Android/iOS because video fan-out code depends on it; removal follows video move to WebRTC.
@@ -58,7 +68,7 @@ Replacement steps on the droplet (not executed — Cos approval required):
   Nothing deployed.
 - Android/iOS: PJSIP removed from the call path; camera video rides the same RingRTC-model PC.
 
-## TURN (open decision for Cos)
+## Historical TURN decision notes (superseded)
 
 Signal still needs TURN: a meaningful share of 1:1 calls (symmetric NAT, UDP-blocked networks) only connect via a relay,
 and RingRTC itself always offers relay candidates. This branch keeps the existing short-lived TURN REST credentials

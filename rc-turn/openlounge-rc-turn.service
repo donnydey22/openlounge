@@ -1,0 +1,21 @@
+[Unit]
+Description=Open Lounge Pion ICE relay candidate (not coturn; no production URL cutover yet)
+After=network-online.target
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/openlounge-rc-turn.env
+LoadCredential=tls-cert:/etc/coturn/certs/fullchain.pem
+LoadCredential=tls-key:/etc/coturn/certs/privkey.pem
+ExecStart=/opt/openlounge-rc-turn/releases/20261106/openlounge-rc-turn
+Restart=on-failure
+RestartSec=3
+MemoryMax=192M
+CPUQuota=50%
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+[Install]
+WantedBy=multi-user.target

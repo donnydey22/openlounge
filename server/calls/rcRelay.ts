@@ -22,12 +22,20 @@ const MAX_OPKS = 200;
 const MAX_DEVICES = 10;
 
 export class PreKeyDirectory {
+  private pending = new Map<string, Promise<unknown>>();
+  private serial<T>(uid: string, work: () => Promise<T>): Promise<T> {
+    const result = (this.pending.get(uid) ?? Promise.resolve()).then(work);
+    const settled = result.catch(() => {}); this.pending.set(uid, settled);
+    void settled.then(() => { if (this.pending.get(uid) === settled) this.pending.delete(uid); });
+    return result;
+  }
   constructor(private store: PreKeyStore = memoryPreKeyStore(), private now: () => number = Date.now) {}
 
   async publish(userId: string, raw: unknown): Promise<{ ok: true; opkCount: number } | { ok: false; error: "bad_request" }> {
     const r = raw as PublishedKeys;
     if (!r || !DEV.test(r.deviceId) || !B64U.test(r.ikDh) || !B64U.test(r.ikSig) || !B64U.test(r.spk) || !B64U_SIG.test(r.spkSig) || !Number.isInteger(r.spkId) || !Array.isArray(r.opks) || r.opks.length > MAX_OPKS) return { ok: false, error: "bad_request" };
     if (!r.opks.every((o) => Number.isInteger(o?.id) && B64U.test(o?.pub))) return { ok: false, error: "bad_request" };
+    return this.serial(userId, async () => {
     const all = (await this.store.get(userId)) ?? {};
     const prev = all[r.deviceId];
     // identity change wipes that device's old OPKs (reinstall); same identity appends
@@ -35,11 +43,13 @@ export class PreKeyDirectory {
     all[r.deviceId] = { keys: { ikDh: r.ikDh, ikSig: r.ikSig, spkId: r.spkId, spk: r.spk, spkSig: r.spkSig }, opks, at: this.now() };
     const devs = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, MAX_DEVICES);
     await this.store.put(userId, Object.fromEntries(devs));
-    return { ok: true, opkCount: opks.length };
+    return { ok: true as const, opkCount: opks.length };
+    });
   }
 
   /** one bundle per registered device of `userId`, each consuming one OPK */
   async fetch(userId: string): Promise<Bundle[]> {
+    return this.serial(userId, async () => {
     const all = await this.store.get(userId);
     if (!all) return [];
     const out: Bundle[] = [];
@@ -49,6 +59,7 @@ export class PreKeyDirectory {
     }
     await this.store.put(userId, all);
     return out;
+    });
   }
 }
 

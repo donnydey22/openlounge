@@ -28,7 +28,13 @@ export class SealedSignaling implements RtcSocket {
   }
 
   private async initiate() {
-    const r = await this.sock.request<{ ok: boolean; bundles?: PreKeyBundle[] & { deviceId: string }[]; error?: string }>("rc:keys:fetch", { userId: this.o.peerUserId, callId: this.o.callId });
+    let r: { ok: boolean; bundles?: (PreKeyBundle & { deviceId: string })[]; error?: string } | undefined;
+    for (let attempt = 0; attempt <= 20 && !this.closed; attempt++) {
+      r = await this.sock.request<typeof r>("rc:keys:fetch", { userId: this.o.peerUserId, callId: this.o.callId });
+      if (r?.error !== "no_keys" || attempt === 20) break;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    if (this.closed) throw new Error("rc: closed");
     if (!r?.ok || !r.bundles?.length) throw new Error(`rc:keys:fetch ${r?.error ?? "failed"}`);
     const me = await this.keys.identity();
     for (const b of r.bundles as (PreKeyBundle & { deviceId: string })[]) {

@@ -70,3 +70,43 @@ test("olx3dh.ts matches node:crypto vectors (cross-platform contract)", async ()
   const s = await OlSession.respond(me, await jwk(v.privHex.spkb, v.pubHex.spkb), await jwk(v.privHex.opkb, v.pubHex.opkb), { ikDh: b64(hx(v.pubHex.ika)), ikSig: "", ek: b64(hx(v.pubHex.eka)), spkId: 1, opkId: 1 });
   assert.equal(new TextDecoder().decode(await s.open({ v: 1, n: 0, ct: v.msg0.ctB64u })), v.msg0.plaintext);
 });
+
+
+test("concurrent trickle ICE sealing/opening advances each ratchet exactly once", async () => {
+  const { a, b, bundle } = await pair();
+  const sa = await OlSession.initiate(await a.identity(), bundle);
+  const envs = await Promise.all(Array.from({ length: 24 }, (_, i) => sa.seal(new TextEncoder().encode(`ice-${i}`))));
+  const pre = envs[0].pre!;
+  const sb = await OlSession.respond(await b.identity(), await b.spkPriv(pre.spkId), await b.takeOpk(pre.opkId), pre);
+  const plain = await Promise.all(envs.map(e => sb.open(e)));
+  assert.deepEqual(plain.map(x => new TextDecoder().decode(x)), Array.from({length:24}, (_,i)=>`ice-${i}`));
+});
+
+test("tampered ciphertext cannot consume receive ratchet or skipped keys", async () => {
+  const { a, b, bundle } = await pair();
+  const sa = await OlSession.initiate(await a.identity(), bundle);
+  const env = await sa.seal(new TextEncoder().encode("offer"));
+  const pre = env.pre!;
+  const sb = await OlSession.respond(await b.identity(), await b.spkPriv(pre.spkId), await b.takeOpk(pre.opkId), pre);
+  await assert.rejects(sb.open({...env, ct: (env.ct[0] === "A" ? "B" : "A") + env.ct.slice(1)}));
+  assert.equal(new TextDecoder().decode(await sb.open(env)), "offer");
+});
+
+
+test("durable DO public-key directory survives restart and concurrent fetches consume distinct OPKs", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { filePreKeyStore } = await import("../../server/calls/preKeyFileStore");
+  const { PreKeyDirectory } = await import("../../server/calls/rcRelay");
+  const dir = await mkdtemp(join(tmpdir(), "ol-prekeys-"));
+  try {
+    const k = new OlKeyStore(memoryKv());
+    const first = new PreKeyDirectory(filePreKeyStore(dir));
+    assert.ok((await first.publish("peer", await k.publishable())).ok);
+    const restarted = new PreKeyDirectory(filePreKeyStore(dir));
+    const replies = await Promise.all(Array.from({length:10},()=>restarted.fetch("peer")));
+    assert.equal(new Set(replies.map(x=>x[0].opkId)).size,10);
+    assert.ok(replies.every(x=>x[0].deviceId));
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});

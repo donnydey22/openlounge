@@ -79,7 +79,9 @@ test("a drop shorter than the grace keeps the call; the other side sees offline 
   const g = await B.client.req("call:get", { callId });
   assert.equal(g.call.phase, "active");
   assert.equal(g.call.offline, undefined);
-  assert.ok(g.media?.token, "fresh LiveKit token on re-sync");
+  assert.equal(g.media?.provider, "p2p", "re-sync preserves single PC backend");
+  assert.equal(g.media?.callId, callId);
+  assert.equal(g.media?.token, "", "no LiveKit credentials in calling");
   assert.equal((await B.client.req("call:current", {})).call?.id, callId);
   assert.equal(inA.filter((e) => e.ev === "call:state" && e.data.call.id === callId && e.data.call.phase === "ended").length, 0);
   await A.client.req("call:hangup", { callId });

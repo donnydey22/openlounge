@@ -37,6 +37,8 @@ export class CallSession {
   private pc: RTCPeerConnection | null = null;
   private gen = 0;
   private seq = 0;
+  private signalQueue: Promise<void> = Promise.resolve();
+  private offerTask: Promise<void> | null = null;
   private pendingCands: RTCIceCandidateInit[] = [];
   private remoteSet = false;
   private recovery: NetworkRecovery;
@@ -120,20 +122,28 @@ export class CallSession {
     if (!r?.ok && r?.error && r.error !== "replayed") this.o.onFailure?.(fromSignalingError(r.error));
   }
 
-  private async sendOffer(restart: boolean) {
-    const pc = this.pc;
-    if (!pc) return;
-    const offer = await pc.createOffer(restart ? { iceRestart: true } : {});
-    await pc.setLocalDescription(offer);
-    await this.send("offer", { sdp: pc.localDescription?.sdp ?? offer.sdp });
+  private sendOffer(restart: boolean): Promise<void> {
+    if (this.offerTask) return this.offerTask;
+    this.offerTask = (async () => {
+      const pc = this.pc;
+      if (!pc || this.phase === "closed") return;
+      const offer = await pc.createOffer(restart ? { iceRestart: true } : {});
+      if (this.pc !== pc) return;
+      await pc.setLocalDescription(offer);
+      await this.send("offer", { sdp: pc.localDescription?.sdp ?? offer.sdp });
+    })().finally(() => { this.offerTask = null; });
+    return this.offerTask;
   }
 
   private onSignal = (raw: unknown) => {
     const m = raw as Incoming;
     if (!m || m.callId !== this.o.callId || this.phase === "closed") return;
-    if (m.gen < this.gen) return;
-    if (m.gen > this.gen) this.gen = m.gen;
-    void this.handle(m).catch((e) => this.o.log?.("signal-error", { kind: m.kind, err: String((e as Error)?.message ?? e).slice(0, 120) }));
+    // SDP apply/create operations must never overlap (ready can arrive during initial createOffer).
+    this.signalQueue = this.signalQueue.then(async () => {
+      if (this.phase === "closed" || m.gen < this.gen) return;
+      if (m.gen > this.gen) this.gen = m.gen;
+      await this.handle(m);
+    }).catch((e) => this.o.log?.("signal-error", { kind: m.kind, err: String((e as Error)?.message ?? e).slice(0, 120) }));
   };
 
   private async handle(m: Incoming) {
@@ -147,6 +157,9 @@ export class CallSession {
         return;
       case "offer":
         if (this.o.role !== "callee" || !m.sdp) return;
+        if (pc.remoteDescription?.sdp === m.sdp && pc.signalingState === "stable" && pc.localDescription?.type === "answer") {
+          await this.send("answer", { sdp: pc.localDescription.sdp }); return;
+        }
         await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
         this.remoteSet = true;
         if (!this.videoTx) {
