@@ -39,6 +39,7 @@ export class CallSession {
   private seq = 0;
   private signalQueue: Promise<void> = Promise.resolve();
   private offerTask: Promise<void> | null = null;
+  private turnLeaseTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingCands: RTCIceCandidateInit[] = [];
   private remoteSet = false;
   private recovery: NetworkRecovery;
@@ -104,6 +105,7 @@ export class CallSession {
       this.o.log?.("ice-state", { st, gen: this.gen });
       if (st === "connected" || st === "completed") {
         this.setPhase("media-running");
+        if (this.o.role === "caller" && !this.turnLeaseTimer) this.scheduleTurnLease();
         this.connectedResolve?.();
         this.connectedResolve = null;
         this.connectedReject = null;
@@ -160,6 +162,11 @@ export class CallSession {
         if (pc.remoteDescription?.sdp === m.sdp && pc.signalingState === "stable" && pc.localDescription?.type === "answer") {
           await this.send("answer", { sdp: pc.localDescription.sdp }); return;
         }
+        if (m.gen > 0) {
+          const fresh = await this.socket.request<{ok:boolean;config?:{iceServers:RTCIceServer[]}}>("rtc:iceConfig",{callId:this.o.callId}).catch(()=>null);
+          if (this.pc !== pc) return;
+          if (fresh?.ok && fresh.config) pc.setConfiguration({...pc.getConfiguration(),iceServers:fresh.config.iceServers});
+        }
         await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
         this.remoteSet = true;
         if (!this.videoTx) {
@@ -211,6 +218,16 @@ export class CallSession {
     else await this.send("restart", {});
   }
 
+  /** Refresh a 600s TURN allocation credential before expiry; transport maintenance, not a local-media fallback. */
+  private scheduleTurnLease() {
+    this.turnLeaseTimer = setTimeout(() => {
+      if (this.phase === "closed") return;
+      this.o.log?.("turn-lease-renew", {});
+      void this.iceRestart(0).catch(e=>this.o.log?.("turn-lease-error",{err:String(e).slice(0,120)}));
+      this.scheduleTurnLease();
+    }, 480_000);
+  }
+
   setMuted(m: boolean) { this.audio.setMuted(m); }
 
   async setInput(id: string | null) {
@@ -244,6 +261,7 @@ export class CallSession {
     if (this.phase === "closed") return;
     this.phase = "closed";
     this.o.onPhase?.("closed");
+    if (this.turnLeaseTimer) clearTimeout(this.turnLeaseTimer); this.turnLeaseTimer = null;
     this.recovery.stop();
     this.socket.off("rtc:signal", this.onSignal);
     if (typeof window !== "undefined") window.removeEventListener("online", this.onlineH);

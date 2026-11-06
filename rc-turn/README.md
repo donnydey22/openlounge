@@ -24,6 +24,10 @@ RC_TURN_TEST_ADDR=127.0.0.1:14443 RC_TURN_TEST_TLS=1 go test -race -run TestLive
 
 Both live tests perform two authenticated allocations and verify actual bidirectional relayed payloads; TLS test checks the trusted certificate and hostname, not insecure skip-verify.
 
+## Credential leases
+
+The pinned Pion server re-authenticates allocation Refresh/CreatePermission/ChannelBind, so expired 600-second credentials cannot be assumed to support a long call. Clients now proactively renew at eight minutes; caller drives the same-PC ICE restart and callee fetches its own fresh config before answering a restarted generation. Timers are cancelled at call close. Accelerated Chromium lease and RTP progress tests pass; real >10-minute cross-platform calls remain required.
+
 ## 2026-11-06 evidence / rollback
 
 Deployed active additive service `openlounge-rc-turn`; public Chromium forced-TURN/TCP synthetic audio packets + decoded canvas video + camera toggle + same-PC synthetic online/ICE restart passed. This is NOT physical audio/video or Wi-Fi/cellular verification. Candidate server ICE credentials now select these Pion listeners, not coturn. Live production has **not** switched. Public-IP Chromium TURN/TCP passed, but the exact server-emitted hostname URLs gathered zero candidates in this box; external hostname/TLS and physical-network gates remain outstanding. Public Google DNS resolves the hostname to the correct DO IP.

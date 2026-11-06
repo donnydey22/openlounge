@@ -14,6 +14,7 @@ try{
  await page.route("http://127.0.0.1:18766/**",r=>r.fulfill({status:200,contentType:"text/html",body:"<!doctype html><title>OL isolated synthetic RTC matrix</title>"}));
  await page.goto("http://127.0.0.1:18766/");
  if(process.env.RTC_MATRIX_CONFIG_FILE) await page.evaluate(c=>globalThis.RTC_MATRIX_CONFIG=c,JSON.parse(await fs.readFile(process.env.RTC_MATRIX_CONFIG_FILE,"utf8")));
+ if(process.env.RTC_MATRIX_TEST_LEASE) await page.evaluate(()=>globalThis.RTC_MATRIX_TEST_LEASE=true);
  await page.addScriptTag({path:bundle});
  const result=await page.evaluate(()=>globalThis.runRtcMatrix());
  if(process.env.RTC_MATRIX_RESULT_FILE) await fs.writeFile(process.env.RTC_MATRIX_RESULT_FILE,JSON.stringify(result,null,2));

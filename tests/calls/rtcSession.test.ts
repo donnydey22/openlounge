@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CallSession } from "../../src/lib/calls/rtc/CallSession";
 import { RtcSessionHub } from "../../server/calls/rtcSession";
 import { rtcIceConfig, p2pMedia } from "../../server/calls/rtcIceConfig";
 import { CallFailure, fromMediaError, mayRecoverOverNetwork, fromIceState } from "../../src/lib/calls/rtc/CallFailures";
@@ -38,4 +39,19 @@ test("local failures never recover over network", () => {
   for (const n of ["NotAllowedError", "NotFoundError", "NotReadableError", "NotSupportedError"]) assert.equal(mayRecoverOverNetwork(fromMediaError({ name: n })), false);
   assert.equal(fromIceState("connected"), null);
   assert.equal(mayRecoverOverNetwork(fromIceState("failed") as CallFailure), true);
+});
+
+test("TURN lease maintenance is bounded and its timer is cancelled on call close", (t) => {
+  t.mock.timers.enable({apis:["setTimeout"]});
+  let renewals=0;
+  const sock={on(){},off(){},request:async<T>()=>({ok:true} as T)};
+  const call=new CallSession(sock,{callId:"lease",role:"caller",media:{provider:"p2p",url:"rtc",token:""},log:ev=>{if(ev==="turn-lease-renew")renewals++}});
+  try{
+    // White-box scheduler test; real same-PC/RTP behavior is covered by the browser matrix.
+    (call as any).scheduleTurnLease();
+    t.mock.timers.tick(479_999);assert.equal(renewals,0);
+    t.mock.timers.tick(1);assert.equal(renewals,1);
+    call.close();assert.equal((call as any).turnLeaseTimer,null);
+    t.mock.timers.tick(960_000);assert.equal(renewals,1);
+  }finally{call.close();t.mock.timers.reset()}
 });

@@ -18,11 +18,17 @@ import { RcRelay } from "../../server/calls/rcRelay";
   await bSock.request("rc:keys:publish",await kb.publishable());
   const sealedA=new SealedSignaling(aSock,ka,{callId:"headless",role:"caller",peerUserId:"b"});
   const sealedB=new SealedSignaling(bSock,kb,{callId:"headless",role:"callee",peerUserId:"a"});
-  const errors:any[]=[];
+  const errors:any[]=[]; let renewals=0; let peerCreations=0;
+  const originalTimeout=window.setTimeout;
+  let accelerated=false;
+  if((globalThis as any).RTC_MATRIX_TEST_LEASE) window.setTimeout=((f:any,ms?:number,...args:any[])=>{
+    if(ms===480_000&&!accelerated){accelerated=true;return originalTimeout(f,3000,...args)}
+    return originalTimeout(f,ms,...args);
+  }) as typeof window.setTimeout;
   const config=(globalThis as any).RTC_MATRIX_CONFIG ?? {};
-  const createPeer=(cfg: RTCConfiguration)=>new RTCPeerConnection({...cfg,...config});
-  const a=new CallSession(sealedA,{callId:"headless",role:"caller",media:{provider:"p2p",url:"rtc",token:"",callId:"headless",expiresAt:9999999999},log:(ev,d)=>console.log(ev,JSON.stringify(d)),createPeer,onFailure:e=>{errors.push(String(e));console.log("FAIL",String(e))}});
-  const b=new CallSession(sealedB,{callId:"headless",role:"callee",media:{provider:"p2p",url:"rtc",token:"",callId:"headless",expiresAt:9999999999},log:(ev,d)=>console.log(ev,JSON.stringify(d)),createPeer,onFailure:e=>{errors.push(String(e));console.log("FAIL",String(e))}});
+  const createPeer=(cfg: RTCConfiguration)=>{peerCreations++;return new RTCPeerConnection({...cfg,...config})};
+  const a=new CallSession(sealedA,{callId:"headless",role:"caller",media:{provider:"p2p",url:"rtc",token:"",callId:"headless",expiresAt:9999999999},log:(ev,d)=>{if(ev==="turn-lease-renew")renewals++;console.log(ev,JSON.stringify(d))},createPeer,onFailure:e=>{errors.push(String(e));console.log("FAIL",String(e))}});
+  const b=new CallSession(sealedB,{callId:"headless",role:"callee",media:{provider:"p2p",url:"rtc",token:"",callId:"headless",expiresAt:9999999999},log:(ev,d)=>{if(ev==="turn-lease-renew")renewals++;console.log(ev,JSON.stringify(d))},createPeer,onFailure:e=>{errors.push(String(e));console.log("FAIL",String(e))}});
   (globalThis as any).rtcDebug={a,b};
   const wait=async(f:()=>boolean)=>{const until=Date.now()+15000;while(!f()){if(Date.now()>until)throw Error("matrix timeout");await new Promise(r=>setTimeout(r,50))}};
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -50,12 +56,18 @@ import { RcRelay } from "../../server/calls/rcRelay";
     const before=ufrag(pa.localDescription);
     window.dispatchEvent(new Event("online")); // synthetic network-change notification, NOT a Wi-Fi/cellular handoff
     await wait(()=>ufrag(pa.localDescription)!==before && ufrag(pa.localDescription)===ufrag(pb.remoteDescription) && ufrag(pb.localDescription)===ufrag(pa.remoteDescription) && pa.signalingState==="stable" && pb.signalingState==="stable" && [pa,pb].every(p=>p.iceGatheringState==="complete"&&(p.iceConnectionState==="connected"||p.iceConnectionState==="completed")));
+    if((globalThis as any).RTC_MATRIX_TEST_LEASE){
+      await wait(()=>renewals===1);
+      await new Promise(r=>setTimeout(r,150));
+      await wait(()=>ufrag(pa.localDescription)===ufrag(pb.remoteDescription)&&ufrag(pb.localDescription)===ufrag(pa.remoteDescription)&&pa.signalingState==="stable"&&pb.signalingState==="stable"&&[pa,pb].every(p=>p.iceGatheringState==="complete"&&(p.iceConnectionState==="connected"||p.iceConnectionState==="completed")));
+    }
     await new Promise(r=>setTimeout(r,600));
+    if(peerCreations!==2)throw Error("created more than one PC per call endpoint");
     const after=[];
     for(const [i,p] of [pa,pb].entries()){const rows=[...(await p.getStats()).values()].filter((r:any)=>r.type==="inbound-rtp");for(const kind of ["audio","video"]){const old=stats[i].find((r:any)=>r.type==="inbound-rtp"&&r.kind===kind);const next=rows.find((r:any)=>r.kind===kind);if(!next||next.bytesReceived<=old.bytesReceived)throw Error("no packet progress after ICE restart: "+kind);}after.push(rows);}
 
     if(a.peer!==pa||b.peer!==pb) throw Error("ICE restart replaced PC");
     if(errors.length) throw Error("RTC errors: "+errors.join(","));
-    return {synthetic:true, physicalDeviceTest:false,states:[a.state,b.state],slotCounts,errors,stats,afterRestartStats:after,selected,syntheticOnlineIceRestart:true};
-  } finally {if(timer)clearInterval(timer);v?.stop();console.log("final",a.peer?.signalingState,b.peer?.signalingState,a.peer?.iceConnectionState,b.peer?.iceConnectionState,JSON.stringify(errors),JSON.stringify([a.peer,b.peer].map(p=>({gathering:p?.iceGatheringState,candidates:(p?.localDescription?.sdp.match(/a=candidate/g)??[]).length}))));a.close();b.close();}
+    return {synthetic:true, physicalDeviceTest:false,states:[a.state,b.state],slotCounts,errors,stats,afterRestartStats:after,selected,peerCreations,acceleratedTurnRenewals:renewals,syntheticOnlineIceRestart:true};
+  } finally {window.setTimeout=originalTimeout;if(timer)clearInterval(timer);v?.stop();console.log("final",a.peer?.signalingState,b.peer?.signalingState,a.peer?.iceConnectionState,b.peer?.iceConnectionState,JSON.stringify(errors),JSON.stringify([a.peer,b.peer].map(p=>({gathering:p?.iceGatheringState,candidates:(p?.localDescription?.sdp.match(/a=candidate/g)??[]).length}))));a.close();b.close();}
 };
