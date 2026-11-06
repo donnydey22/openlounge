@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
-import { ANDROID_RELEASE, IOS_MANIFEST_URL, IOS_RELEASE, releaseLabel } from "@/lib/releases";
+import { ANDROID_RELEASE, IOS_RELEASE, IOS_MANIFEST_URL, releaseLabel } from "@/lib/releases";
 
 const ANDROID = { ...ANDROID_RELEASE, version: releaseLabel(ANDROID_RELEASE) };
-const IOS = { ...IOS_RELEASE, version: releaseLabel(IOS_RELEASE), install: `itms-services://?action=download-manifest&url=${IOS_MANIFEST_URL}` };
 
 function Sha({ value }: { value: string }) {
   return (
@@ -16,7 +15,7 @@ function Sha({ value }: { value: string }) {
 }
 
 export function DownloadHub() {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   useScrollLock(open);
   const tabRef = useRef<HTMLButtonElement>(null);
   const firstRef = useRef<HTMLAnchorElement>(null);
@@ -85,26 +84,28 @@ export function DownloadHub() {
           <Sha value={ANDROID.sha256} />
         </section>
 
-        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-          <h2 className="text-base font-semibold text-zinc-100">iPhone: Direct install (registered devices only)</h2>
-          <p className="text-zinc-500">Version {IOS.version} · {IOS.size}</p>
+        <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5" data-testid="download-ios">
+          <h2 className="text-base font-semibold text-zinc-100">iPhone</h2>
+          <p className="text-zinc-500">Version {releaseLabel(IOS_RELEASE)} · {IOS_RELEASE.size}</p>
           <a
-            href={IOS.install}
-            className="mt-4 block rounded-full border border-sky-500/60 px-5 py-3 text-center font-semibold text-sky-300"
-            data-testid="download-ios"
+            href={IOS_RELEASE.file}
+            download
+            className="mt-4 block rounded-full bg-emerald-500 px-5 py-3 text-center font-semibold text-black"
+            data-testid="download-ios-file"
+          >
+            Download for iPhone
+          </a>
+          <a
+            href={`itms-services://?action=download-manifest&url=${encodeURIComponent(IOS_MANIFEST_URL)}`}
+            className="mt-3 block rounded-full border border-emerald-500/60 px-5 py-3 text-center font-semibold text-emerald-300"
+            data-testid="download-ios-install"
           >
             Install on iPhone
           </a>
-          <p className="mt-3 text-zinc-500">Latest: version {IOS.version}</p>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-zinc-400">
-            <li>Only iPhones registered for this test build can install it.</li>
-            <li>Open this page in Safari, tap Install, then check your home screen.</li>
-            <li>No profile trust step in VPN &amp; Device Management is needed. On iOS 16+, you may need to turn on Settings &gt; Privacy &amp; Security &gt; Developer Mode.</li>
-          </ul>
-          <p className="mt-3 text-xs text-zinc-500">
-            Direct file: <a className="underline" href={IOS.file}>{IOS.file.split("/").pop()}</a>
+          <p className="mt-3 text-zinc-400">
+            Prefer Safari on a registered iPhone and tap Install for one-tap OTA. Or download the IPA file directly (same path as Android). After install, trust the developer in Settings &gt; General &gt; VPN &amp; Device Management.
           </p>
-          <Sha value={IOS.sha256} />
+          <Sha value={IOS_RELEASE.sha256} />
         </section>
 
       </div>

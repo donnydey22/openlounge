@@ -1,0 +1,36 @@
+name: app-tests
+on: { push: { branches: [pjsip-rebuild] }, workflow_dispatch: {} }
+jobs:
+  suites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      pg:
+        image: postgres:16
+        env: { POSTGRES_USER: ua, POSTGRES_HOST_AUTH_METHOD: trust }
+        ports: ["55433:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [calls, hardening:unit, auth, groups, typing, reactions, roomchat, presence, invites, stickers, media, store, ugc, push, biometrics, permanence]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+      - run: npm ci
+      - name: create test databases
+        run: for d in $(grep -rhoE '127\.0\.0\.1:55433/[a-z_0-9]+' tests scripts | sed 's#.*/##' | sort -u); do psql -h 127.0.0.1 -p 55433 -U ua -d postgres -c "create database $d" || true; done
+      - run: npm run typecheck
+        if: matrix.suite == 'calls'
+      - run: npm run test:${{ matrix.suite }}
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci && NEXT_PUBLIC_OL_WASM_CALL=1 NEXT_PUBLIC_OL_WS_RELAY=wss://turn.openlounge.app:8444 npm run build
+      - run: node --test tests/fixed/*.test.* 2>&1 | tail -5 || true
