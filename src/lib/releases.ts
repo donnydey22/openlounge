@@ -112,14 +112,23 @@ export const IOS_ARCHIVED_B109 = {
   size: "10.0 MB",
   sha256: "9e279b23020715b6c025808698e08e7e62c92537077195902ca60ba5c749bf73",
 } as const;
-/** iOS 0.3.19 (113): video fan-out, ios-video-on-audio-cut 0e9e08a, CI run 42164330277. Served directly from openlounge.app/public/downloads (no GitHub redirect). */
-export const IOS_RELEASE = {
+/** ARCHIVED 2026-11-06: b113, asset kept on public/downloads, not linked. Rollback = set IOS_RELEASE back to these values. */
+export const IOS_ARCHIVED_B113 = {
   version: "0.3.19",
   build: 113,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.19-b113.ipa",
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
+} as const;
+/** iOS 0.3.19 (117): five-step cut ios-claude-turn-relay-201 c2e8e9c (mode-wait/didActivate, video fan-out, OLAudioSessionOwner, CallSignalClient bridge, OLNativeCallHost past first cut; TURN/relay/EAUD); CI run 42219514900. Served from openlounge.app/public/downloads. */
+export const IOS_RELEASE = {
+  version: "0.3.19",
+  build: 117,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.3.19-b117.ipa",
+  size: "10.5 MB",
+  sha256: "6f725c9323124558fb810481a2ea7604ca4fa8287655ebc54bca9cc4289ee158",
 } as const;
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
