@@ -24,6 +24,8 @@ import { enableVoiceProcessing, type VoiceProcessingHandle } from "./voiceProces
 import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
+import { CallSession } from "./rtc/CallSession";
+import type { CallFailure } from "./rtc/CallFailures";
 import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
 import { CallTelemetry } from "./callTelemetry";
@@ -883,7 +885,7 @@ export class CallEngine {
   }
 
   private mediaConnected() {
-    return this.room?.state === "connected" || this.mediasoupConnected;
+    return this.rtc?.state === "media-running" || this.rtc?.state === "recovering" || this.room?.state === "connected" || this.mediasoupConnected;
   }
 
   /** Join the selected backend. LiveKit remains byte-for-byte the normal path unless CALL_SFU=layered selects UDP. */
@@ -891,6 +893,11 @@ export class CallEngine {
     if (this.roomPromise) return this.roomPromise;
     const media = this.media;
     if (!media) return Promise.resolve(null);
+    // Signal-identical rebuild: P2P CallSession is the sole calling media path; no provider ladder.
+    if (media.provider === "p2p") {
+      this.roomPromise = this.connectP2P(media, answer);
+      return this.roomPromise as Promise<null>;
+    }
     // Native iPhone voice retains its existing app-owned audio path. A granted iPhone video caller stays app-owned
     // across direct-SFU recovery and native LiveKit migration; the page remains signaling and controls only.
     if (media.provider === "mediasoup" || this.iosNativeVideoLatched() || useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {
@@ -1060,6 +1067,49 @@ export class CallEngine {
       }
       return null;
     }
+  }
+
+  // ---------- P2P (rtc/CallSession) ----------
+  private rtc: CallSession | null = null;
+  private async connectP2P(media: CallMedia, answer: boolean): Promise<null> {
+    const call = this.s.call;
+    if (!call?.id || !this.socket) return null;
+    const session = new CallSession(this.socket, {
+      callId: call.id,
+      role: this.s.role === "caller" ? "caller" : "callee",
+      media,
+      log: (ev, d) => this.netLog(`rtc-${ev}`, d ?? {}),
+      onPhase: (p) => {
+        if (this.rtc !== session) return;
+        if (p === "recovering") this.set({ reconnecting: true });
+        if (p === "media-running") {
+          this.set({ reconnecting: false });
+          if ((answer || this.s.call?.phase === "active") && this.s.ui === "connecting") {
+            this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now() });
+            playConnected();
+            postNative({ type: "call:connected", callId: this.s.call?.id, video: !!this.s.call?.video });
+          }
+        }
+      },
+      onFailure: (f: CallFailure) => {
+        if (this.rtc !== session) return;
+        this.netLog("rtc-failure", { kind: f.kind, code: f.code, local: f.local });
+        this.diag("rtc-failure", { kind: f.kind, code: f.code });
+      },
+    });
+    this.rtc = session;
+    if (this.s.muted) session.setMuted(true);
+    try {
+      await session.start();
+    } catch (e) {
+      const f = e as CallFailure;
+      if (this.rtc === session && this.busy) {
+        this.netLog("rtc-start-failed", { kind: f?.kind, code: f?.code });
+        // permission/device: local — surface and end; never TURN. network on first connect: end cleanly.
+        if (f?.kind !== "session") void this.hangup();
+      }
+    }
+    return null;
   }
 
   /** Same-SFU ICE-TCP (UDP-hostile network / ladder floor). False when the SFU has no TCP port or it can't connect. */
@@ -2486,6 +2536,8 @@ export class CallEngine {
   private teardownMedia() {
     stopTones();
     this.msTcp = false;
+    this.rtc?.close();
+    this.rtc = null;
     this.turnRefresh.stop();
     this.stopWebRouteWatch?.();
     this.webSinkId = "";
@@ -2553,6 +2605,7 @@ export class CallEngine {
     const muted = !this.s.muted;
     this.set({ muted });
     buzz("light");
+    this.rtc?.setMuted(muted);
     if (this.mediasoup) await this.mediasoup.setMuted(muted).catch(() => {});
     const t = this.micTrack;
     if (t) await (muted ? t.mute() : t.unmute()).catch(() => {});

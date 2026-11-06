@@ -291,7 +291,7 @@ export interface CallMedia {
   iosMicReacquire?: boolean;
   /** server opt-in (CALL_IOS_NATIVE_VIDEO=on): only the iOS caller of this video call may use one app-owned audio+camera SFU session */
   iosNativeVideo?: boolean;
-  provider: "livekit" | "mediasoup";
+  provider: "p2p" | "livekit" | "mediasoup";
   /** LiveKit signalling URL, or the opaque "broker" label for Mediasoup (never a browser control endpoint). */
   url: string;
   token: string;

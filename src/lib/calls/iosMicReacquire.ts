@@ -18,7 +18,7 @@ export interface IosMicGateInput {
   nativeMedia: boolean;
   /** callee's platform as reported to the server on accept; unknown = never fire */
   peerPlatform: CallPlatform | null | undefined;
-  provider: "mediasoup" | "livekit" | null | undefined;
+  provider: "p2p" | "mediasoup" | "livekit" | null | undefined;
 }
 
 /** Fires ONLY for: iOS wrapper + local user is the caller + video + WebView media + Android callee + mediasoup + flag on. */

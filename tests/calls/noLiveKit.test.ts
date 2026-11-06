@@ -10,6 +10,5 @@ test("CALL_LIVEKIT=off disables LiveKit; default keeps it", () => {
 
 test("both call-start selection and the in-call fallback are gated", () => {
   const src = readFileSync("server/calls/index.ts", "utf8");
-  assert.match(src, /selectMedia: \(participants\) => mediasoupBackend\(participants\) \?\? \(liveKitAllowed\(\) \? liveKitBackend\(\) : null\)/);
-  assert.match(src, /liveKitFallback: \(\) => \(liveKitAllowed\(\) \? liveKitBackend\(\) : null\)/);
+  assert.match(src, /selectMedia: \(\) => p2pBackend,\s*\n\s*liveKitFallback: \(\) => null,/);
 });

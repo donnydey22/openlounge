@@ -196,6 +196,12 @@ export class CallService {
     for (const c of this.calls.values()) if (c.timer) clearTimeout(c.timer);
   }
 
+  /** rtcSession lookup: participants + phase of a call (null = unknown). */
+  rtcCall(callId: string): { callerId: string; calleeId: string; phase: string } | null {
+    const c = this.calls.get(callId);
+    return c ? { callerId: c.callerId, calleeId: c.calleeId, phase: c.phase } : null;
+  }
+
   /** Busy = already in a call (any phase) or in a live audio room. */
   isBusy(userId: string) {
     return this.busyReason(userId) !== null;
@@ -259,7 +265,7 @@ export class CallService {
     if (c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
     // The caller may establish its outbound UDP transport while ringing, but the called party never receives a
     // Mediasoup admission token (nor can it use one) before explicitly accepting the call.
-    if (c.backend.provider === "mediasoup" && userId === c.calleeId && c.phase !== "active") return null;
+    if (c.backend.provider !== "livekit" && userId === c.calleeId && c.phase !== "active") return null;
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const media = await t.p;

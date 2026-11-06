@@ -11,6 +11,8 @@ import type { CallMediaBackend } from "./mediaBackend";
 import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
 import { mintTurnIceServers } from "../turnCredentials";
+import { RtcSessionHub } from "./rtcSession";
+import { p2pMedia, rtcIceConfig } from "./rtcIceConfig";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
 import { MediasoupGateway } from "../mediasoup/gateway";
@@ -40,6 +42,8 @@ type AckFn = (res: Record<string, unknown>) => void;
 const noop: AckFn = () => {};
 
 let svc: CallService | null = null;
+let rtc: RtcSessionHub | null = null;
+export const rtcHub = () => rtc;
 let unwatchMedia: (() => void) | null = null;
 let gateway: MediasoupGateway | null = null;
 export const calls = () => svc;
@@ -115,6 +119,12 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       close: (callId) => gw.closeCall(callId),
     };
   };
+  void mediasoupBackend; void liveKitBackend; void liveKitAllowed;
+  const p2pBackend: CallMediaBackend = {
+    provider: "p2p",
+    issue: async ({ callId, userId, ttlSec }) => p2pMedia(callId, userId, ttlSec),
+    close: (callId) => rtc?.end(callId),
+  };
   svc = new CallService({
     lastCloseOf: (userId) => lastClose.get(userId) ?? null,
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
@@ -135,8 +145,11 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     policy: (a, b) => store.callPolicy(a, b),
     inRoom: (id) => store.currentRoomOf(id) !== null,
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
-    selectMedia: (participants) => mediasoupBackend(participants) ?? (liveKitAllowed() ? liveKitBackend() : null),
-    liveKitFallback: () => (liveKitAllowed() ? liveKitBackend() : null),
+    // Signal-identical rebuild: the ONLY calling media path is P2P WebRTC over OL signaling (rtcSession) + OL ICE
+    // (rtcIceConfig). mediasoup PlainTransport / LiveKit are no longer selected for calls and there is no in-call
+    // provider migration. (Builders kept only so non-calling code paths still compile; see status doc.)
+    selectMedia: () => p2pBackend,
+    liveKitFallback: () => null,
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
@@ -182,6 +195,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   metrics.gauge("calls_quality_one_way_total", () => cur.stats().quality["one-way"]);
   metrics.gauge("calls_quality_no_audio_total", () => cur.stats().quality["no-audio"]);
   metrics.gauge("calls_quality_no_data_total", () => cur.stats().quality["no-data"]);
+  rtc = new RtcSessionHub({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) });
   return svc;
 }
 
@@ -275,6 +289,15 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   });
   socket.on("call:start", ({ peerId, video, nativeVideo, platform }: { peerId: string; video?: boolean; nativeVideo?: unknown; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled(), platform)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
+  );
+  // P2P calling signaling (offer/answer/candidates) + fresh short-lived OL ICE credentials.
+  socket.on("rtc:signal", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack(rtc ? rtc.signal(uid, d) : { ok: false, error: "unknown_call" })));
+  socket.on("rtc:iceConfig", ({ callId }: { callId?: unknown } = {}, ack: AckFn = noop) =>
+    authed(ack, (uid) => {
+      const c = typeof callId === "string" ? s().rtcCall(callId) : null;
+      if (!c || (uid !== c.callerId && uid !== c.calleeId) || c.phase === "ended") return ack({ ok: false, error: "not_participant" });
+      ack({ ok: true, config: rtcIceConfig(callId as string, uid) });
+    }),
   );
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
