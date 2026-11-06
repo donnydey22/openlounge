@@ -178,7 +178,7 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
 }
 
 /** relayed app→page requests: mediasoup ms:* (legacy) and the P2P contract (rtc:signal / rtc:iceConfig) */
-const MS_EVENT = /^(ms:[a-z:]+|rtc:signal|rtc:iceConfig)$/i;
+const MS_EVENT = /^(ms:[a-z:]+|rtc:signal|rtc:iceConfig|rc:msg|rc:keys:publish|rc:keys:fetch)$/i; // rc:* = RingRTC session model (sealed)
 
 /** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
 export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced", "session-gone", "frame-stall", "ice-restart-coalesced"]);
@@ -228,6 +228,12 @@ export class NativeMediaSession {
     const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
     if (this.closed || !d || (d as { callId?: unknown }).callId !== callId) return;
     void nativeMediaCmd({ op: "rtcSignal", data: d }).catch(() => {});
+  };
+  /** server rc:msg (E2E-sealed, opaque to this page) → app, which owns its own OLX3DH-v1 keys */
+  private readonly onRcMsg = (d: unknown) => {
+    const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
+    if (this.closed || !d || (d as { callId?: unknown }).callId !== callId) return;
+    void nativeMediaCmd({ op: "rcMsg", data: d }).catch(() => {});
   };
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
@@ -326,6 +332,7 @@ export class NativeMediaSession {
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
     this.socket.on("rtc:signal", this.onRtcSignal);
+    this.socket.on("rc:msg", this.onRcMsg);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
     const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
@@ -374,6 +381,7 @@ export class NativeMediaSession {
     this.closed = true;
     this.socket.off("ms:consumer:available", this.onAvailable);
     this.socket.off("rtc:signal", this.onRtcSignal);
+    this.socket.off("rc:msg", this.onRcMsg);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;

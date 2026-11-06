@@ -28,7 +28,13 @@ export class OlKeyStore {
   }
 
   /** Rotate signed prekey and top up one-time prekeys; returns the public upload payload. */
-  async publishable(): Promise<{ ikDh: string; ikSig: string; spkId: number; spk: string; spkSig: string; opks: { id: number; pub: string }[] }> {
+  async deviceId(): Promise<string> {
+    let d = await this.kv.get("olx3dh:dev");
+    if (!d) { d = b64(globalThis.crypto.getRandomValues(new Uint8Array(16))); await this.kv.set("olx3dh:dev", d); }
+    return d;
+  }
+
+  async publishable(): Promise<{ deviceId: string; ikDh: string; ikSig: string; spkId: number; spk: string; spkSig: string; opks: { id: number; pub: string }[] }> {
     const id = await this.identity();
     const spkId = Number((await this.kv.get("olx3dh:spkNext")) ?? "1");
     const spk = await genDh();
@@ -42,7 +48,7 @@ export class OlKeyStore {
       opks.push({ id: next, pub: b64(k.pub) });
     }
     await this.kv.set("olx3dh:opkNext", String(next));
-    return { ikDh: b64(id.dh.pub), ikSig: b64(id.sig.pub), spkId, spk: b64(spk.pub), spkSig: b64(await signSpk(id.sig.priv, spk.pub)), opks };
+    return { deviceId: await this.deviceId(), ikDh: b64(id.dh.pub), ikSig: b64(id.sig.pub), spkId, spk: b64(spk.pub), spkSig: b64(await signSpk(id.sig.priv, spk.pub)), opks };
   }
 
   async spkPriv(id: number) { const r = await this.kv.get(`olx3dh:spk:${id}`); if (!r) throw new Error("olx3dh: unknown spk"); return importDhPriv((JSON.parse(r) as StoredKp).jwk); }

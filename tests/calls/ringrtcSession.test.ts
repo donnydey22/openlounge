@@ -7,7 +7,7 @@ import { RcRelay } from "../../server/calls/rcRelay";
 async function pair() {
   const a = new OlKeyStore(memoryKv()), b = new OlKeyStore(memoryKv());
   const pub = await b.publishable();
-  return { a, b, bundle: { userId: "b", ikDh: pub.ikDh, ikSig: pub.ikSig, spkId: pub.spkId, spk: pub.spk, spkSig: pub.spkSig, opkId: pub.opks[0].id, opk: pub.opks[0].pub } };
+  return { a, b, bundle: { userId: "b", deviceId: pub.deviceId, ikDh: pub.ikDh, ikSig: pub.ikSig, spkId: pub.spkId, spk: pub.spk, spkSig: pub.spkSig, opkId: pub.opks[0].id, opk: pub.opks[0].pub } };
 }
 
 test("X3DH both directions, out-of-order, replay rejected, OPK one-time", async () => {
@@ -38,16 +38,24 @@ test("SealedSignaling end-to-end through RcRelay: server sees only ciphertext", 
     off: () => {},
     request: async (ev: string, d?: any): Promise<any> => ev === "rc:msg" ? relay.msg(uid, d) : ev === "rc:keys:fetch" ? relay.fetchFor(uid, d) : relay.keys.publish(uid, d),
   });
+  const kb2 = new OlKeyStore(memoryKv()); // callee's second device (fan-out; must not see answer-locked traffic)
   await sock("b").request("rc:keys:publish", await kb.publishable());
+  await sock("b").request("rc:keys:publish", await kb2.publishable());
   const A = new SealedSignaling(sock("a"), ka, { callId: "c1", role: "caller", peerUserId: "b" });
   const B = new SealedSignaling(sock("b"), kb, { callId: "c1", role: "callee", peerUserId: "a" });
   const gotB: any[] = [], gotA: any[] = [];
+  const B2 = new SealedSignaling(sock("b"), kb2, { callId: "c1", role: "callee", peerUserId: "a" });
+  const gotB2: any[] = []; B2.on("rtc:signal", (d) => gotB2.push(d));
   B.on("rtc:signal", (d) => gotB.push(d)); A.on("rtc:signal", (d) => gotA.push(d));
   assert.deepEqual(await B.request("rtc:signal", { kind: "ready" }), { ok: true }); // held pre-session
   await A.request("rtc:signal", { callId: "c1", kind: "offer", sdp: "v=0 secret" });
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(gotB[0].sdp, "v=0 secret");
   assert.equal(gotA[0].kind, "ready");
+  assert.equal(gotB2[0].sdp, "v=0 secret"); // pre-lock fan-out reached both devices
+  await A.request("rtc:signal", { callId: "c1", kind: "candidate" });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(gotB.length, 2); assert.equal(gotB2.length, 1); // locked to the device that answered
   assert.ok(!JSON.stringify(seen).includes("secret"));
   assert.equal((await relay.fetchFor("a", { userId: "zzz", callId: "c1" })).ok, false);
 });
