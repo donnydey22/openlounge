@@ -1,0 +1,20 @@
+// Deterministic OLX3DH-v1 vectors (node:crypto, independent of olx3dh.ts) for Swift/Kotlin parity tests.
+import crypto from "node:crypto"; import fs from "node:fs";
+const P8 = Buffer.from("302e020100300506032b656e04220420", "hex");
+const priv = (hex) => crypto.createPrivateKey({ key: Buffer.concat([P8, Buffer.from(hex, "hex")]), format: "der", type: "pkcs8" });
+const pub = (k) => crypto.createPublicKey(k).export({ format: "der", type: "spki" }).subarray(-32);
+const dh = (a, bPub) => crypto.diffieHellman({ privateKey: a, publicKey: crypto.createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b656e032100", "hex"), bPub]), format: "der", type: "spki" }) });
+const hkdf = (ikm, info, n) => Buffer.from(crypto.hkdfSync("sha256", ikm, Buffer.alloc(32), info, n));
+const hm = (k, b) => crypto.createHmac("sha256", k).update(Buffer.from([b])).digest();
+const h = (s) => crypto.createHash("sha256").update(s).digest("hex");
+const k = { ika: h("ika"), eka: h("eka"), ikb: h("ikb"), spkb: h("spkb"), opkb: h("opkb") };
+const K = Object.fromEntries(Object.entries(k).map(([n, v]) => [n, priv(v)]));
+const P = Object.fromEntries(Object.entries(K).map(([n, v]) => [n, pub(v)]));
+const ikm = Buffer.concat([Buffer.alloc(32, 0xff), dh(K.ika, P.spkb), dh(K.eka, P.ikb), dh(K.eka, P.spkb), dh(K.eka, P.opkb)]);
+const sk = hkdf(ikm, "OLX3DH-v1", 32), ch = hkdf(sk, "OLCallChain-v1", 64);
+const ck = ch.subarray(0, 32), mk = hm(ck, 1), nonce = hm(ck, 3).subarray(0, 12);
+const header = Buffer.from([1, 0, 0, 0, 0]), aad = Buffer.concat([P.ika, P.ikb, header]);
+const c = crypto.createCipheriv("aes-256-gcm", mk, nonce); c.setAAD(aad);
+const ct = Buffer.concat([c.update("hello olx3dh"), c.final(), c.getAuthTag()]);
+const v = { privHex: k, pubHex: Object.fromEntries(Object.entries(P).map(([n, x]) => [n, x.toString("hex")])), skHex: sk.toString("hex"), chainsHex: ch.toString("hex"), msg0: { plaintext: "hello olx3dh", ctB64u: ct.toString("base64url"), n: 0 } };
+fs.writeFileSync(new URL("./olx3dh-vectors.json", import.meta.url), JSON.stringify(v, null, 2) + "\n"); console.log(v.skHex);

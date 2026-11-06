@@ -25,6 +25,7 @@ import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, 
 import { livekitRtcConfig } from "@/lib/livekitIce";
 import { MediasoupCallSession, type MediasoupRemoteTrack } from "./mediasoupSession";
 import { CallSession } from "./rtc/CallSession";
+import { ensureRcKeysPublished, sealedFor } from "./ringrtc";
 import type { CallFailure } from "./rtc/CallFailures";
 import { NativeMediaSession, disableAndroidNativeMedia, iosNativeVideoGranted, noteAndroidNativeOptIn, nativeMediaCmd, prepareNativeMedia, nativeVideoAvailable, nativeMediaIsAndroid, useNativeMedia } from "./nativeMediaSession";
 import { AndroidCallLifecycle, summarizeStats } from "./androidLifecycle";
@@ -334,6 +335,7 @@ export class CallEngine {
     }
     this.socket = socket;
     if (!socket) return;
+    void ensureRcKeysPublished(socket);
     socket.on("call:incoming", this.onIncoming);
     socket.on("call:state", this.onState);
     socket.on("call:video", this.onVideo);
@@ -1076,9 +1078,13 @@ export class CallEngine {
   private async connectP2P(media: CallMedia, answer: boolean): Promise<null> {
     const call = this.s.call;
     if (!call?.id || !this.socket) return null;
-    const session = new CallSession(this.socket, {
+    const role = this.s.role === "caller" ? "caller" : "callee";
+    // RingRTC session model: all call signaling E2E-sealed (OLX3DH-v1) and relayed opaquely as rc:msg.
+    const peerUserId = call.callerId === this.meId ? call.calleeId : call.callerId;
+    const sealed = sealedFor(this.socket, { callId: call.id, role, peerUserId, log: (ev, d) => this.netLog(ev, d ?? {}) });
+    const session = new CallSession(sealed, {
       callId: call.id,
-      role: this.s.role === "caller" ? "caller" : "callee",
+      role,
       media,
       log: (ev, d) => this.netLog(`rtc-${ev}`, d ?? {}),
       onPhase: (p) => {

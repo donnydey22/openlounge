@@ -12,6 +12,7 @@ import { initVoip, voipService } from "./voip";
 import { declineTokens } from "./declineToken";
 import { mintTurnIceServers } from "../turnCredentials";
 import { RtcSessionHub } from "./rtcSession";
+import { RcRelay } from "./rcRelay";
 import { p2pMedia, rtcIceConfig } from "./rtcIceConfig";
 import { randomUUID } from "node:crypto";
 import { mintMediasoupAdmission } from "../mediasoup/admission";
@@ -43,6 +44,7 @@ const noop: AckFn = () => {};
 
 let svc: CallService | null = null;
 let rtc: RtcSessionHub | null = null;
+let rc: RcRelay | null = null;
 export const rtcHub = () => rtc;
 let unwatchMedia: (() => void) | null = null;
 let gateway: MediasoupGateway | null = null;
@@ -123,7 +125,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   const p2pBackend: CallMediaBackend = {
     provider: "p2p",
     issue: async ({ callId, userId, ttlSec }) => p2pMedia(callId, userId, ttlSec),
-    close: (callId) => rtc?.end(callId),
+    close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
   svc = new CallService({
     lastCloseOf: (userId) => lastClose.get(userId) ?? null,
@@ -195,6 +197,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   metrics.gauge("calls_quality_one_way_total", () => cur.stats().quality["one-way"]);
   metrics.gauge("calls_quality_no_audio_total", () => cur.stats().quality["no-audio"]);
   metrics.gauge("calls_quality_no_data_total", () => cur.stats().quality["no-data"]);
+  rc = new RcRelay({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) });
   rtc = new RtcSessionHub({ call: (id) => svc?.rtcCall(id) ?? null, emitUser: (u, ev, data) => io.to(`user:${u}`).emit(ev, data) });
   return svc;
 }
@@ -292,6 +295,10 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   );
   // P2P calling signaling (offer/answer/candidates) + fresh short-lived OL ICE credentials.
   socket.on("rtc:signal", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack(rtc ? rtc.signal(uid, d) : { ok: false, error: "unknown_call" })));
+  // RingRTC session model: E2E-sealed call messages + OLX3DH-v1 prekey directory (rcRelay.ts).
+  socket.on("rc:msg", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack(rc ? rc.msg(uid, d) : { ok: false, error: "unknown_call" })));
+  socket.on("rc:keys:publish", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => void (rc ? rc.keys.publish(uid, d) : Promise.resolve({ ok: false })).then(ack, () => ack({ ok: false }))));
+  socket.on("rc:keys:fetch", (d: { userId?: unknown; callId?: unknown } = {}, ack: AckFn = noop) => authed(ack, (uid) => void (rc ? rc.fetchFor(uid, d) : Promise.resolve({ ok: false })).then(ack, () => ack({ ok: false }))));
   socket.on("rtc:iceConfig", ({ callId }: { callId?: unknown } = {}, ack: AckFn = noop) =>
     authed(ack, (uid) => {
       const c = typeof callId === "string" ? s().rtcCall(callId) : null;
