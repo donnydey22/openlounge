@@ -28,6 +28,7 @@ export const RTC_P2P_CAPABILITY = "rtcP2P";
 export function nativeRtcP2PAvailable(): boolean {
   return nativeMediaAvailable() && !!bridge()?.capabilities?.includes(RTC_P2P_CAPABILITY);
 }
+export function nativeCallingProtocolAvailable():boolean {return nativeRtcP2PAvailable() && !!bridge()?.capabilities?.includes("ol-rc-v1")}
 /** The app owns call media (audio and video) whenever it implements the P2P contract. Older builds: browser CallSession. */
 export function useNativeMedia(): boolean {
   return nativeRtcP2PAvailable();

@@ -193,8 +193,11 @@ export interface LoadResult {
   empty: boolean;
 }
 
+export type AudioAdmissionLease = {userId:string;owner:string;until:number};
 export interface Persistence {
   kind: "postgres" | "json";
+  loadAudioLeases?():Promise<AudioAdmissionLease[]>;
+  writeAudioLeases?(owner:string,users:string[],until:number):Promise<boolean>;
   /** human-readable location for logs (password redacted) */
   where: string;
   load(): Promise<LoadResult>;

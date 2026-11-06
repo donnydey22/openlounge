@@ -54,6 +54,31 @@ func env(k, d string) string {
 	}
 	return d
 }
+
+type certificateReloader struct {
+	directory, certName, keyName string
+	current                      atomic.Pointer[tls.Certificate]
+}
+
+func (c *certificateReloader) reload() error {
+	dir, e := filepath.EvalSymlinks(c.directory)
+	if e != nil {
+		return e
+	}
+	pair, e := tls.LoadX509KeyPair(filepath.Join(dir, c.certName), filepath.Join(dir, c.keyName))
+	if e != nil {
+		return e
+	}
+	c.current.Store(&pair)
+	return nil
+}
+func (c *certificateReloader) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	p := c.current.Load()
+	if p == nil {
+		return nil, fmt.Errorf("TLS unavailable")
+	}
+	return p, nil
+}
 func main() {
 	ip := net.ParseIP(os.Getenv("RC_TURN_PUBLIC_IP"))
 	secret := os.Getenv("RC_TURN_SECRET")
@@ -72,12 +97,19 @@ func main() {
 	}
 	gen := &turn.RelayAddressGeneratorPortRange{RelayAddress: ip, Address: "0.0.0.0", MinPort: 62000, MaxPort: 62999}
 	listeners := []turn.ListenerConfig{{Listener: tcp, RelayAddressGenerator: gen, PermissionHandler: publicPeer}}
-	if dir := os.Getenv("CREDENTIALS_DIRECTORY"); dir != "" {
-		cert, e := tls.LoadX509KeyPair(filepath.Join(dir, "tls-cert"), filepath.Join(dir, "tls-key"))
-		if e != nil {
+	var certificates *certificateReloader
+	dir := os.Getenv("RC_TURN_TLS_DIR")
+	certName, keyName := "fullchain.pem", "privkey.pem"
+	if dir == "" {
+		dir = os.Getenv("CREDENTIALS_DIRECTORY")
+		certName, keyName = "tls-cert", "tls-key"
+	}
+	if dir != "" {
+		certificates = &certificateReloader{directory: dir, certName: certName, keyName: keyName}
+		if e := certificates.reload(); e != nil {
 			log.Fatal("TLS credentials unavailable")
 		}
-		tl, e := tls.Listen("tcp4", env("RC_TURN_TLS_LISTEN", "0.0.0.0:14443"), &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+		tl, e := tls.Listen("tcp4", env("RC_TURN_TLS_LISTEN", "0.0.0.0:14443"), &tls.Config{GetCertificate: certificates.get, MinVersion: tls.VersionTLS12})
 		if e != nil {
 			log.Fatal(e)
 		}
@@ -94,8 +126,29 @@ func main() {
 	ready.Store(srv)
 	log.Print("Open Lounge Pion ICE relay ready (UDP/TCP, isolated relay range 62000-62999)")
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-	<-c
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case sig := <-c:
+			if sig != syscall.SIGHUP {
+				goto shutdown
+			}
+			if certificates != nil {
+				if e := certificates.reload(); e != nil {
+					log.Print("TLS renewal invalid; prior certificate retained")
+				}
+			}
+		case <-ticker.C:
+			if certificates != nil {
+				if e := certificates.reload(); e != nil {
+					log.Print("TLS renewal invalid; prior certificate retained")
+				}
+			}
+		}
+	}
+shutdown:
 	fmt.Println("relay shutdown")
 	_ = srv.Close()
 }

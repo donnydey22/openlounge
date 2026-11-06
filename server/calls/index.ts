@@ -1,3 +1,4 @@
+import {bridgeMode,wirePlatformCalls,attachPlatformCalls} from "./bridge/platform";
 // Wires the one-PC P2P CallService + sealed rcRelay into WS, platform store and push.
 import type { Conn, WsHub } from "../ws";
 import { store } from "../store";
@@ -55,6 +56,7 @@ export function voipPayload(call: { id: string; callerId: string; video: boolean
 
 export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) {
   svc?.dispose();
+  if (bridgeMode()) { svc=null;rtc=null;rc=null;wirePlatformCalls(io);return null; }
   if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
   const p2pBackend: CallMediaBackend = {
     provider: "p2p",
@@ -120,6 +122,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
 }
 
 export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined, fn: (userId: string) => void) => void, iosNativeVideoWrapper = false) {
+  if (bridgeMode()) return attachPlatformCalls(socket,authed);
   const s = () => svc!;
   const endedResent = new Set<string>(); // call ids whose ended state this socket was re-sent (call:diag)
   // A direct-media session is scoped to this exact browser WebSocket. The gateway relays this cleanup only after

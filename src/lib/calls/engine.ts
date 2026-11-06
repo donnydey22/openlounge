@@ -14,7 +14,7 @@ import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, 
 import { CallSession } from "./rtc/CallSession";
 import { ensureRcKeysPublished, sealedFor } from "./ringrtc";
 import type { CallFailure } from "./rtc/CallFailures";
-import { NativeMediaSession, nativeMediaCmd, nativeSignalConnected, useNativeMedia } from "./nativeMediaSession";
+import { NativeMediaSession, nativeMediaCmd, nativeSignalConnected, nativeCallingProtocolAvailable, useNativeMedia } from "./nativeMediaSession";
 import { CallTelemetry } from "./callTelemetry";
 import { swapVideoTrack } from "./frameHold";
 
@@ -283,7 +283,7 @@ export class CallEngine {
 
   private req<T = Record<string, unknown>>(ev: string, data: unknown, ms = 10_000): Promise<T> {
     if (!this.socket) return Promise.reject(new Error("Not connected"));
-    return this.socket.request<T>(ev, data, ms);
+    return this.socket.request<T>(ev, data && typeof data === "object" ? {...data, protocol:nativePlatform() && !nativeCallingProtocolAvailable() ? "upgrade_required" : "ol-rc-v1"} : data, ms);
   }
 
   /** after (re)connect + auth: pick up a call that is still live (page reload, network switch) */

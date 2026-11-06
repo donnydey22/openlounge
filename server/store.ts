@@ -242,6 +242,9 @@ export class Store {
   private hiddenSockets = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
   private events: StoreEvents | null = null;
+  /** Generic audio occupancy, loaded before accepting platform traffic. Lifecycle remains on DO. */
+  readonly audioAdmissionLeases=new Map<string,{owner:string;until:number}>();
+  async persistAudioAdmission(owner:string,users:string[],until:number){return await this.backend?.writeAudioLeases?.(owner,users,until)??true}
   private backend: Persistence | null = null;
   private flushChain: Promise<void> = Promise.resolve();
   private retryDelay = 0;
@@ -266,6 +269,8 @@ export class Store {
     const keys = configureAuthKeys({ dbSecret: (await this.backend.authSecret?.()) ?? null });
     log.info("auth keys", keys);
     const { db, empty } = await this.backend.load();
+    this.audioAdmissionLeases.clear();
+    for(const l of await this.backend.loadAudioLeases?.()??[])this.audioAdmissionLeases.set(l.userId,{owner:l.owner,until:l.until});
     if (db) this.hydrate(db, this.backend.kind === "postgres" ? "Postgres" : DATA_FILE);
 
     const auto = this.backend.kind === "postgres" && empty && !opts.importJson && process.env.SKIP_JSON_IMPORT !== "1" && fs.existsSync(DATA_FILE);
@@ -486,12 +491,12 @@ export class Store {
    * when it runs. Postgres writes only changed rows; JSON rewrites db.json (atomic tmp + rename).
    * A failed Postgres write is retried with backoff (memory stays authoritative meanwhile).
    */
-  flush(): Promise<void> {
+  flush(strict = false): Promise<void> {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const run = this.flushChain.then(() => this.saveSnapshot());
     this.flushChain = run.catch(() => {});
-    return this.flushChain;
+    return strict ? run : this.flushChain;
   }
 
   private async saveSnapshot() {
@@ -2357,6 +2362,8 @@ export class Store {
 
   /** The call's service message in the DM (one per call, caller → callee). Missed/cancelled/busy stay unread for the callee. */
   appendCallMessage(meta: CallMeta, calleeId: string) {
+    const existing = this.dms.get([meta.callerId, calleeId].sort().join("|"))?.find(m => m.kind === "call" && m.call?.id === meta.id);
+    if (existing) return existing;
     const kindWord = meta.video ? "video call" : "audio call";
     const icon = meta.video ? "📹" : "📞";
     const dur = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;

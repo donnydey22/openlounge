@@ -10,7 +10,7 @@ export const TURN_URLS = [
 ] as const;
 
 /**
- * Default coturn REST credential lifetime: 6 hours. coturn re-checks the username's expiry on every allocation
+ * Default legacy TURN REST helper lifetime: 6 hours. The relay re-checks the username's expiry on every allocation
  * Refresh (~every 10 min), so a credential shorter than the longest call would drop a relayed call mid-way; rejoins
  * also fetch a fresh credential via call:get. Override with TURN_CREDENTIAL_TTL_S (clamped to 10 min .. 24 h).
  */
@@ -31,11 +31,11 @@ type MintOptions = {
 };
 
 /**
- * Create a coturn use-auth-secret credential for one authenticated call participant.
+ * Create a TURN REST credential for one authenticated call participant.
  *
- * The username follows coturn's REST form `<unix-expiry>:<opaque-id>`. Its opaque suffix is
- * HMAC-derived from the call and user IDs, so those internal identifiers are never sent to coturn
- * or exposed to the other endpoint. Coturn validates `credential = base64(HMAC-SHA1(secret, username))`.
+ * The username follows the TURN REST form `<unix-expiry>:<opaque-id>`. Its opaque suffix is
+ * HMAC-derived from the call and user IDs, so those internal identifiers are never sent as raw IDs to the relay
+ * or exposed to the other endpoint. The DO-owned Pion relay validates `credential = base64(HMAC-SHA1(secret, username))`.
  * Returning null keeps the established explicit-empty-ICE/TCP path intact when TURN_STATIC_SECRET is unset.
  */
 export function mintTurnIceServers(callId: string, userId: string, opts: MintOptions = {}): TurnIceServer[] | null {

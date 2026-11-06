@@ -1,3 +1,5 @@
+import {bridgeMode,remoteCall} from "./bridge/platform";
+import {randomUUID} from "node:crypto";
 // Device → server endpoints for the native ring UIs (NATIVE_SPEC.md §2). Authenticated with the app's session bearer.
 //   GET  /api/calls/<id>               → { ok, call: { id, phase, outcome?, video, callerId, calleeId } } (is it still ringing?)
 //   POST /api/calls/<id>/decline       → decline from the notification / CallKit without loading the web app
@@ -40,8 +42,16 @@ export async function handleCallsHttp(req: IncomingMessage, res: ServerResponse,
   const m = url.match(/^\/api\/calls\/([A-Za-z0-9_-]{1,64})(\/decline)?$/);
   const s = calls();
   if (!m) return json(res, 404, { ok: false, error: "Not found" });
-  if (!s) return json(res, 503, { ok: false, error: "Unavailable" });
   const [, callId, decline] = m;
+  if (bridgeMode()) {
+    if (req.method !== (decline ? "POST" : "GET")) return json(res,405,{ok:false,error:"Method not allowed"});
+    try { const r=await remoteCall(uid,"http-"+randomUUID(),decline?"call:decline":"call:get",{callId});
+      if(!r.ok)return json(res,r.reason==="calling_unavailable"?503:404,r);
+      if(decline)return json(res,200,{ok:true,phase:r.call?.phase??"ended"});
+      const c=r.call;return json(res,200,{ok:true,call:{id:c.id,phase:c.phase,outcome:c.outcome??null,video:c.video,callerId:c.callerId,calleeId:c.calleeId,expiresAt:c.expiresAt}});
+    }catch{return json(res,503,{ok:false,error:"Unavailable"})}
+  }
+  if (!s) return json(res, 503, { ok: false, error: "Unavailable" });
   if (decline) {
     if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method not allowed" });
     const r = s.decline(callId, uid);
@@ -80,6 +90,15 @@ export async function handleTokenDecline(req: IncomingMessage, res: ServerRespon
   const v = tokens.inspect(token, callId);
   if (!v.ok) return fail(v.reason === "replayed" ? 409 : 401, v.reason);
   const s = calls();
+  if (bridgeMode()) {
+    // Stable DO request id makes transport retries safe. Consume only after a definite remote result;
+    // a temporary cross-host failure must not burn the notification's only decline capability.
+    try { const r=await remoteCall(v.userId,"http-token-"+v.nonce,"call:decline",{callId,tokenDecline:true},"ol-rc-v1","decline-"+v.nonce);
+      if(!r.ok)return fail(r.error==="wrong_user"?403:r.error==="unknown"?404:409,r.error??"answered");
+      if(!tokens.consume(v.nonce!,v.exp!))return fail(409,"replayed");
+      json(res,200,{ok:true,phase:r.call?.phase??"ended"});return true;
+    }catch{json(res,503,{ok:false,error:"Unavailable"});return true}
+  }
   if (!s) return json(res, 503, { ok: false, error: "Unavailable" }), true;
   const c = s.peek(callId, v.userId);
   if (!c) return fail(404, "unknown"); // unknown/purged call, or the token's user isn't in it

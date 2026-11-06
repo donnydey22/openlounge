@@ -1,0 +1,23 @@
+#!/bin/bash
+# Root-only certificate delivery; no private key leaves the verified DO droplet.
+set -euo pipefail
+[[ $(curl -fsS --max-time 5 http://169.254.169.254/metadata/v1/id) == 608073501 ]] || exit 1
+[[ $# == 0 || ($# == 1 && $1 == --stage-only) ]] || exit 2
+lineage=/etc/letsencrypt/live/turn.openlounge.app
+base=/var/lib/openlounge-calling-tls
+openssl x509 -in "$lineage/fullchain.pem" -noout -checkhost turn.openlounge.app >/dev/null
+openssl x509 -in "$lineage/fullchain.pem" -noout -checkend 604800 >/dev/null
+certpub=$(openssl x509 -in "$lineage/fullchain.pem" -noout -pubkey | openssl sha256)
+keypub=$(openssl pkey -in "$lineage/privkey.pem" -pubout 2>/dev/null | openssl sha256)
+[[ $certpub == "$keypub" ]] || exit 1
+generation=$(sha256sum "$lineage/fullchain.pem" | cut -d ' ' -f1)
+install -d -o root -g openlounge-calling-tls -m 0750 "$base" "$base/certsets" "$base/certsets/$generation"
+install -o root -g openlounge-calling-tls -m 0640 "$lineage/fullchain.pem" "$base/certsets/$generation/fullchain.pem"
+install -o root -g openlounge-calling-tls -m 0640 "$lineage/privkey.pem" "$base/certsets/$generation/privkey.pem"
+ln -s "$base/certsets/$generation" "$base/current.next.$$"
+mv -Tf "$base/current.next.$$" "$base/current"
+if [[ $# == 0 ]]; then
+ for unit in openlounge-calling openlounge-rc-turn; do
+  if systemctl is-active --quiet "$unit"; then systemctl kill --kill-whom=main -s HUP "$unit"; fi
+ done
+fi

@@ -1,3 +1,4 @@
+import {platformAudioBusy,platformCallingVisibility} from "./calls/bridge/platform";
 // Realtime wiring over raw WebSockets: auth, rooms, host controls, chat, DMs, follows.
 // Audio itself goes through LiveKit (see livekit.ts); this layer keeps LiveKit
 // publish permissions in sync with stage roles.
@@ -495,7 +496,7 @@ export function registerRealtime(io: WsHub) {
       socket.hidden = visible === false;
       store.setSocketVisible(socket.id, visible !== false);
       const vu = me();
-      if (vu && visible === false) calls()?.visibilityChanged(vu); // callee backgrounded mid-ring → push (calls/service.ts)
+      if (vu && visible === false) {calls()?.visibilityChanged(vu);platformCallingVisibility(vu);} // callee backgrounded mid-ring → push (calls/service.ts)
       ack({ ok: true });
     });
 
@@ -515,7 +516,7 @@ export function registerRealtime(io: WsHub) {
     socket.on("room:join", ({ roomId }: { roomId: string }, ack: AckFn = noop) =>
       authed(ack, async (userId) => {
         // one audio session at a time: a live 1:1 call blocks joining a room (and vice versa, see server/calls)
-        if (calls()?.liveCallOf(userId)) return ack({ ok: false, error: "Hang up your call to join a room" });
+        if (platformAudioBusy(userId) || calls()?.liveCallOf(userId)) return ack({ ok: false, error: "Hang up your call to join a room" });
         // leave channels for any other rooms
         for (const r of socket.rooms) if (r.startsWith("room:") && r !== `room:${roomId}`) socket.leave(r);
         const res = store.join(roomId, userId, socket.id);

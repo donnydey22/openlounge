@@ -642,6 +642,25 @@ export class PgPersistence implements Persistence {
     },
   };
 
+  async loadAudioLeases() {
+    const r=await this.pool.query<{user_id:string;owner:string;expires_at:string}>("SELECT user_id,owner,expires_at FROM platform_audio_leases WHERE expires_at>$1",[Date.now()]);
+    return r.rows.map(x=>({userId:x.user_id,owner:x.owner,until:Number(x.expires_at)}));
+  }
+  async writeAudioLeases(owner:string,users:string[],until:number) {
+    const c=await this.pool.connect();try {
+      await c.query("BEGIN");
+      // Same primary pool/database. Deterministic per-user locks make two-participant admission atomic.
+      await c.query("SELECT id FROM users WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE",[users]);
+      if(!until)await c.query("DELETE FROM platform_audio_leases WHERE user_id=ANY($1::text[]) AND owner=$2",[users,owner]);
+      else {
+        const busy=await c.query("SELECT 1 FROM platform_audio_leases WHERE user_id=ANY($1::text[]) AND owner<>$2 AND expires_at>$3",[users,owner,Date.now()]);
+        if(busy.rowCount){await c.query("ROLLBACK");return false}
+        await c.query("INSERT INTO platform_audio_leases(user_id,owner,expires_at) SELECT unnest($1::text[]),$2,$3 ON CONFLICT(user_id) DO UPDATE SET owner=EXCLUDED.owner,expires_at=EXCLUDED.expires_at",[users,owner,until]);
+      }
+      await c.query("COMMIT");return true;
+    } catch(e){await c.query("ROLLBACK").catch(()=>{});throw e}finally{c.release()}
+  }
+
   /** The key persisted in the DB (created on first boot). Returned even when AUTH_SECRET is set: it stays a verification key. */
   async authSecret() {
     const fresh = randomBytes(32).toString("hex");

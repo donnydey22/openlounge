@@ -68,6 +68,9 @@ const QUALITY_SILENT_KBPS = 2;
 const QUALITY_MAX_SAMPLES = 720; // 1 h of 5 s reports per participant
 
 export interface CallDeps {
+  /** Platform-owned generic audio occupancy, atomically excludes room/call races. DO serializes starts. */
+  claimAudio?(callerId:string, calleeId:string, callId:string):Promise<{ok:boolean;error?:string;reason?:string}>;
+  releaseAudio?(callerId:string,calleeId:string,callId:string):void;
   emitUser(userId: string, ev: string, data: unknown): void;
   /** does the user have any open (authenticated) socket? */
   isConnected(userId: string): boolean;
@@ -339,6 +342,10 @@ export class CallService {
       // "Line busy": the caller sees Busy, the callee gets a missed-call message (Telegram behaviour)
       this.finish(c, "busy", { silentToCallee: true });
       return { ok: false, error: `${this.d.peer(calleeId)?.name.split(" ")[0] ?? "They"} is on another call`, reason: "busy", call: this.info(c) };
+    }
+    if (this.d.claimAudio) {
+      try {const claim = await this.d.claimAudio(callerId, calleeId, c.id);
+      if (!claim.ok) { this.calls.delete(c.id); return {ok:false,error:claim.error??"Audio is busy",reason:claim.reason??"audio_busy"}; }}catch(e){this.calls.delete(c.id);this.d.releaseAudio?.(callerId,calleeId,c.id);throw e}
     }
     this.live.set(callerId, c.id);
     this.live.set(calleeId, c.id);

@@ -1,0 +1,27 @@
+[Unit]
+Description=Open Lounge authenticated DO-only sealed calling authority
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+DynamicUser=yes
+SupplementaryGroups=openlounge-calling-tls
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/openlounge-calling.env
+StateDirectory=openlounge-calling
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/bin/node /opt/openlounge-calling/current/calling.cjs
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryMax=384M
+CPUQuota=50%
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+[Install]
+WantedBy=multi-user.target

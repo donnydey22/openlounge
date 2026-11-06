@@ -1,0 +1,5 @@
+#!/bin/sh
+# Additive hook; does not modify the existing coturn hook or restart old services.
+set -eu
+[ "${RENEWED_LINEAGE:-}" = /etc/letsencrypt/live/turn.openlounge.app ] || exit 0
+exec /usr/local/sbin/openlounge-calling-tls-refresh
