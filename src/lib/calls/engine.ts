@@ -894,7 +894,8 @@ export class CallEngine {
     const media = this.media;
     if (!media) return Promise.resolve(null);
     // Signal-identical rebuild: P2P CallSession is the sole calling media path; no provider ladder.
-    if (media.provider === "p2p") {
+    // Native app (Android/iOS) owns the PeerConnection: NativeMediaSession relays rtc:* both ways. Browsers use CallSession.
+    if (media.provider === "p2p" && !useNativeMedia(!!this.s.call?.video || this.s.camOn, media)) {
       this.roomPromise = this.connectP2P(media, answer);
       return this.roomPromise as Promise<null>;
     }
@@ -981,6 +982,7 @@ export class CallEngine {
       setSimulcastGrant(media); // FX-082: test-account grant only; false for everyone else
       const session: CallMediaSession = new (media.provider === "mediasoup" ? Session : NativeMediaSession)(this.socket!, media, {
         callId: this.s.call?.id,
+        caller: this.s.role === "caller",
         ...(this.s.role === "callee" && this.s.call?.callerPlatform ? { incoming: true, peerPlatform: this.s.call.callerPlatform } : {}),
         ...(this.iosNativeVideoLatched() && this.s.call?.id && this.meId ? { streamId: `ol-${this.s.call.id}-${this.meId}`, nativeVideo: true } : {}),
         ...(this.msRecovering ? { rebuild: true } : {}),

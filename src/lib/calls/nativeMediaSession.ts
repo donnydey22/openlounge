@@ -168,7 +168,8 @@ export async function prepareNativeMedia(socket: RealtimeClient, media: CallMedi
   }
 }
 
-const MS_EVENT = /^ms:[a-z:]+$/i;
+/** relayed app→page requests: mediasoup ms:* (legacy) and the P2P contract (rtc:signal / rtc:iceConfig) */
+const MS_EVENT = /^(ms:[a-z:]+|rtc:signal|rtc:iceConfig)$/i;
 
 /** FX-064: app diag events forwarded to the server log (b67 nativeMedia.ts). */
 export const NATIVE_DIAG_EVENTS = new Set(["consume-result", "first-remote-video-frame", "no-remote-video-frame", "ice-recovered", "consumer-resumed", "resume-failed", "remote-video-replaced", "session-gone", "frame-stall", "ice-restart-coalesced"]);
@@ -198,6 +199,8 @@ export class NativeMediaSession {
       callId?: string;
       /** iOS 75: this device is the callee and the caller's platform (routes Android→iPhone audio to the Swift lane) */
       incoming?: boolean;
+      /** P2P: this device placed the call (offerer per rtc contract) */
+      caller?: boolean;
       peerPlatform?: string;
       /** Explicit msid shared by this caller's audio and camera producers. */
       streamId?: string;
@@ -211,6 +214,12 @@ export class NativeMediaSession {
   ) {
   }
 
+  /** server rtc:signal → app, same shape as the contract (only this call's messages) */
+  private readonly onRtcSignal = (d: unknown) => {
+    const callId = (this.media as { callId?: string }).callId ?? this.opts.callId;
+    if (this.closed || !d || (d as { callId?: unknown }).callId !== callId) return;
+    void nativeMediaCmd({ op: "rtcSignal", data: d }).catch(() => {});
+  };
   private readonly onAvailable = () => void nativeMediaCmd({ op: "consumerAvailable" }).catch(() => {});
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
@@ -307,6 +316,7 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("ms:consumer:available", this.onAvailable);
+    this.socket.on("rtc:signal", this.onRtcSignal);
     const m = this.media as CallMedia & { callId?: string; iceServers?: unknown[]; url?: string; token?: string };
     const callId = m.callId ?? this.opts.callId;
     const nativeVideo = withVideo && (iosNativeVideoGranted(m) || this.opts.nativeVideo === true);
@@ -316,7 +326,7 @@ export class NativeMediaSession {
     // TURN relay UDP -> TCP -> TLS 443). A LiveKit grant never reaches the app; rejecting lets the engine keep its
     // non-native path. LiveKit drop-in rooms are a separate code path and are untouched.
     if (m.provider === "livekit") throw new Error("native media: livekit calling removed");
-    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}), ...(this.opts.incoming && this.opts.peerPlatform ? { incoming: true, peerPlatform: this.opts.peerPlatform } : {}), ...(nativeVideo && simulcastEnabled() ? { simulcast: true } : {}) });
+    await nativeMediaCmd({ op: "connect", callId, iceServers: m.iceServers ?? [], ...(m.provider === "p2p" ? { media: m, caller: this.opts.caller === true } : {}), ...(nativeVideo ? { video: true, nativeVideo: true, ...(this.opts.streamId ? { streamId: this.opts.streamId } : {}) } : {}), tcpOnly: this.opts.tcpOnly === true, ...(this.opts.relayOnly ? { relayOnly: true } : {}), ...(this.opts.rebuild ? { rebuild: true } : {}), ...(this.opts.incoming && this.opts.peerPlatform ? { incoming: true, peerPlatform: this.opts.peerPlatform } : {}), ...(nativeVideo && simulcastEnabled() ? { simulcast: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
     this.connected = true;
   }
@@ -354,6 +364,7 @@ export class NativeMediaSession {
     if (this.closed) return;
     this.closed = true;
     this.socket.off("ms:consumer:available", this.onAvailable);
+    this.socket.off("rtc:signal", this.onRtcSignal);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq;
