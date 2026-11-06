@@ -73,8 +73,10 @@ export class RcRelay {
   /** bundle fetch is only allowed for the peer of a call you are in (prevents OPK draining / directory scraping) */
   async fetchFor(uid: string, raw: { userId?: unknown; callId?: unknown }) {
     const c = this.member(raw?.callId, uid);
-    if (!c || typeof raw.userId !== "string" || raw.userId !== (uid === c.callerId ? c.calleeId : c.callerId)) return { ok: false as const, error: "not_participant" };
-    const bundles = await this.keys.fetch(raw.userId);
+    const peer = c ? (uid === c.callerId ? c.calleeId : c.callerId) : null;
+    // userId optional (natives send callId only; server derives the peer); if given it must be the peer
+    if (!peer || (raw.userId !== undefined && raw.userId !== peer)) return { ok: false as const, error: "not_participant" };
+    const bundles = await this.keys.fetch(peer);
     return bundles.length ? { ok: true as const, bundles } : { ok: false as const, error: "no_keys" };
   }
 
