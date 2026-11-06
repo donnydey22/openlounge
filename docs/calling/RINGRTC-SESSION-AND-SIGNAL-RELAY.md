@@ -48,3 +48,20 @@ Replacement steps on the droplet (not executed — Cos approval required):
   the legacy branches is the next Cos integration step (large, behavior-affecting).
 * PJSIP still vendored on Android/iOS because video fan-out code depends on it; removal follows video move to WebRTC.
 * Real-device matrix not run. No deploy, no /download, no store upload.
+
+## Hard cut (ringrtc-bindings): one engine
+
+- Web `engine.ts`: only `CallSession` (browser PC, sealed rc:* via `sealedFor`) or, in apps with `rtcP2P`, the app-owned
+  PC through `NativeMediaSession` (relays rc:* / rtc:* only). mediasoup, LiveKit-for-calls and every native/TCP/relay
+  fallback lane are deleted. LiveKit remains for audio rooms only.
+- Server: `selectMedia` is p2p only; `ms:*`, `call:mediaFallback/Restore`, callq and SFU gates are gone; `rcRelay` stays.
+  Nothing deployed.
+- Android/iOS: PJSIP removed from the call path; camera video rides the same RingRTC-model PC.
+
+## TURN (open decision for Cos)
+
+Signal still needs TURN: a meaningful share of 1:1 calls (symmetric NAT, UDP-blocked networks) only connect via a relay,
+and RingRTC itself always offers relay candidates. This branch keeps the existing short-lived TURN REST credentials
+(`mintTurnIceServers`, `TURN_STATIC_SECRET`, `call:turnRefresh` / `rtc:iceConfig`) and invents no TURN server.
+Which server issues them — keep coturn on the droplet, or move to pion/turn — is Cos's decision; the client only
+consumes `iceServers`, so either works without client changes.

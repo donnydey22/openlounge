@@ -1,6 +1,6 @@
-// 1:1 audio/video calls (Telegram-style). Signaling over the existing WebSocket, media over LiveKit (one private
-// LiveKit room per call, "openlounge-call-<id>"). Both participants' tokens are minted at RING time, so accepting is
-// just "connect" (no extra round trip on the critical accept → first-audio path).
+// 1:1 audio/video calls (Signal/RingRTC session model). Call lifecycle over the OL WebSocket; media is P2P WebRTC with
+// E2E-sealed signaling (rcRelay rc:msg) and short-lived OL ICE/TURN credentials (rtcIceConfig). No SFU in the path.
+//
 //
 // Lifecycle: calling (caller sent call:start) → ringing (a callee device acked) → active (accepted) → ended.
 // Outcomes: completed | missed (45s timeout) | declined | cancelled (caller hung up first) | busy | failed.
@@ -8,7 +8,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 import type { CallMediaBackend } from "./mediaBackend";
-import { callqGrantFor } from "./callqAllowlist";
 
 const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
@@ -82,13 +81,6 @@ export interface CallDeps {
   /** Preferred backend for a NEW call. The selected instance is retained on the call record. */
   /** Chooses the media backend for a new call; receives both participants so a server-side test allowlist can opt them in. */
   selectMedia?(participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }): CallMediaBackend | null;
-  /** Existing LiveKit path for compatibility and layered Mediasoup fallback. */
-  liveKitFallback?(): CallMediaBackend | null;
-  /** Legacy LiveKit hooks retained for focused unit tests and older integration wiring. */
-  mintToken?(callId: string, userId: string, name: string, ttlSec: number): Promise<string | null>;
-  mediaUrl?(): string | null;
-  /** Optional self-hosted TURN credentials; this remains untouched when no secret is configured. */
-  turnIceServers?(callId: string, userId: string): TurnIceServer[] | null;
   closeMedia?(callId: string): void;
   /** why a user's last socket closed (close code/reason/cause), for "call peer offline" diagnostics */
   lastCloseOf?(userId: string): Record<string, unknown> | null;
@@ -127,12 +119,8 @@ interface CallRec {
   outcome: CallOutcome | null;
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
   tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
-  /** Captured once at call start; only `fallbackMedia()` may replace it, and only Mediasoup → LiveKit. */
+  /** Captured once at call start (P2P/rcRelay only); never migrated mid-call. */
   backend: CallMediaBackend;
-  /** The original direct-UDP backend, retained after a TCP fallback so `restoreMedia()` can return to it. */
-  primary?: CallMediaBackend | null;
-  /** last backend switch (fallback or restore): server-side hysteresis against flapping */
-  switchedAt?: number;
   timer: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
@@ -172,23 +160,8 @@ export class CallService {
     return this.d.now?.() ?? Date.now();
   }
 
-  private legacyLiveKit(): CallMediaBackend | null {
-    const url = this.d.mediaUrl?.();
-    const mint = this.d.mintToken;
-    if (!url || !mint) return null;
-    return {
-      provider: "livekit",
-      issue: async ({ callId, userId, name, ttlSec }) => {
-        const token = await mint(callId, userId, name, ttlSec);
-        const iceServers = this.d.turnIceServers?.(callId, userId);
-        return token ? { provider: "livekit", url, token, expiresAt: Math.floor(this.now() / 1000) + ttlSec, ...(iceServers ? { iceServers } : {}) } : null;
-      },
-      close: (callId) => this.d.closeMedia?.(callId),
-    };
-  }
-
   private selectBackend(participants?: { callerId: string; calleeId: string; video?: boolean; iosNativeVideo?: boolean }) {
-    return this.d.selectMedia?.(participants) ?? this.legacyLiveKit();
+    return this.d.selectMedia?.(participants) ?? null;
   }
 
   dispose() {
@@ -263,26 +236,13 @@ export class CallService {
   /** media credential for a participant of a LIVE call (never for an ended one); fresh enough to connect with */
   private async media(c: CallRec, userId: string): Promise<CallMedia | null> {
     if (c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
-    // The caller may establish its outbound UDP transport while ringing, but the called party never receives a
-    // Mediasoup admission token (nor can it use one) before explicitly accepting the call.
-    if (c.backend.provider !== "livekit" && userId === c.calleeId && c.phase !== "active") return null;
+    // The called party never receives call media/ICE credentials before explicitly accepting the call.
+    if (userId === c.calleeId && c.phase !== "active") return null;
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const media = await t.p;
     if (!media || (c.phase as CallPhase) === "ended") return null;
-    // FX-082: test accounts only get the call-quality grant; everyone else gets the exact same object as before.
-    const callq = media.provider === "mediasoup" ? callqGrantFor(userId) : null;
-    return callq ? { ...media, callq } : media;
-  }
-
-  /**
-   * LiveKit webhook guard: may this identity be in this call's media room right now? false = the call ended (or the
-   * identity isn't one of its two participants) → kick. null = unknown call (e.g. the app server restarted): leave it.
-   */
-  mediaAllowed(callId: string, userId: string): boolean | null {
-    const c = this.calls.get(callId);
-    if (!c) return null;
-    return c.phase !== "ended" && (userId === c.callerId || userId === c.calleeId);
+    return media;
   }
 
   private limited(userId: string) {
@@ -386,7 +346,6 @@ export class CallService {
     // Preserve ring-time prewarming for the established LiveKit path. For direct UDP, only the caller has a
     // credential until the callee atomically accepts; the server enforces that consent boundary below as well.
     this.mint(c, callerId);
-    if (backend.provider === "livekit") this.mint(c, calleeId);
     c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
     c.timer.unref?.();
     const info = this.info(c);
@@ -545,73 +504,6 @@ export class CallService {
     return { ok: true as const, call: this.info(c), media: c.phase === "ended" ? null : await this.media(c, userId) };
   }
 
-  /**
-   * The only in-call backend migration: a failed or degraded Mediasoup transport moves BOTH participants to the
-   * established LiveKit/TCP backend. The new credential is broadcast, and clients rebuild media automatically.
-   */
-  async fallbackMedia(callId: unknown, userId: string) {
-    const c = this.get(callId, userId);
-    if (!c || c.phase === "ended") return { ok: false as const, error: "This call isn't available" };
-    if (c.backend.provider === "livekit") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyFallback: true };
-    const fallback = this.d.liveKitFallback?.() ?? this.legacyLiveKit();
-    if (!fallback) return { ok: false as const, error: "TCP fallback isn't available" };
-    c.primary = c.backend;
-    c.switchedAt = this.now();
-    c.backend.close(c.id);
-    c.backend = fallback;
-    c.tokens.clear();
-    for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
-    const info = this.info(c);
-    const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
-    for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaFallback", { call: info, media, from: "mediasoup", to: "livekit" });
-    this.d.log?.("call media fallback", { callId: c.id, from: "mediasoup", to: "livekit" });
-    return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
-  }
-
-  /**
-   * Return to direct UDP after a TCP fallback. Only an active call that started on Mediasoup may go back, and never
-   * sooner than CALL_RESTORE_MIN_MS after the last switch (hysteresis). If UDP fails again the client simply calls
-   * `fallbackMedia()`, which is unchanged.
-   */
-  async restoreMedia(callId: unknown, userId: string) {
-    const c = this.get(callId, userId);
-    if (!c || c.phase !== "active") return { ok: false as const, error: "This call isn't active" };
-    if (c.backend.provider === "mediasoup") return { ok: true as const, call: this.info(c), media: await this.media(c, userId), alreadyUdp: true };
-    if (!c.primary || c.primary.provider !== "mediasoup") return { ok: false as const, error: "UDP media isn't available" };
-    const minGap = num("CALL_RESTORE_MIN_MS", 10_000);
-    if (c.switchedAt && this.now() - c.switchedAt < minGap) return { ok: false as const, error: "Too soon", retryInMs: minGap - (this.now() - c.switchedAt) };
-    const tcp = c.backend;
-    c.backend = c.primary;
-    c.switchedAt = this.now();
-    c.tokens.clear();
-    for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
-    const info = this.info(c);
-    const all = await Promise.all([c.callerId, c.calleeId].map(async (uid) => [uid, await this.media(c, uid)] as const));
-    if (all.some(([, m]) => !m || m.provider !== "mediasoup")) {
-      // UDP credential couldn't be issued: stay on the working TCP path.
-      c.backend = tcp;
-      c.tokens.clear();
-      for (const uid of [c.callerId, c.calleeId]) this.mint(c, uid);
-      return { ok: false as const, error: "UDP media isn't available" };
-    }
-    tcp.close(c.id);
-    for (const [uid, media] of all) this.d.emitUser(uid, "call:mediaRestore", { call: info, media, from: "livekit", to: "mediasoup" });
-    this.d.log?.("call media restore", { callId: c.id, from: "livekit", to: "mediasoup" });
-    return { ok: true as const, call: info, media: all.find(([uid]) => uid === userId)?.[1] ?? null };
-  }
-
-  /** Broker an authenticated browser signaling action to the currently selected Mediasoup backend. */
-  async mediaRequest(callId: unknown, userId: string, connectionId: string, method: string, payload: Record<string, unknown>) {
-    const c = this.get(callId, userId);
-    if (!c || c.phase === "ended" || c.backend.provider !== "mediasoup" || !c.backend.relay) return { ok: false as const, error: "UDP media isn't available" };
-    if (userId === c.calleeId && c.phase !== "active") return { ok: false as const, error: "Answer the call before joining direct media" };
-    this.bind(c, userId, connectionId);
-    const media = await this.media(c, userId);
-    if (!media || media.provider !== "mediasoup") return { ok: false as const, error: "UDP media credential expired" };
-    const result = await c.backend.relay({ callId: c.id, userId, connectionId, method, payload, token: media.token });
-    return { ok: true as const, result };
-  }
-
   /** client-measured accept → first remote audio (ms) */
   metric(callId: unknown, userId: string, acceptToAudioMs: unknown) {
     const c = this.get(callId, userId);
@@ -696,12 +588,6 @@ export class CallService {
       ringAck: { n: this.metrics.ringMs.length, p50: pct(this.metrics.ringMs, 50) },
       quality: { ...this.verdicts },
     };
-  }
-
-  /** LiveKit says a participant left the call's media room (webhook) */
-  mediaLeft(callId: string, userId: string) {
-    const c = this.calls.get(callId);
-    if (c && c.phase === "active" && (userId === c.callerId || userId === c.calleeId)) this.finish(c, "completed", { by: userId });
   }
 
   private timeout(callId: string) {
@@ -822,14 +708,6 @@ export class CallService {
         if (now - c.orphanSince > CALL_ORPHAN_MS) this.finish(c, "completed");
       } else c.orphanSince = null;
     }
-  }
-
-  /** A media `leave` for a call that is already over (or that the server no longer knows): nothing left to tear down. */
-  leaveIsNoop(callId: unknown, userId: string) {
-    if (typeof callId !== "string") return false;
-    const c = this.calls.get(callId);
-    if (!c) return true;
-    return c.phase === "ended" && (c.callerId === userId || c.calleeId === userId);
   }
 
   /** test hook */

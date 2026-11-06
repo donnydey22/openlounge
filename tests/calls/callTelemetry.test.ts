@@ -42,18 +42,13 @@ test("server: sanitize rejects junk, bounds streams/rows, summary has loss p95, 
   assert.equal(summarize([]).length, 0);
 });
 
-test("wiring: engine samples every call and stops on teardown; server logs + gateway-only SFU telemetry; schema present", () => {
+test("wiring: engine samples every call and stops on teardown; server logs telemetry; schema present", () => {
   const eng = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(eng, /this\.startTelemetry\(session\)/);
-  assert.ok((eng.match(/this\.stopTelemetry\(\);/g)?.length ?? 0) >= 3, "start + both teardown paths");
+  assert.match(eng, /this\.startTelemetry\(\(\) => session\.stats\(\)\)/);
+  assert.match(eng, /this\.telemetry\?\.stop\(\);/);
   assert.match(eng, /emit\("call:telemetry", payload\)/);
   const idx = readFileSync(new URL("../../server/calls/index.ts", import.meta.url), "utf8");
   assert.match(idx, /socket\.on\("call:telemetry"/);
-  assert.match(idx, /mediaGateway\(\)\.handleTelemetry\(socket, data\)/);
-  const gw = readFileSync(new URL("../../server/mediasoup/gateway.ts", import.meta.url), "utf8");
-  assert.match(gw, /handleTelemetry\(conn: Conn, data: unknown\)[\s\S]{0,120}if \(conn !== this\.conn/);
   const sch = readFileSync(new URL("../../server/wsSchemas.ts", import.meta.url), "utf8");
   assert.match(sch, /"call:telemetry"/);
-  const sfu = readFileSync(new URL("../../media-sfu/src/index.mjs", import.meta.url), "utf8");
-  assert.match(sfu, /emitGateway\("ms:gateway:telemetry"/);
 });

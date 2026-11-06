@@ -38,7 +38,7 @@ test("#49 no poster / placeholder of any kind; last frame held on a canvas, no t
   assert.match(overlay, /controls=\{false\}/);
 });
 test("#49 engine swaps the track inside the same MediaStream (never clears srcObject mid-call)", () => {
-  const raw = engine.slice(engine.indexOf("private attachRawVideo"), engine.indexOf("private onMediasoupState"));
+  const raw = engine.slice(engine.indexOf("private attachRawVideo"), engine.indexOf("private startTelemetry"));
   assert.doesNotMatch(raw, /srcObject\s*=/);
   assert.match(raw, /swapVideoTrack\(el, track\)/);
 });

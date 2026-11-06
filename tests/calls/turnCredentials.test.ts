@@ -42,9 +42,7 @@ test("CallService hands TURN configuration only to authenticated live-call parti
       policy: () => ({ ok: true }),
       inRoom: () => false,
       appendCallMessage() {},
-      mintToken: async (callId, userId) => `test-livekit-token:${callId}:${userId}`,
-      mediaUrl: () => "wss://livekit.example.test",
-      turnIceServers: (callId, userId) => mintTurnIceServers(callId, userId, { secret, now: () => 1_800_000_000_000 }),
+      selectMedia: () => ({ provider: "p2p" as const, close() {}, issue: async ({ callId, userId }) => { const iceServers = mintTurnIceServers(callId, userId, { secret, now: () => 1_800_000_000_000 }); return { provider: "p2p" as const, url: "", token: "", ...(iceServers ? { iceServers } : {}) }; } }),
       closeMedia() {},
     });
 

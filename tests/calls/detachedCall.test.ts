@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { CallService } from "../../server/calls/service";
 import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
-const backend = (): CallMediaBackend => ({ provider: "mediasoup", issue: async ({ callId, userId }) => ({ provider: "mediasoup", url: "x", token: `${callId}-${userId}` }), close: () => {}, relay: async () => ({}) });
+const backend = (): CallMediaBackend => ({ provider: "p2p" as const, issue: async ({ callId, userId }) => ({ provider: "p2p" as const, url: "x", token: `${callId}-${userId}` }), close: () => {} });
 function svc(clock: { now: number }) {
   const peer = (id: string) => ({ id, name: id, color: "#000", photoUrl: null });
-  return new CallService({ emitUser: () => {}, isConnected: () => true, isForeground: () => true, peer, policy: () => ({ ok: true }), inRoom: () => false, appendCallMessage: () => {}, selectMedia: backend, liveKitFallback: backend, now: () => clock.now });
+  return new CallService({ emitUser: () => {}, isConnected: () => true, isForeground: () => true, peer, policy: () => ({ ok: true }), inRoom: () => false, appendCallMessage: () => {}, selectMedia: backend, now: () => clock.now });
 }
 
 test("detached: call page gone while the user stays online elsewhere → call ends after CALL_DETACHED_MS, new call possible", async () => {

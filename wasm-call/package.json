@@ -1,2 +1,0 @@
-{ "name": "openlounge-wasm-call", "private": true, "type": "module", "version": "0.1.0",
-  "scripts": { "build": "./build.sh", "test": "node --test test/*.test.mjs" }, "dependencies": { "ws": "8.18.3" } }

@@ -7,13 +7,13 @@ import { readFileSync } from "node:fs";
 import { CallService } from "../../server/calls/service";
 import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
-const backend = (): CallMediaBackend => ({ provider: "mediasoup", issue: async ({ callId, userId }) => ({ provider: "mediasoup", url: "x", token: `${callId}-${userId}` }), close: () => {}, relay: async () => ({}) });
+const backend = (): CallMediaBackend => ({ provider: "p2p" as const, issue: async ({ callId, userId }) => ({ provider: "p2p" as const, url: "x", token: `${callId}-${userId}` }), close: () => {} });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function svc(clock: { now: number }, o: { foreground?: boolean; pushes?: string[]; logs?: string[]; inRoom?: boolean } = {}) {
   const peer = (id: string) => ({ id, name: id, color: "#000", photoUrl: null });
   return new CallService({
     emitUser: () => {}, isConnected: () => true, isForeground: () => o.foreground ?? true, peer, policy: () => ({ ok: true }), inRoom: () => !!o.inRoom,
-    appendCallMessage: () => {}, selectMedia: backend, liveKitFallback: backend, now: () => clock.now,
+    appendCallMessage: () => {}, selectMedia: backend, now: () => clock.now,
     push: { incoming: (u, c) => o.pushes?.push(`in:${u}:${c.id}`), repush: (u, c) => o.pushes?.push(`re:${u}:${c.id}`), cancel: () => {} },
     log: (m) => o.logs?.push(m),
   });

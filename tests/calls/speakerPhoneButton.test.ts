@@ -20,10 +20,10 @@ test("engine follows the actual native route, headsets included; device change r
   assert.ok(body.includes("this.routeUserPick = false"));
   assert.ok(body.includes("routeAnnouncement(prev, route)"));
 });
-test("manual pick: native gets route+deviceId, web uses setSinkId on every call audio element", () => {
+test("manual pick: native gets route+deviceId, web routes the call PC output (setSinkId)", () => {
   const i = engine.indexOf("async selectRoute("); assert.ok(i > 0);
   const body = engine.slice(i, i + 1500);
   assert.ok(body.includes('type: "call:audioRoute"') && body.includes("deviceId") && body.includes("user: true"));
-  assert.ok(body.includes("applyWebSink(el)"));
+  assert.ok(body.includes("this.rtc?.setOutput(this.webSinkId || null)"));
   assert.ok(engine.includes('md.addEventListener("devicechange", on)'), "web reacts to device plug/unplug");
 });

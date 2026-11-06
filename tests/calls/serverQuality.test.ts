@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { CallService } from "../../server/calls/service";
 import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
-const backend = (): CallMediaBackend => ({ provider: "livekit", issue: async ({ callId, userId }) => ({ provider: "livekit", url: "x", token: `${callId}-${userId}` }), close: () => {} });
+const backend = (): CallMediaBackend => ({ provider: "p2p" as const, issue: async ({ callId, userId }) => ({ provider: "p2p" as const, url: "x", token: `${callId}-${userId}` }), close: () => {} });
 function svc(clock: { now: number }) {
   const peer = (id: string) => ({ id, name: id, color: "#000", photoUrl: null });
   const logs: { m: string; x?: any }[] = [];

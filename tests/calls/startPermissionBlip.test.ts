@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const ov = readFileSync("src/components/calls/CallOverlay.tsx", "utf8");
 const fh = readFileSync("src/lib/calls/frameHold.ts", "utf8");
-const ms = readFileSync("src/lib/calls/mediasoupSession.ts", "utf8");
 const eng = readFileSync("src/lib/calls/engine.ts", "utf8");
 
 test("permission prompt: curtain fallback only runs once the big tile has a feed attached", () => {

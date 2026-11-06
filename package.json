@@ -55,7 +55,6 @@
     "livekit-server-sdk": "^2.19.1",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.52.0",
-    "mediasoup-client": "^3.24.5",
     "next": "^16.3.8",
     "nodemailer": "^7.0.13",
     "pg": "^8.23.1",

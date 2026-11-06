@@ -6,12 +6,11 @@ import { readFileSync } from "node:fs";
 import { CallService, CALL_ACK_FALLBACK_MS } from "../../server/calls/service";
 import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
-function backend(provider: "mediasoup" | "livekit"): CallMediaBackend {
+function backend(provider: "p2p"): CallMediaBackend {
   return {
     provider,
     issue: async ({ callId, userId }) => ({ provider, url: "x", token: `${provider}-${callId}-${userId}` }),
     close: () => {},
-    relay: provider === "mediasoup" ? async () => ({}) : undefined,
   };
 }
 
@@ -22,7 +21,7 @@ function svc(acks: boolean, foreground = true) {
   const s = new CallService({
     emitUser: () => {},
     isConnected: () => true, isForeground: () => foreground, peer, policy: () => ({ ok: true }), inRoom: () => false, appendCallMessage: () => {},
-    selectMedia: () => backend("mediasoup"), liveKitFallback: () => backend("livekit"), now: () => Date.now(),
+    selectMedia: () => backend("p2p"), now: () => Date.now(),
     push: { incoming: (u: string) => pushes.push(u), cancel: () => {} },
     log: (m: string) => logs.push(m),
   } as never);
@@ -67,7 +66,3 @@ test("ring element: stalled-but-playing is restarted, Web Audio revived, re-arm 
   assert.match(src, /setTimeout\(\(\) => \{[\s\S]{0,160}fallback\(true\)[\s\S]{0,20}RING_PROBE_MS\)/);
 });
 
-test("outgoing call re-arms the ringback once the mic request settles", () => {
-  const src = readFileSync("src/lib/calls/engine.ts", "utf8");
-  assert.match(src, /this\.preMic = this\.acquireMic\(\);\s*\n\s*\/\/[^\n]*\n\s*void this\.preMic\.then\([^\n]*rearmRing\(\)/);
-});

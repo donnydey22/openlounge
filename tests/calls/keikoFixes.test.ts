@@ -23,30 +23,9 @@ test("native wrappers never hang up from pagehide (unlock reload dropped answere
   assert.ok(handler.indexOf("__olNativeCalls") < handler.indexOf('"call:hangup"'));
 });
 
-test("mic muted by an OS session handover is recaptured; ended too", () => {
-  const src = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
-  assert.ok(src.includes('addEventListener("mute", this.onMicMuted)'));
-  assert.ok(/checkMicAlive\(\)[\s\S]{0,200}this\.mic\.muted\) void this\.recoverMic\(\)/.test(src));
-});
-
 test("glare: a start() that returns the peer's ringing call answers it", () => {
   const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
   assert.match(src, /r\.call\.callerId !== this\.meId && r\.call\.calleeId === this\.meId[\s\S]{0,600}await this\.accept\(video\)/);
-});
-
-test("foreground return re-checks the mic", () => {
-  const src = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  assert.match(src, /onVisibleCallAudio = \(\) => \{[\s\S]{0,300}checkMicAlive\(\)/);
-});
-
-test("caller mic handover: CallKit/connected reasons rebind the existing producer; pending until it exists", () => {
-  const eng = readFileSync(new URL("../../src/lib/calls/engine.ts", import.meta.url), "utf8");
-  const ms = readFileSync(new URL("../../src/lib/calls/mediasoupSession.ts", import.meta.url), "utf8");
-  for (const r of ["callkit-activate", "callkit-activate-settle", "connected", "interruption-ended"]) assert.ok(eng.includes(`"${r}"`));
-  assert.match(eng, /role === "caller" && MIC_HANDOVER_REASONS\.has\(reason\)[\s\S]{0,300}rebindMic\(\)[\s\S]{0,80}micHandoverPending = true/);
-  assert.match(eng, /this\.mediasoup = session;\s*if \(this\.micHandoverPending\)[\s\S]{0,120}session\.rebindMic\(\)/);
-  assert.match(ms, /rebindMic\(\) \{[\s\S]{0,400}replaceTrack|rebindMic\(\) \{[\s\S]{0,900}this\.recoverMic\(\)/);
-  assert.match(ms, /this\.producers\.set\("audio", producer\);\s*if \(this\.micHandoverPending\)/);
 });
 
 test("resume retries when call:current acks ok:false (socket not authed yet after a WebView reload)", async () => {

@@ -44,6 +44,9 @@ export class CallSession {
   private connectedResolve: (() => void) | null = null;
   private connectedReject: ((e: Error) => void) | null = null;
   private onlineH = () => this.recovery.onNetworkChange();
+  private videoTx: RTCRtpTransceiver | null = null;
+  private localStream: MediaStream | null = null;
+  private localVideo: MediaStreamTrack | null = null;
 
   constructor(private socket: RtcSocket, private o: CallSessionOpts) {
     this.recovery = new NetworkRecovery({
@@ -71,7 +74,12 @@ export class CallSession {
     if (this.phase === "closed") throw new CallFailure("session", "closed");
     this.setPhase("transport");
     const pc = this.newPeer(this.o.media.iceServers);
-    pc.addTrack(track, new MediaStream([track]));
+    const stream = new MediaStream([track]);
+    pc.addTrack(track, stream);
+    // One video m-line from the start (caller offers it; callee flips it to sendrecv) so the camera can be turned on
+    // or off mid-call with replaceTrack only: no renegotiation, same PC, same ICE (RingRTC: one PC per call).
+    if (this.o.role === "caller") this.videoTx = pc.addTransceiver("video", { direction: "sendrecv", streams: [stream] });
+    this.localStream = stream;
     this.socket.on("rtc:signal", this.onSignal);
     if (typeof window !== "undefined") window.addEventListener("online", this.onlineH);
     const connected = new Promise<void>((res, rej) => { this.connectedResolve = res; this.connectedReject = rej; });
@@ -141,6 +149,13 @@ export class CallSession {
         if (this.o.role !== "callee" || !m.sdp) return;
         await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
         this.remoteSet = true;
+        if (!this.videoTx) {
+          this.videoTx = pc.getTransceivers().find((t) => t.receiver.track?.kind === "video") ?? null;
+          if (this.videoTx) {
+            this.videoTx.direction = "sendrecv";
+            if (this.localVideo) await this.videoTx.sender.replaceTrack(this.localVideo);
+          }
+        }
         await this.flushCands();
         await pc.setLocalDescription(await pc.createAnswer());
         await this.send("answer", { sdp: pc.localDescription?.sdp });
@@ -193,6 +208,18 @@ export class CallSession {
 
   setOutput(id: string | null) { return this.playback.setOutput(id); }
 
+  /** Local camera onto the call's single video sender (null = camera off). Local only: never touches transport. */
+  async setVideoTrack(t: MediaStreamTrack | null) {
+    this.localVideo = t;
+    if (t && this.localStream) { try { this.videoTx?.sender.setStreams?.(this.localStream); } catch { /* older engines */ } }
+    await this.videoTx?.sender.replaceTrack(t);
+  }
+
+  /** Transport stats for telemetry / level logs (read-only). */
+  async stats(): Promise<RTCStatsReport[]> {
+    return this.pc ? [await this.pc.getStats()] : [];
+  }
+
   private fail(f: CallFailure) {
     this.o.onFailure?.(f);
     this.connectedReject?.(f);
@@ -209,6 +236,8 @@ export class CallSession {
     if (typeof window !== "undefined") window.removeEventListener("online", this.onlineH);
     this.pc?.close();
     this.pc = null;
+    this.videoTx = null;
+    this.localVideo = null;
     this.audio.close();
     this.playback.close();
     this.connectedReject?.(new CallFailure("session", "closed"));
