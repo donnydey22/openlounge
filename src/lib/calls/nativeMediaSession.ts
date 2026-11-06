@@ -133,6 +133,9 @@ export function iosNativeVideoGranted(media: CallMedia | null | undefined): bool
  * Android stays behind its independent opt-in and never inherits the iPhone path. */
 export function useNativeMedia(video: boolean, media?: CallMedia | null): boolean {
   if (!nativeMediaAvailable()) return false;
+  // P2P (rtc contract): any app with the native bridge owns the PeerConnection — no build/opt-in/video gates,
+  // so an Android/iOS WebView never falls back to the browser CallSession.
+  if (media?.provider === "p2p") return true;
   if (video) return iosNativeVideoGranted(media);
   if (!nativeMediaIsAndroid()) return true;
   return androidNativeOff === null && androidNativeOptedIn() && androidNativeHealthy() && (androidAppBuild() ?? 0) >= ANDROID_NATIVE_MIN_BUILD;
