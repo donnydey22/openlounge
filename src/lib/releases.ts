@@ -1,11 +1,12 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
+/** Android 47 rebuilt from android-47-video-fanout 53151b4: real PJSIP status, sound retry, network-only relay fallback, video fan-out lifecycle fixes. */
 export const ANDROID_RELEASE = {
   version: "0.3.30",
   build: 47,
   file: "/downloads/openlounge-0.3.30-47.apk",
   size: "25.8 MB",
-  sha256: "7a2af9d1b91713112f7a60a2030403c2046704132ac3a0f5053123c72ee57c17",
+  sha256: "fe9d80f3c15355baa8a300ae16a5753391d8ad2635a1fe3957064fa31ba563c8",
 } as const;
 /** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
 export const ANDROID_FALLBACK = {
