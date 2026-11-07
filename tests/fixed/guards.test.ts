@@ -1,6 +1,7 @@
 // Regression guards for past fixes that had no automated test of their own (see docs/fixed-registry.csv).
 // Static checks against the shipped source: cheap, deterministic, and they fail loudly if a fix is reverted.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -50,7 +51,10 @@ test("FX-download-latest: /download serves the latest Android build; label, file
   assert.equal(r.IOS_RELEASE.file, `/downloads/openlounge-ios-${r.IOS_RELEASE.version}-b${r.IOS_RELEASE.build}.ipa`);
   assert.equal(r.binaryUrl(a.file), `https://openlounge.app${a.file}`);
   assert.equal(r.binaryUrl(r.IOS_RELEASE.file), `https://openlounge.app${r.IOS_RELEASE.file}`);
-  assert.match(r.CALLING_RELEASE_NOTICE, /previous builds.*do not include/);
+  assert.match(r.CALLING_RELEASE_NOTICE, /physical-device and normal-network.*validation are still pending/);
+  assert.match(r.CALLING_RELEASE_NOTICE, /Signal-identical behavior is not verified/);
+  for(const release of [a,r.IOS_RELEASE]) assert.equal(createHash("sha256").update(readFileSync(path.resolve("public"+release.file))).digest("hex"),release.sha256,"published bytes must match signed-artifact metadata");
+  assert.ok(R("public/downloads/openlounge-ios.plist").includes(r.binaryUrl(r.IOS_RELEASE.file)));
   assert.match(R("src/app/download/DownloadHub.tsx"), /ANDROID_RELEASE/);
 });
 

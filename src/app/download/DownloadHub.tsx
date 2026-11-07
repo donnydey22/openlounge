@@ -104,7 +104,7 @@ export function DownloadHub() {
             Install on iPhone
           </a>
           <p className="mt-3 text-zinc-400">
-            Prefer Safari on a registered iPhone and tap Install for one-tap OTA. Or download the IPA file directly (same path as Android). After install, trust the developer in Settings &gt; General &gt; VPN &amp; Device Management.
+            Ad-hoc test build, not an App Store release: installation is limited to iPhones registered in the provisioning profile. Use Safari on a registered iPhone and tap Install, or download the IPA directly. Physical calling tests are pending.
           </p>
           <Sha value={IOS_RELEASE.sha256} />
         </section>

@@ -27,9 +27,9 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/@:handle([A-Za-z0-9_]{1,30})", destination: "/u/:handle" }];
   },
-  // native binaries live on GitHub release assets (see BINARY_HOST in src/lib/releases.ts)
+  // Current and prior shipped binaries stay direct-hosted; older archived links may redirect to release assets.
   async redirects() {
-    return [{ source: "/downloads/:file((?!(?:openlounge-0\\.3\\.30-47\\.apk|openlounge-ios-0\\.3\\.19-b117\\.ipa)$)[A-Za-z0-9._-]+\\.(?:ipa|apk))", destination: "https://github.com/donnydey22/openlounge/releases/download/downloads-v1/:file", permanent: false }];
+    return [{ source: "/downloads/:file((?!(?:openlounge-0\\.3\\.30-47\\.apk|openlounge-ios-0\\.3\\.19-b117\\.ipa|openlounge-0\\.3\\.35-52\\.apk|openlounge-ios-0\\.3\\.20-b128\\.ipa)$)[A-Za-z0-9._-]+\\.(?:ipa|apk))", destination: "https://github.com/donnydey22/openlounge/releases/download/downloads-v1/:file", permanent: false }];
   },
   async headers() {
     return [

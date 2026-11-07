@@ -1,12 +1,12 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android 47 five-step cut from android-47-video-fanout 23b7e41: mode-wait, video fan-out, openSound-before-media, CallSignalClient accept, CallActivity native UI past first cut; TURN UDP+TCP+TLS:443, relay-only ~28s, openSound EAUD instrument. */
+/** Android52: signed clean-room sealed calling/DO bridge build. Physical-device validation pending. */
 export const ANDROID_RELEASE = {
-  version: "0.3.30",
-  build: 47,
-  file: "/downloads/openlounge-0.3.30-47.apk",
-  size: "25.9 MB",
-  sha256: "e3cbdaab6246d9380241d4d1340f641bf6549991d37e43c85ea5e25351d4698d",
+  version: "0.3.35",
+  build: 52,
+  file: "/downloads/openlounge-0.3.35-52.apk",
+  size: "46.5 MB",
+  sha256: "ba618c25966c289495da2feadec9259d27c04f9b2ef9cb071f7abc0ba5bead42",
 } as const;
 /** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
 export const ANDROID_FALLBACK = {
@@ -121,21 +121,21 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS 0.3.19 (117): five-step cut ios-claude-turn-relay-201 c2e8e9c (mode-wait/didActivate, video fan-out, OLAudioSessionOwner, CallSignalClient bridge, OLNativeCallHost past first cut; TURN/relay/EAUD); CI run 42219514900. Served from openlounge.app/public/downloads. */
+/** iOS128: actual Mac compile + strict ad-hoc codesign green, CI42314057044. Device calling validation pending. */
 export const IOS_RELEASE = {
-  version: "0.3.19",
-  build: 117,
+  version: "0.3.20",
+  build: 128,
   bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.3.19-b117.ipa",
-  size: "10.5 MB",
-  sha256: "6f725c9323124558fb810481a2ea7604ca4fa8287655ebc54bca9cc4289ee158",
+  file: "/downloads/openlounge-ios-0.3.20-b128.ipa",
+  size: "15.2 MB",
+  sha256: "d5aa6af0244f2e80fe189021667c59653a2a33b4968fd18181096105d3515884",
 } as const;
 
-export const CALLING_RELEASE_NOTICE = "Calling upgrade is being validated. Downloads below are the previous builds and do not include the new calling update.";
+export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
 
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";
 
-// Binaries are hosted as GitHub release assets (a ~400 MB `railway up` upload kept failing); /downloads/*.ipa|apk redirect there.
+// Current builds are hosted directly; this host is only for archived legacy release assets.
 export const BINARY_HOST = "https://github.com/donnydey22/openlounge/releases/download/downloads-v1";
 export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === IOS_RELEASE.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
