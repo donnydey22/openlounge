@@ -15,6 +15,14 @@ const uid=(v:unknown):v is string=>typeof v==="string"&&/^[\w-]{1,80}$/.test(v);
 export function platformAudioBusy(user:string){const l=leases.get(user);if(l&&l.until>Date.now())return true;if(l)leases.delete(user);return false}
 export function platformCallingVisibility(userId:string){if(client)void client.call("visibility",{userId}).catch(()=>{})}
 export function platformEndpoint(){return endpoint}
+// Public coarse availability only; no participant, key, queue, or credential metadata.
+// Coalesce/cache probes so monitoring cannot amplify traffic to the authority.
+let healthProbe:Promise<{ok:boolean,authority:string,protocol:string}>|null=null,healthUntil=0;
+export function platformCallingHealth(){
+ if(!client)return Promise.resolve({ok:false,authority:"digitalocean",protocol:CALL_PROTOCOL});
+ if(!healthProbe||Date.now()>=healthUntil){healthUntil=Date.now()+5000;healthProbe=client.call("health",{}).then(r=>({ok:r?.ok===true&&r.authority==="digitalocean"&&r.sealed===true,authority:"digitalocean",protocol:CALL_PROTOCOL}),()=>({ok:false,authority:"digitalocean",protocol:CALL_PROTOCOL}));}
+ return healthProbe;
+}
 export async function remoteCall(userId:string,connId:string,event:string,data:any={},protocol=CALL_PROTOCOL,requestId?:string){if(!client)return {ok:false,error:"Calls are temporarily unavailable",reason:"calling_unavailable"};return client.call("request",{userId,connId,event,data,protocol},requestId)}
 const UPGRADE={ok:false,error:"Update Open Lounge at https://openlounge.app/download to use calls",reason:"upgrade_required",downloadUrl:"https://openlounge.app/download",requiredProtocol:CALL_PROTOCOL};
 const EVENTS=["call:start","call:accept","call:ack","call:decline","call:hangup","call:get","call:current","call:video","call:metric","call:diag","call:telemetry","call:turnRefresh","rtc:iceConfig","rtc:signal","rc:msg","rc:keys:publish","rc:keys:fetch"];
@@ -26,7 +34,7 @@ export function attachPlatformCalls(socket:Conn,authed:(ack:any,fn:(uid:string)=
  socket.on("call:history",({before}:any={},ack:any=()=>{})=>authed(ack,user=>{const h=store.callHistory(user,before);const peers:Record<string,unknown>={};for(const m of h.calls){const p=m.fromId===user?m.toId:m.fromId;peers[p]=store.publicUser(p)}ack({ok:true,...h,peers})}));
  socket.onClose(()=>{if(last&&client)void client.call("disconnect",{userId:last,connId:socket.id}).catch(()=>{})});
 }
-export function wirePlatformCalls(hub:WsHub){io=hub;if(!voipService())initVoip({log:()=>{}});
+export function wirePlatformCalls(hub:WsHub){healthProbe=null;healthUntil=0;io=hub;if(!voipService())initVoip({log:()=>{}});
  const outbound=process.env.CALLING_TO_DO_KEY??"",inbound=process.env.CALLING_TO_PLATFORM_KEY??"";
  if(!process.env.CALLING_BRIDGE_URL||outbound.length<32||inbound.length<32||outbound===inbound){client=null;endpoint=null;console.warn("[calling-bridge] unavailable; no local calling engine started");return}
  try{client=new BridgeClient(validateBridgeUrl(process.env.CALLING_BRIDGE_URL,"calling",process.env.CALLING_BRIDGE_TEST==="1"),new BridgeAuth(outbound,"calling"))}catch{client=null;endpoint=null;console.error("[calling-bridge] invalid configuration; calls disabled without affecting platform");return}

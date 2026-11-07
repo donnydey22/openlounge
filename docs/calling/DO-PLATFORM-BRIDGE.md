@@ -29,3 +29,7 @@ Production config/source/binaries are backed up under `/var/backups/openlounge-c
 ## Required release evidence
 
 Run all calling tests, real separate-host-implementation authenticated WS integration, adversarial auth/replay/authorization/idempotence, primary audio lease/restart/history/native decline, trusted TLS hot-renewal, full Next build, Android unit/signature gate, and actual Mac iOS compile/signature/AVAudioSession-owner gates. Preserve existing noncalling suites. Exact server-emitted normal-hostname TURN URLs must work from an ordinary browser network; public-IP tests do not prove that. Then perform all42 native cross-platform cells and >10min TURN renewal with actual heard audio/rendered camera/network handoff. Headless synthetic RTP is never a physical-device claim. Do not label signed artifacts or a deployed authority as end-to-end verified until those gates pass.
+
+## Coarse production availability monitor
+
+`GET /api/calling/health` performs the authenticated platform→DO `health` RPC and returns only `ok`, `authority: digitalocean`, and protocol. It is cached/coalesced for five seconds, sends `Cache-Control: no-store`, never returns participant/credential/queue metadata, and returns503 on missing configuration or bridge failure. Other methods return405. This is separate from room-media readiness and is not a media/device/Signal-parity certification.

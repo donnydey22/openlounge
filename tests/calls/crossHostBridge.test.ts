@@ -29,6 +29,10 @@ before(async()=>{
 });
 after(async()=>{for(const x of[A,B,C,B2])x?.client.close();runtime?.stop();await app?.close();await new Promise<void>(r=>doServer.close(()=>r()));await rm(dir,{recursive:true,force:true});for(const k of["CALLING_BRIDGE_URL","CALLING_TO_DO_KEY","CALLING_TO_PLATFORM_KEY","CALLING_BRIDGE_TEST"])delete process.env[k]});
 test("platform bridge mode has no local call lifecycle instance",async()=>{const {calls}=await import("../../server/calls");assert.equal(calls(),null)});
+test("public calling health probes actual authenticated DO bridge without leaking private authority metadata",async()=>{
+ const r=await fetch(app.base+"/api/calling/health");assert.equal(r.status,200);assert.equal(r.headers.get("cache-control"),"no-store");assert.deepEqual(await r.json(),{ok:true,authority:"digitalocean",protocol:"ol-rc-v1"});
+ assert.equal((await fetch(app.base+"/api/calling/health",{method:"POST"})).status,405);
+});
 test("bridge authentication rejects raw caller, wrong key, wrong audience and replay",async()=>{
  const body=JSON.stringify({id:"request-auth-0001",op:"health",args:{}});const signer=new BridgeAuth(doKey,"calling");
  assert.equal((await fetch(doUrl,{method:"POST",body})).status,401);
@@ -145,7 +149,7 @@ test("authenticated visibility changes reach the DO authority rather than losing
 test("invalid cross-host configuration disables only calls, never resurrects a local calling engine or breaks chats",async()=>{
  const old=process.env.CALLING_BRIDGE_URL;try{
   process.env.CALLING_BRIDGE_URL="https://untrusted.example/bridge/calling";
-  const {wirePlatformCalls,platformEndpoint}=await import("../../server/calls/bridge/platform");assert.doesNotThrow(()=>wirePlatformCalls({} as any));assert.equal(platformEndpoint(),null);
+  const {wirePlatformCalls,platformEndpoint}=await import("../../server/calls/bridge/platform");assert.doesNotThrow(()=>wirePlatformCalls({} as any));assert.equal(platformEndpoint(),null);const health=await fetch(app.base+"/api/calling/health");assert.equal(health.status,503);assert.equal((await health.json()).ok,false);
   const r=await A.client.req("call:start",{...proto,peerId:actor(B)});assert.equal(r.reason,"calling_unavailable");
   assert.equal((await A.client.req("dm:send",{to:actor(B),text:"chat remains available with calling unavailable"})).ok,true);
   assert.equal((await import("../../server/calls")).calls(),null);
