@@ -91,6 +91,8 @@ test("native HTTP get and single-use token decline preserve participant/callee/a
  const {declineTokens}=await import("../../server/calls/declineToken");const H=(token:string)=>({headers:{"X-Call-Decline-Token":token}});
  const r=await A.client.req("call:start",{...proto,peerId:actor(B)});assert.equal(r.ok,true);
  const path=`/api/calls/${r.call.id}/decline`;
+ const get=await api(app.base,`/api/calls/${r.call.id}`,undefined,{token:A.res.access??A.res.token??A.res.refresh});assert.equal(get.status,200);assert.equal(get.data.call.callerId,actor(A));assert.equal(get.data.media,undefined);
+ const outsider=await api(app.base,`/api/calls/${r.call.id}`,undefined,{token:C.res.access??C.res.token??C.res.refresh});assert.equal(outsider.status,404);
  assert.equal((await api(app.base,path,{},H(declineTokens().mint(r.call.id,actor(A),r.call.expiresAt)))).status,403);
  assert.equal((await api(app.base,path,{},H(declineTokens().mint(r.call.id,actor(C),r.call.expiresAt)))).status,404);
  const valid=declineTokens().mint(r.call.id,actor(B),r.call.expiresAt);
@@ -101,6 +103,20 @@ test("native HTTP get and single-use token decline preserve participant/callee/a
  const token=declineTokens().mint(next.call.id,actor(B),next.call.expiresAt);
  assert.equal((await api(app.base,`/api/calls/${next.call.id}/decline`,{},H(token))).status,409);
  await A.client.req("call:hangup",{callId:next.call.id});await wait(()=>!platformAudioBusy(actor(A)));
+});
+test("actual bidirectional sealed sessions, public prekeys, video controls and fresh Pion ICE credentials traverse the authenticated cross-host bridge",async()=>{
+ const {OlKeyStore,memoryKv,SealedSignaling}=await import("../../src/lib/calls/ringrtc");
+ const adapter=(client:any)=>{const map=new Map<any,any>();return {request:client.req,on:(ev:string,fn:any)=>{const h=(raw:Buffer)=>{const m=JSON.parse(raw.toString());if(m.t==="evt"&&m.ev===ev)fn(m.data)};map.set(fn,h);client.ws.on("message",h)},off:(_ev:string,fn:any)=>{client.ws.off("message",map.get(fn));map.delete(fn)}}};
+ const r=await A.client.req("call:start",{...proto,peerId:actor(B)});assert.equal(r.ok,true);const callId=r.call.id;assert.equal((await B.client.req("call:accept",{...proto,callId})).ok,true);
+ const ka=new OlKeyStore(memoryKv()),kb=new OlKeyStore(memoryKv());assert.equal((await A.client.req("rc:keys:publish",await ka.publishable())).ok,true);assert.equal((await B.client.req("rc:keys:publish",await kb.publishable())).ok,true);
+ const a=new SealedSignaling(adapter(A.client),ka,{callId,role:"caller",peerUserId:actor(B)}),b=new SealedSignaling(adapter(B.client),kb,{callId,role:"callee",peerUserId:actor(A)});
+ try{let offer:any=null,answer:any=null;b.on("rtc:signal",d=>offer=d);a.on("rtc:signal",d=>answer=d);
+  await a.request("rtc:signal",{callId,gen:0,seq:0,kind:"offer",sdp:"isolated-cross-host-sealed-offer"});await wait(()=>offer!==null);assert.equal(offer.sdp,"isolated-cross-host-sealed-offer");
+  await b.request("rtc:signal",{callId,gen:0,seq:0,kind:"answer",sdp:"isolated-cross-host-sealed-answer"});await wait(()=>answer!==null);assert.equal(answer.sdp,"isolated-cross-host-sealed-answer");
+  assert.equal((await A.client.req("call:video",{callId,on:true})).ok,true);assert.equal((await A.client.req("call:video",{callId,on:false})).ok,true);
+  for(const event of["rtc:iceConfig","call:turnRefresh"]){const ice=await A.client.req(event,{callId});assert.equal(ice.ok,true);const servers=ice.config?.iceServers??ice.iceServers;assert.ok(servers.some((x:any)=>x.credential&&x.urls.some((u:string)=>u.includes(":14443"))))}
+ }finally{a.close();b.close();await A.client.req("call:hangup",{callId})}
+ const {platformAudioBusy}=await import("../../server/calls/bridge/platform");await wait(()=>!platformAudioBusy(actor(A)));
 });
 test("DO authority restart recovers durable call metadata, ends rather than revives sessions, and releases primary audio leases",async()=>{
  const r=await A.client.req("call:start",{...proto,peerId:actor(B)});assert.equal(r.ok,true);

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/lib/scrollLock";
-import { ANDROID_RELEASE, IOS_RELEASE, IOS_MANIFEST_URL, releaseLabel } from "@/lib/releases";
+import { ANDROID_RELEASE, IOS_RELEASE, IOS_MANIFEST_URL, CALLING_RELEASE_NOTICE, releaseLabel } from "@/lib/releases";
 
 const ANDROID = { ...ANDROID_RELEASE, version: releaseLabel(ANDROID_RELEASE) };
 
@@ -63,7 +63,8 @@ export function DownloadHub() {
           ×
         </button>
         <h1 className="mb-1 text-2xl font-bold text-zinc-100">Get the app</h1>
-        <p className="mb-6 text-zinc-500">Test builds for family and friends.</p>
+        <p className="mb-3 text-zinc-500">Test builds for family and friends.</p>
+        <p role="status" className="mb-6 rounded-xl border border-amber-400/30 p-3 text-xs text-amber-200">{CALLING_RELEASE_NOTICE}</p>
 
         <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-base font-semibold text-zinc-100">Android</h2>

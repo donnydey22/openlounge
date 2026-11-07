@@ -43,12 +43,14 @@ test("FX-download-latest: /download serves the latest Android build; label, file
   assert.equal(a.file, `/downloads/openlounge-${a.version}-${a.build}.apk`);
   assert.equal(f.file, `/downloads/openlounge-${f.version}-${f.build}.apk`);
   assert.ok(a.build > f.build, "latest build is newer than the fallback");
-  assert.ok(r.IOS_RELEASE.build > r.IOS_FALLBACK.build, "latest iOS build is newer than the fallback");
-  assert.equal(r.IOS_FALLBACK.file, `/downloads/openlounge-ios-${r.IOS_FALLBACK.version}-b${r.IOS_FALLBACK.build}.ipa`);
-  for (const x of [a, f, r.IOS_RELEASE, r.IOS_FALLBACK]) assert.match(x.sha256, /^[0-9a-f]{64}$/);
+  assert.ok(r.IOS_RELEASE.build > r.IOS_ARCHIVED_B113.build, "latest iOS build is newer than the archived production rollback");
+  assert.equal(r.IOS_ARCHIVED_B113.file, `/downloads/openlounge-ios-${r.IOS_ARCHIVED_B113.version}-b${r.IOS_ARCHIVED_B113.build}.ipa`);
+  for (const x of [a, f, r.IOS_RELEASE, r.IOS_ARCHIVED_B113]) assert.match(x.sha256, /^[0-9a-f]{64}$/);
   assert.match(r.ANDROID_SIGNER_SHA256, /^[0-9a-f]{64}$/);
   assert.equal(r.IOS_RELEASE.file, `/downloads/openlounge-ios-${r.IOS_RELEASE.version}-b${r.IOS_RELEASE.build}.ipa`);
-  assert.equal(r.binaryUrl(a.file), `${r.BINARY_HOST}/openlounge-${a.version}-${a.build}.apk`);
+  assert.equal(r.binaryUrl(a.file), `https://openlounge.app${a.file}`);
+  assert.equal(r.binaryUrl(r.IOS_RELEASE.file), `https://openlounge.app${r.IOS_RELEASE.file}`);
+  assert.match(r.CALLING_RELEASE_NOTICE, /previous builds.*do not include/);
   assert.match(R("src/app/download/DownloadHub.tsx"), /ANDROID_RELEASE/);
 });
 

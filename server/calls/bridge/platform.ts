@@ -42,7 +42,7 @@ export function wirePlatformCalls(hub:WsHub){io=hub;if(!voipService())initVoip({
    const policy=store.callPolicy(a.callerId,a.calleeId);if(!policy.ok)return policy;
    if(users.some(id=>store.currentRoomOf(id)!==null||(platformAudioBusy(id)&&leases.get(id)?.owner!==a.owner)))return {ok:false,reason:"audio_busy",error:"A participant is already using audio"};
    const previous=users.map(id=>leases.get(id)),until=Date.now()+120_000;for(const id of users)leases.set(id,{owner:a.owner,until});
-   try{await store.flush(true);if(!await store.persistAudioAdmission(a.owner,users,until))throw Error("durable audio conflict")}catch(e){for(let n=0;n<users.length;n++){const id=users[n],l=leases.get(id);if(l?.owner===a.owner&&l.until===until){const old=previous[n];if(old)leases.set(id,old);else leases.delete(id)}}throw e}
+   try{await store.flush(true);if(!await store.persistAudioAdmission(a.owner,users,until))throw Error("durable audio conflict")}catch(e){for(let n=0;n<users.length;n++){const id=users[n],l=leases.get(id);if(l&&l.owner===a.owner&&l.until===until){const old=previous[n];if(old)leases.set(id,old);else leases.delete(id)}}throw e}
    return {ok:true};
   }
   if(op==="renewAudio"||op==="releaseAudio"){

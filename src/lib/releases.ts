@@ -131,9 +131,11 @@ export const IOS_RELEASE = {
   sha256: "6f725c9323124558fb810481a2ea7604ca4fa8287655ebc54bca9cc4289ee158",
 } as const;
 
+export const CALLING_RELEASE_NOTICE = "Calling upgrade is being validated. Downloads below are the previous builds and do not include the new calling update.";
+
 export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";
 
 // Binaries are hosted as GitHub release assets (a ~400 MB `railway up` upload kept failing); /downloads/*.ipa|apk redirect there.
 export const BINARY_HOST = "https://github.com/donnydey22/openlounge/releases/download/downloads-v1";
-export const binaryUrl = (file: string) => `${BINARY_HOST}/${file.split("/").pop()}`;
+export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === IOS_RELEASE.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
