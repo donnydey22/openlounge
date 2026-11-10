@@ -2,7 +2,7 @@
 import { inQuietHours, mergePrefs, type NotifPrefs, type NotifType } from "./prefs";
 import type { PushRepo, Platform } from "./repo";
 import { voipService } from "../calls/voip";
-import type { PushMessage, PushSender } from "./sender";
+import type { PushMessage, PushSender, SendResult } from "./sender";
 import { cleanHashes, pepperHash, clientHash } from "./contacts";
 
 /** In-app copy of a notification for the user's open tabs/apps ("notify:activity" frame). The client shows a banner
@@ -102,7 +102,7 @@ export class Notifier {
    * while one of them is visible (same rule as DMs: the in-app banner already showed it). Same gates either way.
    * opts.skipPlatforms: leave those devices out (calls: the iPhone already rings through CallKit).
    */
-  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; dedupeMs?: number; live?: { actorId?: string; roomId?: string }; skipPlatforms?: Platform[] } = {}): Promise<Outcome> {
+  async deliver(userId: string, type: NotifType, msg: PushMessage, opts: { dedupeKey?: string; dedupeMs?: number; live?: { actorId?: string; roomId?: string }; skipPlatforms?: Platform[]; onSend?: (r: SendResult) => void } = {}): Promise<Outcome> {
     if (this.d.isBot?.(userId)) return "skip:bot";
     const now = this.now();
     const prefs: NotifPrefs = await this.d.repo.getPrefs(userId);
@@ -139,6 +139,7 @@ export class Notifier {
     if (!tokens.length) return shown ? "in-app" : "no-tokens";
     if (!shown) mark();
     const res = await this.d.sender.send(tokens, this.withBadge(userId, msg));
+    try { opts.onSend?.(res); } catch { /* log hook only */ }
     for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
     return "sent";
   }
@@ -175,7 +176,7 @@ export class Notifier {
   // ---------- 1:1 calls ----------
   /** Ringing while the app is closed/backgrounded: data message (wrappers build a full-screen call UI from it; see
    *  /workspace/calls/NATIVE_SPEC.md) + a visible "Incoming call" alert on iOS / web. Same tag as the missed call so it's replaced. */
-  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean; declineToken?: string } = {}) {
+  async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean; declineToken?: string; onSend?: (r: SendResult) => void } = {}) {
     // skipIos: the iPhone already rings through CallKit (VoIP push, server/calls/voip.ts) → no duplicate "Incoming call" alert
     return this.deliver(calleeId, "dm", {
       type: "call_incoming",
@@ -185,7 +186,7 @@ export class Notifier {
       tag: `call:${call.id}`,
       url: `/call/${call.id}`,
       data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId, ...(opts.declineToken ? { declineToken: opts.declineToken } : {}) },
-    }, opts.skipIos ? { skipPlatforms: ["ios"] } : {});
+    }, { ...(opts.skipIos ? { skipPlatforms: ["ios" as Platform] } : {}), ...(opts.onSend ? { onSend: opts.onSend } : {}) });
   }
 
   /** stop the native ring UI (caller hung up / answered elsewhere / timeout) */

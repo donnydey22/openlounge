@@ -25,6 +25,16 @@ export interface PushMessage {
 export interface SendResult {
   sent: number;
   invalidTokens: string[];
+  /** Per-token outcome (log only): platform, FCM message id or error code. Never carries the token itself. */
+  results?: PushSendItem[];
+}
+
+export interface PushSendItem {
+  platform: string;
+  ok: boolean;
+  /** FCM message id (projects/…/messages/<id>) shortened to its last segment */
+  messageId?: string;
+  error?: string;
 }
 
 export interface PushSender {
@@ -80,11 +90,17 @@ export class FcmSender implements PushSender {
       }),
     );
     const invalidTokens: string[] = [];
+    const results: PushSendItem[] = res.responses.map((r, i) => ({
+      platform: tokens[i].platform,
+      ok: r.success,
+      ...(r.messageId ? { messageId: String(r.messageId).split("/").pop()!.slice(0, 40) } : {}),
+      ...(r.error?.code ? { error: String(r.error.code).slice(0, 80) } : {}),
+    }));
     res.responses.forEach((r, i) => {
       if (!r.success && r.error && INVALID.has(r.error.code)) invalidTokens.push(tokens[i].token);
       else if (!r.success) console.warn("[push] send failed:", r.error?.code);
     });
-    return { sent: res.successCount, invalidTokens };
+    return { sent: res.successCount, invalidTokens, results };
   }
 }
 
@@ -95,6 +111,7 @@ export class MemorySender implements PushSender {
   invalid = new Set<string>();
   async send(tokens: DeviceToken[], msg: PushMessage) {
     if (tokens.length) this.sent.push({ tokens, msg });
-    return { sent: tokens.length, invalidTokens: tokens.filter((t) => this.invalid.has(t.token)).map((t) => t.token) };
+    const results: PushSendItem[] = tokens.map((t, i) => (this.invalid.has(t.token) ? { platform: t.platform, ok: false, error: "messaging/registration-token-not-registered" } : { platform: t.platform, ok: true, messageId: `mem-${this.sent.length}-${i}` }));
+    return { sent: tokens.length, invalidTokens: tokens.filter((t) => this.invalid.has(t.token)).map((t) => t.token), results };
   }
 }

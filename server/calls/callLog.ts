@@ -295,6 +295,7 @@ const SERVER_EVENTS: Record<string, string> = {
   "call peer back": "peer_back", "call peer unreachable": "peer_unreachable", "call lost": "call_lost", "call peer detached": "peer_detached",
   "call peer reattached": "peer_reattached", "call detached": "detached", "call quality": "quality", "call metric": "metric",
   "socket closed during call": "socket_closed_during_call", "client diag": "client_diag", "call caller detached": "caller_detached",
+  "call push result": "push_result",
 };
 let seqN = 0;
 /** One CallService log line -> one durable server event (only lines that name a call). Fire-and-forget. */

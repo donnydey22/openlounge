@@ -3,6 +3,7 @@ import {bridgeMode,wirePlatformCalls,attachPlatformCalls} from "./bridge/platfor
 import type { Conn, WsHub } from "../ws";
 import { store } from "../store";
 import { bg, push } from "../push";
+import type { SendResult } from "../push/sender";
 import { log, metrics } from "../log";
 import { callTelemetry, sanitizeSample } from "./telemetry";
 import { CallService } from "./service";
@@ -55,6 +56,27 @@ export function voipPayload(call: { id: string; callerId: string; video: boolean
   };
 }
 
+/** Last FCM send result per call id (log only; consumed by logCallPush right after the send). */
+const pushResults = new Map<string, SendResult>();
+const pushSink = (callId: string) => (r: SendResult) => { pushResults.set(callId, r); };
+/**
+ * Log-only (t5450): what the push layer did with a call ring: notifier outcome ("sent" / "no-tokens" / "skip:pref" …),
+ * VoIP pushes accepted by APNs, and per device platform the FCM message id or error code. No tokens are logged.
+ * Delivery behaviour is unchanged: the same calls run in the same order; this only awaits the promise it was given.
+ */
+export async function logCallPush(kind: "incoming" | "repush", callId: string, t0: number, voipRang: number | null, p: Promise<unknown> | undefined) {
+  let outcome: string;
+  try { outcome = p ? String((await p) ?? "none") : "push-disabled"; } catch (e) { outcome = `error:${String((e as Error)?.message ?? e).slice(0, 80)}`; }
+  const r = pushResults.get(callId);
+  pushResults.delete(callId);
+  const devices = (r?.results ?? []).map((x) => `${x.platform}:${x.ok ? `ok:${x.messageId ?? "-"}` : `err:${x.error ?? "?"}`}`);
+  try {
+    log.info("[calls] call push result", { callId, kind, outcome, voipRang, fcmSent: r?.sent ?? 0, fcmFailed: devices.filter((d) => d.includes(":err:")).length, devices: devices.join(",").slice(0, 600), ms: Date.now() - t0 });
+    recordServerEvent("call push result", { callId, kind, reason: outcome, voipRang, fcmSent: r?.sent ?? 0, devices: devices.join(",").slice(0, 600), ms: Date.now() - t0 });
+  } catch { /* log only */ }
+  return outcome;
+}
+
 export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) {
   svc?.dispose();
   if (bridgeMode()) { svc=null;rtc=null;rc=null;wirePlatformCalls(io);return null; }
@@ -98,18 +120,19 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
           (async () => {
             // one single-use, call+callee-scoped token shared by both surfaces: Decline works even with an expired session
             const declineToken = declineTokens().mint(call.id, calleeId, call.expiresAt);
+            const t0 = Date.now();
             const rang = await (voipService()?.ring(calleeId, voipPayload(call, declineToken), call.expiresAt) ?? Promise.resolve(0)).catch(() => 0);
             if (rang > 0) {
               voipRang.add(call.id);
               setTimeout(() => voipRang.delete(call.id), 120_000).unref?.();
             }
-            await push()?.callIncoming(calleeId, call, { skipIos: rang > 0, declineToken });
+            await logCallPush("incoming", call.id, t0, rang, push()?.callIncoming(calleeId, call, { skipIos: rang > 0, declineToken, onSend: pushSink(call.id) }));
           })(),
         ),
       // ring retry (service callRepushMs): FCM / web push / iOS alert only — never a second VoIP push
       repush: (calleeId, call) =>
         // CallKit already rang on iOS: a second iOS alert push is a duplicate ring (Oct 31, b22f5441) — Android/web only
-        bg(push()?.callIncoming(calleeId, call, { skipIos: voipRang.has(call.id), declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt) })),
+        bg(logCallPush("repush", call.id, Date.now(), null, push()?.callIncoming(calleeId, call, { skipIos: voipRang.has(call.id), declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt), onSend: pushSink(call.id) }))),
       cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
