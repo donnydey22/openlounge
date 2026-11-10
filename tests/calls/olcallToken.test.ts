@@ -74,3 +74,15 @@ test("withOlcallMedia replaces p2p media in every {media} payload and never thro
   assert.equal(withOlcallMedia("a", null, env()), null);
   assert.ok(!JSON.stringify(out).includes(vectorSecret));
 });
+
+test("coturn iceServers: same list Pion serves (STUN + TURN/TURNS 3478/5349), temporary shared-secret creds", () => {
+  const turnSecret = "t".repeat(64);
+  const m = olcallMediaFor(call, "a", env({ OLCALL_TURN_SECRET: turnSecret }))!;
+  const ice = m.iceServers as Array<{ urls: string[]; username?: string; credential?: string }>;
+  assert.deepEqual(ice.flatMap((s) => s.urls), ["stun:turn.openlounge.app:3478", "turn:turn.openlounge.app:3478?transport=udp", "turn:turn.openlounge.app:3478?transport=tcp", "turns:turn.openlounge.app:5349?transport=tcp"]);
+  const t = ice[1];
+  assert.match(t.username!, /^\d+:call-/);
+  assert.equal(t.credential, createHmac("sha1", turnSecret).update(t.username!).digest("base64"));
+  assert.ok(!JSON.stringify(m).includes(turnSecret));
+  assert.ok(!JSON.stringify(m).includes("13478") && !JSON.stringify(m).includes("18443"));
+});

@@ -6,7 +6,8 @@
 // stripped from every payload (single path, no fallback of any kind; Donny 2026-11-09 11:25 PM MST). Rollback = redeploy 5923712.
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { CallMedia } from "../../src/lib/types";
+import type { CallMedia, TurnIceServer } from "../../src/lib/types";
+import { mintTurnIceServers, STUN_URLS } from "../turnCredentials";
 
 export type OlcallRole = "caller" | "callee";
 export interface OlcallClaims { callId: string; userId: string; role: OlcallRole; exp: number }
@@ -57,7 +58,13 @@ export function olcallMediaFor(call: OlcallCallRef | null | undefined, userId: s
   if (!secret) return null;
   const exp = Math.floor(now / 1000) + OLCALL_TOKEN_TTL_S;
   const role: OlcallRole = userId === call!.callerId ? "caller" : "callee";
-  return { provider: "olcall", url, token: signOlcallToken(secret, { callId: call!.id, userId, role, exp }), callId: call!.id, expiresAt: exp };
+  const turn = mintTurnIceServers(call!.id, userId, { secret: env.OLCALL_TURN_SECRET ?? null }) ?? [];
+  return {
+    provider: "olcall", url, token: signOlcallToken(secret, { callId: call!.id, userId, role, exp }), callId: call!.id, expiresAt: exp,
+    // same list Pion serves: STUN + TURN/TURNS on OL coturn with temporary shared-secret credentials (direct first, relay fallback)
+    // (the STUN entry carries no credentials; CallMedia.iceServers is typed for the TURN shape the clients already parse)
+    ...(turn.length ? { iceServers: [{ urls: [...STUN_URLS] } as unknown as TurnIceServer, ...turn] } : {}),
+  };
 }
 
 /** Replace any media in {call, media} payloads (acks, call:incoming / call:state emits) with olcall media. Never throws. */

@@ -78,7 +78,7 @@ test("TURN credential lifetime: 6 h default, TURN_CREDENTIAL_TTL_S override clam
   assert.equal(Number(s.username.split(":")[0]), now / 1000 + 1234);
 });
 
-// The replacement is a separate DO-only Pion process, not relabeled legacy coturn ports.
-test("calling TURN URLs select isolated DO Pion listeners, not shared coturn", () => {
-  assert.deepEqual([...TURN_URLS],["turn:turn.openlounge.app:13478?transport=udp","turn:turn.openlounge.app:13478?transport=tcp","turns:turn.openlounge.app:14443?transport=tcp"]);
+// Calls use OL coturn on the olcall droplet: exactly the TURN/TURNS list Pion serves (Donny, 2026-11-09 11:35 PM MST).
+test("calling TURN URLs are OL coturn 3478/5349 (same list Pion serves)", () => {
+  assert.deepEqual([...TURN_URLS],["turn:turn.openlounge.app:3478?transport=udp","turn:turn.openlounge.app:3478?transport=tcp","turns:turn.openlounge.app:5349?transport=tcp"]);
 });

@@ -9,7 +9,9 @@ import {BridgeAuth,BridgeClient,BridgeEndpoint,validateBridgeUrl} from "./auth";
 import {withOlcallMedia} from "../olcallToken";
 export const PLATFORM_BRIDGE_PATH="/api/internal/calling-platform";
 export const CALL_PROTOCOL="ol-rc-v1";
-export const bridgeMode=()=>process.env.NODE_ENV==="production"||!!process.env.CALLING_BRIDGE_URL;
+// Railway owns call start/accept itself (olcall, Donny 2026-11-09 11:35 PM MST): the hand-off to the DO calling service
+// (turn.openlounge.app:18443, dead since Nov 6) is removed. Bridge code below is kept, unreachable, until Android+iOS are live.
+export const bridgeMode=()=>false;
 let io:WsHub|null=null,client:BridgeClient|null=null,endpoint:BridgeEndpoint|null=null;
 const leases=store.audioAdmissionLeases;
 const uid=(v:unknown):v is string=>typeof v==="string"&&/^[\w-]{1,80}$/.test(v);

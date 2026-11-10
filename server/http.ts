@@ -1,4 +1,5 @@
-import {PLATFORM_BRIDGE_PATH,platformEndpoint,platformCallingHealth} from "./calls/bridge/platform";
+import {PLATFORM_BRIDGE_PATH,platformEndpoint} from "./calls/bridge/platform";
+import {callingHealth} from "./calls";
 // HTTP API (everything under /api/* and /auth/*), shared by server/index.ts and the in-process tests.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleCallsHttp, handleTokenDecline, isCallsHttpPath } from "./calls/api";
@@ -219,7 +220,7 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   // Calling availability is independent of room media readiness and never grants bridge authority.
   if (url === "/api/calling/health") {
     if(req.method!=="GET")return json(res,405,{ok:false,error:"method"});
-    const health=await platformCallingHealth();res.setHeader("Cache-Control","no-store");return json(res,health.ok?200:503,health);
+    const health=await callingHealth();res.setHeader("Cache-Control","no-store");return json(res,health.ok?200:503,health);
   }
 
   if (url === PLATFORM_BRIDGE_PATH) { const ep=platformEndpoint();if(!ep)return json(res,503,{ok:false,error:"bridge_unavailable"});return ep.handle(req,res,url); }

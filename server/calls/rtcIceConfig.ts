@@ -7,7 +7,7 @@ import { mintTurnIceServers, TURN_URLS } from "../turnCredentials";
 export const RTC_TURN_TTL_S = 600;
 
 /** OL STUN on the same DO Pion host — no third-party STUN. */
-export const RTC_STUN_URLS = ["stun:turn.openlounge.app:13478"] as const;
+export const RTC_STUN_URLS = ["stun:turn.openlounge.app:3478"] as const; // OL coturn
 
 export interface RtcIceConfig {
   iceServers: Array<TurnIceServer | { urls: string[] }>;

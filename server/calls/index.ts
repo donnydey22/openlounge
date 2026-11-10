@@ -13,7 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { RtcSessionHub } from "./rtcSession";
 import { RcRelay, PreKeyDirectory } from "./rcRelay";
 import { filePreKeyStore } from "./preKeyFileStore";
-import { p2pMedia, rtcIceConfig } from "./rtcIceConfig";
+import { olcallMediaFor, olcallSecret } from "./olcallToken";
 import { iosNativeVideoEnabled } from "./sfuSelect";
 
 /** Call TURN logins (ICE relay transport only, Signal-style) live at most 10 minutes. Rejoins/call:get mint fresh ones. */
@@ -58,9 +58,13 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
   svc?.dispose();
   if (bridgeMode()) { svc=null;rtc=null;rc=null;wirePlatformCalls(io);return null; }
   if (!voipService()) initVoip({ log: (msg, extra) => log.info(`[voip] ${msg}`, extra) });
-  const p2pBackend: CallMediaBackend = {
-    provider: "p2p",
-    issue: async ({ callId, userId, ttlSec }) => p2pMedia(callId, userId, ttlSec),
+  // The only call media: olcall (Pion on the OL droplet) with a per-role join token + OL coturn ICE. No p2p.
+  const olcallBackend: CallMediaBackend = {
+    provider: "olcall",
+    issue: async ({ callId, userId }) => {
+      const c = svc?.rtcCall(callId);
+      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId }, userId) : null;
+    },
     close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
   svc = new CallService({
@@ -85,7 +89,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     appendCallMessage: (meta, calleeId) => void store.appendCallMessage(meta, calleeId),
     // RingRTC session model: the ONLY calling media path is P2P WebRTC (BSD M152 / browser) with E2E-sealed rc:msg
     // signaling (rcRelay) + OL ICE/TURN creds (rtcIceConfig). No mediasoup, no LiveKit, no in-call provider migration.
-    selectMedia: () => p2pBackend,
+    selectMedia: () => olcallBackend,
     push: {
       // iPhone build 18+: CallKit via a PushKit VoIP push first; if any iPhone took it, skip the duplicate iOS alert
       incoming: (calleeId, call) =>
@@ -142,19 +146,9 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:start", ({ peerId, video, nativeVideo, platform }: { peerId: string; video?: boolean; nativeVideo?: unknown; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().start(uid, peerId, !!video, socket.id, nativeVideo === true && iosNativeVideoWrapper && iosNativeVideoEnabled(), platform)).then(ack, () => ack({ ok: false, error: "Couldn't start the call" }))),
   );
-  // P2P calling signaling (offer/answer/candidates) + fresh short-lived OL ICE credentials.
-  socket.on("rtc:signal", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack(rtc ? rtc.signal(uid, d) : { ok: false, error: "unknown_call" })));
-  // RingRTC session model: E2E-sealed call messages + OLX3DH-v1 prekey directory (rcRelay.ts).
-  socket.on("rc:msg", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => ack(rc ? rc.msg(uid, d) : { ok: false, error: "unknown_call" })));
-  socket.on("rc:keys:publish", (d: unknown, ack: AckFn = noop) => authed(ack, (uid) => void (rc ? rc.keys.publish(uid, d) : Promise.resolve({ ok: false })).then(ack, () => ack({ ok: false }))));
-  socket.on("rc:keys:fetch", (d: { userId?: unknown; callId?: unknown } = {}, ack: AckFn = noop) => authed(ack, (uid) => void (rc ? rc.fetchFor(uid, d) : Promise.resolve({ ok: false })).then(ack, () => ack({ ok: false }))));
-  socket.on("rtc:iceConfig", ({ callId }: { callId?: unknown } = {}, ack: AckFn = noop) =>
-    authed(ack, (uid) => {
-      const c = typeof callId === "string" ? s().rtcCall(callId) : null;
-      if (!c || (uid !== c.callerId && uid !== c.calleeId) || c.phase === "ended") return ack({ ok: false, error: "not_participant" });
-      ack({ ok: true, config: rtcIceConfig(callId as string, uid) });
-    }),
-  );
+  // p2p calling removed (olcall is the only media path): its signaling / key / ICE-config events are refused.
+  for (const ev of ["rtc:signal", "rc:msg", "rc:keys:publish", "rc:keys:fetch", "rtc:iceConfig"])
+    socket.on(ev, (_d: unknown, ack: AckFn = noop) => authed(ack, () => ack({ ok: false, error: "p2p calling was removed; calls use olcall", reason: "p2p_removed" })));
   socket.on("call:ack", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().ack(callId, uid))));
   socket.on("call:accept", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().accept(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't answer" }))),
@@ -227,4 +221,18 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:metric", ({ callId, acceptToAudioMs }: { callId: string; acceptToAudioMs: number }, ack: AckFn = noop) =>
     authed(ack, (uid) => ack(s().metric(callId, uid, acceptToAudioMs))),
   );
+}
+
+/** Public coarse calling health (no secrets): Railway call engine up, olcall configured, Pion reachable. */
+let pionProbe: Promise<boolean> | null = null, pionUntil = 0;
+export async function callingHealth() {
+  const url = process.env.OLCALL_URL ?? "";
+  if (!pionProbe || Date.now() >= pionUntil) {
+    pionUntil = Date.now() + 5000;
+    const h = url.replace(/^ws/, "http").replace(/\/v1\/call$/, "/healthz");
+    pionProbe = fetch(h, { signal: AbortSignal.timeout(3000) }).then((r) => r.ok, () => false);
+  }
+  const engine = !!svc, configured = !!olcallSecret() && /^wss?:\/\//.test(url) && (process.env.OLCALL_TURN_SECRET ?? "").trim().length >= 32;
+  const pion = await pionProbe;
+  return { ok: engine && configured && pion, authority: "railway", engine: "olcall", configured, pion };
 }
