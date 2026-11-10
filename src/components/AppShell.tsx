@@ -12,7 +12,9 @@ import { usePathname } from "next/navigation";
  * - Keyboard: when the on-screen keyboard shrinks the *visual* viewport (iOS Safari / WKWebView overlay mode), the
  *   shell is pinned to exactly the visible area (--ol-vvh / --ol-vv-top, also used by overlays) and any
  *   document scroll iOS adds is undone, so headers and composers stay put; the focused field is scrolled into view
- *   inside the shell. Android WebView (adjustResize) simply shrinks innerHeight, which 100dvh already follows.
+ *   inside the shell. Android WebView (adjustResize) shrinks innerHeight, which 100dvh already follows; if a field
+ *   is focused and the layout viewport also shrinks, data-kbd is still set so live-room tray reservation is
+ *   released and the composer can dock to the keyboard.
  * - Horizontal: scrollLeft is held at 0 (nothing can drift sideways even if a child overflows).
  * - Navigation: new pages start at the top; browser back/forward restores the previous position.
  */
@@ -29,14 +31,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const vv = window.visualViewport;
     let raf = 0;
     let kbOpen = false;
+    let layoutH = window.innerHeight;
     const resetDoc = () => {
       if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    };
+    const focusedField = () => {
+      const a = document.activeElement as HTMLElement | null;
+      return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
     };
     const apply = () => {
       raf = 0;
       const h = vv ? vv.height : window.innerHeight;
       const top = vv ? vv.offsetTop : 0;
-      const open = window.innerHeight - h > 80; // keyboard (or a big bottom bar) covers part of the layout viewport
+      const focused = focusedField();
+      if (!focused) layoutH = window.innerHeight;
+      // iOS / WKWebView overlay: layout viewport stays tall, visual viewport shrinks.
+      const overlay = window.innerHeight - h > 80;
+      // Android adjustResize: innerHeight shrinks with the keyboard and visualViewport
+      // tracks it, so overlay is false. A focused field plus a large layout shrink is
+      // still the keyboard (needed to release live-room tray reservation).
+      const resized = focused && layoutH - window.innerHeight > 80;
+      const open = overlay || resized;
       if (open) {
         root.style.setProperty("--ol-vvh", `${Math.round(h)}px`);
         root.style.setProperty("--ol-vv-top", `${Math.round(top)}px`);
@@ -61,6 +76,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     vv?.addEventListener("resize", schedule, { passive: true });
     vv?.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule, { passive: true });
+    document.addEventListener("focusin", schedule, true);
+    document.addEventListener("focusout", schedule, true);
     const onWinScroll = () => {
       // the document has nothing to scroll; any offset is iOS keyboard panning or a stray scrollIntoView
       if (!kbOpen) resetDoc();
@@ -72,6 +89,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       vv?.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", onWinScroll);
+      document.removeEventListener("focusin", schedule, true);
+      document.removeEventListener("focusout", schedule, true);
     };
   }, []);
 

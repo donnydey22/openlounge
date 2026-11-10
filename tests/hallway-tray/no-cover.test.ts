@@ -38,3 +38,16 @@ test("key surfaces opt into reservation markers", () => {
   assert.match(sheet, /data-ol-sheet/);
   assert.match(notif, /data-ol-notif/);
 });
+
+test("keyboard-open zeros tray reservation so the composer can dock to the keyboard", () => {
+  assert.match(css, /html\[data-kbd\]\[data-live-room-bar\]/);
+  assert.match(css, /--ol-liveroom-bar-h:\s*0px\s*!important/);
+  assert.match(css, /data-ol-live-room-bar/);
+  assert.match(mini, /data-ol-live-room-bar/);
+  assert.match(mini, /kbdOpen/);
+  assert.match(mini, /"0px"/);
+  // Must still watch visualViewport so a focus-driven keyboard open is measured,
+  // but must not lift the tray into the visual viewport on top of the keyboard inset.
+  assert.match(mini, /visualViewport/);
+  assert.doesNotMatch(mini, /el\.style\.bottom = `\$\{keyboard\}px`/);
+});

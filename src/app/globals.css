@@ -154,6 +154,22 @@ html[data-live-room-bar] [data-ol-notif] {
   bottom: var(--ol-liveroom-bar-h) !important;
   padding-bottom: 1rem !important;
 }
+/* Keyboard open: the DM/group screen is already fitted to the visual viewport
+   (AppShell sets data-kbd). Adding --ol-liveroom-bar-h on top of that inset left a
+   large empty gap between the composer and the keyboard, while the tray sat behind
+   the keyboard. Zero the reservation so the composer docks to the keyboard the same
+   way with or without a live tray. Hide the tray so it cannot cover the composer.
+   Closing the keyboard restores the reservation and the tray. */
+html[data-kbd][data-live-room-bar] {
+  --ol-liveroom-bar-h: 0px !important;
+}
+html[data-kbd][data-live-room-bar] [data-ol-screen] [data-ol-bottom-pad] {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px)) !important;
+}
+html[data-kbd] [data-ol-live-room-bar] {
+  visibility: hidden;
+  pointer-events: none;
+}
 /* full-screen overlays (room drawers): exactly the visible area, above the keyboard */
 .ol-vv-fixed {
   top: var(--ol-vv-top, 0px);

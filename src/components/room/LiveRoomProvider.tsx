@@ -370,9 +370,11 @@ function LiveRoomMiniBar() {
   }, [visible, tucked, holdOpen, poke, pathname]);
   useEffect(() => { if (holdOpen) setTucked(false); }, [holdOpen]);
 
-  // Publish the bar's real height as --ol-liveroom-bar-h and pin it to the visual viewport
-  // (above the on-screen keyboard). Pages reserve that space via globals.css so the tray
-  // never covers composers, docks, sheets, or other controls.
+  // Publish the bar's real height as --ol-liveroom-bar-h. Pages reserve that space via
+  // globals.css so the tray never covers composers, docks, sheets, or other controls.
+  // When the keyboard is open (data-kbd / visualViewport shrink), reserve nothing and
+  // leave the tray at the layout bottom (behind the keyboard) so the composer docks to
+  // the keyboard the same way it does without a tray.
   useEffect(() => {
     const root = document.documentElement;
     if (!visible) {
@@ -390,11 +392,14 @@ function LiveRoomMiniBar() {
     }
     const sync = () => {
       const height = Math.ceil(el.getBoundingClientRect().height);
-      root.style.setProperty("--ol-liveroom-bar-h", `${height}px`);
       const vv = window.visualViewport;
       // Distance from the layout viewport bottom to the visual viewport bottom (= keyboard cover).
       const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-      el.style.bottom = `${keyboard}px`;
+      const kbdOpen = keyboard > 80 || root.hasAttribute("data-kbd");
+      // Do not add tray height on top of the keyboard inset, and do not lift the tray
+      // into the visual viewport (it would cover the composer once reservation is 0).
+      root.style.setProperty("--ol-liveroom-bar-h", kbdOpen ? "0px" : `${height}px`);
+      el.style.bottom = "0px";
     };
     sync();
     const ro = new ResizeObserver(sync);
@@ -418,6 +423,7 @@ function LiveRoomMiniBar() {
     <div
       ref={barRef}
       className="fixed inset-x-0 bottom-0 z-[70] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4"
+      data-ol-live-room-bar=""
       data-testid="live-room-bar"
       data-tucked={tucked ? "" : undefined}
       onPointerDown={interact}
