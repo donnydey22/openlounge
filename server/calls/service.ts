@@ -377,7 +377,7 @@ export class CallService {
       }, CALL_ACK_FALLBACK_MS);
       t.unref?.();
     }
-    this.d.log?.("call start", { callId: c.id, video: c.video });
+    this.d.log?.("call start", { callId: c.id, video: c.video, callerId: c.callerId, calleeId: c.calleeId, callerPlatform: c.callerPlatform ?? null, backend: c.backend.provider });
     return { ok: true, call: info, media: await this.media(c, callerId) };
   }
 
@@ -467,7 +467,7 @@ export class CallService {
       c.timer = null;
       this.broadcast(c, "call:state");
       if (c.pushed) this.d.push?.cancel(c.calleeId, c.id, "answered");
-      this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt });
+      this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt, userId, calleePlatform: c.calleePlatform ?? null });
     }
     return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
   }
@@ -626,7 +626,7 @@ export class CallService {
     } catch {
       /* telemetry only */
     }
-    this.d.log?.("call end", { callId: c.id, outcome, durationSec, by: opts.by === c.callerId ? "caller" : opts.by === c.calleeId ? "callee" : (opts.by ?? null), reason: opts.reason ?? null });
+    this.d.log?.("call end", { callId: c.id, outcome, durationSec, video: c.everVideo, by: opts.by === c.callerId ? "caller" : opts.by === c.calleeId ? "callee" : (opts.by ?? null), reason: opts.reason ?? null });
   }
 
   private sweep() {

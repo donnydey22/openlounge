@@ -3,6 +3,7 @@ import {callingHealth} from "./calls";
 // HTTP API (everything under /api/* and /auth/*), shared by server/index.ts and the in-process tests.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleCallsHttp, handleTokenDecline, isCallsHttpPath } from "./calls/api";
+import { handleCallLogIngest, handleCallLogReview } from "./calls/callLog";
 import { SIGNAL_PUSH_PATH, handleSignalPush } from "./calls/signalPush";
 import { createJoinToken, livekit } from "./livekit";
 import { store } from "./store";
@@ -226,6 +227,14 @@ export async function api(req: IncomingMessage, res: ServerResponse) {
   if (url === PLATFORM_BRIDGE_PATH) { const ep=platformEndpoint();if(!ep)return json(res,503,{ok:false,error:"bridge_unavailable"});return ep.handle(req,res,url); }
 
   if (url === SIGNAL_PUSH_PATH) return handleSignalPush(req, res, json, readJson); // call-signal → APNs VoIP + FCM (shared secret)
+
+  // ---- call log (t5375): phones upload their six-state call log; admins review a call's timeline (server/calls/callLog.ts) ----
+  if (url === "/api/call-log") return handleCallLogIngest(req, res, json, readJson, (t) => store.authenticate(t));
+  if (url === "/api/admin/call-log") {
+    const b = bearer(req);
+    const a = b ? await store.authenticate(b).catch(() => null) : null;
+    return handleCallLogReview(req, res, json, !!(a && a.ok && isAdmin(a.userId)));
+  }
 
   // ---- native call ring UIs: decline / status / PushKit token (server/calls/api.ts) ----
   if (isCallsHttpPath(url)) {

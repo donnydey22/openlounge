@@ -15,6 +15,7 @@ import { RcRelay, PreKeyDirectory } from "./rcRelay";
 import { filePreKeyStore } from "./preKeyFileStore";
 import { olcallMediaFor, olcallSecret } from "./olcallToken";
 import { iosNativeVideoEnabled } from "./sfuSelect";
+import { recordServerEvent } from "./callLog";
 
 /** Call TURN logins (ICE relay transport only, Signal-style) live at most 10 minutes. Rejoins/call:get mint fresh ones. */
 export const CALL_TURN_TTL_S = 600;
@@ -111,7 +112,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
         bg(push()?.callIncoming(calleeId, call, { skipIos: voipRang.has(call.id), declineToken: declineTokens().mint(call.id, calleeId, call.expiresAt) })),
       cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
-    log: (msg, extra) => log.info(`[calls] ${msg}`, extra),
+    log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
   });
   const cur = svc;
   metrics.gauge("calls_live", () => cur.stats().live);
@@ -139,7 +140,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
     if (uid && info) {
       lastClose.set(uid, { closeCode: info.code, closeReason: info.reason, closeCause: info.cause, closeHidden: info.hidden, closeMissedPongs: info.missed, socketAgeMs: info.ageMs, socketIdleMs: info.idleMs, closedAt: Date.now() });
       const live = svc?.liveCallOf(uid);
-      if (live) log.info("[calls] socket closed during call", { callId: live.id, userId: uid, phase: live.phase, ...info });
+      if (live) { log.info("[calls] socket closed during call", { callId: live.id, userId: uid, phase: live.phase, ...info }); try { recordServerEvent("socket closed during call", { callId: live.id, userId: uid, phase: live.phase, code: info.code, cause: info.cause }); } catch { /* call log only */ } }
     }
     if (callUser) svc?.connClosed(socket.id, callUser);
   });
@@ -181,6 +182,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       const extra: Record<string, string> = {};
       for (const [k, v] of Object.entries(d ?? {}).slice(0, 12)) if (k !== "callId" && k !== "ev") { const sv = str(v); if (sv !== undefined) extra[k.slice(0, 24)] = sv; }
       log.info("[calls] client diag", { callId: str(d?.callId, 36), user: uid.slice(0, 12), ev: str(d?.ev, 40), ...extra });
+      if (d?.ev !== "audio-levels") try { recordServerEvent("client diag", { callId: str(d?.callId, 36), userId: uid, ev: str(d?.ev, 40), ...extra }); } catch { /* call log only */ }
       if (d?.ev === "audio-levels") s().qualitySample(d?.callId, uid, d as Record<string, unknown>); // server-side quality (service.ts)
       // A client still reporting on a call the server already ended (d8d7eded: the iPhone kept "connecting" 9 s past
       // the end and missed the next call 51c135b3) gets the ended state again, once per call per socket.
