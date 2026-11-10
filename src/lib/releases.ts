@@ -123,23 +123,24 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** Previous iOS build (128), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
+/** iOS128 remains in public/downloads and direct-hosted (unlinked). */
+/** Previous iOS build (130), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
 export const IOS_FALLBACK = {
-  version: "0.3.20",
-  build: 128,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.3.20-b128.ipa",
-  size: "15.2 MB",
-  sha256: "d5aa6af0244f2e80fe189021667c59653a2a33b4968fd18181096105d3515884",
-} as const;
-/** iOS130: signed ad-hoc 0.4.0 (build 130) — fresh Pion/tgcalls calling project, full WKWebView app, CallKit/PushKit ringing; physical-device calling validation pending. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 130,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b130.ipa",
   size: "8.9 MB",
   sha256: "441b0e0d5b4b33a589a1beca679bc8ed02fe1b4018dd59262634f8e2d196b905",
+} as const;
+/** iOS131: signed ad-hoc 0.4.0 (build 131) — b130 plus WKScriptMessage frame-URL fallback so nativeMedia can open /v1/call, and the t5375 six-state call-log uploader. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 131,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b131.ipa",
+  size: "9.0 MB",
+  sha256: "ade6d3331a8b094fd64587593df3cd57535e9cb3cc9666127c4234caf56b0559",
 } as const;
 
 export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
