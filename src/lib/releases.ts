@@ -123,14 +123,23 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS128: actual Mac compile + strict ad-hoc codesign green, CI42314057044. Device calling validation pending. */
-export const IOS_RELEASE = {
+/** Previous iOS build (128), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
+export const IOS_FALLBACK = {
   version: "0.3.20",
   build: 128,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.3.20-b128.ipa",
   size: "15.2 MB",
   sha256: "d5aa6af0244f2e80fe189021667c59653a2a33b4968fd18181096105d3515884",
+} as const;
+/** iOS130: signed ad-hoc 0.4.0 (build 130) — fresh Pion/tgcalls calling project, full WKWebView app, CallKit/PushKit ringing; physical-device calling validation pending. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 130,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b130.ipa",
+  size: "8.9 MB",
+  sha256: "441b0e0d5b4b33a589a1beca679bc8ed02fe1b4018dd59262634f8e2d196b905",
 } as const;
 
 export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
@@ -140,4 +149,4 @@ export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios
 
 // Current builds are hosted directly; this host is only for archived legacy release assets.
 export const BINARY_HOST = "https://github.com/donnydey22/openlounge/releases/download/downloads-v1";
-export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === ANDROID_FALLBACK.file || file === IOS_RELEASE.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
+export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === ANDROID_FALLBACK.file || file === IOS_RELEASE.file || file === IOS_FALLBACK.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
