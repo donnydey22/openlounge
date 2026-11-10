@@ -123,24 +123,25 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS128 remains in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build (130), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
+/** iOS128 and iOS130 remain in public/downloads and direct-hosted (unlinked). */
+/** Previous iOS build offered on /download: 0.4.0 (131). Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 130,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b130.ipa",
-  size: "8.9 MB",
-  sha256: "441b0e0d5b4b33a589a1beca679bc8ed02fe1b4018dd59262634f8e2d196b905",
-} as const;
-/** iOS131: signed ad-hoc 0.4.0 (build 131) — b130 plus WKScriptMessage frame-URL fallback so nativeMedia can open /v1/call, and the t5375 six-state call-log uploader. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 131,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b131.ipa",
   size: "9.0 MB",
   sha256: "ade6d3331a8b094fd64587593df3cd57535e9cb3cc9666127c4234caf56b0559",
+} as const;
+/** iOS131 call-integration: signed ad-hoc 0.4.0 (build 131) from ol-call-integration a212ff6 — Telegram-matched calling UI/timing; stray brace fix so CallController stays one class. Physical-device validation pending. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 131,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b131-ol-call-integration.ipa",
+  size: "9.1 MB",
+  sha256: "2d142e9dfae133f282cd7f179b6dc28db1fb9a9b60b416abcd90a4ddeab03f17",
+  qualifier: "call integration",
 } as const;
 
 export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
