@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android54: signed release 0.3.37 — 0.3.36 plus the call log (t5375): every call's six-state machine with failure tags,
- *  on-disk queue, uploaded to /api/call-log. olcall (Pion + coturn) is the only call engine. Physical-device validation pending. */
+/** Android54 call-integration: signed 0.3.37 (versionCode 54) — Telegram-matched calling UI/timing (Calling… / Ringing… / Connecting…, timer on first media, portrait video, no keep-awake). Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.37",
+  build: 54,
+  file: "/downloads/openlounge-0.3.37-54-ol-call-integration.apk",
+  size: "56.4 MB",
+  sha256: "b596aa8c47b0a23dec30cfdf0761ee4dbd48d717cfc1a17fb69cfd7124f69f7e",
+  qualifier: "call integration",
+} as const;
+/** Previous Android build offered on /download: 0.3.37 (54) call-log. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.37",
   build: 54,
   file: "/downloads/openlounge-0.3.37-54.apk",
   size: "44.4 MB",
   sha256: "bda8721ff762c56c65a231a0fdb66ccf9515e4105522e064496141282adc80a7",
-} as const;
-/** Previous Android build (53), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects).
- *  52 (0.3.35) also stays in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.36",
-  build: 53,
-  file: "/downloads/openlounge-0.3.36-53.apk",
-  size: "44.3 MB",
-  sha256: "3c0c5bbdb9b1c0d851b4ec4de746abbbfba648767b9aa4a3fc237bdc14917286",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -145,7 +145,7 @@ export const IOS_RELEASE = {
 
 export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
 
-export const releaseLabel = (r: { version: string; build: number }) => `${r.version} (build ${r.build})`;
+export const releaseLabel = (r: { version: string; build: number; qualifier?: string }) => r.qualifier ? `${r.version} (build ${r.build}, ${r.qualifier})` : `${r.version} (build ${r.build})`;
 export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios.plist";
 
 // Current builds are hosted directly; this host is only for archived legacy release assets.
