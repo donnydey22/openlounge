@@ -1,21 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android53: signed release 0.3.36 — olcall (tgcalls -> Pion wss://turn.openlounge.app/v1/call + coturn) is the only call engine;
- *  legacy p2p engine removed; call permissions at the call tap only; headset-aware routing. Physical-device validation pending. */
+/** Android54: signed release 0.3.37 — 0.3.36 plus the call log (t5375): every call's six-state machine with failure tags,
+ *  on-disk queue, uploaded to /api/call-log. olcall (Pion + coturn) is the only call engine. Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.37",
+  build: 54,
+  file: "/downloads/openlounge-0.3.37-54.apk",
+  size: "44.4 MB",
+  sha256: "bda8721ff762c56c65a231a0fdb66ccf9515e4105522e064496141282adc80a7",
+} as const;
+/** Previous Android build (53), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects).
+ *  52 (0.3.35) also stays in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.36",
   build: 53,
   file: "/downloads/openlounge-0.3.36-53.apk",
   size: "44.3 MB",
   sha256: "3c0c5bbdb9b1c0d851b4ec4de746abbbfba648767b9aa4a3fc237bdc14917286",
-} as const;
-/** Previous Android build (52), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
-export const ANDROID_FALLBACK = {
-  version: "0.3.35",
-  build: 52,
-  file: "/downloads/openlounge-0.3.35-52.apk",
-  size: "46.5 MB",
-  sha256: "ba618c25966c289495da2feadec9259d27c04f9b2ef9cb071f7abc0ba5bead42",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
