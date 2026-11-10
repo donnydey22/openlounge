@@ -1,6 +1,7 @@
 process.env.TEST_DATABASE_URL ||= "postgresql://ua@127.0.0.1:55433/calls_test";
 // short ring timeout / orphan windows so those paths run in seconds
 process.env.CALL_RING_TIMEOUT_MS ||= "1500";
+process.env.CALL_RECEIVE_TIMEOUT_MS ||= "1500"; // ol-call-wake: an unconfirmed ring ends on the receive timer
 process.env.CALL_CALLER_GONE_MS ||= "300";
 process.env.CALL_MAX_PER_10MIN ||= "40";
 // fake LiveKit credentials: tokens are signed locally (no SFU needed); server-side deletes fail quietly

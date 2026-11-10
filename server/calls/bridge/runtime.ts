@@ -41,6 +41,8 @@ export class CallingRuntime {
   }
   this.timer=setInterval(()=>void this.refreshPresence(),3000);this.timer.unref();
  }
+ // DEAD PATH (ol-call-wake, Nov 10 2026): this DO-side runtime only runs in bridge mode, which is off (bridgeMode()=false);
+ // live call pushes are sent by server/calls/index.ts wireCalls. Kept, not deleted.
  private sendPush(kind:string,userId:string,call:CallInfo,reason?:string){void this.platform.call("push",{kind,userId,call,reason},"push-"+kind+"-"+call.id).catch(()=>console.warn("[calling] platform push unavailable"))}
  private async prepare(a:string,b:string){const p=await this.platform.call("prepare",{callerId:a,calleeId:b});this.policies.set(a+"|"+b,p.policy);for(let n=0;n<2;n++){const uid=n===0?a:b;if(p.peers[n])this.people.set(uid,{peer:p.peers[n],at:Date.now()});this.rooms.set(uid,p.inRoom[n]);this.presence.set(uid,{...p.presence[n],at:Date.now()})}return p.policy}
  private async refreshPresence(){const users=[...this.people.keys()].filter(u=>!!this.service.liveCallOf(u));

@@ -3,7 +3,10 @@
 //
 //
 // Lifecycle: calling (caller sent call:start) → ringing (a callee device acked) → active (accepted) → ended.
-// Outcomes: completed | missed (45s timeout) | declined | cancelled (caller hung up first) | busy | failed.
+// Outcomes: completed | missed | declined | cancelled (caller hung up first) | busy | failed.
+// Timers (Telegram call_receive/ring/connect_timeout_ms, ol-call-wake): 20 s for a callee device to confirm
+// ("received", call:ack) → missed/no_ack; 90 s ringing counted from that confirmation → missed/no_answer; 30 s after
+// answer for first audio → failed/connect_timeout. One timer per phase, each with its own end reason.
 // Every ended call leaves one service message in the DM (store.appendCallMessage).
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
@@ -13,16 +16,23 @@ const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
   return Number.isFinite(v) && v > 0 ? v : d;
 };
-export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
+/** calling: no callee device confirmed receipt (call:ack) within this → missed, reason no_ack */
+export const CALL_RECEIVE_TIMEOUT_MS = num("CALL_RECEIVE_TIMEOUT_MS", 20_000);
+/** ringing: counted from the callee's confirmation (ackAt), not from call start → missed, reason no_answer */
+export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 90_000);
+/** active: answered but no first audio (call:metric / audio-levels report) within this → failed, reason connect_timeout */
+export const CALL_CONNECT_TIMEOUT_MS = num("CALL_CONNECT_TIMEOUT_MS", 30_000);
+/** calling (unconfirmed): re-send call:incoming over the callee's raw WebSockets this often until confirmed/ended */
+export const CALL_RESEND_MS = num("CALL_RESEND_MS", 2_000);
 /** No callee device acked call:incoming within this window → send the push anyway (unacked "foreground" socket). */
 export const CALL_ACK_FALLBACK_MS = num("CALL_ACK_FALLBACK_MS", 4_000);
 /** a call whose participants both lost every WebSocket for this long is over (LiveKit webhook usually ends it sooner) */
-/** Pushed call still un-acked by any callee device after this → push once more to the non-VoIP surfaces (Android FCM,
- *  web push, iOS alert; same `call:<id>` tag, so it replaces rather than stacks). 51c135b3 / 51976b82: a backgrounded
- *  phone got one push and never rang. Past the slowest push-woken ack seen today (67078d15: 10.8 s). 0 = off. */
+/** Pushed call still un-acked after this AND the callee has no socket connected at all → one more push to the non-VoIP
+ *  surfaces (Android FCM, web push, iOS alert; same `call:<id>` tag). Replaces the blind 15 s second push: if any callee
+ *  socket is up, the 2 s re-send already reaches it. 0 = off. */
 export const callRepushMs = () => {
   const v = Number(process.env.CALL_REPUSH_MS);
-  return process.env.CALL_REPUSH_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 15_000;
+  return process.env.CALL_REPUSH_MS !== undefined && Number.isFinite(v) && v >= 0 ? v : 5_000;
 };
 export const CALL_ORPHAN_MS = num("CALL_ORPHAN_MS", 60_000);
 /** caller lost their socket while it was still ringing → cancel after this */
@@ -124,7 +134,10 @@ interface CallRec {
   tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
   /** Captured once at call start (P2P/rcRelay only); never migrated mid-call. */
   backend: CallMediaBackend;
+  /** the current phase's timer: receive (calling) → ring (ringing) → connect (active, until first audio) */
   timer: NodeJS.Timeout | null;
+  /** calling only: the 2 s call:incoming re-send */
+  resend?: NodeJS.Timeout | null;
   pushed: boolean;
   orphanSince: number | null;
   /** active call: when each participant lost their last socket (reconnect grace) */
@@ -169,7 +182,10 @@ export class CallService {
 
   dispose() {
     clearInterval(this.sweeper);
-    for (const c of this.calls.values()) if (c.timer) clearTimeout(c.timer);
+    for (const c of this.calls.values()) {
+      if (c.timer) clearTimeout(c.timer);
+      if (c.resend) clearInterval(c.resend);
+    }
   }
 
   /** rtcSession lookup: participants + phase of a call (null = unknown). */
@@ -195,7 +211,7 @@ export class CallService {
       if (!c || c.phase === "ended") {
         this.live.delete(userId);
         this.d.log?.("call stale busy cleared", { callId: id, why: c ? "ended" : "missing" });
-      } else if (c.phase !== "active" && this.now() - c.createdAt > CALL_RING_TIMEOUT_MS + 5_000) {
+      } else if (c.phase !== "active" && this.now() > this.ringDeadline(c) + 5_000) {
         this.d.log?.("call stale busy cleared", { callId: c.id, why: "ring-expired" });
         this.finish(c, "missed");
       } else return { why: "call", callId: c.id, phase: c.phase, ageMs: this.now() - c.createdAt };
@@ -207,6 +223,23 @@ export class CallService {
     const id = this.live.get(userId);
     const c = id ? this.calls.get(id) : undefined;
     return c ? this.info(c) : null;
+  }
+
+  /** latest moment this call can still be ringing (server clock): 90 s from confirmation, or receive + ring if unconfirmed */
+  private ringDeadline(c: CallRec) {
+    return c.ackAt !== null ? c.ackAt + CALL_RING_TIMEOUT_MS : c.createdAt + CALL_RECEIVE_TIMEOUT_MS + CALL_RING_TIMEOUT_MS;
+  }
+
+  /** replace the call's phase timer */
+  private arm(c: CallRec, ms: number, fn: () => void) {
+    if (c.timer) clearTimeout(c.timer);
+    c.timer = setTimeout(fn, ms);
+    c.timer.unref?.();
+  }
+
+  private stopResend(c: CallRec) {
+    if (c.resend) clearInterval(c.resend);
+    c.resend = null;
   }
 
   info(c: CallRec): CallInfo {
@@ -221,7 +254,7 @@ export class CallService {
       answeredAt: c.answeredAt,
       endedAt: c.endedAt,
       outcome: c.outcome,
-      expiresAt: c.createdAt + CALL_RING_TIMEOUT_MS,
+      expiresAt: this.ringDeadline(c),
       caller: this.d.peer(c.callerId) ?? anon(c.callerId),
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
       ...(c.goneSince?.size ? { offline: [...c.goneSince.keys()] } : {}),
@@ -353,13 +386,23 @@ export class CallService {
     // Preserve ring-time prewarming for the established LiveKit path. For direct UDP, only the caller has a
     // credential until the callee atomically accepts; the server enforces that consent boundary below as well.
     this.mint(c, callerId);
-    c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
-    c.timer.unref?.();
+    this.arm(c, CALL_RECEIVE_TIMEOUT_MS, () => this.receiveTimeout(c.id));
     const info = this.info(c);
     const calleeMedia = await this.media(c, calleeId);
     if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
     this.d.emitUser(calleeId, "call:incoming", { call: info, media: calleeMedia });
     this.d.log?.("call ring emit", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null, foreground: this.d.isForeground(calleeId) });
+    // Telegram-style: keep offering the call over the callee's raw WebSockets until a device confirms it (call:ack).
+    // A socket that (re)connects in between also gets it at once (userConnected). Clients dedupe by call id.
+    let resends = 0;
+    c.resend = setInterval(() => {
+      if (c.phase !== "calling") return this.stopResend(c);
+      resends++;
+      const sockets = this.d.connCount?.(calleeId) ?? null;
+      this.d.log?.("call ring resend", { callId: c.id, n: resends, calleeSockets: sockets });
+      if (sockets !== 0) this.d.emitUser(calleeId, "call:incoming", { call: this.info(c), media: null, resend: resends });
+    }, CALL_RESEND_MS);
+    c.resend.unref?.();
     this.d.emitUser(callerId, "call:state", { call: info }); // caller's other tabs show "Calling…"
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
@@ -381,17 +424,36 @@ export class CallService {
     return { ok: true, call: info, media: await this.media(c, callerId) };
   }
 
-  /** One ring retry when no callee device acked a pushed call (still "calling" — never after ring ack/answer/end). */
+  /** One more push at ~5 s, only while still unconfirmed AND the callee has no socket connected (a connected socket
+   *  already gets the 2 s re-send). Never after ack/answer/end; never a second VoIP push. */
   private armRepush(c: CallRec, info: CallInfo) {
     const repush = this.d.push?.repush;
     const ms = callRepushMs();
     if (!repush || !(ms > 0)) return;
     const t = setTimeout(() => {
       if (c.phase !== "calling") return;
-      this.d.log?.("call repush", { callId: c.id, calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
+      if (this.d.isConnected(c.calleeId)) {
+        this.d.log?.("call repush skipped", { callId: c.id, why: "callee_connected", calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
+        return;
+      }
+      this.d.log?.("call repush", { callId: c.id, calleeSockets: 0 });
       repush(c.calleeId, info);
     }, ms);
     t.unref?.();
+  }
+
+  /**
+   * A callee socket just authenticated (session:resume): if they have a call that is still ringing for them, deliver the
+   * offer to that socket right away instead of waiting for the next re-send (push-woken Android native socket, a page
+   * reconnecting after a network switch). `emit` targets only the new socket.
+   */
+  userConnected(userId: string, emit: (ev: string, data: unknown) => void) {
+    const id = this.live.get(userId);
+    const c = id ? this.calls.get(id) : undefined;
+    if (!c || c.calleeId !== userId || (c.phase !== "calling" && c.phase !== "ringing")) return false;
+    this.d.log?.("call ring deliver on connect", { callId: c.id, phase: c.phase });
+    emit("call:incoming", { call: this.info(c), media: null, resend: "connect" });
+    return true;
   }
 
   /**
@@ -440,7 +502,9 @@ export class CallService {
     if (c.phase === "calling") {
       c.phase = "ringing";
       c.ackAt = this.now();
-      this.d.log?.("call ring ack", { callId: c.id, ms: c.ackAt - c.createdAt });
+      this.stopResend(c);
+      this.arm(c, CALL_RING_TIMEOUT_MS, () => this.ringTimeout(c.id));
+      this.d.log?.("call ring ack", { callId: c.id, ms: c.ackAt - c.createdAt, ringTimeoutMs: CALL_RING_TIMEOUT_MS });
       this.metrics.ringMs.push(c.ackAt - c.createdAt);
       if (this.metrics.ringMs.length > METRIC_KEEP) this.metrics.ringMs.shift();
       this.broadcast(c, "call:state");
@@ -463,8 +527,11 @@ export class CallService {
       c.answeredConn = connId ?? null;
       if (platform === "ios" || platform === "android" || platform === "web") c.calleePlatform = platform;
       c.answeredAt = this.now();
-      if (c.timer) clearTimeout(c.timer);
-      c.timer = null;
+      this.stopResend(c);
+      if (c.audioAt) {
+        if (c.timer) clearTimeout(c.timer);
+        c.timer = null;
+      } else this.arm(c, CALL_CONNECT_TIMEOUT_MS, () => this.connectTimeout(c.id));
       this.broadcast(c, "call:state");
       if (c.pushed) this.d.push?.cancel(c.calleeId, c.id, "answered");
       this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt, userId, calleePlatform: c.calleePlatform ?? null });
@@ -517,6 +584,7 @@ export class CallService {
     const v = Number(acceptToAudioMs);
     if (!c || !Number.isFinite(v) || v <= 0 || v > 60_000) return { ok: false as const };
     c.audioAt ??= this.now();
+    this.connected(c, "metric");
     this.metrics.acceptToAudioMs.push(Math.round(v));
     if (this.metrics.acceptToAudioMs.length > METRIC_KEEP) this.metrics.acceptToAudioMs.shift();
     this.d.log?.("call metric", { callId: c.id, acceptToAudioMs: Math.round(v), role: userId === c.calleeId ? "callee" : "caller" });
@@ -543,7 +611,16 @@ export class CallService {
     arr.push(sample);
     if (arr.length > QUALITY_MAX_SAMPLES) arr.shift();
     c.quality.set(userId, arr);
+    this.connected(c, "audio-levels");
     return true;
+  }
+
+  /** first evidence that media flows (call:metric first audio, or a 5 s audio report): the connect timer is done */
+  private connected(c: CallRec, via: string) {
+    if (c.phase !== "active" || !c.timer) return;
+    clearTimeout(c.timer);
+    c.timer = null;
+    this.d.log?.("call connect confirmed", { callId: c.id, via, ms: c.answeredAt ? this.now() - c.answeredAt : null });
   }
 
   /** summary of what one participant RECEIVED (null = no reports from them) */
@@ -597,12 +674,28 @@ export class CallService {
     };
   }
 
-  private timeout(callId: string) {
+  /** 20 s and no callee device confirmed the call */
+  private receiveTimeout(callId: string) {
     const c = this.calls.get(callId);
-    if (c && (c.phase === "calling" || c.phase === "ringing")) {
-      this.d.log?.("call ring timeout", { callId: c.id, acked: c.phase === "ringing", calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
-      this.finish(c, "missed");
-    }
+    if (!c || c.phase !== "calling") return;
+    this.d.log?.("call receive timeout", { callId: c.id, calleeSockets: this.d.connCount?.(c.calleeId) ?? null, pushed: c.pushed });
+    this.finish(c, "missed", { reason: "no_ack" });
+  }
+
+  /** 90 s of confirmed ringing and nobody answered */
+  private ringTimeout(callId: string) {
+    const c = this.calls.get(callId);
+    if (!c || c.phase !== "ringing") return;
+    this.d.log?.("call ring timeout", { callId: c.id, calleeSockets: this.d.connCount?.(c.calleeId) ?? null });
+    this.finish(c, "missed", { reason: "no_answer" });
+  }
+
+  /** answered 30 s ago and no first audio reported by either side */
+  private connectTimeout(callId: string) {
+    const c = this.calls.get(callId);
+    if (!c || c.phase !== "active" || c.audioAt || c.quality?.size) return;
+    this.d.log?.("call connect timeout", { callId: c.id, calleePlatform: c.calleePlatform ?? null });
+    this.finish(c, "failed", { reason: "connect_timeout" });
   }
 
   private finish(c: CallRec, outcome: CallOutcome, opts: { by?: string; silentToCallee?: boolean; reason?: string } = {}) {
@@ -613,6 +706,7 @@ export class CallService {
     c.endedAt = this.now();
     if (c.timer) clearTimeout(c.timer);
     c.timer = null;
+    this.stopResend(c);
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
     c.tokens.clear(); // the media credential dies with the call: nothing is handed out or re-minted after this
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;

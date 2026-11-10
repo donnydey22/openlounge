@@ -18,6 +18,8 @@ export interface PushMessage {
   data?: Record<string, string>;
   /** data-only "clear this tag" message (DM read on another device) */
   clear?: boolean;
+  /** Android FCM lifetime (ms). Default 6 h; a ringing call must never arrive late, so call_incoming sets ~30 s. */
+  ttlMs?: number;
   /** total unread for the recipient (also sent as data.badge) → iOS aps.badge, Android launcher badge */
   badge?: number;
 }
@@ -65,7 +67,7 @@ export class FcmSender implements PushSender {
     };
     const res = await getMessaging(app).sendEach(
       tokens.map((t): Message => {
-        if (t.platform === "android") return { token: t.token, data, android: { priority: "high" as const, collapseKey: msg.tag.slice(0, 64), ttl: 6 * 3600_000 } };
+        if (t.platform === "android") return { token: t.token, data, android: { priority: "high" as const, collapseKey: msg.tag.slice(0, 64), ttl: msg.ttlMs ?? 6 * 3600_000 } };
         if (t.platform === "ios")
           return {
             token: t.token,

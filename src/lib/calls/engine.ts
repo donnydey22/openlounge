@@ -382,8 +382,8 @@ export class CallEngine {
       callee: { id: peer.id, name: peer.name, color: peer.color, photoUrl: peer.photoUrl, username: peer.username },
     };
     this.set({ ...initial(), call: optimistic, role: "caller", ui: "outgoing", camOn: video, v: this.s.v + 1 });
-    // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
-    playRingback({ video, untilMs: ringUntil(optimistic) });
+    // ol-call-wake (Telegram): "Calling…" is silent; ringback starts only on "Ringing…", i.e. once a callee device has
+    // confirmed the call (call:state phase ringing, onState below). unlockAudio() above keeps that later tone allowed.
     // Native app: the app owns media. iOS defers its media join to the answer so the native ringback stays loud.
     // Browser: mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
     this.deferNativeConnect = useNativeMedia() && nativeRingbackMode() !== "off" && nativePlatform() === "ios";
@@ -419,8 +419,10 @@ export class CallEngine {
       }
       return { ok: true };
     }
-    if (ringing() !== "outgoing") playRingback({ video, untilMs: ringUntil(r.call) });
-    this.diag("ring-start", { tone: "ringback" });
+    if (r.call.phase === "ringing" && ringing() !== "outgoing") {
+      playRingback({ video, untilMs: ringUntil(r.call) });
+      this.diag("ring-start", { tone: "ringback" });
+    }
     this.media = r.media ?? null;
     this.set({ call: r.call });
     if (!this.media) {
@@ -438,7 +440,12 @@ export class CallEngine {
   private onIncoming = (d: { call: CallInfo; media: CallMedia | null }) => {
     const call = d?.call;
     if (!call || call.calleeId !== this.meId) return;
-    if (this.s.call?.id === call.id && this.busy) return;
+    if (this.s.call?.id === call.id && this.busy) {
+      // ol-call-wake: the server re-sends an unconfirmed offer every 2 s and on reconnect. Same call already ringing
+      // here → confirm again (the first call:ack may have died with the old socket), never restart the ringtone.
+      if (this.s.ui === "incoming") void this.req("call:ack", { callId: call.id }).catch(() => {});
+      return;
+    }
     if (this.busy) return; // server already treats us as busy; never stack ring screens
     this.clearEnd();
     this.media = d.media;
@@ -540,7 +547,10 @@ export class CallEngine {
     const role = this.s.role;
     if (call.phase === "ringing" && role === "caller" && this.s.ui === "outgoing") {
       this.set({ call });
-      if (ringing() !== "outgoing") playRingback({ video: call.video, untilMs: ringUntil(call) }); // already ringing since the tap
+      if (ringing() !== "outgoing") {
+        playRingback({ video: call.video, untilMs: ringUntil(call) }); // Ringing: the callee's device confirmed
+        this.diag("ring-start", { tone: "ringback" });
+      }
       return;
     }
     if (call.phase === "active") {

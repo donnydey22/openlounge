@@ -9,10 +9,10 @@ import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
 const backend = (): CallMediaBackend => ({ provider: "p2p" as const, issue: async ({ callId, userId }) => ({ provider: "p2p" as const, url: "x", token: `${callId}-${userId}` }), close: () => {} });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-function svc(clock: { now: number }, o: { foreground?: boolean; pushes?: string[]; logs?: string[]; inRoom?: boolean } = {}) {
+function svc(clock: { now: number }, o: { foreground?: boolean; pushes?: string[]; logs?: string[]; inRoom?: boolean; connected?: boolean } = {}) {
   const peer = (id: string) => ({ id, name: id, color: "#000", photoUrl: null });
   return new CallService({
-    emitUser: () => {}, isConnected: () => true, isForeground: () => o.foreground ?? true, peer, policy: () => ({ ok: true }), inRoom: () => !!o.inRoom,
+    emitUser: () => {}, isConnected: () => o.connected ?? true, isForeground: () => o.foreground ?? true, peer, policy: () => ({ ok: true }), inRoom: () => !!o.inRoom,
     appendCallMessage: () => {}, selectMedia: backend, now: () => clock.now,
     push: { incoming: (u, c) => o.pushes?.push(`in:${u}:${c.id}`), repush: (u, c) => o.pushes?.push(`re:${u}:${c.id}`), cancel: () => {} },
     log: (m) => o.logs?.push(m),
@@ -41,7 +41,7 @@ test("busy: a ringing call past its ring timeout (lost timer) is finished as mis
     const busy = await s.start("x", "b", false, "cx"); assert.equal(busy.ok, false); assert.equal((busy as any).reason, "busy");
     assert.ok(logs.includes("call busy"));
     const rec = (s as any).calls.get(a.call.id); clearTimeout(rec.timer); rec.timer = null; // simulate a lost ring timer
-    clock.now += 51_000;
+    clock.now += 20_000 + 90_000 + 6_000; // ol-call-wake: unconfirmed ring deadline = receive 20 s + ring 90 s (+5 s slack)
     const ok = await s.start("x", "b", false, "cx2"); assert.ok(ok.ok, JSON.stringify(ok));
     assert.equal(rec.phase, "ended"); assert.equal(rec.outcome, "missed");
   } finally { s.dispose(); }
@@ -61,7 +61,8 @@ test("busy: an active call is never cleared by the stale check, however long", a
 
 test("ring retry: a pushed call nobody acked is pushed once more; an acked call is not", async () => {
   const clock = { now: 1_700_000_000_000 }, pushes: string[] = [];
-  const s = svc(clock, { foreground: false, pushes });
+  // ol-call-wake: the one retry push only goes out while the callee has no socket at all
+  const s = svc(clock, { foreground: false, pushes, connected: false });
   try {
     const a = await s.start("a", "b", false, "ca"); assert.ok(a.ok); if (!a.ok) return;
     await sleep(120);

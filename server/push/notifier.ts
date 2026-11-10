@@ -46,6 +46,9 @@ export const DEDUPE_MS = 60_000; // loosened from 30 min; join events use per-jo
 export const HALLWAY_DEDUPE_MS = 30 * 60_000;
 export const HOURLY_CAP = 20; // all non-DM pushes per user per hour
 export const DM_HOURLY_CAP = 30; // DM pushes per user per hour (collapse per thread anyway)
+/** Android FCM lifetime of a ring push: past the 20 s receive window the call is over (missed/no_ack), so FCM drops it
+ *  after 30 s instead of delivering a stale ring hours later (was the 6 h default). call_cancel keeps the default. */
+export const CALL_PUSH_TTL_MS = 30_000;
 export const FOLLOWER_BATCH_MS = 10 * 60_000;
 export const TRENDING_MIN_FOLLOWED = 3;
 export const RECENT_ROOM_MS = 7 * 24 * 3600_000;
@@ -178,7 +181,9 @@ export class Notifier {
    *  /workspace/calls/NATIVE_SPEC.md) + a visible "Incoming call" alert on iOS / web. Same tag as the missed call so it's replaced. */
   async callIncoming(calleeId: string, call: { id: string; callerId: string; video: boolean; expiresAt: number; caller: { name: string; photoUrl: string | null } }, opts: { skipIos?: boolean; declineToken?: string; onSend?: (r: SendResult) => void } = {}) {
     // skipIos: the iPhone already rings through CallKit (VoIP push, server/calls/voip.ts) → no duplicate "Incoming call" alert
-    return this.deliver(calleeId, "dm", {
+    // ol-call-wake: calls have their own path. Not deliver(): the DM opt-out (prefs.dm) and the 30/h DM cap never apply
+    // to a ringing call (the call itself is already gated by call policy, blocks and the per-caller rate limit).
+    return this.sendCall(calleeId, {
       type: "call_incoming",
       title: call.caller.name,
       body: call.video ? "📹 Incoming video call" : "📞 Incoming audio call",
@@ -186,7 +191,19 @@ export class Notifier {
       tag: `call:${call.id}`,
       url: `/call/${call.id}`,
       data: { callId: call.id, callerId: call.callerId, callerName: call.caller.name, callerPhoto: call.caller.photoUrl?.startsWith("http") ? call.caller.photoUrl : "", video: call.video ? "1" : "0", expiresAt: String(call.expiresAt), peerId: call.callerId, ...(opts.declineToken ? { declineToken: opts.declineToken } : {}) },
+      ttlMs: CALL_PUSH_TTL_MS,
     }, { ...(opts.skipIos ? { skipPlatforms: ["ios" as Platform] } : {}), ...(opts.onSend ? { onSend: opts.onSend } : {}) });
+  }
+
+  /** call ring push: no pref / quiet-hours / dedupe / hourly-cap gates; stamped with server sentAt like every push */
+  private async sendCall(userId: string, msg: PushMessage, opts: { skipPlatforms?: Platform[]; onSend?: (r: SendResult) => void }): Promise<Outcome> {
+    if (this.d.isBot?.(userId)) return "skip:bot";
+    const tokens = (await this.d.repo.tokensFor(userId)).filter((t) => !opts.skipPlatforms?.includes(t.platform));
+    if (!tokens.length) return "no-tokens";
+    const res = await this.d.sender.send(tokens, this.withBadge(userId, msg));
+    try { opts.onSend?.(res); } catch { /* log hook only */ }
+    for (const t of res.invalidTokens) await this.d.repo.removeToken(t);
+    return "sent";
   }
 
   /** stop the native ring UI (caller hung up / answered elsewhere / timeout) */

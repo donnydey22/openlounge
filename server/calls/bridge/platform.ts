@@ -76,6 +76,8 @@ export function wirePlatformCalls(hub:WsHub){healthProbe=null;healthUntil=0;io=h
    store.appendCallMessage(m,a.calleeId);await store.flush(true);return {ok:true};
   }
   if(op==="quickReply"){if(!uid(a.userId)||!uid(a.peerId)||!uid(a.callId)||typeof a.message!=="string")throw Error("reply");const r=store.sendDm(a.userId,a.peerId,a.message.slice(0,500),"call-reply-"+a.callId);if(r.ok)await store.flush(true);return r}
+  // DEAD PATH (ol-call-wake, Nov 10 2026): bridgeMode() is false, so no DO calling service ever sends op "push". Live
+  // call pushes go through server/calls/index.ts wireCalls → push().callIncoming / callCancel. Kept, not deleted.
   if(op==="push"){
    if(!uid(a.userId)||!a.call||!uid(a.call.id)||!uid(a.call.callerId)||a.call.calleeId!==a.userId||!["incoming","repush","cancel"].includes(a.kind))throw Error("push");
    const c=a.call;if(a.kind==="cancel"){await push()?.callCancel(a.userId,c.id,a.reason??"ended");return {ok:true}}

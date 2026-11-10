@@ -18,3 +18,4 @@ process.env.LIVEKIT_URL = `ws://127.0.0.1:${PORT}`;
 export const listenFakeLiveKit = () => new Promise<void>((r, j) => fakeLiveKit.once("error", j).listen(PORT, "127.0.0.1", () => r()));
 process.env.CALL_TOKEN_TTL_S = "6";
 process.env.CALL_RING_TIMEOUT_MS = "20000";
+process.env.CALL_RECEIVE_TIMEOUT_MS = "20000";

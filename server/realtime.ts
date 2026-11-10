@@ -352,6 +352,9 @@ export function registerRealtime(io: WsHub) {
       presence.attach(socket.id, userId, sessionId);
       socket.emit("rooms:update", store.listRooms());
       socket.emit("presence:snapshot", presence.snapshot());
+      // ol-call-wake: a callee socket that (re)connects while their call is still ringing gets the offer right away
+      // (after this resume's ack), instead of waiting for the 2 s re-send (calls/service.ts userConnected)
+      setImmediate(() => { if (userOfSocket.get(socket.id) === userId) calls()?.userConnected(userId, (ev, d) => socket.emit(ev, d)); });
       const user = store.me(userId);
       return {
         user: user ? { ...user, online: true, lastSeenAt: null, presence: "online" as const } : user,
