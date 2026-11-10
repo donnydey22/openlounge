@@ -9,7 +9,7 @@ import { callEngine } from "@/lib/calls/engine";
 import { installAudioUnlock } from "@/lib/audioUnlock";
 import { installAppLockPresence } from "@/lib/calls/appLockPresence";
 import { needsBackgroundRing, startBackgroundRing, stopBackgroundRing } from "@/lib/calls/backgroundRing";
-import { appVisible, NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT } from "@/lib/realtime";
+import { NATIVE_LOCK_EVENT, NATIVE_VISIBILITY_EVENT } from "@/lib/realtime";
 import { native } from "@/lib/native";
 import { checkMediaPermissionsSilently } from "@/lib/calls/permissions";
 import { useCall } from "./useCall";
@@ -166,9 +166,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         };
         if (needsBackgroundRing()) startBackgroundRing(info);
         else stopBackgroundRing(s.call.id);
-        // While App Lock / backgrounded, ask the native shell to surface IncomingCallActivity / CallKit
-        // even if the FCM/VoIP push is still in flight (WS often wins the race).
-        if (!appVisible() && lastIncomingNative.current !== s.call.id) {
+        // Foreground too: the native call screen needs name + photo from call:incoming
+        // (CallKit / IncomingCallActivity still only take over when the app is not in front).
+        if (lastIncomingNative.current !== s.call.id) {
           lastIncomingNative.current = s.call.id;
           postNativeCall({
             type: "call:incoming",

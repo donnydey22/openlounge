@@ -171,6 +171,7 @@ export class CallEngine {
   /** outgoing native-media call: media join held until answer so the native ringback stays loud (iOS) */
   private deferNativeConnect = false;
   private metricSent = false;
+  private mediaFlowPosted = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private weakTimer: ReturnType<typeof setTimeout> | null = null;
   /** web: the audiooutput deviceId the user picked ("" = follow the system default) */
@@ -364,6 +365,7 @@ export class CallEngine {
     unlockAudio();
     buzz("light");
     this.clearEnd();
+    this.mediaFlowPosted = false;
     this.lastPeer = { id: peer.id, video };
     this.watchNativeAudio(); // native audio-session events must be heard while ringing (network watch stays connect-time)
     const now = Date.now();
@@ -430,7 +432,8 @@ export class CallEngine {
       void this.hangup();
       return { ok: false };
     }
-    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, video, nativeMedia: useNativeMedia() });
+    postNative({ type: "call:outgoing", callId: r.call.id, name: peer.name, photo: peer.photoUrl || "", video, nativeMedia: useNativeMedia() });
+    if (r.call.phase === "ringing") this.postRinging(r.call.id);
     this.diag("call-start", { video, app: appVersionFromUa() });
     if (!this.deferNativeConnect) void this.connect(false);
     return { ok: true };
@@ -451,6 +454,7 @@ export class CallEngine {
     this.media = d.media;
     this.acceptedHere = false;
     this.metricSent = false;
+    this.mediaFlowPosted = false;
     this.set({ ...initial(), call, role: "callee", ui: "incoming", v: this.s.v + 1 });
     void this.req("call:ack", { callId: call.id }).catch(() => {});
     playRingtone({ video: call.video, untilMs: ringUntil(call) });
@@ -472,7 +476,7 @@ export class CallEngine {
     this.set({ ui: "connecting", camOn: withVideo, error: null });
     this.diag("answered", {});
     // iOS build 72+: CallKit is answered at the tap (stops the system ring now, not at media connect). Older apps ignore it.
-    postNative({ type: "call:answering", callId: call.id, video: !!(withVideo || call.video) });
+    postNative({ type: "call:answering", callId: call.id, name: call.caller?.name || "", photo: call.caller?.photoUrl || "", video: !!(withVideo || call.video) });
     if (useNativeMedia()) void nativeMediaCmd({ op: "prewarm" }).catch(() => {});
     else if (withVideo) void this.ensureCamPreview();
     // connect with the ring-time token right away, in parallel with telling the server
@@ -547,6 +551,7 @@ export class CallEngine {
     const role = this.s.role;
     if (call.phase === "ringing" && role === "caller" && this.s.ui === "outgoing") {
       this.set({ call });
+      this.postRinging(call.id);
       if (ringing() !== "outgoing") {
         playRingback({ video: call.video, untilMs: ringUntil(call) }); // Ringing: the callee's device confirmed
         this.diag("ring-start", { tone: "ringback" });
@@ -571,7 +576,10 @@ export class CallEngine {
         this.acceptT0 = performance.now();
         mark("accepted");
         this.set({ call, ui: this.mediaConnected() ? "active" : "connecting", connectedAt: Date.now() });
-        if (this.mediaConnected()) playConnected();
+        if (this.mediaConnected()) {
+          playConnected();
+          this.postMediaFlowing(call.id);
+        }
         postNative({ type: "call:connected", callId: call.id, video: !!call.video });
         this.diag("answered", { deferred: this.deferNativeConnect });
         if (this.deferNativeConnect) {
@@ -701,6 +709,9 @@ export class CallEngine {
       this.set({ ui: "active", connectedAt: this.s.connectedAt ?? Date.now() });
       playConnected();
       postNative({ type: "call:connected", callId: this.s.call?.id, video: !!(this.s.camOn || this.s.call?.video) });
+      this.postMediaFlowing(this.s.call?.id);
+    } else if (this.mediaConnected() && (this.s.ui === "connecting" || this.s.ui === "active" || this.s.call?.phase === "active")) {
+      this.postMediaFlowing(this.s.call?.id);
     }
   }
   private routeInit = false;
@@ -884,7 +895,17 @@ export class CallEngine {
     });
   }
 
+  private postRinging(callId?: string | null) {
+    if (!callId) return;
+    postNative({ type: "call:ringing", callId });
+  }
+  private postMediaFlowing(callId?: string | null) {
+    if (!callId || this.mediaFlowPosted) return;
+    this.mediaFlowPosted = true;
+    postNative({ type: "call:mediaFlowing", callId });
+  }
   private firstAudio() {
+    if (this.s.call?.id) this.postMediaFlowing(this.s.call.id);
     if (this.metricSent || !this.acceptT0 || !this.s.call?.id) return;
     this.metricSent = true;
     const ms = Math.round(performance.now() - this.acceptT0);
@@ -1067,6 +1088,7 @@ export class CallEngine {
     this.acceptedHere = false;
     this.acceptT0 = 0;
     this.metricSent = false;
+    this.mediaFlowPosted = false;
     if (this.weakTimer) clearTimeout(this.weakTimer);
     if (this.nativeAudio()) this.set({ nativeAudio: false, nativeVideo: false });
   }
