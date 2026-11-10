@@ -11,7 +11,7 @@ const vectorToken =
   "eyJjYWxsSWQiOiJjYWxsLXZlY3Rvci0xIiwidXNlcklkIjoidXNlci00MiIsInJvbGUiOiJjYWxsZXIiLCJleHAiOjE4OTM0NTYwMDB9.DCDbfj0041vyFg_RS_ctxN-pBuoWLjykejGDEd38P7w";
 
 const env = (o: Record<string, string> = {}) => ({
-  OLCALL_ENABLED: "1", OLCALL_URL: "wss://turn.openlounge.app/v1/call", OLCALL_TOKEN_SECRET: vectorSecret, OLCALL_TEST_USERS: "a, b", ...o,
+  OLCALL_URL: "wss://turn.openlounge.app/v1/call", OLCALL_TOKEN_SECRET: vectorSecret, ...o,
 });
 const call = { id: "call-1", callerId: "a", calleeId: "b", callerPlatform: "android", calleePlatform: "android" };
 const p2p: CallMedia = { provider: "p2p", url: "rtc", token: "", callId: "call-1", expiresAt: 1, iceServers: [{ urls: ["turn:x"], username: "u", credential: "c", credentialType: "password" }] };
@@ -33,28 +33,21 @@ test("secret: env var or file, trimmed, >= 32 bytes, else null", () => {
   assert.equal(olcallSecret({}), null);
 });
 
-test("gate: off by default, both users allowlisted, both android, ws(s) url, participant only", () => {
-  assert.equal(olcallEligible(call, "a", env()), true);
-  assert.equal(olcallEligible(call, "b", env()), true);
-  assert.equal(olcallEligible(call, "a", env({ OLCALL_ENABLED: "" })), false);
-  assert.equal(olcallEligible(call, "a", {}), false);
-  assert.equal(olcallEligible(call, "c", env()), false);
-  assert.equal(olcallEligible(call, "a", env({ OLCALL_TEST_USERS: "a" })), false);
-  assert.equal(olcallEligible(call, "a", env({ OLCALL_TEST_USERS: "*" })), true);
-  assert.equal(olcallEligible({ ...call, calleePlatform: "ios" }, "a", env({ OLCALL_TEST_USERS: "*" })), false);
-  assert.equal(olcallEligible(call, "a", env({ OLCALL_TEST_USERS: "" })), false);
-  assert.equal(olcallEligible({ ...call, calleePlatform: "ios" }, "a", env()), false);
-  assert.equal(olcallEligible({ ...call, callerPlatform: undefined }, "a", env()), false);
-  assert.equal(olcallEligible(call, "a", env({ OLCALL_URL: "https://x" })), false);
+test("participants only, every platform; no switch", () => {
+  assert.equal(olcallEligible(call, "a"), true);
+  assert.equal(olcallEligible(call, "b"), true);
+  assert.equal(olcallEligible({ ...call, calleePlatform: "ios" }, "a"), true);
+  assert.equal(olcallEligible(call, "c"), false);
+  assert.equal(olcallEligible(null, "a"), false);
 });
 
-test("eligible: olcall media with per-role token; TURN list kept as fallback", () => {
+test("olcall media with per-role token; no TURN creds or p2p fields carried over", () => {
   const now = 1_800_000_000_000;
-  const a = olcallMediaFor(call, "a", p2p, env(), now)!;
-  const b = olcallMediaFor(call, "b", p2p, env(), now)!;
+  const a = olcallMediaFor(call, "a", env(), now)!;
+  const b = olcallMediaFor(call, "b", env(), now)!;
   assert.equal(a.provider, "olcall");
   assert.equal(a.url, "wss://turn.openlounge.app/v1/call");
-  assert.deepEqual(a.iceServers, p2p.iceServers);
+  assert.equal(a.iceServers, undefined);
   assert.equal(a.expiresAt, now / 1000 + OLCALL_TOKEN_TTL_S);
   const claims = (t: string) => JSON.parse(Buffer.from(t.split(".")[0], "base64url").toString());
   assert.deepEqual(claims(a.token), { callId: "call-1", userId: "a", role: "caller", exp: now / 1000 + OLCALL_TOKEN_TTL_S });
@@ -63,19 +56,19 @@ test("eligible: olcall media with per-role token; TURN list kept as fallback", (
   assert.equal(sig, createHmac("sha256", vectorSecret).update(p1).digest("base64url"));
 });
 
-test("not eligible or no secret: the exact p2p media object is returned (old clients unchanged)", () => {
-  assert.equal(olcallMediaFor(call, "a", p2p, env({ OLCALL_ENABLED: "0" })), p2p);
-  assert.equal(olcallMediaFor(call, "a", p2p, env({ OLCALL_TOKEN_SECRET: "" })), p2p);
-  assert.equal(olcallMediaFor({ ...call, calleePlatform: "web" }, "a", p2p, env()), p2p);
-  assert.equal(olcallMediaFor(call, "a", null, env()), null);
+test("no fallback: missing secret / bad url / non-participant -> null media, never p2p", () => {
+  assert.equal(olcallMediaFor(call, "a", env({ OLCALL_TOKEN_SECRET: "" })), null);
+  assert.equal(olcallMediaFor(call, "a", env({ OLCALL_URL: "rtc" })), null);
+  assert.equal(olcallMediaFor(call, "c", env()), null);
 });
 
-test("withOlcallMedia rewrites only {call, media:p2p} payloads and never throws", () => {
+test("withOlcallMedia replaces p2p media in every {media} payload and never throws", () => {
   const ack = { ok: true, call, media: p2p };
-  assert.equal(withOlcallMedia("a", ack, env({ OLCALL_ENABLED: "" })), ack);
   const out = withOlcallMedia("a", ack, env()) as typeof ack;
   assert.equal(out.media.provider, "olcall");
   assert.equal(ack.media.provider, "p2p"); // input not mutated
+  assert.equal((withOlcallMedia("a", ack, env({ OLCALL_TOKEN_SECRET: "" })) as typeof ack).media, null);
+  assert.equal((withOlcallMedia("a", { ok: true, media: p2p }, env()) as { media: unknown }).media, null);
   const other = { ok: false, error: "x" };
   assert.equal(withOlcallMedia("a", other, env()), other);
   assert.equal(withOlcallMedia("a", null, env()), null);

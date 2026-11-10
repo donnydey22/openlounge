@@ -26,12 +26,16 @@ export function platformCallingHealth(){
 }
 export async function remoteCall(userId:string,connId:string,event:string,data:any={},protocol=CALL_PROTOCOL,requestId?:string){if(!client)return {ok:false,error:"Calls are temporarily unavailable",reason:"calling_unavailable"};return client.call("request",{userId,connId,event,data,protocol},requestId)}
 const UPGRADE={ok:false,error:"Update Open Lounge at https://openlounge.app/download to use calls",reason:"upgrade_required",downloadUrl:"https://openlounge.app/download",requiredProtocol:CALL_PROTOCOL};
-const EVENTS=["call:start","call:accept","call:ack","call:decline","call:hangup","call:get","call:current","call:video","call:metric","call:diag","call:telemetry","call:turnRefresh","rtc:iceConfig","rtc:signal","rc:msg","rc:keys:publish","rc:keys:fetch"];
+const EVENTS=["call:start","call:accept","call:ack","call:decline","call:hangup","call:get","call:current","call:video","call:metric","call:diag","call:telemetry"];
+// p2p media path removed (olcall is the only call media): its signaling/ICE events are refused, never relayed.
+const P2P_REMOVED=["call:turnRefresh","rtc:iceConfig","rtc:signal","rc:msg","rc:keys:publish","rc:keys:fetch"];
+const P2P_GONE={ok:false,error:"p2p calling was removed; calls use olcall",reason:"p2p_removed"};
 export function attachPlatformCalls(socket:Conn,authed:(ack:any,fn:(uid:string)=>void)=>void){let last:string|null=null;
  for(const event of EVENTS)socket.on(event,(data:any={},ack:any=()=>{})=>authed(ack,user=>{last=user;
   if((event==="call:start"||event==="call:accept")&&data?.protocol!==CALL_PROTOCOL)return ack(UPGRADE);
   void remoteCall(user,socket.id,event,data,data?.protocol??"").then(r=>ack(withOlcallMedia(user,r)),()=>ack({ok:false,error:"Calls are temporarily unavailable",reason:"calling_unavailable"}));
  }));
+ for(const event of P2P_REMOVED)socket.on(event,(_d:any={},ack:any=()=>{})=>authed(ack,()=>ack(P2P_GONE)));
  socket.on("call:history",({before}:any={},ack:any=()=>{})=>authed(ack,user=>{const h=store.callHistory(user,before);const peers:Record<string,unknown>={};for(const m of h.calls){const p=m.fromId===user?m.toId:m.fromId;peers[p]=store.publicUser(p)}ack({ok:true,...h,peers})}));
  socket.onClose(()=>{if(last&&client)void client.call("disconnect",{userId:last,connId:socket.id}).catch(()=>{})});
 }
@@ -62,7 +66,7 @@ export function wirePlatformCalls(hub:WsHub){healthProbe=null;healthUntil=0;io=h
    for(const id of a.users){const l=leases.get(id);if(until)leases.set(id,{owner:a.owner,until});else if(l?.owner===a.owner)leases.delete(id)}return {ok:true};
   }
   if(op==="emit"){
-   if(!uid(a.userId)||!["call:incoming","call:state","call:peer","call:video","rc:msg"].includes(a.event))throw Error("event");io?.to("user:"+a.userId).emit(a.event,withOlcallMedia(a.userId,a.data));return {ok:true};
+   if(!uid(a.userId)||!["call:incoming","call:state","call:peer","call:video"].includes(a.event))throw Error("event");io?.to("user:"+a.userId).emit(a.event,withOlcallMedia(a.userId,a.data));return {ok:true};
   }
   if(op==="history"){
    const m=a.meta;if(!m||!uid(m.id)||!uid(m.callerId)||!uid(a.calleeId)||!store.publicUser(m.callerId)||!store.publicUser(a.calleeId)||!["completed","declined","failed","missed","cancelled","busy"].includes(m.outcome))throw Error("history");
