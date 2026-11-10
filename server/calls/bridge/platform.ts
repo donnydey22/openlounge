@@ -6,6 +6,7 @@ import {push,bg} from "../../push";
 import {initVoip,voipService} from "../voip";
 import {declineTokens} from "../declineToken";
 import {BridgeAuth,BridgeClient,BridgeEndpoint,validateBridgeUrl} from "./auth";
+import {withOlcallMedia} from "../olcallToken";
 export const PLATFORM_BRIDGE_PATH="/api/internal/calling-platform";
 export const CALL_PROTOCOL="ol-rc-v1";
 export const bridgeMode=()=>process.env.NODE_ENV==="production"||!!process.env.CALLING_BRIDGE_URL;
@@ -29,7 +30,7 @@ const EVENTS=["call:start","call:accept","call:ack","call:decline","call:hangup"
 export function attachPlatformCalls(socket:Conn,authed:(ack:any,fn:(uid:string)=>void)=>void){let last:string|null=null;
  for(const event of EVENTS)socket.on(event,(data:any={},ack:any=()=>{})=>authed(ack,user=>{last=user;
   if((event==="call:start"||event==="call:accept")&&data?.protocol!==CALL_PROTOCOL)return ack(UPGRADE);
-  void remoteCall(user,socket.id,event,data,data?.protocol??"").then(ack,()=>ack({ok:false,error:"Calls are temporarily unavailable",reason:"calling_unavailable"}));
+  void remoteCall(user,socket.id,event,data,data?.protocol??"").then(r=>ack(withOlcallMedia(user,r)),()=>ack({ok:false,error:"Calls are temporarily unavailable",reason:"calling_unavailable"}));
  }));
  socket.on("call:history",({before}:any={},ack:any=()=>{})=>authed(ack,user=>{const h=store.callHistory(user,before);const peers:Record<string,unknown>={};for(const m of h.calls){const p=m.fromId===user?m.toId:m.fromId;peers[p]=store.publicUser(p)}ack({ok:true,...h,peers})}));
  socket.onClose(()=>{if(last&&client)void client.call("disconnect",{userId:last,connId:socket.id}).catch(()=>{})});
@@ -61,7 +62,7 @@ export function wirePlatformCalls(hub:WsHub){healthProbe=null;healthUntil=0;io=h
    for(const id of a.users){const l=leases.get(id);if(until)leases.set(id,{owner:a.owner,until});else if(l?.owner===a.owner)leases.delete(id)}return {ok:true};
   }
   if(op==="emit"){
-   if(!uid(a.userId)||!["call:incoming","call:state","call:peer","call:video","rc:msg"].includes(a.event))throw Error("event");io?.to("user:"+a.userId).emit(a.event,a.data);return {ok:true};
+   if(!uid(a.userId)||!["call:incoming","call:state","call:peer","call:video","rc:msg"].includes(a.event))throw Error("event");io?.to("user:"+a.userId).emit(a.event,withOlcallMedia(a.userId,a.data));return {ok:true};
   }
   if(op==="history"){
    const m=a.meta;if(!m||!uid(m.id)||!uid(m.callerId)||!uid(a.calleeId)||!store.publicUser(m.callerId)||!store.publicUser(a.calleeId)||!["completed","declined","failed","missed","cancelled","busy"].includes(m.outcome))throw Error("history");

@@ -284,7 +284,8 @@ export interface TurnIceServer {
  * signaling). `token` is short-lived and call-scoped; iceServers are short-lived TURN logins (never the static secret).
  */
 export interface CallMedia {
-  provider: "p2p";
+  /** "olcall": native Android tgcalls -> OL Pion server (url wss://.../v1/call + join token); only for eligible apps. */
+  provider: "p2p" | "olcall";
   url: string;
   token: string;
   /** Absent unless the server has a TURN_STATIC_SECRET; never contains the static TURN secret. */
