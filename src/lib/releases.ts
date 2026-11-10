@@ -1,20 +1,21 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android52: signed clean-room sealed calling/DO bridge build. Physical-device validation pending. */
+/** Android53: signed release 0.3.36 — olcall (tgcalls -> Pion wss://turn.openlounge.app/v1/call + coturn) is the only call engine;
+ *  legacy p2p engine removed; call permissions at the call tap only; headset-aware routing. Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.36",
+  build: 53,
+  file: "/downloads/openlounge-0.3.36-53.apk",
+  size: "44.3 MB",
+  sha256: "3c0c5bbdb9b1c0d851b4ec4de746abbbfba648767b9aa4a3fc237bdc14917286",
+} as const;
+/** Previous Android build (52), kept as an unlinked rollback file (stays in public/downloads; restore = swap these two objects). */
+export const ANDROID_FALLBACK = {
   version: "0.3.35",
   build: 52,
   file: "/downloads/openlounge-0.3.35-52.apk",
   size: "46.5 MB",
   sha256: "ba618c25966c289495da2feadec9259d27c04f9b2ef9cb071f7abc0ba5bead42",
-} as const;
-/** Previous Android build, kept as an unlinked rollback file (release asset stays; restore = swap these two objects). */
-export const ANDROID_FALLBACK = {
-  version: "0.3.29",
-  build: 46,
-  file: "/downloads/openlounge-0.3.29-46.apk",
-  size: "25.8 MB",
-  sha256: "c23093e75d9a054c11340c52f8273b3581e45233192e48b9b13d4700fd08b397",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -138,4 +139,4 @@ export const IOS_MANIFEST_URL = "https://openlounge.app/downloads/openlounge-ios
 
 // Current builds are hosted directly; this host is only for archived legacy release assets.
 export const BINARY_HOST = "https://github.com/donnydey22/openlounge/releases/download/downloads-v1";
-export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === IOS_RELEASE.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
+export const binaryUrl = (file: string) => file === ANDROID_RELEASE.file || file === ANDROID_FALLBACK.file || file === IOS_RELEASE.file ? `https://openlounge.app${file}` : `${BINARY_HOST}/${file.split("/").pop()}`;
