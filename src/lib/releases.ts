@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android54 call-integration: signed 0.3.37 (versionCode 54) — Telegram-matched calling UI/timing (Calling… / Ringing… / Connecting…, timer on first media, portrait video, no keep-awake). Physical-device validation pending. */
+/** Android55 test: signed 0.3.38 (versionCode 55) from ol-unified-path-b55 1709b49 — call screen shows initials only when there is no photo (no "KD" flash while the photo loads). Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.38",
+  build: 55,
+  file: "/downloads/openlounge-0.3.38-55.apk",
+  size: "56.4 MB",
+  sha256: "f69d3a71a20bb27007505302c1db939b68ed25a7d1f7a6390198a29325af5419",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.37 (54) call-integration. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.37",
   build: 54,
   file: "/downloads/openlounge-0.3.37-54-ol-call-integration.apk",
   size: "56.4 MB",
   sha256: "b596aa8c47b0a23dec30cfdf0761ee4dbd48d717cfc1a17fb69cfd7124f69f7e",
-  qualifier: "call integration",
-} as const;
-/** Previous Android build offered on /download: 0.3.37 (54) call-log. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.37",
-  build: 54,
-  file: "/downloads/openlounge-0.3.37-54.apk",
-  size: "44.4 MB",
-  sha256: "bda8721ff762c56c65a231a0fdb66ccf9515e4105522e064496141282adc80a7",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -123,25 +123,25 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS128 and iOS130 remain in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (131). Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
+/** iOS128, iOS130 and the earlier iOS131 (openlounge-ios-0.4.0-b131.ipa) remain in public/downloads and direct-hosted (unlinked). */
+/** Previous iOS build offered on /download: 0.4.0 (131) call-integration. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 131,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b131.ipa",
-  size: "9.0 MB",
-  sha256: "ade6d3331a8b094fd64587593df3cd57535e9cb3cc9666127c4234caf56b0559",
-} as const;
-/** iOS131 call-integration: signed ad-hoc 0.4.0 (build 131) from ol-call-integration a212ff6 — Telegram-matched calling UI/timing; stray brace fix so CallController stays one class. Physical-device validation pending. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 131,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b131-ol-call-integration.ipa",
   size: "9.1 MB",
   sha256: "2d142e9dfae133f282cd7f179b6dc28db1fb9a9b60b416abcd90a4ddeab03f17",
-  qualifier: "call integration",
+} as const;
+/** iOS132 test: signed ad-hoc 0.4.0 (build 132) from ol-unified-path-b132 47dfd8e — same ICE policy as the working Android path (direct first, TURN relay when direct fails). Physical-device validation pending. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 132,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b132.ipa",
+  size: "8.6 MB",
+  sha256: "a51bfaeba5aab685821b91371541c2975d595de2e2fdcf60d6ce94d12f8f22f1",
+  qualifier: "test",
 } as const;
 
 export const CALLING_RELEASE_NOTICE = "Latest signed calling-update test builds. Build and signing checks passed; physical-device and normal-network audio/video calling validation are still pending. Signal-identical behavior is not verified.";
