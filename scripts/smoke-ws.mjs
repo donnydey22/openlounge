@@ -103,6 +103,9 @@ const sent = await A.c.req("chat:send", { roomId, text: "hello from Ada" });
 check(sent.ok, "chat:send", sent);
 const msg = await gotChat;
 check(msg.authorName && msg.authorRole === "host" && msg.createdAt, "chat delivered with author/role/timestamp", msg);
+await B.c.req("room:leave", { roomId });
+const rejoined = await B.c.req("room:join", { roomId });
+check(rejoined.ok && rejoined.chat?.some((m) => m.id === msg.id), "room chat history restored after rejoin", rejoined);
 
 {
   const res = await fetch(`${HTTP}/api/livekit/token`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${A.token}` }, body: JSON.stringify({ roomId }) });
@@ -110,15 +113,27 @@ check(msg.authorName && msg.authorRole === "host" && msg.createdAt, "chat delive
   check(ja.audio?.enabled ? res.ok && body.token : res.status === 503, `/api/livekit/token → ${res.status}`, body);
 }
 
+const clientId = `smoke-${stamp}`;
 const gotDm = B.c.wait("dm:message", (m) => m.text === "psst");
-const dm = await A.c.req("dm:send", { to: B.user.id, text: "psst" });
+const dm = await A.c.req("dm:send", { to: B.user.id, text: "psst", clientId });
 check(dm.ok, "dm:send", dm);
 const dmMsg = await gotDm;
 check(dmMsg.fromId === A.user.id, "DM delivered in real time", dmMsg);
+const retry = await A.c.req("dm:send", { to: B.user.id, text: "psst", clientId });
+check(retry.ok && retry.message?.id === dm.message?.id, "repeated DM send is idempotent", retry);
 const list = await B.c.req("dm:list");
 check(list.ok && list.conversations?.some((c) => c.peer?.id === A.user.id && c.unread >= 1), "dm:list shows unread conversation", list);
 const hist = await B.c.req("dm:history", { peerId: A.user.id });
-check(hist.ok && hist.messages?.some((m) => m.text === "psst"), "dm:history", hist);
+check(hist.ok && hist.messages?.filter((m) => m.text === "psst").length === 1, "DM history contains only one retried send", hist);
+const catchUp = await B.c.req("dm:since", { after: dmMsg.createdAt - 1 });
+check(catchUp.ok && catchUp.messages?.some((m) => m.id === dmMsg.id), "dm:since returns missed messages after reconnect", catchUp);
+const receiptWait = A.c.wait("dm:read-receipt", (r) => r.readerId === B.user.id && r.peerId === A.user.id);
+const read = await B.c.req("dm:read", { peerId: A.user.id, upToMessageId: dmMsg.id });
+check(read.ok, "dm:read advances the recipient read cursor", read);
+const receipt = await receiptWait;
+check(receipt.upToMessageId === dmMsg.id && receipt.readAt, "sender receives the matching read receipt", receipt);
+const readList = await B.c.req("dm:list");
+check(readList.conversations?.find((c) => c.peer?.id === A.user.id)?.unread === 0, "read receipt clears the conversation unread count", readList);
 
 const ended = B.c.wait("room:ended");
 const end = await A.c.req("room:end", { roomId });
