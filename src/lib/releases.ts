@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android55 test: signed 0.3.38 (versionCode 55) from ol-unified-path-b55 1709b49 — call screen shows initials only when there is no photo (no "KD" flash while the photo loads). Physical-device validation pending. */
+/** Android57 test: signed 0.3.40 (versionCode 57) from ol-b57 65491dd — calling screen row matches iOS (Speaker / Mute / End call), louder outgoing ringback; native call libraries byte-identical to 55. Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.40",
+  build: 57,
+  file: "/downloads/openlounge-0.3.40-57.apk",
+  size: "56.4 MB",
+  sha256: "8ac55280397f69f9dd27ea0ebfd2733edce1bbe7e71a33a29f34ecb6e742b0a9",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.38 (55) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.38",
   build: 55,
   file: "/downloads/openlounge-0.3.38-55.apk",
   size: "56.4 MB",
   sha256: "f69d3a71a20bb27007505302c1db939b68ed25a7d1f7a6390198a29325af5419",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.37 (54) call-integration. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.37",
-  build: 54,
-  file: "/downloads/openlounge-0.3.37-54-ol-call-integration.apk",
-  size: "56.4 MB",
-  sha256: "b596aa8c47b0a23dec30cfdf0761ee4dbd48d717cfc1a17fb69cfd7124f69f7e",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -123,24 +123,24 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS128, iOS130 and the earlier iOS131 (openlounge-ios-0.4.0-b131.ipa) remain in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (131) call-integration. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
+/** iOS128, iOS130, both iOS131 files and iOS131 call-integration remain in public/downloads and direct-hosted (unlinked). */
+/** Previous iOS build offered on /download: 0.4.0 (132) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 131,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b131-ol-call-integration.ipa",
-  size: "9.1 MB",
-  sha256: "2d142e9dfae133f282cd7f179b6dc28db1fb9a9b60b416abcd90a4ddeab03f17",
-} as const;
-/** iOS132 test: signed ad-hoc 0.4.0 (build 132) from ol-unified-path-b132 47dfd8e — same ICE policy as the working Android path (direct first, TURN relay when direct fails). Physical-device validation pending. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 132,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b132.ipa",
   size: "8.6 MB",
   sha256: "a51bfaeba5aab685821b91371541c2975d595de2e2fdcf60d6ce94d12f8f22f1",
+} as const;
+/** iOS135 test: signed ad-hoc 0.4.0 (build 135) from openlounge-ios ol-b135 7420601 — calling screen UI port (133), louder incoming ringtone (134), call survives a Wi-Fi<->cellular signaling drop (resume). Physical-device validation pending. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 135,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b135.ipa",
+  size: "8.6 MB",
+  sha256: "ee295423d8e6accb0e3d6b40ff6b169e6216298613ff757d6574a20f0fee19cd",
   qualifier: "test",
 } as const;
 

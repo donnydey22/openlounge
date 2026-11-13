@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
   },
   // Current and prior shipped binaries stay direct-hosted; older archived links may redirect to release assets.
   async redirects() {
-    return [{ source: "/downloads/:file((?!(?:openlounge-0\\.3\\.30-47\\.apk|openlounge-ios-0\\.3\\.19-b117\\.ipa|openlounge-0\\.3\\.35-52\\.apk|openlounge-0\\.3\\.36-53\\.apk|openlounge-0\\.3\\.37-54\\.apk|openlounge-0\\.3\\.37-54-ol-call-integration\\.apk|openlounge-ios-0\\.3\\.20-b128\\.ipa|openlounge-ios-0\\.4\\.0-b130\\.ipa|openlounge-ios-0\\.4\\.0-b131\\.ipa|openlounge-ios-0\\.4\\.0-b131-ol-call-integration\\.ipa|openlounge-0\\.3\\.38-55\\.apk|openlounge-ios-0\\.4\\.0-b132\\.ipa)$)[A-Za-z0-9._-]+\\.(?:ipa|apk))", destination: "https://github.com/donnydey22/openlounge/releases/download/downloads-v1/:file", permanent: false }];
+    return [{ source: "/downloads/:file((?!(?:openlounge-0\\.3\\.30-47\\.apk|openlounge-ios-0\\.3\\.19-b117\\.ipa|openlounge-0\\.3\\.35-52\\.apk|openlounge-0\\.3\\.36-53\\.apk|openlounge-0\\.3\\.37-54\\.apk|openlounge-0\\.3\\.37-54-ol-call-integration\\.apk|openlounge-ios-0\\.3\\.20-b128\\.ipa|openlounge-ios-0\\.4\\.0-b130\\.ipa|openlounge-ios-0\\.4\\.0-b131\\.ipa|openlounge-ios-0\\.4\\.0-b131-ol-call-integration\\.ipa|openlounge-0\\.3\\.38-55\\.apk|openlounge-ios-0\\.4\\.0-b132\\.ipa|openlounge-0\\.3\\.40-57\\.apk|openlounge-ios-0\\.4\\.0-b135\\.ipa)$)[A-Za-z0-9._-]+\\.(?:ipa|apk))", destination: "https://github.com/donnydey22/openlounge/releases/download/downloads-v1/:file", permanent: false }];
   },
   async headers() {
     return [
