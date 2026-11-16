@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android59: signed 0.3.42 (versionCode 59) from ol-b59 605cf7d — signaling resume (58 had none) and restart of this leg's tgcalls engine on a mid-call Wi-Fi↔cellular path change, or if media stays silent after resume. Physical-device validation pending. */
+/** Android60: signed 0.3.43 (versionCode 60) from ol-b60 4b954c8 — moves signaling to the new default network on a settled Wi-Fi↔cellular flip (Android lingers the old one 30 s then kills its sockets), restarts the engine on mid-call Reconnecting/Failed and server media-lost, retries refused resets, 36 s resume window. Physical-device validation pending. */
 export const ANDROID_RELEASE = {
+  version: "0.3.43",
+  build: 60,
+  file: "/downloads/openlounge-0.3.43-60.apk",
+  size: "56.4 MB",
+  sha256: "3066d9b065632b20a953b774af768db361e92ab896ef60a95b39c32d8bed037b",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.42 (59) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.42",
   build: 59,
   file: "/downloads/openlounge-0.3.42-59.apk",
   size: "56.4 MB",
   sha256: "3344b9c323143fd39e947df4b25f999138075747847ca8b105ac4ce41960673f",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.41 (58) test-logs. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.41",
-  build: 58,
-  file: "/downloads/openlounge-0.3.41-58-test-logs.apk",
-  size: "56.3 MB",
-  sha256: "1bbc92579195faee667fb41cac6518c38ec19b9188ea81f45ae45f1b526d6c39",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
