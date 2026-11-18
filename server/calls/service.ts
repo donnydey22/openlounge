@@ -68,6 +68,8 @@ const QUALITY_SILENT_KBPS = 2;
 const QUALITY_MAX_SAMPLES = 720; // 1 h of 5 s reports per participant
 
 export interface CallDeps {
+  /** Tell the olcall server (the only writer of call state) about an app-side event. Fire-and-forget; must never throw. */
+  olcallEvent?(event: "call:start" | "call:accept" | "call:decline", callId: string): void;
   /** Platform-owned generic audio occupancy, atomically excludes room/call races. DO serializes starts. */
   claimAudio?(callerId:string, calleeId:string, callId:string):Promise<{ok:boolean;error?:string;reason?:string}>;
   releaseAudio?(callerId:string,calleeId:string,callId:string):void;
@@ -378,6 +380,7 @@ export class CallService {
       t.unref?.();
     }
     this.d.log?.("call start", { callId: c.id, video: c.video, callerId: c.callerId, calleeId: c.calleeId, callerPlatform: c.callerPlatform ?? null, backend: c.backend.provider });
+    this.fireOlcall("call:start", c.id);
     return { ok: true, call: info, media: await this.media(c, callerId) };
   }
 
@@ -468,6 +471,7 @@ export class CallService {
       this.broadcast(c, "call:state");
       if (c.pushed) this.d.push?.cancel(c.calleeId, c.id, "answered");
       this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt, userId, calleePlatform: c.calleePlatform ?? null });
+      this.fireOlcall("call:accept", c.id);
     }
     return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
   }
@@ -477,8 +481,12 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.calleeId !== userId) return { ok: false as const, error: "No such call" };
     if (c.phase === "active") return this.hangup(callId, userId);
-    if (c.phase !== "ended") this.finish(c, "declined");
+    if (c.phase !== "ended") { this.finish(c, "declined"); this.fireOlcall("call:decline", c.id); }
     return { ok: true as const, call: this.info(c) };
+  }
+
+  private fireOlcall(event: "call:start" | "call:accept" | "call:decline", callId: string) {
+    try { this.d.olcallEvent?.(event, callId); } catch { /* observer channel only: never affects the call */ }
   }
 
   /** Either side hangs up. Before answer: caller → cancelled (missed for callee), callee → declined. */

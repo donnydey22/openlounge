@@ -78,3 +78,68 @@ export function withOlcallMedia<T>(userId: string, payload: T, env: Env = proces
     return (p && typeof p === "object" && "media" in p ? { ...p, media: null } : payload) as T;
   }
 }
+
+// ── App-side call events -> call server (POST /v1/call-event) ──────────────────────────────────────────
+// Mirrors backend/olcallToken.ts (ec9bf51) and olcall/server/events.go: same secret and base64url/HMAC encoding as the
+// join token, but the claims carry "event" instead of "role", so neither token is accepted in place of the other.
+// The call server stays the only writer of call state; this only asks it to transition (Idle -> Ringing -> Answering).
+// Fire-and-forget by design: a lost event never blocks or ends a call (the server's leg simply goes Idle -> JoiningUrl
+// on join, exactly as before this was wired).
+export type OlcallEvent = "call:start" | "call:accept" | "call:decline";
+const OLCALL_EVENTS: readonly OlcallEvent[] = ["call:start", "call:accept", "call:decline"];
+export const OLCALL_EVENT_TTL_S = 120;
+export const OLCALL_EVENT_TIMEOUT_MS = 3000;
+
+export function signOlcallEventToken(secret: Buffer | string, c: { callId: string; event: OlcallEvent; exp: number }): string {
+  if (!c.callId || !OLCALL_EVENTS.includes(c.event) || !Number.isInteger(c.exp)) throw new Error("olcall event token: invalid claims");
+  const key = typeof secret === "string" ? Buffer.from(secret) : secret;
+  if (key.length < 32) throw new Error("olcall token: secret must be >= 32 bytes");
+  // Explicit field order == Go EventClaims order (callId, event, exp).
+  const p1 = b64url(Buffer.from(JSON.stringify({ callId: c.callId, event: c.event, exp: c.exp }), "utf8"));
+  return `${p1}.${b64url(createHmac("sha256", key).update(p1).digest())}`;
+}
+
+/** wss://host/v1/call -> https://host/v1/call-event (OLCALL_EVENT_URL overrides). null when not configured. */
+export function olcallEventUrl(env: Env = process.env): string | null {
+  if (env.OLCALL_EVENT_URL) return env.OLCALL_EVENT_URL;
+  const raw = env.OLCALL_URL ?? "";
+  if (!(raw.startsWith("wss://") || raw.startsWith("ws://"))) return null;
+  const u = new URL(raw);
+  u.protocol = u.protocol === "ws:" ? "http:" : "https:";
+  u.pathname = u.pathname.replace(/\/v1\/call\/?$/, "") + "/v1/call-event";
+  return u.toString();
+}
+
+/**
+ * Sends one event; resolves to the HTTP status (200 applied, 409 refused by the state machine, 401 bad token), or 0 when
+ * not configured / unreachable / timed out. Never throws, never retried (a duplicate start/accept is a 409 at best and a
+ * stale one could race a later event; dropping it only skips the Ringing/Answering observer states).
+ */
+export async function forwardOlcallEvent(event: OlcallEvent, callId: string, env: Env = process.env, now = Date.now(),
+  fetchImpl: typeof fetch = fetch): Promise<number> {
+  try {
+    const url = olcallEventUrl(env); const secret = olcallSecret(env);
+    if (!url || !secret || !callId) return 0;
+    const token = signOlcallEventToken(secret, { callId, event, exp: Math.floor(now / 1000) + OLCALL_EVENT_TTL_S });
+    const r = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+      signal: AbortSignal.timeout(OLCALL_EVENT_TIMEOUT_MS) });
+    return r.status;
+  } catch { return 0; }
+}
+
+/**
+ * Per-call ordered sender: events for one call are posted one after another (start before accept/decline), because
+ * parallel HTTP requests can arrive out of order and the server's state machine would refuse accept-before-start.
+ * Each send still has its own timeout, so a slow or dead call server delays only the observer events, never the call.
+ */
+export function olcallEventQueue(send: (event: OlcallEvent, callId: string) => Promise<number> = forwardOlcallEvent,
+  onResult: (event: OlcallEvent, callId: string, status: number) => void = () => {}) {
+  const tails = new Map<string, Promise<void>>();
+  return (event: OlcallEvent, callId: string): Promise<void> => {
+    const prev = tails.get(callId) ?? Promise.resolve();
+    const next = prev.then(() => send(event, callId)).then((st) => { try { onResult(event, callId, st); } catch { /* log only */ } }, () => {});
+    tails.set(callId, next);
+    void next.finally(() => { if (tails.get(callId) === next) tails.delete(callId); });
+    return next;
+  };
+}

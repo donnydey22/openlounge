@@ -13,7 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { RtcSessionHub } from "./rtcSession";
 import { RcRelay, PreKeyDirectory } from "./rcRelay";
 import { filePreKeyStore } from "./preKeyFileStore";
-import { olcallMediaFor, olcallSecret } from "./olcallToken";
+import { olcallMediaFor, olcallSecret, olcallEventQueue } from "./olcallToken";
 import { iosNativeVideoEnabled } from "./sfuSelect";
 import { recordServerEvent } from "./callLog";
 
@@ -68,6 +68,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     },
     close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
+  const olcallEvents = olcallEventQueue(undefined, (event, callId, status) => { if (status !== 200) log.info("[calls] olcall event not applied", { event, callId, status }); });
   svc = new CallService({
     lastCloseOf: (userId) => lastClose.get(userId) ?? null,
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
@@ -113,6 +114,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
+    olcallEvent: (event, callId) => void olcallEvents(event, callId),
   });
   const cur = svc;
   metrics.gauge("calls_live", () => cur.stats().live);
