@@ -79,6 +79,7 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:link": { peerId: "id" },
   "call:join": { callId: "id", platform: "string?" },
   "call:get": { callId: "id" },
+  "call:room": { callId: "id" },
   "call:current": {},
   "call:history": { before: "number?" },
   "call:metric": { callId: "id", acceptToAudioMs: "number?" },

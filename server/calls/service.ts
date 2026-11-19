@@ -189,8 +189,8 @@ export class CallService {
   rtcCall(callId: string): { callerId: string; calleeId: string; phase: string; linkExpiresAt?: number } | null {
     const c = this.calls.get(callId);
     if (!c) return null;
-    // until both have joined, a link call's join token expires with the link itself
-    return { callerId: c.callerId, calleeId: c.calleeId, phase: c.phase, ...(c.link && c.phase !== "active" ? { linkExpiresAt: c.link.expiresAt } : {}) };
+    // Links never expire (Donny t6066u): a link's join token is the normal short per-join token, minted at each tap.
+    return { callerId: c.callerId, calleeId: c.calleeId, phase: c.phase };
   }
 
   /** Busy = already in a call (any phase) or in a live audio room. */
@@ -210,9 +210,10 @@ export class CallService {
       if (!c || c.phase === "ended") {
         this.live.delete(userId);
         this.d.log?.("call stale busy cleared", { callId: id, why: c ? "ended" : "missing" });
-      } else if (c.link && c.phase !== "active" && this.now() > c.link.expiresAt + 5_000) {
-        this.d.log?.("call stale busy cleared", { callId: c.id, why: "link-expired" });
-        this.finish(c, "missed", { reason: "link_expired" });
+      } else if (c.link && !c.conns.get(userId)?.size) {
+        // Links never expire (Donny t6066u): a link participant with no connection in it (app gone) is not busy. The live
+        // entry stays so a reconnecting page still finds its link (call:current), and the link itself stays.
+        return this.d.inRoom(userId) ? { why: "room" } : null;
       } else if (!c.link && c.phase !== "active" && this.now() - c.createdAt > CALL_RING_TIMEOUT_MS + 5_000) {
         this.d.log?.("call stale busy cleared", { callId: c.id, why: "ring-expired" });
         this.finish(c, "missed");
@@ -583,8 +584,7 @@ export class CallService {
       return { ok: false, error: "Calls aren't available right now", reason: "calling_unavailable" };
     }
     this.absorb(c, r);
-    c.timer = setTimeout(() => this.expireLink(c.id), CALL_LINK_TTL_MS);
-    c.timer.unref?.();
+    // No expiry timer (Donny t6066u): a link stays alive and joinable until nobody needs it; nothing ends it on a clock.
     this.d.log?.("call link", { callId: c.id });
     return { ok: true, call: this.info(c), url: `${this.d.publicOrigin ?? "https://openlounge.app"}/call/${c.id}` };
   }
@@ -594,15 +594,15 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || !c.link) return { ok: false as const, error: "This call isn't available", reason: "unknown" };
     if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
-    if (c.phase !== "active" && this.now() >= c.link.expiresAt) {
-      this.finish(c, "missed", { reason: "link_expired" });
-      return { ok: false as const, error: "This call link has expired", reason: "expired", call: this.info(c) };
-    }
     const mine = this.live.get(userId);
     if (mine && mine !== c.id && this.busyReason(userId)) return { ok: false as const, error: "You're already in a call", reason: "self_busy" };
     if (this.d.inRoom(userId)) return { ok: false as const, error: "Leave the room you're in to join the call", reason: "self_busy" };
     const plat = platform === "ios" || platform === "android" || platform === "web" ? platform : undefined;
     if (plat) { if (userId === c.callerId) c.callerPlatform = plat; else c.calleePlatform = plat; }
+    // Links are always alive (Donny t6066u): re-register call:link on every tap so the call server still treats it as a
+    // link (no join timer, a leaver drops only its leg) even after it pruned or lost the link flag. Idempotent there.
+    await this.eventGate("call:link", c.id);
+    if ((c.phase as CallPhase) === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
     this.live.set(userId, c.id);
     this.bind(c, userId, connId);
     c.link.joined.add(userId);
@@ -638,9 +638,27 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c) return { ok: false as const, error: "No such call" };
     if (c.phase === "ended") return { ok: true as const, call: this.info(c) };
+    if (c.link) return this.leaveLink(c, userId);
     if (c.phase === "active") this.finish(c, "completed", { by: userId });
     else this.finish(c, userId === c.callerId ? "cancelled" : "declined");
     return { ok: true as const, call: this.info(c) };
+  }
+
+  /** Links are always alive (Donny t6066u): leaving drops only this participant; the link stays joinable for everyone. */
+  private leaveLink(c: CallRec, userId: string) {
+    if (this.live.get(userId) === c.id) this.live.delete(userId);
+    c.conns.delete(userId);
+    c.goneSince.delete(userId);
+    this.d.log?.("call link left", { callId: c.id, who: userId === c.callerId ? "caller" : "callee" });
+    return { ok: true as const, call: this.info(c) };
+  }
+
+  /** Who is in a link's live room right now (read-only; the link join screen polls it). */
+  room(callId: unknown, userId: string) {
+    const c = this.get(callId, userId);
+    if (!c || !c.link || c.phase === "ended") return { ok: false as const };
+    const here = [c.callerId, c.calleeId].filter((u) => this.live.get(u) === c.id && !!c.conns.get(u)?.size);
+    return { ok: true as const, here };
   }
 
   /** Mid-call camera on/off ("upgrade to video"): relayed to the other side. */
@@ -792,7 +810,7 @@ export class CallService {
         continue;
       }
       // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 30 s
-      if (c.phase !== "active" && c.link) continue; // no ring to cancel: the link's own ten-minute expiry ends it
+      if (c.link) continue; // links are always alive (Donny t6066u): no ring to cancel, no grace/orphan clock ends one
       if (c.phase !== "active") {
         // Half-open ring: the caller is still "online" (another tab / device / a lingering chat socket) but every
         // connection that was in this call has closed (call page closed, WebView killed) and none re-attached

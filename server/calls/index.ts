@@ -205,6 +205,8 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
   socket.on("call:join", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().joinLink(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't join the call" }))),
   );
+  // Link join screen (Donny t6067u): who is in the link's live room. Read-only.
+  socket.on("call:room", ({ callId }: { callId: string }, ack: AckFn = noop) => authed(ack, (uid) => ack(s().room(callId, uid))));
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),
   );

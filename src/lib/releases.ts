@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android62: signed 0.3.45 (versionCode 62) from ol-baotime-binding-android 70d3e46, tag ol-android-62 — BaoTime seven-state binding on top of 61 (relay-only, link calls straight to Connecting). Unit tests 86 pass. Physical-device calls not yet run. */
+/** Android63: signed 0.3.46 (versionCode 63) from ol-alwaysalive-android ed11130, tag ol-android-63 — always-alive call links (server/web lifecycle; app code same as 62). Unit tests 86 pass. Physical-device calls not yet run. */
 export const ANDROID_RELEASE = {
+  version: "0.3.46",
+  build: 63,
+  file: "/downloads/openlounge-0.3.46-63.apk",
+  size: "56.6 MB",
+  sha256: "f5e15fb1524f6cb644c09dc7f74c47db5bdef779a6bdda44a99c2ace020a89e4",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.45 (62) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  61, 60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.45",
   build: 62,
   file: "/downloads/openlounge-0.3.45-62.apk",
   size: "56.6 MB",
   sha256: "b648a305414f16f7261364b2fd3c406dc71c315cd7b5fc8ce1d58bd637ce88e3",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.44 (61) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.44",
-  build: 61,
-  file: "/downloads/openlounge-0.3.44-61.apk",
-  size: "56.6 MB",
-  sha256: "e06c149a8e678efc4ecf5b6abdc925dc9f3f2b3f6f845b1d770729c661ef3835",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 

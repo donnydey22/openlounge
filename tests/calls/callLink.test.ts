@@ -1,6 +1,6 @@
 // Call links (Donny, Nov 18 2026): no waiting room, no host approval, no ring. The server mints the call and registers it
-// with the call server (call:link, ten-minute LinkJoinTimeout); each person joins by tapping the link, straight to
-// Connecting; the join token expires with the link; an unjoined link ends as expired after ten minutes.
+// with the call server (call:link); each person joins by tapping the link, straight to Connecting.
+// Nov 19 2026 (Donny t6066u): links are always alive: no expiry, no sweep, a leaver drops only themselves.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CallService, CALL_LINK_TTL_MS } from "../../server/calls/service";
@@ -81,7 +81,7 @@ test("join is refused for a ring call (no link) and for a busy user", async () =
   } finally { s.dispose?.(); }
 });
 
-test("an unjoined link survives the ring timeout and the caller-gone sweep, then expires at ten minutes", async () => {
+test("links are always alive (t6066u): no ring timeout, no caller-gone sweep, no ten-minute expiry", async () => {
   const clock = { t: 1_000_000 }; const msgs: Array<{ outcome: string }> = [];
   const s = svc({ clock, msgs: msgs as unknown[] });
   try {
@@ -91,11 +91,33 @@ test("an unjoined link survives the ring timeout and the caller-gone sweep, then
     (s as unknown as { sweep(): void }).sweep();
     assert.equal(s.isBusy("a"), true); // busyReason does not heal it as a stale ring
     assert.equal((await s.get_(r.call.id, "a")).ok && (await s.get_(r.call.id, "a")).call?.phase, "calling");
-    clock.t = r.call.createdAt + CALL_LINK_TTL_MS; // the link's deadline
+    clock.t = r.call.createdAt + CALL_LINK_TTL_MS * 10; // far past the old ten-minute deadline
+    (s as unknown as { sweep(): void }).sweep();
     const late = await s.joinLink(r.call.id, "b", "cb");
-    assert.equal(late.ok, false); assert.equal(!late.ok && late.reason, "expired");
-    assert.deepEqual(msgs.map((m) => m.outcome), ["missed"]);
-    assert.equal(s.isBusy("a"), false);
+    assert.ok(late.ok && late.media); assert.equal(late.ok && late.call.phase, "active");
+    clock.t += 24 * 3_600_000; (s as unknown as { sweep(): void }).sweep(); // a day in the room, both offline: still alive
+    assert.deepEqual(msgs, []);
+    assert.equal((await s.get_(r.call.id, "a")).ok && (await s.get_(r.call.id, "a")).call?.phase, "active");
+  } finally { s.dispose?.(); }
+});
+
+test("a link leaver drops only themselves; the link stays joinable, even empty (t6066u)", async () => {
+  const seen: string[] = []; const msgs: unknown[] = [];
+  const idle = (id: string) => ({ status: 200, legs: { caller: { callId: id, leg: "caller", state: "idle", seq: 0 }, callee: { callId: id, leg: "callee", state: "idle", seq: 0 } } });
+  const s = svc({ hook: (e, id) => { seen.push(e); return Promise.resolve(e === "call:link" ? idle(id) : { status: 200, legs: {} }); }, msgs });
+  try {
+    const r = await s.createLink("a", "b"); assert.ok(r.ok); if (!r.ok) return;
+    await s.joinLink(r.call.id, "a", "ca"); await s.joinLink(r.call.id, "b", "cb");
+    assert.deepEqual(s.room(r.call.id, "a"), { ok: true, here: ["a", "b"] });
+    const h = s.hangup(r.call.id, "b"); assert.ok(h.ok); assert.equal(h.ok && h.call.phase, "active");
+    assert.equal(s.isBusy("b"), false); assert.equal(s.isBusy("a"), true);
+    assert.deepEqual(s.room(r.call.id, "a"), { ok: true, here: ["a"] });
+    s.hangup(r.call.id, "a"); // everyone left
+    assert.deepEqual(s.room(r.call.id, "a"), { ok: true, here: [] });
+    assert.deepEqual(msgs, []); // nothing ended
+    assert.ok(!seen.includes("call:hangup") && !seen.includes("call:end")); // the call server is never told to end it
+    const back = await s.joinLink(r.call.id, "b", "cb2"); assert.ok(back.ok && back.media); // empty link rejoined
+    assert.equal(seen.filter((e) => e === "call:link").length, 4); // created + re-registered on every tap
   } finally { s.dispose?.(); }
 });
 
@@ -114,13 +136,13 @@ test("join token: a link call's olcall token expires with the link, not after 30
   assert.equal(olcallMediaFor({ id: "r", callerId: "a", calleeId: "b" }, "a", env, now)!.expiresAt, Math.floor(now / 1000) + 300);
 });
 
-test("rtcCall hands the link deadline to the token minter only until both have joined", async () => {
+test("rtcCall never hands a link deadline to the token minter (links never expire; normal per-join tokens)", async () => {
   const s = svc();
   try {
     const r = await s.createLink("a", "b"); assert.ok(r.ok); if (!r.ok) return;
-    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, r.call.expiresAt);
+    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined);
     await s.joinLink(r.call.id, "a", "ca"); await s.joinLink(r.call.id, "b", "cb");
-    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined); // active: normal short tokens for rejoin
+    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined);
   } finally { s.dispose?.(); }
 });
 
@@ -130,10 +152,10 @@ test("link calls are excluded from the 15 s caller-left cleanup (creator offline
   const s = svc({ clock, msgs });
   try {
     const r = await s.createLink("a", "b"); assert.ok(r.ok); if (!r.ok) return;
-    const j = await s.joinLink(r.call.id, "b"); assert.ok(j.ok);
+    const j = await s.joinLink(r.call.id, "b", "cb"); assert.ok(j.ok);
     (s as unknown as { _sweep: () => void })._sweep();
     clock.t += 60_000; (s as unknown as { _sweep: () => void })._sweep();
-    assert.deepEqual(msgs, []); // still open: the link's own ten-minute expiry ends it, not the caller-left cleanup
+    assert.deepEqual(msgs, []); // still open: links are always alive (t6066u)
     assert.equal(s.isBusy("b"), true); // b is actually inside
     assert.equal(s.isBusy("a"), false); // a has not tapped: not busy
   } finally { s.dispose?.(); }

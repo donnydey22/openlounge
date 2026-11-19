@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
 import { baoTone } from "@/lib/calls/baoTone";
 import { AudioRouteButton, RouteNotice } from "./AudioRouteButton";
+import { LinkRoom } from "./LinkRoom";
 import css from "./calls.module.css";
 
 /** iPhone app video: show the local self-view this long after connect when the other side has no camera. */
@@ -582,6 +583,7 @@ export function CallOverlay() {
               Weak connection
             </div>
           )}
+          {s.call?.link && active && <LinkRoom s={s} />}
           {s.needsGesture && active && (
             <button type="button" onClick={() => void callEngine.startAudio()} className="pointer-events-auto rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-zinc-900">
               Tap to hear {p.name.split(" ")[0]}
