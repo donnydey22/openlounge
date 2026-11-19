@@ -88,6 +88,8 @@ export class CallSession {
     // One video m-line from the start (caller offers it; callee flips it to sendrecv) so the camera can be turned on
     // or off mid-call with replaceTrack only: no renegotiation, same PC, same ICE (RingRTC: one PC per call).
     if (this.o.role === "caller") this.videoTx = pc.addTransceiver("video", { direction: "sendrecv", streams: [stream] });
+    // a camera that came up while the ICE servers were awaited (setVideoTrack before the PC existed) rides from the start
+    if (this.videoTx && this.localVideo) await this.videoTx.sender.replaceTrack(this.localVideo);
     this.localStream = stream;
     this.socket.on("rtc:signal", this.onSignal);
     if (typeof window !== "undefined") window.addEventListener("online", this.onlineH);
