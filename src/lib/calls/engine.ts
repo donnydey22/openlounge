@@ -163,6 +163,8 @@ function buzz(kind: "light" | "medium" | "success" | "warning") {
 }
 
 export class CallEngine {
+  /** a call link whose call:join is in flight: a concurrent resume's "no call" is stale for it */
+  private linkJoining: string | null = null;
   private s: CallSnapshot = initial();
   private listeners = new Set<() => void>();
   private socket: RealtimeClient | null = null;
@@ -296,7 +298,11 @@ export class CallEngine {
   }
 
   /** after (re)connect + auth: pick up a call that is still live (page reload, network switch) */
+  // the call this answer can speak for: one the page already had when it asked. A call link tapped on a cold page
+  // runs openFromLink and this resume together; "no call" for the asked-before state must never end the call the
+  // link join set up meanwhile (Donny's video, Nov 19 2026: link opened, media up, page said "Call ended").
   async resume(attempt = 0): Promise<void> {
+    const askedFor = this.s.call?.id || null;
     try {
       const r = await this.req<{ ok: boolean; call?: CallInfo | null }>("call:current", {});
       if (!r.ok) {
@@ -309,7 +315,7 @@ export class CallEngine {
       const call = r.call;
       if (!call) {
         // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
-        if (this.s.call && this.busy) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
+        if (this.s.call && this.busy && askedFor && this.s.call.id === askedFor && this.linkJoining !== askedFor) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
         return;
       }
       if (this.s.call?.id === call.id && (this.rtc || this.native)) {
@@ -381,7 +387,9 @@ export class CallEngine {
     this.clearEnd();
     const role = c.callerId === this.meId ? "caller" : "callee";
     this.set({ ...initial(), call: c, role, ui: "connecting", v: this.s.v + 1 });
-    const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const);
+    this.linkJoining = c.id;
+    const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const)
+      .finally(() => { if (this.linkJoining === c.id) this.linkJoining = null; });
     const media = r.ok && "media" in r ? (r.media ?? null) : null;
     if (!r.ok || !media) {
       this.set({ ...initial(), error: (!r.ok && r.error) || "Couldn't join the call", v: this.s.v + 1 });
