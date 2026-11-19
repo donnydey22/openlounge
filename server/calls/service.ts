@@ -3,8 +3,9 @@
 //
 //
 // Lifecycle: calling (caller sent call:start) → ringing (a callee device acked) → active (accepted) → ended.
-// Outcomes: completed | missed (45s timeout) | declined | cancelled (caller hung up first) | busy | failed.
+// Outcomes: completed | missed (30 s ring timeout) | declined | cancelled (caller hung up first) | busy | failed.
 // Every ended call leaves one service message in the DM (store.appendCallMessage).
+import { OLCALL_EVENT_TIMEOUT_MS, phaseOfLeg, type OlcallEvent, type OlcallFireResult, type OlcallLegSnapshot } from "./olcallToken";
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 import type { CallMediaBackend } from "./mediaBackend";
@@ -13,7 +14,7 @@ const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
   return Number.isFinite(v) && v > 0 ? v : d;
 };
-export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
+export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 30_000); // = olcall RingTimeout (states.go), BaoTime ring expiry
 /** No callee device acked call:incoming within this window → send the push anyway (unacked "foreground" socket). */
 export const CALL_ACK_FALLBACK_MS = num("CALL_ACK_FALLBACK_MS", 4_000);
 /** a call whose participants both lost every WebSocket for this long is over (LiveKit webhook usually ends it sooner) */
@@ -48,13 +49,15 @@ export const CALL_BG_RING_PUSH_MS = num("CALL_BG_RING_PUSH_MS", 1_500);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 /**
  * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
- * ring → accept → connect (ring ≤ 45 s). Once connected, LiveKit keeps the client on server-refreshed tokens (sent right
+ * ring → accept → connect (ring ≤ 30 s). Once connected, LiveKit keeps the client on server-refreshed tokens (sent right
  * after join and every few minutes, ~10 min validity), so resume and LiveKit's own full reconnect work in calls of any
  * length (verified against livekit-server 1.13: /workspace/calls/token-ttl). Our own rejoin asks call:get, which re-mints
  * while the call is live. After the call ends nothing is re-minted, and a join with a still-valid refreshed token into an
  * ended call's room is kicked by the LiveKit webhook guard (calls/index.ts) — the credential dies with the call.
  */
 export const CALL_TOKEN_TTL_S = num("CALL_TOKEN_TTL_S", 180);
+/** = olcall LinkJoinTimeout (events.go): a call link stays joinable for ten minutes, then ends as expired */
+export const CALL_LINK_TTL_MS = num("CALL_LINK_TTL_MS", 600_000);
 /** ended calls answer call:get ("Call ended") — and keep the webhook guard armed — for a while: longer than a
  *  LiveKit-refreshed token stays valid (10 min) plus LiveKit's 1 min clock leeway */
 const ENDED_KEEP_MS = 12 * 60_000;
@@ -68,6 +71,12 @@ const QUALITY_SILENT_KBPS = 2;
 const QUALITY_MAX_SAMPLES = 720; // 1 h of 5 s reports per participant
 
 export interface CallDeps {
+  /** Ask the olcall server (the only writer of call state) to apply an app-side event. Must never throw. For call:start
+   *  the result gates the ring: the callee is rung (socket call:incoming, VoIP/FCM push) only after the call server's
+   *  callee leg reports Ringing; anything else ends the call as Failed with no ring (Donny, Nov 18 2026, strict). */
+  olcallEvent?(event: OlcallEvent, callId: string): Promise<OlcallFireResult> | void;
+  /** public site origin for call links (default https://openlounge.app) */
+  publicOrigin?: string;
   /** Platform-owned generic audio occupancy, atomically excludes room/call races. DO serializes starts. */
   claimAudio?(callerId:string, calleeId:string, callId:string):Promise<{ok:boolean;error?:string;reason?:string}>;
   releaseAudio?(callerId:string,calleeId:string,callId:string):void;
@@ -120,6 +129,10 @@ interface CallRec {
   iosNativeVideo?: boolean;
   endedAt: number | null;
   outcome: CallOutcome | null;
+  /** created by call:link: no ring, no push, no accept; each participant joins by tapping the link before expiresAt */
+  link?: { expiresAt: number; joined: Set<string> };
+  /** The call server's latest leg snapshots (olcall/server/states.go). call:state relays only these. */
+  fsm: { caller?: OlcallLegSnapshot; callee?: OlcallLegSnapshot };
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
   tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
   /** Captured once at call start (P2P/rcRelay only); never migrated mid-call. */
@@ -173,9 +186,11 @@ export class CallService {
   }
 
   /** rtcSession lookup: participants + phase of a call (null = unknown). */
-  rtcCall(callId: string): { callerId: string; calleeId: string; phase: string } | null {
+  rtcCall(callId: string): { callerId: string; calleeId: string; phase: string; linkExpiresAt?: number } | null {
     const c = this.calls.get(callId);
-    return c ? { callerId: c.callerId, calleeId: c.calleeId, phase: c.phase } : null;
+    if (!c) return null;
+    // until both have joined, a link call's join token expires with the link itself
+    return { callerId: c.callerId, calleeId: c.calleeId, phase: c.phase, ...(c.link && c.phase !== "active" ? { linkExpiresAt: c.link.expiresAt } : {}) };
   }
 
   /** Busy = already in a call (any phase) or in a live audio room. */
@@ -195,7 +210,10 @@ export class CallService {
       if (!c || c.phase === "ended") {
         this.live.delete(userId);
         this.d.log?.("call stale busy cleared", { callId: id, why: c ? "ended" : "missing" });
-      } else if (c.phase !== "active" && this.now() - c.createdAt > CALL_RING_TIMEOUT_MS + 5_000) {
+      } else if (c.link && c.phase !== "active" && this.now() > c.link.expiresAt + 5_000) {
+        this.d.log?.("call stale busy cleared", { callId: c.id, why: "link-expired" });
+        this.finish(c, "missed", { reason: "link_expired" });
+      } else if (!c.link && c.phase !== "active" && this.now() - c.createdAt > CALL_RING_TIMEOUT_MS + 5_000) {
         this.d.log?.("call stale busy cleared", { callId: c.id, why: "ring-expired" });
         this.finish(c, "missed");
       } else return { why: "call", callId: c.id, phase: c.phase, ageMs: this.now() - c.createdAt };
@@ -221,7 +239,8 @@ export class CallService {
       answeredAt: c.answeredAt,
       endedAt: c.endedAt,
       outcome: c.outcome,
-      expiresAt: c.createdAt + CALL_RING_TIMEOUT_MS,
+      expiresAt: c.link ? c.link.expiresAt : c.createdAt + CALL_RING_TIMEOUT_MS,
+      ...(c.link ? { link: true } : {}),
       caller: this.d.peer(c.callerId) ?? anon(c.callerId),
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
       ...(c.goneSince?.size ? { offline: [...c.goneSince.keys()] } : {}),
@@ -240,7 +259,9 @@ export class CallService {
   private async media(c: CallRec, userId: string): Promise<CallMedia | null> {
     if (c.phase === "ended" || (userId !== c.callerId && userId !== c.calleeId)) return null;
     // The called party never receives call media/ICE credentials before explicitly accepting the call.
-    if (userId === c.calleeId && c.phase !== "active") return null;
+    if (userId === c.calleeId && c.phase !== "active" && !c.link) return null;
+    // A link call: tapping the link is the consent. Nobody (creator included) gets media before joining it.
+    if (c.link && c.phase !== "active" && !c.link.joined.has(userId)) return null;
     let t = c.tokens.get(userId);
     if (!t || this.now() - t.at > (CALL_TOKEN_TTL_S * 1000) / 2) t = this.mint(c, userId);
     const media = await t.p;
@@ -260,9 +281,44 @@ export class CallService {
     return false;
   }
 
-  private broadcast(c: CallRec, ev: string, extra: Record<string, unknown> = {}) {
-    const info = this.info(c);
-    for (const u of [c.callerId, c.calleeId]) this.d.emitUser(u, ev, { call: info, ...extra });
+  /**
+   * call:state is relay-only (Donny, Nov 18 2026): each participant gets the phase of THEIR leg as the call server's
+   * state machine last reported it, plus that snapshot as `state`. This record's own phase is internal (tokens, push
+   * cancel, history) and is never emitted. No snapshot for a leg -> nothing is sent to that participant.
+   * Without an olcallEvent hook there is no call server (unit tests only) and the internal view is sent as before.
+   */
+  private relayState(c: CallRec, users: string[], extra: Record<string, unknown> = {}) {
+    for (const u of users) {
+      if (!this.d.olcallEvent) { this.d.emitUser(u, "call:state", { call: this.info(c), ...extra }); continue; }
+      const p = this.statePayload(c, u);
+      if (!p) { this.d.log?.("call state not relayed: no call-server snapshot", { callId: c.id, leg: u === c.callerId ? "caller" : "callee" }); continue; }
+      this.d.emitUser(u, "call:state", { ...p, ...extra });
+    }
+  }
+
+  private statePayload(c: CallRec, userId: string): { call: CallInfo; state: OlcallLegSnapshot } | null {
+    const snap = c.fsm[userId === c.callerId ? "caller" : "callee"];
+    return snap ? { call: { ...this.info(c), phase: phaseOfLeg(snap) }, state: snap } : null;
+  }
+
+  /** Keeps the newest snapshot per leg (seq only grows on the call server). */
+  private absorb(c: CallRec, r: OlcallFireResult) {
+    for (const k of ["caller", "callee"] as const) {
+      const n = r.legs[k];
+      if (n && n.callId === c.id && (!c.fsm[k] || n.seq >= c.fsm[k]!.seq)) c.fsm[k] = n;
+    }
+  }
+
+  /** Ask the call server to apply one event, then relay what it returned to `users`. Never throws. */
+  private fireAndRelay(c: CallRec, event: OlcallEvent, users: string[], extra: Record<string, unknown> = {}) {
+    if (!this.d.olcallEvent) { this.relayState(c, users, extra); return; }
+    let p: Promise<OlcallFireResult> | void;
+    try { p = this.d.olcallEvent(event, c.id); } catch { p = undefined; }
+    void Promise.resolve(p).catch(() => undefined).then((r) => {
+      if (r) this.absorb(c, r);
+      if (!r || r.status !== 200) this.d.log?.("call event not applied by call server", { callId: c.id, event, status: r ? r.status : 0 });
+      this.relayState(c, users, extra);
+    });
   }
 
   private bind(c: CallRec, userId: string, connId?: string) {
@@ -327,6 +383,7 @@ export class CallService {
       answeredAt: null,
       endedAt: null,
       outcome: null,
+      fsm: {},
       tokens: new Map(),
       backend,
       timer: null,
@@ -355,19 +412,32 @@ export class CallService {
     this.mint(c, callerId);
     c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
     c.timer.unref?.();
+    // The ring follows the call server's Ringing transition, never the other way round: no Ringing snapshot within
+    // OLCALL_EVENT_TIMEOUT_MS (3 s) means no ring anywhere and the call ends as Failed.
+    if (this.d.olcallEvent) {
+      const r = await this.eventGate("call:start", c.id);
+      this.absorb(c, r);
+      if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
+      if (r.status !== 200 || r.legs.callee?.state !== "ringing") {
+        this.d.log?.("call ring refused by call server", { callId: c.id, status: r.status, callee: r.legs.callee?.state ?? null });
+        // finish() sends call:end, which releases the server's pending legs and ring expiry if the start landed late
+        this.finish(c, "failed", { silentToCallee: true, reason: "call_server_unavailable" });
+        return { ok: false, error: "Couldn't place the call. Try again in a moment.", reason: "call_server_unavailable", call: this.info(c) };
+      }
+    }
     const info = this.info(c);
     const calleeMedia = await this.media(c, calleeId);
     if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
     this.d.emitUser(calleeId, "call:incoming", { call: info, media: calleeMedia });
     this.d.log?.("call ring emit", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null, foreground: this.d.isForeground(calleeId) });
-    this.d.emitUser(callerId, "call:state", { call: info }); // caller's other tabs show "Calling…"
+    this.relayState(c, [callerId]); // caller's other tabs: the caller leg as the call server reported it
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
       this.d.push.incoming(calleeId, info);
       this.armRepush(c, info);
     } else if (this.d.push) {
       // A "foreground" socket that never acks (frozen/unattended tab, stale WebView) used to mean no ring anywhere
-      // for the full 45 s. If no callee device acks in time, fall back to push so their phone still rings.
+      // for the full 30 s. If no callee device acks in time, fall back to push so their phone still rings.
       const t = setTimeout(() => {
         if (c.phase !== "calling" || c.pushed || !this.d.push) return;
         c.pushed = true;
@@ -416,9 +486,13 @@ export class CallService {
   }
 
   /** Ended-call view for a participant (null while live/unknown): lets a client stuck on a finished call clear itself. */
-  endedFor(callId: unknown, userId: string): CallInfo | null {
+  /** A participant still reporting on an ended call gets the ended call:state again: the call server's snapshot. */
+  endedFor(callId: unknown, userId: string): { id: string; payload: Record<string, unknown> } | null {
     const c = this.get(callId, userId);
-    return c && c.phase === "ended" ? this.info(c) : null;
+    if (!c || c.phase !== "ended") return null;
+    if (!this.d.olcallEvent) return { id: c.id, payload: { call: this.info(c) } };
+    const p = this.statePayload(c, userId);
+    return p ? { id: c.id, payload: p } : null;
   }
 
   private get(callId: unknown, userId: string) {
@@ -443,7 +517,7 @@ export class CallService {
       this.d.log?.("call ring ack", { callId: c.id, ms: c.ackAt - c.createdAt });
       this.metrics.ringMs.push(c.ackAt - c.createdAt);
       if (this.metrics.ringMs.length > METRIC_KEEP) this.metrics.ringMs.shift();
-      this.broadcast(c, "call:state");
+      this.relayState(c, [c.callerId, c.calleeId]);
     }
     return { ok: true as const, call: this.info(c) };
   }
@@ -465,9 +539,9 @@ export class CallService {
       c.answeredAt = this.now();
       if (c.timer) clearTimeout(c.timer);
       c.timer = null;
-      this.broadcast(c, "call:state");
       if (c.pushed) this.d.push?.cancel(c.calleeId, c.id, "answered");
       this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt, userId, calleePlatform: c.calleePlatform ?? null });
+      this.fireAndRelay(c, "call:accept", [c.callerId, c.calleeId]);
     }
     return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
   }
@@ -479,6 +553,84 @@ export class CallService {
     if (c.phase === "active") return this.hangup(callId, userId);
     if (c.phase !== "ended") this.finish(c, "declined");
     return { ok: true as const, call: this.info(c) };
+  }
+
+  /** call:start to the call server, bounded by OLCALL_EVENT_TIMEOUT_MS even if the hook itself stalls. */
+  /**
+   * Open Lounge call link (Donny, Nov 18 2026): no waiting room, no host approval, no ring. The server mints the call
+   * and registers it with the call server (call:link, which arms its own ten-minute LinkJoinTimeout); nobody is in the
+   * call and nobody shows busy until they tap the link. The creator only shares the URL. Fails closed: if the call
+   * server does not accept call:link (200), there is no link.
+   */
+  async createLink(creatorId: string, peerId: string): Promise<{ ok: true; call: CallInfo; url: string } | { ok: false; error: string; reason?: string }> {
+    const pol = this.d.policy(creatorId, peerId);
+    if (!pol.ok) return { ok: false, error: pol.error, reason: pol.reason };
+    if (this.limited(creatorId)) return { ok: false, error: "Slow down a little 🙂 Try again in a few minutes.", reason: "rate" };
+    const backend = this.selectBackend({ callerId: creatorId, calleeId: peerId, video: false, iosNativeVideo: false });
+    if (!backend) return { ok: false, error: "Calls aren't available right now", reason: "media_unavailable" };
+    const now = this.now();
+    const c: CallRec = {
+      id: randomUUID(), callerId: creatorId, calleeId: peerId, video: false, everVideo: false, phase: "calling",
+      createdAt: now, ackAt: null, answeredAt: null, endedAt: null, outcome: null, fsm: {}, tokens: new Map(), backend,
+      timer: null, pushed: false, orphanSince: null, goneSince: new Map(), conns: new Map(),
+      link: { expiresAt: now + CALL_LINK_TTL_MS, joined: new Set() },
+    };
+    this.calls.set(c.id, c);
+    const r = await this.eventGate("call:link", c.id);
+    if (r.status !== 200) {
+      this.calls.delete(c.id);
+      this.d.log?.("call link refused", { callId: c.id, status: r.status });
+      return { ok: false, error: "Calls aren't available right now", reason: "calling_unavailable" };
+    }
+    this.absorb(c, r);
+    c.timer = setTimeout(() => this.expireLink(c.id), CALL_LINK_TTL_MS);
+    c.timer.unref?.();
+    this.d.log?.("call link", { callId: c.id });
+    return { ok: true, call: this.info(c), url: `${this.d.publicOrigin ?? "https://openlounge.app"}/call/${c.id}` };
+  }
+
+  /** A participant tapped the link: they are in the call now (straight to Connecting, no accept). */
+  async joinLink(callId: unknown, userId: string, connId?: string, platform?: unknown) {
+    const c = this.get(callId, userId);
+    if (!c || !c.link) return { ok: false as const, error: "This call isn't available", reason: "unknown" };
+    if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
+    if (c.phase !== "active" && this.now() >= c.link.expiresAt) {
+      this.finish(c, "missed", { reason: "link_expired" });
+      return { ok: false as const, error: "This call link has expired", reason: "expired", call: this.info(c) };
+    }
+    const mine = this.live.get(userId);
+    if (mine && mine !== c.id && this.busyReason(userId)) return { ok: false as const, error: "You're already in a call", reason: "self_busy" };
+    if (this.d.inRoom(userId)) return { ok: false as const, error: "Leave the room you're in to join the call", reason: "self_busy" };
+    const plat = platform === "ios" || platform === "android" || platform === "web" ? platform : undefined;
+    if (plat) { if (userId === c.callerId) c.callerPlatform = plat; else c.calleePlatform = plat; }
+    this.live.set(userId, c.id);
+    this.bind(c, userId, connId);
+    c.link.joined.add(userId);
+    if (c.phase !== "active" && c.link.joined.has(c.callerId) && c.link.joined.has(c.calleeId)) {
+      c.phase = "active";
+      c.answeredAt = this.now();
+      if (c.timer) clearTimeout(c.timer);
+      c.timer = null;
+      this.d.log?.("call link joined", { callId: c.id, waitMs: c.answeredAt - c.createdAt });
+    }
+    return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
+  }
+
+  /** Ten minutes and nobody completed the link: it ends as expired (the call server's legs end Terminal Expired). */
+  private expireLink(callId: string) {
+    const c = this.calls.get(callId);
+    if (!c || c.phase !== "calling" || !c.link) return;
+    this.finish(c, "missed", { reason: "link_expired" });
+  }
+
+  private async eventGate(event: OlcallEvent, callId: string): Promise<OlcallFireResult> {
+    const none: OlcallFireResult = { status: 0, legs: {} };
+    let t: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const p = this.d.olcallEvent?.(event, callId);
+      if (!p) return none;
+      return await Promise.race([p.catch(() => none), new Promise<OlcallFireResult>((res) => { t = setTimeout(() => res(none), OLCALL_EVENT_TIMEOUT_MS); })]);
+    } catch { return none; } finally { if (t) clearTimeout(t); }
   }
 
   /** Either side hangs up. Before answer: caller → cancelled (missed for callee), callee → declined. */
@@ -616,8 +768,11 @@ export class CallService {
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
     c.tokens.clear(); // the media credential dies with the call: nothing is handed out or re-minted after this
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;
-    if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
-    else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });
+    // the call server ends its legs first; what it returns is what both sides are told
+    const ev: OlcallEvent = outcome === "declined" && wasRinging ? "call:decline" : outcome === "missed" ? "call:timeout"
+      : outcome === "cancelled" || (outcome === "completed" && opts.by && !opts.reason) || outcome === "declined" ? "call:hangup" : "call:end";
+    if (!opts.silentToCallee) this.fireAndRelay(c, ev, [c.callerId, c.calleeId], { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
+    else this.fireAndRelay(c, ev, [c.callerId]);
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
     c.backend.close(c.id);
     this.d.appendCallMessage({ id: c.id, callerId: c.callerId, video: c.everVideo, outcome, durationSec }, c.calleeId);
@@ -636,11 +791,12 @@ export class CallService {
         if (c.endedAt && now - c.endedAt > ENDED_KEEP_MS) this.calls.delete(c.id);
         continue;
       }
-      // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 45s
+      // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 30 s
+      if (c.phase !== "active" && c.link) continue; // no ring to cancel: the link's own ten-minute expiry ends it
       if (c.phase !== "active") {
         // Half-open ring: the caller is still "online" (another tab / device / a lingering chat socket) but every
         // connection that was in this call has closed (call page closed, WebView killed) and none re-attached
-        // (a reloaded page re-binds via call:get within ~1 s). Cancel instead of ringing the callee for 45 s.
+        // (a reloaded page re-binds via call:get within ~1 s). Cancel instead of ringing the callee for 30 s.
         const callerSet = c.conns.get(c.callerId);
         const callerDetached = !!callerSet && callerSet.size === 0;
         if (!this.d.isConnected(c.callerId) || callerDetached) {

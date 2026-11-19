@@ -88,7 +88,7 @@ test("ended view: only participants of an ENDED call get it (drives the call:dia
     const a = await s.start("a", "b", false, "ca"); assert.ok(a.ok); if (!a.ok) return;
     assert.equal(s.endedFor(a.call.id, "b"), null, "live call");
     await s.hangup(a.call.id, "a");
-    assert.equal(s.endedFor(a.call.id, "b")?.phase, "ended");
+    assert.equal((s.endedFor(a.call.id, "b")?.payload.call as { phase?: string } | undefined)?.phase, "ended");
     assert.equal(s.endedFor(a.call.id, "z"), null, "not a participant");
     assert.equal(s.endedFor("nope", "b"), null);
   } finally { s.dispose(); }

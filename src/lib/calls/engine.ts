@@ -21,6 +21,11 @@ import { swapVideoTrack } from "./frameHold";
 export type CallUi = "incoming" | "outgoing" | "connecting" | "active" | "ended";
 export type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
 
+/** Where a hang-up came from: the page's End button, a native End (CallKit / Telecom / call screen), or a failure path. */
+export type HangupSource = "button" | "native" | "failure";
+/** Connecting stalled this long: the End button comes back so nobody is stuck on a dead call screen. */
+export const CONNECTING_ESCAPE_MS = 20_000;
+
 export interface CallSnapshot {
   call: CallInfo | null;
   role: "caller" | "callee" | null;
@@ -180,6 +185,8 @@ export class CallEngine {
   private routeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private stopWebRouteWatch: (() => void) | null = null;
   private lastPeer: { id: string; video: boolean } | null = null;
+  /** when the FSM entered Connecting (hang-up gate escape clock); null outside Connecting */
+  private connectingSince: number | null = null;
 
   // ---------- store plumbing ----------
   subscribe = (l: () => void) => {
@@ -189,7 +196,9 @@ export class CallEngine {
   snapshot = () => this.s;
   private set(patch: Partial<CallSnapshot>) {
     const was = this.s.reconnecting;
+    const wasUi = this.s.ui;
     this.s = { ...this.s, ...patch, v: this.s.v + 1 };
+    if (this.s.ui !== wasUi) this.connectingSince = this.s.ui === "connecting" ? Date.now() : null;
     if (this.s.reconnecting !== was) this.armStuckGuard();
     if (typeof window !== "undefined") (window as unknown as { __olCallLive?: boolean }).__olCallLive = this.busy;
     for (const l of this.listeners) l();
@@ -323,6 +332,12 @@ export class CallEngine {
         this.media = g.media ?? null;
         this.set({ call: g.call, role, ui: "connecting", connectedAt: this.s.connectedAt ?? Date.now() });
         await this.connect(true);
+      } else if (g.call.link && g.call.phase !== "ended") {
+        // a link call this user already joined (the server only hands media to joined participants): rejoin quietly
+        if (!g.media) return;
+        this.media = g.media;
+        this.set({ call: g.call, role, ui: "connecting" });
+        await this.connect(true);
       } else if (role === "callee" && g.call.phase !== "active" && g.call.phase !== "ended") {
         this.onIncoming({ call: g.call, media: g.media ?? null });
       } else if (role === "caller" && (g.call.phase === "calling" || g.call.phase === "ringing")) {
@@ -343,6 +358,8 @@ export class CallEngine {
       const c = g.call;
       const peerId = c.callerId === this.meId ? c.calleeId : c.callerId;
       if (c.phase === "ended") return { peerId, ended: true };
+      // A call link: no ring screen and no Accept. Tapping the link is the join, straight to Connecting.
+      if (c.link) return { peerId, ended: !(await this.joinLink(c)) };
       if (c.calleeId === this.meId && c.phase !== "active") {
         if (this.s.call?.id !== c.id) this.onIncoming({ call: c, media: g.media ?? null });
         if (accept) await this.accept(c.video);
@@ -351,6 +368,29 @@ export class CallEngine {
     } catch {
       return { peerId: null, ended: true };
     }
+  }
+
+  /** Join a call link (Donny, Nov 18 2026): the server mints the call; the joiner goes straight to Connecting. */
+  private async joinLink(c: CallInfo): Promise<boolean> {
+    if (this.s.call?.id === c.id && (this.rtc || this.native || this.roomPromise)) return true; // already joining or in it
+    if (this.busy && this.s.call?.id !== c.id) {
+      this.set({ error: "You're already in a call" });
+      return false;
+    }
+    unlockAudio();
+    this.clearEnd();
+    const role = c.callerId === this.meId ? "caller" : "callee";
+    this.set({ ...initial(), call: c, role, ui: "connecting", v: this.s.v + 1 });
+    const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const);
+    const media = r.ok && "media" in r ? (r.media ?? null) : null;
+    if (!r.ok || !media) {
+      this.set({ ...initial(), error: (!r.ok && r.error) || "Couldn't join the call", v: this.s.v + 1 });
+      return false;
+    }
+    this.media = media;
+    if (r.call) this.set({ call: r.call });
+    void this.connect(true);
+    return true;
   }
 
   // ---------- outgoing ----------
@@ -377,7 +417,7 @@ export class CallEngine {
       answeredAt: null,
       endedAt: null,
       outcome: null,
-      expiresAt: now + 45_000,
+      expiresAt: now + 30_000, // server CALL_RING_TIMEOUT_MS (30 s) until call:state arrives
       caller: { id: this.meId ?? "", name: "You", color: "#10B981", photoUrl: null },
       callee: { id: peer.id, name: peer.name, color: peer.color, photoUrl: peer.photoUrl, username: peer.username },
     };
@@ -514,9 +554,34 @@ export class CallEngine {
     this.set({ ...initial(), v: this.s.v + 1 });
   }
 
-  async hangup() {
+  /**
+   * Hang-up gate (Donny, Nov 19 2026): a person's hang-up (End button, native CallKit / Telecom / call-screen End) only
+   * ends the call in the FSM Active state, or as Cancel while the caller's ring is still going (outgoing). During
+   * Connecting the End button is disabled and stray taps / native lifecycle hang-ups are ignored (logged as
+   * hangup-blocked) so nothing kills the call between answer and media. ICE disconnected/failed never hang up: they
+   * enter NetworkRecovery (2.5 s relay-only restart ladder); only an exhausted ladder or a failed native connect ends
+   * the call, as a failure. If Connecting stalls past CONNECTING_ESCAPE_MS the End button comes back (the call server's
+   * own 20 s ceiling ends it before that in practice).
+   */
+  hangupAllowed(at: number = Date.now()): boolean {
+    const ui = this.s.ui;
+    if (ui === "active" || ui === "outgoing") return true;
+    if (ui === "connecting") return this.connectingSince !== null && at - this.connectingSince >= CONNECTING_ESCAPE_MS;
+    return false;
+  }
+
+  async hangup(source: HangupSource = "failure") {
     const call = this.s.call;
     if (!call) return;
+    const user = source !== "failure";
+    // iPhone: CallKit / the app's call screen have already ended the call and closed native media before telling the
+    // page, so the page must follow (logged with its source); the iOS screen gates its own End button natively.
+    const iosNative = source === "native" && nativePlatform() === "ios";
+    if (user && !iosNative && !this.hangupAllowed()) {
+      this.diag("hangup-blocked", { source });
+      return;
+    }
+    this.diag("hangup", { source, connectedMs: this.s.connectedAt ? Date.now() - this.s.connectedAt : -1 });
     buzz("light");
     if (call.id) void this.req("call:hangup", { callId: call.id }).catch(() => {});
     const dur = this.s.connectedAt ? Math.round((Date.now() - this.s.connectedAt) / 1000) : 0;
@@ -710,6 +775,7 @@ export class CallEngine {
     const session = new NativeMediaSession(this.socket, media, {
       callId: call.id,
       caller: this.s.role === "caller",
+      ...(call.link ? { link: true } : {}),
       onState: (st) => {
         if (this.native !== session) return;
         if (st === "connected") {
@@ -1187,7 +1253,7 @@ export class CallEngine {
  */
 export function ringUntil(call: Pick<CallInfo, "createdAt" | "expiresAt">, now = Date.now()): number {
   const windowMs = call.expiresAt - call.createdAt;
-  return now + (windowMs > 0 && windowMs < 120_000 ? windowMs : 45_000) + 2000;
+  return now + (windowMs > 0 && windowMs < 120_000 ? windowMs : 30_000) + 2000; // fallback = server ring timeout (30 s)
 }
 
 export const fmt = (s: number) => {

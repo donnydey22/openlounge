@@ -77,6 +77,8 @@ export class NativeMediaSession {
       callId: string;
       /** this device placed the call (offerer per rtc contract) */
       caller: boolean;
+      /** a call link: the Android shell starts the mic foreground service before connecting (no Telecom) */
+      link?: boolean;
       onState(state: "connected" | "disconnected" | "failed"): void;
       /** app-owned remote camera availability only; the native MediaStream never crosses this bridge */
       onRemoteVideo?(on: boolean): void;
@@ -125,7 +127,7 @@ export class NativeMediaSession {
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
     this.socket.on("rtc:signal", this.onRtcSignal);
     this.socket.on("rc:msg", this.onRcMsg);
-    await nativeMediaCmd({ op: "connect", callId: this.opts.callId, iceServers: this.media.iceServers ?? [], media: this.media, caller: this.opts.caller, ...(withVideo ? { video: true } : {}) });
+    await nativeMediaCmd({ op: "connect", callId: this.opts.callId, iceServers: this.media.iceServers ?? [], media: this.media, caller: this.opts.caller, ...(this.opts.link ? { link: true } : {}), ...(withVideo ? { video: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
   }
 

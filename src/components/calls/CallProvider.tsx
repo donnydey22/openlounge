@@ -98,7 +98,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       const e_ = callEngine;
       if (!d || !e_) return;
       const st = e_.snapshot();
-      if (d.type === "call:hangup") void (st.ui === "incoming" ? e_.decline() : e_.hangup());
+      if (d.type === "call:hangup") void (st.ui === "incoming" ? e_.decline() : e_.hangup("native"));
       else if (d.type === "call:accept" && st.ui === "incoming") void e_.accept(st.call?.video ?? false);
       else if (d.type === "call:decline" && st.ui === "incoming") void e_.decline();
       else if (d.type === "call:mute" && typeof d.muted === "boolean" && d.muted !== st.muted) void e_.toggleMute();

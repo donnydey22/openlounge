@@ -76,6 +76,8 @@ export const WS_SCHEMAS: Record<string, Schema> = {
   "call:decline": { callId: "id", message: "string?" },
   "call:hangup": { callId: "id" },
   "call:video": { callId: "id", on: "bool" },
+  "call:link": { peerId: "id" },
+  "call:join": { callId: "id", platform: "string?" },
   "call:get": { callId: "id" },
   "call:current": {},
   "call:history": { before: "number?" },

@@ -13,7 +13,7 @@ import { mintTurnIceServers } from "../turnCredentials";
 import { RtcSessionHub } from "./rtcSession";
 import { RcRelay, PreKeyDirectory } from "./rcRelay";
 import { filePreKeyStore } from "./preKeyFileStore";
-import { olcallMediaFor, olcallSecret } from "./olcallToken";
+import { olcallMediaFor, olcallSecret, olcallEventQueue } from "./olcallToken";
 import { iosNativeVideoEnabled } from "./sfuSelect";
 import { recordServerEvent } from "./callLog";
 
@@ -64,10 +64,11 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     provider: "olcall",
     issue: async ({ callId, userId }) => {
       const c = svc?.rtcCall(callId);
-      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId }, userId) : null;
+      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId, ...(c.linkExpiresAt !== undefined ? { linkExpiresAt: c.linkExpiresAt } : {}) }, userId) : null;
     },
     close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
+  const olcallEvents = olcallEventQueue(undefined, (event, callId, status) => { if (status !== 200) log.info("[calls] olcall event not applied", { event, callId, status }); });
   svc = new CallService({
     lastCloseOf: (userId) => lastClose.get(userId) ?? null,
     emitUser: (userId, ev, data) => io.to(`user:${userId}`).emit(ev, data),
@@ -113,6 +114,8 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
+    olcallEvent: (event, callId) => olcallEvents(event, callId),
+    publicOrigin: (process.env.PUBLIC_ORIGIN || "https://openlounge.app").replace(/\/+$/, ""),
   });
   const cur = svc;
   metrics.gauge("calls_live", () => cur.stats().live);
@@ -190,10 +193,17 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       if (ended && !endedResent.has(ended.id)) {
         endedResent.add(ended.id);
         log.info("[calls] call ended resent", { callId: ended.id, user: uid.slice(0, 12), ev: str(d?.ev, 40) });
-        socket.emit("call:state", { call: ended });
+        socket.emit("call:state", ended.payload);
       }
       ack({ ok: true });
     }),
+  );
+  // Call links (Donny, Nov 18 2026): create = no ring, no push, nobody joined; join = the tap is the consent, straight to Connecting.
+  socket.on("call:link", ({ peerId }: { peerId: string }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void s().createLink(uid, peerId).then(ack, () => ack({ ok: false, error: "Couldn't create the call link" }))),
+  );
+  socket.on("call:join", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void ((callUser = uid), s().joinLink(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't join the call" }))),
   );
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),

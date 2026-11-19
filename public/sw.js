@@ -161,7 +161,7 @@ function onCallMessage(msg) {
       body: typeof msg.body === "string" ? msg.body : "Incoming call",
       url: typeof msg.url === "string" ? msg.url : "/",
       acceptUrl: typeof msg.acceptUrl === "string" ? msg.acceptUrl : msg.url || "/",
-      expiresAt: typeof msg.expiresAt === "number" ? msg.expiresAt : Date.now() + 45_000,
+      expiresAt: typeof msg.expiresAt === "number" ? msg.expiresAt : Date.now() + 30_000,
       video: !!msg.video,
     });
     return true;

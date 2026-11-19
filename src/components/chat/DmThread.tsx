@@ -1469,6 +1469,19 @@ export function DmThread({
     },
     [peer],
   );
+  // "Create Open Lounge Audio link": the server mints the call (call ID, link-scoped join tokens, TURN-only list in the
+  // joined frame) and returns openlounge.app/call/<id>. Nobody rings: each person, the creator included, joins by
+  // tapping it, straight to Connecting. tgcalls generates ufrag/pwd/cert on each device. Unjoined, it expires after 10 min.
+  const createCallLink = useCallback(async () => {
+    if (!peer) return;
+    const r = await request<{ url: string }>("call:link", { peerId: peer.id });
+    if (typeof navigator !== "undefined" && navigator.share) {
+      await navigator.share({ url: r.url }).catch(() => undefined);
+    } else {
+      await navigator.clipboard.writeText(r.url);
+      toast("Link copied");
+    }
+  }, [peer, request, toast]);
   const autoCalled = useRef(false);
   useEffect(() => {
     if (!canCall || autoCalled.current || typeof window === "undefined" || !connected) return;
@@ -1867,7 +1880,7 @@ export function DmThread({
           )}
         </div>
         <div className="flex items-end gap-2" data-composer-row>
-        {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} />}
+        {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} onCall={canCall ? () => callPeer(false) : undefined} onCreateLink={canCall ? createCallLink : undefined} />}
         {canAttach && <MediaAttach ctx={mediaCtx} disabled={messages === null} pasted={pastedFiles} onPastedConsumed={clearPasted} />}
         <div className="min-w-0 flex-1">
         <ChatComposer
