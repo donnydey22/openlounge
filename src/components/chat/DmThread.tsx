@@ -1487,6 +1487,21 @@ export function DmThread({
       toast("Link copied");
     }
   }, [peer, request, toast]);
+  // Tray "Start an Open Lounge Audio call" (Donny t6081u item 2): a pure Google Meet-style link, never a ring. Same
+  // server path as "Create Open Lounge Audio link" (call:link: always alive, no ring, no 30 s ring timeout); the starter
+  // goes straight into the join screen and the link is posted into this chat so the other person taps it to join.
+  const startLinkCall = useCallback(async () => {
+    if (!peer) return;
+    try {
+      const r = await request<{ url: string; call?: CallInfo }>("call:link", { peerId: peer.id });
+      if (r.call?.link) void callEngine.joinCreatedLink(r.call);
+      const clientId = newClientId();
+      const res = await request<{ message: DirectMessage }>("dm:send", { to: peer.id, text: `Join my Open Lounge Audio call: ${r.url}`, clientId });
+      if (res?.message) setMessages((list) => mergeMessages(list ?? [], [{ ...res.message, clientId }]));
+    } catch {
+      toast("Couldn't start the call");
+    }
+  }, [peer, request, toast]);
   const autoCalled = useRef(false);
   useEffect(() => {
     if (!canCall || autoCalled.current || typeof window === "undefined" || !connected) return;
@@ -1885,7 +1900,7 @@ export function DmThread({
           )}
         </div>
         <div className="flex items-end gap-2" data-composer-row>
-        {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} onCall={canCall ? () => callPeer(false) : undefined} onCreateLink={canCall ? createCallLink : undefined} />}
+        {peer && !peer.isBot && <DmRoomActions peerId={peerId} peerName={peer.name} disabled={messages === null || offline} onSent={onCardSent} onCall={canCall ? () => void startLinkCall() : undefined} onCreateLink={canCall ? createCallLink : undefined} />}
         {canAttach && <MediaAttach ctx={mediaCtx} disabled={messages === null} pasted={pastedFiles} onPastedConsumed={clearPasted} />}
         <div className="min-w-0 flex-1">
         <ChatComposer

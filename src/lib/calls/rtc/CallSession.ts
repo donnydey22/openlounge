@@ -27,6 +27,10 @@ export interface CallSessionOpts {
   log?(ev: string, data?: Record<string, unknown>): void;
   /** test seam */
   createPeer?(cfg: RTCConfiguration): RTCPeerConnection;
+  /** olcall (t6081u): ICE servers come from the call server's joined frame (TURN-only), awaited after the mic opens. */
+  iceServers?(): Promise<TurnIceServer[]>;
+  /** olcall (t6081u): relay-only transport from the first gathering (TURN relay candidates only). */
+  relayOnly?: boolean;
 }
 
 type Incoming = { callId: string; gen: number; kind: string; sdp?: string; candidate?: RTCIceCandidateInit | null };
@@ -76,7 +80,9 @@ export class CallSession {
     const track = await this.audio.open(); // CallFailure(permission|device) propagates; no TURN, no restart
     if (this.phase === "closed") throw new CallFailure("session", "closed");
     this.setPhase("transport");
-    const pc = this.newPeer(this.o.media.iceServers);
+    const ice = this.o.iceServers ? await this.o.iceServers() : this.o.media.iceServers;
+    if ((this.phase as SessionPhase) === "closed") throw new CallFailure("session", "closed");
+    const pc = this.newPeer(ice);
     const stream = new MediaStream([track]);
     pc.addTrack(track, stream);
     // One video m-line from the start (caller offers it; callee flips it to sendrecv) so the camera can be turned on
@@ -92,7 +98,7 @@ export class CallSession {
   }
 
   private newPeer(ice?: TurnIceServer[]): RTCPeerConnection {
-    const cfg: RTCConfiguration = { iceServers: ice ?? [], iceTransportPolicy: "all", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" };
+    const cfg: RTCConfiguration = { iceServers: ice ?? [], iceTransportPolicy: this.o.relayOnly ? "relay" : "all", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" };
     const pc = this.o.createPeer ? this.o.createPeer(cfg) : new RTCPeerConnection(cfg);
     pc.onicecandidate = (e) => void this.send("candidate", { candidate: e.candidate ? e.candidate.toJSON() : null }).catch(() => {});
     pc.ontrack = (e) => {
@@ -218,7 +224,7 @@ export class CallSession {
     const cfg = pc.getConfiguration();
     // Never-connected restarts gather OL TURN candidates only (W3C: iceTransportPolicy may change via setConfiguration
     // and applies to the next gathering, which the ICE restart triggers). Once connected, policy stays "all".
-    pc.setConfiguration({ ...cfg, ...(r?.ok && r.config ? { iceServers: r.config.iceServers } : {}), iceTransportPolicy: relayOnly ? "relay" : "all" });
+    pc.setConfiguration({ ...cfg, ...(r?.ok && r.config ? { iceServers: r.config.iceServers } : {}), iceTransportPolicy: relayOnly || this.o.relayOnly ? "relay" : "all" });
     this.gen++;
     this.seq = 0;
     this.remoteSet = false;

@@ -42,8 +42,6 @@ export function olcallSecret(env: Env = process.env): Buffer | null {
 
 export interface OlcallCallRef {
   id: string; callerId: string; calleeId: string; callerPlatform?: string; calleePlatform?: string;
-  /** link call not yet joined by both: the join token expires with the link (epoch ms), not OLCALL_TOKEN_TTL_S */
-  linkExpiresAt?: number;
 }
 
 /** Participant check only: there is no switch and no other media path. */
@@ -60,10 +58,8 @@ export function olcallMediaFor(call: OlcallCallRef | null | undefined, userId: s
   if (!olcallEligible(call, userId) || !(url.startsWith("wss://") || url.startsWith("ws://"))) return null;
   const secret = olcallSecret(env);
   if (!secret) return null;
-  // A link's join token lives exactly as long as the link (the call server's LinkJoinTimeout, ten minutes from
-  // creation); an expired link mints nothing. Every other call keeps the short OLCALL_TOKEN_TTL_S token.
-  if (call!.linkExpiresAt !== undefined && call!.linkExpiresAt <= now) return null;
-  const exp = call!.linkExpiresAt !== undefined ? Math.floor(call!.linkExpiresAt / 1000) : Math.floor(now / 1000) + OLCALL_TOKEN_TTL_S;
+  // Every join (ring call or always-alive link) gets the short per-join OLCALL_TOKEN_TTL_S token, minted at each tap.
+  const exp = Math.floor(now / 1000) + OLCALL_TOKEN_TTL_S;
   const role: OlcallRole = userId === call!.callerId ? "caller" : "callee";
   const turn = mintTurnIceServers(call!.id, userId, { secret: env.OLCALL_TURN_SECRET ?? null }) ?? [];
   return {

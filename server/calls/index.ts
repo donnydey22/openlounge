@@ -64,7 +64,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     provider: "olcall",
     issue: async ({ callId, userId }) => {
       const c = svc?.rtcCall(callId);
-      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId, ...(c.linkExpiresAt !== undefined ? { linkExpiresAt: c.linkExpiresAt } : {}) }, userId) : null;
+      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId }, userId) : null;
     },
     close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
@@ -116,8 +116,10 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
     olcallEvent: (event, callId) => olcallEvents(event, callId),
     publicOrigin: (process.env.PUBLIC_ORIGIN || "https://openlounge.app").replace(/\/+$/, ""),
+    linkStore: { save: (l) => store.saveCallLink(l), load: (id) => store.loadCallLinks(id) },
   });
   const cur = svc;
+  void svc.restoreLinks(); // links made before this boot stay joinable (Donny t6082u)
   metrics.gauge("calls_live", () => cur.stats().live);
   metrics.gauge("calls_accept_to_audio_p50_ms", () => cur.stats().acceptToAudio.p50 ?? 0);
   metrics.gauge("calls_quality_two_way_total", () => cur.stats().quality["two-way"]);

@@ -142,7 +142,7 @@ export function DmRoomActions({
               <AudioLines className="h-5 w-5" />
               <span className="min-w-0 flex-1">
                 <span className="block">Start an Open Lounge Audio call</span>
-                <span className="block text-xs font-normal opacity-80">Rings {firstName(peerName)} on their phone</span>
+                <span className="block text-xs font-normal opacity-80">Opens a call link {firstName(peerName)} can tap to join</span>
               </span>
             </button>
           )}

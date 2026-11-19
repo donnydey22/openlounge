@@ -642,6 +642,16 @@ export class PgPersistence implements Persistence {
     },
   };
 
+  /** Durable call links (Donny t6082u): who a link is for and when it was made. Idempotent upsert. */
+  async saveCallLink(l:{id:string;callerId:string;calleeId:string;createdAt:number}) {
+    await this.pool.query("INSERT INTO call_links(id,caller_id,callee_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING",[l.id,l.callerId,l.calleeId,l.createdAt]);
+  }
+  async loadCallLinks(id?:string) {
+    const r=id
+      ?await this.pool.query<{id:string;caller_id:string;callee_id:string;created_at:string}>("SELECT id,caller_id,callee_id,created_at FROM call_links WHERE id=$1",[id])
+      :await this.pool.query<{id:string;caller_id:string;callee_id:string;created_at:string}>("SELECT id,caller_id,callee_id,created_at FROM call_links");
+    return r.rows.map(x=>({id:x.id,callerId:x.caller_id,calleeId:x.callee_id,createdAt:Number(x.created_at)}));
+  }
   async loadAudioLeases() {
     const r=await this.pool.query<{user_id:string;owner:string;expires_at:string}>("SELECT user_id,owner,expires_at FROM platform_audio_leases WHERE expires_at>$1",[Date.now()]);
     return r.rows.map(x=>({userId:x.user_id,owner:x.owner,until:Number(x.expires_at)}));

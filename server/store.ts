@@ -244,6 +244,9 @@ export class Store {
   private events: StoreEvents | null = null;
   /** Generic audio occupancy, loaded before accepting platform traffic. Lifecycle remains on DO. */
   readonly audioAdmissionLeases=new Map<string,{owner:string;until:number}>();
+  /** durable call links (Donny t6082u): Postgres only; the JSON dev backend keeps links in memory */
+  async saveCallLink(l:{id:string;callerId:string;calleeId:string;createdAt:number}){await this.backend?.saveCallLink?.(l)}
+  async loadCallLinks(id?:string){return (await this.backend?.loadCallLinks?.(id))??[]}
   async persistAudioAdmission(owner:string,users:string[],until:number){return await this.backend?.writeAudioLeases?.(owner,users,until)??true}
   private backend: Persistence | null = null;
   private flushChain: Promise<void> = Promise.resolve();

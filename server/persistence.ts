@@ -198,6 +198,9 @@ export interface Persistence {
   kind: "postgres" | "json";
   loadAudioLeases?():Promise<AudioAdmissionLease[]>;
   writeAudioLeases?(owner:string,users:string[],until:number):Promise<boolean>;
+  /** durable call links (Donny t6082u, migration 036) */
+  saveCallLink?(l:{id:string;callerId:string;calleeId:string;createdAt:number}):Promise<void>;
+  loadCallLinks?(id?:string):Promise<{id:string;callerId:string;calleeId:string;createdAt:number}[]>;
   /** human-readable location for logs (password redacted) */
   where: string;
   load(): Promise<LoadResult>;

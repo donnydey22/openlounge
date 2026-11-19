@@ -3,7 +3,7 @@
 // Nov 19 2026 (Donny t6066u): links are always alive: no expiry, no sweep, a leaver drops only themselves.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CallService, CALL_LINK_TTL_MS } from "../../server/calls/service";
+import { CallService } from "../../server/calls/service";
 import { olcallMediaFor, signOlcallToken } from "../../server/calls/olcallToken";
 import type { CallMediaBackend } from "../../server/calls/mediaBackend";
 
@@ -28,7 +28,7 @@ test("create: call:link fired once, no ring, no push, no call:incoming, nobody b
     assert.deepEqual(seen, ["call:link"]);
     assert.equal(r.url, `https://openlounge.app/call/${r.call.id}`);
     assert.equal(r.call.link, true);
-    assert.equal(r.call.expiresAt, r.call.createdAt + CALL_LINK_TTL_MS);
+    assert.equal(r.call.expiresAt, 0); // no deadline: links never expire
     assert.deepEqual(pushed, []); assert.deepEqual(emits, []); // nothing rang, nothing emitted
     assert.equal(s.isBusy("a"), false); assert.equal(s.isBusy("b"), false);
     // a normal call to either of them still goes through while the link sits unjoined
@@ -91,7 +91,7 @@ test("links are always alive (t6066u): no ring timeout, no caller-gone sweep, no
     (s as unknown as { sweep(): void }).sweep();
     assert.equal(s.isBusy("a"), true); // busyReason does not heal it as a stale ring
     assert.equal((await s.get_(r.call.id, "a")).ok && (await s.get_(r.call.id, "a")).call?.phase, "calling");
-    clock.t = r.call.createdAt + CALL_LINK_TTL_MS * 10; // far past the old ten-minute deadline
+    clock.t = r.call.createdAt + 6_000_000; // far past the old ten-minute deadline
     (s as unknown as { sweep(): void }).sweep();
     const late = await s.joinLink(r.call.id, "b", "cb");
     assert.ok(late.ok && late.media); assert.equal(late.ok && late.call.phase, "active");
@@ -121,28 +121,23 @@ test("a link leaver drops only themselves; the link stays joinable, even empty (
   } finally { s.dispose?.(); }
 });
 
-test("join token: a link call's olcall token expires with the link, not after 300 s; expired link mints nothing", () => {
+test("join token: link joins get the normal short per-join token (no link deadline exists)", () => {
   const env = { OLCALL_URL: "wss://turn.openlounge.app/v1/call", OLCALL_TOKEN_SECRET: "olcall-link-test-secret-0123456789abcdef" };
   const now = 1_900_000_000_000;
-  const linkExpiresAt = now + 600_000;
-  const call = { id: "link-1", callerId: "a", calleeId: "b", linkExpiresAt };
-  const m = olcallMediaFor(call, "b", env, now)!;
-  assert.equal(m.expiresAt, Math.floor(linkExpiresAt / 1000));
-  assert.equal(m.token, signOlcallToken(env.OLCALL_TOKEN_SECRET, { callId: "link-1", userId: "b", role: "callee", exp: Math.floor(linkExpiresAt / 1000) }));
-  // later in the window the token still ends at the link deadline
-  assert.equal(olcallMediaFor(call, "a", env, now + 500_000)!.expiresAt, Math.floor(linkExpiresAt / 1000));
-  assert.equal(olcallMediaFor(call, "a", env, linkExpiresAt), null);
-  // ring calls unchanged
-  assert.equal(olcallMediaFor({ id: "r", callerId: "a", calleeId: "b" }, "a", env, now)!.expiresAt, Math.floor(now / 1000) + 300);
+  const m = olcallMediaFor({ id: "link-1", callerId: "a", calleeId: "b" }, "b", env, now)!;
+  assert.equal(m.expiresAt, Math.floor(now / 1000) + 300);
+  assert.equal(m.token, signOlcallToken(env.OLCALL_TOKEN_SECRET, { callId: "link-1", userId: "b", role: "callee", exp: Math.floor(now / 1000) + 300 }));
+  // a year later the same link still mints a fresh join token
+  assert.ok(olcallMediaFor({ id: "link-1", callerId: "a", calleeId: "b" }, "a", env, now + 365 * 86_400_000));
 });
 
 test("rtcCall never hands a link deadline to the token minter (links never expire; normal per-join tokens)", async () => {
   const s = svc();
   try {
     const r = await s.createLink("a", "b"); assert.ok(r.ok); if (!r.ok) return;
-    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined);
+    assert.equal((s.rtcCall(r.call.id) as Record<string, unknown> | null)?.linkExpiresAt, undefined);
     await s.joinLink(r.call.id, "a", "ca"); await s.joinLink(r.call.id, "b", "cb");
-    assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined);
+    assert.equal((s.rtcCall(r.call.id) as Record<string, unknown> | null)?.linkExpiresAt, undefined);
   } finally { s.dispose?.(); }
 });
 

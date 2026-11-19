@@ -6,13 +6,13 @@
 import { isHeadsetKind, routeAnnouncement, routeFromNative, routesFromNative, routesFromWebOutputs, sortRoutes, type AudioRoute, type NativeRouteDetail } from "./audioRoute";
 import { nextElsewhere } from "./elsewhere";
 import type { ElsewhereCall } from "./elsewhere";
-import type { CallInfo, CallMedia, CallOutcome } from "@/lib/types";
+import type { CallInfo, CallMedia, CallOutcome, TurnIceServer } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 import { native, nativePlatform } from "@/lib/native";
 import { unlockAudio } from "@/lib/audioUnlock";
-import { nativeRingbackMode, playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
+import { playBusy, playConnected, playHangup, playRingback, playRingtone, rearmRing, ringing, stopTones } from "./tones";
 import { CallSession } from "./rtc/CallSession";
-import { ensureRcKeysPublished, sealedFor } from "./ringrtc";
+import { OlcallSignaling } from "./rtc/OlcallSignaling";
 import type { CallFailure } from "./rtc/CallFailures";
 import { NativeMediaSession, nativeMediaCmd, nativeSignalConnected, nativeCallingProtocolAvailable, useNativeMedia } from "./nativeMediaSession";
 import { CallTelemetry } from "./callTelemetry";
@@ -256,7 +256,6 @@ export class CallEngine {
     }
     this.socket = socket;
     if (!socket) return;
-    void ensureRcKeysPublished(socket);
     nativeSignalConnected(socket); // app-owned media: the app publishes its own keys now, not on its first call op
     socket.on("call:incoming", this.onIncoming);
     socket.on("call:state", this.onState);
@@ -438,9 +437,10 @@ export class CallEngine {
     this.set({ ...initial(), call: optimistic, role: "caller", ui: "outgoing", camOn: video, v: this.s.v + 1 });
     // ringback from the tap (audio and video alike) until connect / end — not only after the callee's device acks
     playRingback({ video, untilMs: ringUntil(optimistic) });
-    // Native app: the app owns media. iOS defers its media join to the answer so the native ringback stays loud.
+    // Native app: the app owns media and joins its leg now, while the callee rings (Donny t6081u item 3: iOS like
+    // Android: no deferral to the answer; ringback stays the page's local tone, callee CallKit audio stays post-answer).
     // Browser: mic (and camera) permission prompt happens now, inside the tap, in parallel with the server round trip.
-    this.deferNativeConnect = useNativeMedia() && nativeRingbackMode() !== "off" && nativePlatform() === "ios";
+    this.deferNativeConnect = false;
     if (!useNativeMedia() && video) void this.ensureCamPreview().then(() => this.s.ui === "outgoing" && rearmRing());
     let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string; reason?: string };
     r = await this.startWhenConnected(peer.id, video);
@@ -598,6 +598,7 @@ export class CallEngine {
     this.diag("hangup", { source, connectedMs: this.s.connectedAt ? Date.now() - this.s.connectedAt : -1 });
     buzz("light");
     if (call.id) void this.req("call:hangup", { callId: call.id }).catch(() => {});
+    this.olSig?.hangup(); // the call server drops this leg now (link) / ends the rung call, not after the socket grace
     const dur = this.s.connectedAt ? Math.round((Date.now() - this.s.connectedAt) / 1000) : 0;
     playHangup();
     postNative({ type: "call:ended", callId: call.id });
@@ -729,6 +730,7 @@ export class CallEngine {
 
   // ---------- media (one path: CallSession over sealed rc:* or the app-owned native PC) ----------
   private rtc: CallSession | null = null;
+  private olSig: OlcallSignaling | null = null;
   private native: NativeMediaSession | null = null;
   private nativeConnected = false;
   private roomPromise: Promise<null> | null = null;
@@ -825,14 +827,30 @@ export class CallEngine {
   private async connectP2P(media: CallMedia, answer: boolean): Promise<null> {
     const call = this.s.call;
     if (!call?.id || !this.socket) return null;
-    const role = this.s.role === "caller" ? "caller" : "callee";
-    // RingRTC session model: all call signaling E2E-sealed (OLX3DH-v1) and relayed opaquely as rc:msg.
-    const peerUserId = call.callerId === this.meId ? call.calleeId : call.callerId;
-    const sealed = sealedFor(this.socket, { callId: call.id, role, peerUserId, log: (ev, d) => this.netLog(ev, d ?? {}) });
-    const session = new CallSession(sealed, {
+    // Desktop web media (Donny t6081u item 1): this browser joins its own leg on the olcall Pion server (webleg) with
+    // the per-user join token, at press time. ICE servers are the joined frame's TURN-only list; transport is relay
+    // only; the browser always offers to the server. The removed sealed rc:* peer-to-peer exchange is gone.
+    const sig = new OlcallSignaling(media, {
       callId: call.id,
-      role,
+      log: (ev, d) => this.netLog(ev, d ?? {}),
+      onPeer: (st) => { if (this.olSig === sig) this.set({ peerReconnecting: st === "reconnecting" }); },
+      onBye: (detail) => {
+        if (this.olSig !== sig || !this.busy || this.s.call?.id !== call.id) return;
+        // Our leg ended on the server but the call did not (e.g. a link leg dropped after a long outage): rejoin.
+        setTimeout(() => { if (this.olSig === sig && this.busy && this.s.call?.id === call.id) void this.rejoin("olcall-bye:" + detail); }, 1000);
+      },
+      // fresh TURN logins for a long call's ICE restart (the joined list's logins age out after an hour)
+      freshIce: async () => (await this.req<{ ok: boolean; iceServers?: TurnIceServer[] }>("call:turnRefresh", { callId: call.id }, 5_000).catch(() => null))?.iceServers ?? null,
+    });
+    this.olSig = sig;
+    void sig.connect().catch((e) => this.netLog("olcall-join-failed", { err: String((e as Error)?.message ?? e).slice(0, 120) }));
+    sig.mediaState(this.s.muted, this.s.camOn);
+    const session = new CallSession(sig, {
+      callId: call.id,
+      role: "caller", // the browser is always the offerer toward the call server
       media,
+      iceServers: () => sig.joined,
+      relayOnly: true,
       video: this.s.camOn || !!call.video,
       log: (ev, d) => this.netLog(`rtc-${ev}`, d ?? {}),
       onRemoteTrack: (t) => {
@@ -908,6 +926,8 @@ export class CallEngine {
     this.telemetry = null;
     this.rtc?.close();
     this.rtc = null;
+    this.olSig?.close();
+    this.olSig = null;
     this.native?.close();
     this.native = null;
     this.nativeConnected = false;
@@ -1153,6 +1173,7 @@ export class CallEngine {
     this.set({ muted });
     buzz("light");
     this.rtc?.setMuted(muted);
+    this.olSig?.mediaState(muted, this.s.camOn);
     if (this.native) await this.native.setMuted(muted);
     postNative({ type: "call:muted", muted });
   }
@@ -1181,6 +1202,7 @@ export class CallEngine {
       this.camTrack = null;
       this.attachRawVideo(this.videoEls.local, null);
     }
+    this.olSig?.mediaState(this.s.muted, this.s.camOn);
     if (call?.id) void this.req("call:video", { callId: call.id, on }).catch(() => {});
   }
 

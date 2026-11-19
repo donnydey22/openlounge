@@ -56,8 +56,6 @@ export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
  * ended call's room is kicked by the LiveKit webhook guard (calls/index.ts) — the credential dies with the call.
  */
 export const CALL_TOKEN_TTL_S = num("CALL_TOKEN_TTL_S", 180);
-/** = olcall LinkJoinTimeout (events.go): a call link stays joinable for ten minutes, then ends as expired */
-export const CALL_LINK_TTL_MS = num("CALL_LINK_TTL_MS", 600_000);
 /** ended calls answer call:get ("Call ended") — and keep the webhook guard armed — for a while: longer than a
  *  LiveKit-refreshed token stays valid (10 min) plus LiveKit's 1 min clock leeway */
 const ENDED_KEEP_MS = 12 * 60_000;
@@ -106,7 +104,12 @@ export interface CallDeps {
   /** number of live sockets for a user (ring-delivery diagnostics only) */
   connCount?(userId: string): number;
   log?(msg: string, extra?: Record<string, unknown>): void;
+  /** Durable call-link records (Donny t6082u): a backend restart / redeploy keeps every link joinable. */
+  linkStore?: { save(l: CallLinkRow): Promise<void> | void; load(id?: string): Promise<CallLinkRow[]> };
 }
+
+/** what survives a restart for a call link: who it is for and when it was made (no tokens, keys or media state) */
+export interface CallLinkRow { id: string; callerId: string; calleeId: string; createdAt: number }
 
 interface CallRec {
   id: string;
@@ -129,8 +132,8 @@ interface CallRec {
   iosNativeVideo?: boolean;
   endedAt: number | null;
   outcome: CallOutcome | null;
-  /** created by call:link: no ring, no push, no accept; each participant joins by tapping the link before expiresAt */
-  link?: { expiresAt: number; joined: Set<string> };
+  /** created by call:link: no ring, no push, no accept, no deadline; each participant joins by tapping the link */
+  link?: { joined: Set<string> };
   /** The call server's latest leg snapshots (olcall/server/states.go). call:state relays only these. */
   fsm: { caller?: OlcallLegSnapshot; callee?: OlcallLegSnapshot };
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
@@ -186,7 +189,7 @@ export class CallService {
   }
 
   /** rtcSession lookup: participants + phase of a call (null = unknown). */
-  rtcCall(callId: string): { callerId: string; calleeId: string; phase: string; linkExpiresAt?: number } | null {
+  rtcCall(callId: string): { callerId: string; calleeId: string; phase: string } | null {
     const c = this.calls.get(callId);
     if (!c) return null;
     // Links never expire (Donny t6066u): a link's join token is the normal short per-join token, minted at each tap.
@@ -240,7 +243,7 @@ export class CallService {
       answeredAt: c.answeredAt,
       endedAt: c.endedAt,
       outcome: c.outcome,
-      expiresAt: c.link ? c.link.expiresAt : c.createdAt + CALL_RING_TIMEOUT_MS,
+      expiresAt: c.link ? 0 : c.createdAt + CALL_RING_TIMEOUT_MS, // links: 0 = no deadline (never expire)
       ...(c.link ? { link: true } : {}),
       caller: this.d.peer(c.callerId) ?? anon(c.callerId),
       callee: this.d.peer(c.calleeId) ?? anon(c.calleeId),
@@ -574,7 +577,7 @@ export class CallService {
       id: randomUUID(), callerId: creatorId, calleeId: peerId, video: false, everVideo: false, phase: "calling",
       createdAt: now, ackAt: null, answeredAt: null, endedAt: null, outcome: null, fsm: {}, tokens: new Map(), backend,
       timer: null, pushed: false, orphanSince: null, goneSince: new Map(), conns: new Map(),
-      link: { expiresAt: now + CALL_LINK_TTL_MS, joined: new Set() },
+      link: { joined: new Set() },
     };
     this.calls.set(c.id, c);
     const r = await this.eventGate("call:link", c.id);
@@ -586,11 +589,56 @@ export class CallService {
     this.absorb(c, r);
     // No expiry timer (Donny t6066u): a link stays alive and joinable until nobody needs it; nothing ends it on a clock.
     this.d.log?.("call link", { callId: c.id });
+    // Durable (Donny t6082u): the link record is written to the DB so it outlives this process.
+    try {
+      void Promise.resolve(this.d.linkStore?.save({ id: c.id, callerId: c.callerId, calleeId: c.calleeId, createdAt: c.createdAt })).catch((e) =>
+        this.d.log?.("call link save failed", { callId: c.id, err: String((e as Error)?.message ?? e).slice(0, 120) }));
+    } catch { /* in-memory link still works */ }
     return { ok: true, call: this.info(c), url: `${this.d.publicOrigin ?? "https://openlounge.app"}/call/${c.id}` };
+  }
+
+  /** Rebuild a persisted link as a fresh, empty, joinable link (nobody in it until they tap). */
+  private adoptLink(l: CallLinkRow): CallRec | null {
+    const have = this.calls.get(l.id);
+    if (have) return have;
+    const backend = this.selectBackend({ callerId: l.callerId, calleeId: l.calleeId, video: false, iosNativeVideo: false });
+    if (!backend) return null;
+    const c: CallRec = {
+      id: l.id, callerId: l.callerId, calleeId: l.calleeId, video: false, everVideo: false, phase: "calling",
+      createdAt: l.createdAt, ackAt: null, answeredAt: null, endedAt: null, outcome: null, fsm: {}, tokens: new Map(), backend,
+      timer: null, pushed: false, orphanSince: null, goneSince: new Map(), conns: new Map(),
+      link: { joined: new Set() },
+    };
+    this.calls.set(c.id, c);
+    return c;
+  }
+
+  /** Boot (Donny t6082u): load every persisted link so links made before a restart / redeploy stay joinable. */
+  async restoreLinks() {
+    try {
+      const rows = (await this.d.linkStore?.load()) ?? [];
+      let n = 0;
+      for (const l of rows) if (!this.calls.has(l.id) && this.adoptLink(l)) n++;
+      this.d.log?.("call links restored", { count: n });
+      return n;
+    } catch (e) {
+      this.d.log?.("call links restore failed", { err: String((e as Error)?.message ?? e).slice(0, 120) });
+      return 0;
+    }
+  }
+
+  /** A link made by a sibling instance (deploy overlap) or before this boot's restore finished: load it on first use. */
+  private async ensureLink(callId: unknown) {
+    if (typeof callId !== "string" || this.calls.has(callId) || !this.d.linkStore) return;
+    try {
+      const [l] = await this.d.linkStore.load(callId);
+      if (l && l.id === callId) this.adoptLink(l);
+    } catch { /* unknown stays unknown */ }
   }
 
   /** A participant tapped the link: they are in the call now (straight to Connecting, no accept). */
   async joinLink(callId: unknown, userId: string, connId?: string, platform?: unknown) {
+    await this.ensureLink(callId);
     const c = this.get(callId, userId);
     if (!c || !c.link) return { ok: false as const, error: "This call isn't available", reason: "unknown" };
     if (c.phase === "ended") return { ok: false as const, error: "Call ended", reason: "ended", call: this.info(c) };
@@ -614,13 +662,6 @@ export class CallService {
       this.d.log?.("call link joined", { callId: c.id, waitMs: c.answeredAt - c.createdAt });
     }
     return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
-  }
-
-  /** Ten minutes and nobody completed the link: it ends as expired (the call server's legs end Terminal Expired). */
-  private expireLink(callId: string) {
-    const c = this.calls.get(callId);
-    if (!c || c.phase !== "calling" || !c.link) return;
-    this.finish(c, "missed", { reason: "link_expired" });
   }
 
   private async eventGate(event: OlcallEvent, callId: string): Promise<OlcallFireResult> {
@@ -675,6 +716,7 @@ export class CallService {
   }
 
   async get_(callId: unknown, userId: string, connId?: string) {
+    await this.ensureLink(callId);
     const c = this.get(callId, userId);
     if (!c) return { ok: false as const, error: "This call isn't available", reason: "unknown" };
     this.bind(c, userId, connId);
