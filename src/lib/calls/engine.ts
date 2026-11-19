@@ -376,6 +376,12 @@ export class CallEngine {
     }
   }
 
+  /** Press-to-Connecting (Donny t6078u): the link's creator already holds the CallInfo from call:link, so it joins at once
+   *  (ui "connecting" synchronously, then call:join) with no call:get round trip first. Same join path as a tap. */
+  joinCreatedLink(c: CallInfo): Promise<boolean> {
+    return this.joinLink(c);
+  }
+
   /** Join a call link (Donny, Nov 18 2026): the server mints the call; the joiner goes straight to Connecting. */
   private async joinLink(c: CallInfo): Promise<boolean> {
     if (this.s.call?.id === c.id && (this.rtc || this.native || this.roomPromise)) return true; // already joining or in it

@@ -41,6 +41,8 @@ import { RoomCardRow, RoomLinkCards } from "../rooms/RoomJoinCard";
 import { DmRoomActions } from "../rooms/DmRoomActions";
 import { CallMessageRow } from "../calls/CallMessageRow";
 import { startCall } from "../calls/CallProvider";
+import { callEngine } from "@/lib/calls/engine";
+import type { CallInfo } from "@/lib/types";
 import { DropInBanner } from "../rooms/DropInBanner";
 import { ForwardSheet } from "./ForwardSheet";
 import { canAdmin, isGroupId, type ConvMessage, type GroupInfo } from "@/lib/groups";
@@ -1471,10 +1473,13 @@ export function DmThread({
   );
   // "Create Open Lounge Audio link": the server mints the call (call ID, link-scoped join tokens, TURN-only list in the
   // joined frame) and returns openlounge.app/call/<id>. Nobody rings: each person, the creator included, joins by
-  // tapping it, straight to Connecting. tgcalls generates ufrag/pwd/cert on each device. Unjoined, it expires after 10 min.
+  // tapping it, straight to Connecting. tgcalls generates ufrag/pwd/cert on each device. Links never expire (t6066u).
   const createCallLink = useCallback(async () => {
     if (!peer) return;
-    const r = await request<{ url: string }>("call:link", { peerId: peer.id });
+    const r = await request<{ url: string; call?: CallInfo }>("call:link", { peerId: peer.id });
+    // Press-to-Connecting (Donny t6078u): producing the link puts its creator straight into the live room through the
+    // same join path as tapping the link (joined frame + ICE start now, not on a later tap). Nobody rings.
+    if (r.call?.link) void callEngine.joinCreatedLink(r.call);
     if (typeof navigator !== "undefined" && navigator.share) {
       await navigator.share({ url: r.url }).catch(() => undefined);
     } else {
