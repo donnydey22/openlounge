@@ -592,8 +592,11 @@ export class CallEngine {
   }
 
   // ---------- server state ----------
-  private onState = (d: { call: CallInfo; by?: string | null }) => {
+  private onState = (d: { call: CallInfo; by?: string | null; state?: { callId?: string } & Record<string, unknown> }) => {
     const call = d?.call;
+    // BaoTime binding: the backend relays the olcall server's own snapshot (relay-only call:state). Forward it verbatim
+    // to the native call screen, which renders only from these frames. The page never edits or invents one.
+    if (d?.state && call && d.state.callId === call.id) postNative({ type: "call:lifecycle", callId: call.id, lifecycle: d.state });
     if (call) {
       const local = this.s.call?.id === call.id && (this.acceptedHere || this.s.role === "caller");
       const e = nextElsewhere(this.s.elsewhere, call, this.meId, local);

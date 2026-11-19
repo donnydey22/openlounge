@@ -90,7 +90,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // Native wrappers (CallKit / Android call notification, NATIVE_SPEC.md §5) drive the call from outside the page:
   //   window.dispatchEvent(new CustomEvent("openlounge:native-call", { detail: { type: "call:hangup" } }))
-  // types: call:hangup | call:accept | call:decline | call:mute {muted}. CustomEvents can only come from code running in
+  // types: call:hangup | call:accept | call:decline | call:mute {muted} | call:retry. CustomEvents can only come from code running in
   // this page (the wrapper's injectJavaScript), never from other origins/iframes.
   useEffect(() => {
     const onNative = (e: Event) => {
@@ -102,6 +102,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       else if (d.type === "call:accept" && st.ui === "incoming") void e_.accept(st.call?.video ?? false);
       else if (d.type === "call:decline" && st.ui === "incoming") void e_.decline();
       else if (d.type === "call:mute" && typeof d.muted === "boolean" && d.muted !== st.muted) void e_.toggleMute();
+      else if (d.type === "call:retry" && st.call && st.ui === "ended") e_.retry(); // native Failed screen: Call again
     };
     window.addEventListener("openlounge:native-call", onNative);
     // Native Accept on an already-loaded page (CallKit / Android call screen): accept IN PLACE instead of the wrapper
