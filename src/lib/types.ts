@@ -260,8 +260,10 @@ export interface CallInfo {
   answeredAt: number | null;
   endedAt: number | null;
   outcome: CallOutcome | null;
-  /** ring deadline (epoch ms) */
+  /** ring deadline (epoch ms); for a link call, the link's ten-minute join deadline */
   expiresAt: number;
+  /** created as a shareable link (call:link): no ring, each person joins by tapping the link */
+  link?: boolean;
   caller: CallPeer;
   callee: CallPeer;
   /** active call: participants currently without a connection (inside the reconnect grace) */

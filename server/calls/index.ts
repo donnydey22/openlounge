@@ -64,7 +64,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     provider: "olcall",
     issue: async ({ callId, userId }) => {
       const c = svc?.rtcCall(callId);
-      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId }, userId) : null;
+      return c ? olcallMediaFor({ id: callId, callerId: c.callerId, calleeId: c.calleeId, ...(c.linkExpiresAt !== undefined ? { linkExpiresAt: c.linkExpiresAt } : {}) }, userId) : null;
     },
     close: (callId) => { rtc?.end(callId); rc?.end(callId); },
   };
@@ -115,6 +115,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
     },
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
     olcallEvent: (event, callId) => olcallEvents(event, callId),
+    publicOrigin: (process.env.PUBLIC_ORIGIN || "https://openlounge.app").replace(/\/+$/, ""),
   });
   const cur = svc;
   metrics.gauge("calls_live", () => cur.stats().live);
@@ -196,6 +197,13 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       }
       ack({ ok: true });
     }),
+  );
+  // Call links (Donny, Nov 18 2026): create = no ring, no push, nobody joined; join = the tap is the consent, straight to Connecting.
+  socket.on("call:link", ({ peerId }: { peerId: string }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void s().createLink(uid, peerId).then(ack, () => ack({ ok: false, error: "Couldn't create the call link" }))),
+  );
+  socket.on("call:join", ({ callId, platform }: { callId: string; platform?: unknown }, ack: AckFn = noop) =>
+    authed(ack, (uid) => void ((callUser = uid), s().joinLink(callId, uid, socket.id, platform)).then(ack, () => ack({ ok: false, error: "Couldn't join the call" }))),
   );
   socket.on("call:get", ({ callId }: { callId: string }, ack: AckFn = noop) =>
     authed(ack, (uid) => void ((callUser = uid), s().get_(callId, uid, socket.id)).then(ack, () => ack({ ok: false, error: "Unavailable" }))),

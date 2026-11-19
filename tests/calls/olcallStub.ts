@@ -16,13 +16,13 @@ if (!process.env.OLCALL_EVENT_URL) {
         const token = String(JSON.parse(body).token ?? "");
         ({ callId, event } = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8")));
       } catch { res.writeHead(400).end(); return; }
-      // the happy-path slice of states.go: start -> Ringing, accept -> Answering, any terminal request -> Terminal
-      const legs = (calls.get(callId) ?? (event === "call:start" ? { caller: "idle", callee: "idle", seq: 0 } : null));
+      // the happy-path slice of states.go: start -> Ringing, link -> Idle, accept -> Answering, any terminal request -> Terminal
+      const legs = (calls.get(callId) ?? (event === "call:start" || event === "call:link" ? { caller: "idle", callee: "idle", seq: 0 } : null));
       res.setHeader("content-type", "application/json");
       if (!legs) { res.writeHead(404).end("{}"); return; }
       calls.set(callId, legs);
       const next: Record<string, string> = { "call:start": "ringing", "call:accept": "answering" };
-      for (const k of ["caller", "callee"] as const) if (legs[k] !== "terminal") legs[k] = next[event] ?? "terminal";
+      if (event !== "call:link") for (const k of ["caller", "callee"] as const) if (legs[k] !== "terminal") legs[k] = next[event] ?? "terminal"; // call:link: both legs stay Idle until joined
       legs.seq += 1;
       const snap = (leg: "caller" | "callee") => ({ callId, leg, state: legs[leg], seq: legs.seq, event });
       res.writeHead(200);

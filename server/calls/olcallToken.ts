@@ -40,7 +40,11 @@ export function olcallSecret(env: Env = process.env): Buffer | null {
   }
 }
 
-export interface OlcallCallRef { id: string; callerId: string; calleeId: string; callerPlatform?: string; calleePlatform?: string }
+export interface OlcallCallRef {
+  id: string; callerId: string; calleeId: string; callerPlatform?: string; calleePlatform?: string;
+  /** link call not yet joined by both: the join token expires with the link (epoch ms), not OLCALL_TOKEN_TTL_S */
+  linkExpiresAt?: number;
+}
 
 /** Participant check only: there is no switch and no other media path. */
 export function olcallEligible(call: OlcallCallRef | null | undefined, userId: string): boolean {
@@ -56,7 +60,10 @@ export function olcallMediaFor(call: OlcallCallRef | null | undefined, userId: s
   if (!olcallEligible(call, userId) || !(url.startsWith("wss://") || url.startsWith("ws://"))) return null;
   const secret = olcallSecret(env);
   if (!secret) return null;
-  const exp = Math.floor(now / 1000) + OLCALL_TOKEN_TTL_S;
+  // A link's join token lives exactly as long as the link (the call server's LinkJoinTimeout, ten minutes from
+  // creation); an expired link mints nothing. Every other call keeps the short OLCALL_TOKEN_TTL_S token.
+  if (call!.linkExpiresAt !== undefined && call!.linkExpiresAt <= now) return null;
+  const exp = call!.linkExpiresAt !== undefined ? Math.floor(call!.linkExpiresAt / 1000) : Math.floor(now / 1000) + OLCALL_TOKEN_TTL_S;
   const role: OlcallRole = userId === call!.callerId ? "caller" : "callee";
   const turn = mintTurnIceServers(call!.id, userId, { secret: env.OLCALL_TURN_SECRET ?? null }) ?? [];
   return {
@@ -85,8 +92,8 @@ export function withOlcallMedia<T>(userId: string, payload: T, env: Env = proces
 // The call server stays the only writer of call state; this only asks it to transition (Idle -> Ringing -> Answering).
 // Fire-and-forget by design: a lost event never blocks or ends a call (the server's leg simply goes Idle -> JoiningUrl
 // on join, exactly as before this was wired).
-export type OlcallEvent = "call:start" | "call:accept" | "call:decline" | "call:hangup" | "call:timeout" | "call:end";
-const OLCALL_EVENTS: readonly OlcallEvent[] = ["call:start", "call:accept", "call:decline", "call:hangup", "call:timeout", "call:end"];
+export type OlcallEvent = "call:start" | "call:link" | "call:accept" | "call:decline" | "call:hangup" | "call:timeout" | "call:end";
+const OLCALL_EVENTS: readonly OlcallEvent[] = ["call:start", "call:link", "call:accept", "call:decline", "call:hangup", "call:timeout", "call:end"];
 
 /** One leg's snapshot as olcall/server/states.go CallSnapshot serializes it (the seven BaoTime states). */
 export interface OlcallLegSnapshot {

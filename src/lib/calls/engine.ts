@@ -323,6 +323,12 @@ export class CallEngine {
         this.media = g.media ?? null;
         this.set({ call: g.call, role, ui: "connecting", connectedAt: this.s.connectedAt ?? Date.now() });
         await this.connect(true);
+      } else if (g.call.link && g.call.phase !== "ended") {
+        // a link call this user already joined (the server only hands media to joined participants): rejoin quietly
+        if (!g.media) return;
+        this.media = g.media;
+        this.set({ call: g.call, role, ui: "connecting" });
+        await this.connect(true);
       } else if (role === "callee" && g.call.phase !== "active" && g.call.phase !== "ended") {
         this.onIncoming({ call: g.call, media: g.media ?? null });
       } else if (role === "caller" && (g.call.phase === "calling" || g.call.phase === "ringing")) {
@@ -343,6 +349,8 @@ export class CallEngine {
       const c = g.call;
       const peerId = c.callerId === this.meId ? c.calleeId : c.callerId;
       if (c.phase === "ended") return { peerId, ended: true };
+      // A call link: no ring screen and no Accept. Tapping the link is the join, straight to Connecting.
+      if (c.link) return { peerId, ended: !(await this.joinLink(c)) };
       if (c.calleeId === this.meId && c.phase !== "active") {
         if (this.s.call?.id !== c.id) this.onIncoming({ call: c, media: g.media ?? null });
         if (accept) await this.accept(c.video);
@@ -351,6 +359,29 @@ export class CallEngine {
     } catch {
       return { peerId: null, ended: true };
     }
+  }
+
+  /** Join a call link (Donny, Nov 18 2026): the server mints the call; the joiner goes straight to Connecting. */
+  private async joinLink(c: CallInfo): Promise<boolean> {
+    if (this.s.call?.id === c.id && (this.rtc || this.native || this.roomPromise)) return true; // already joining or in it
+    if (this.busy && this.s.call?.id !== c.id) {
+      this.set({ error: "You're already in a call" });
+      return false;
+    }
+    unlockAudio();
+    this.clearEnd();
+    const role = c.callerId === this.meId ? "caller" : "callee";
+    this.set({ ...initial(), call: c, role, ui: "connecting", v: this.s.v + 1 });
+    const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const);
+    const media = r.ok && "media" in r ? (r.media ?? null) : null;
+    if (!r.ok || !media) {
+      this.set({ ...initial(), error: (!r.ok && r.error) || "Couldn't join the call", v: this.s.v + 1 });
+      return false;
+    }
+    this.media = media;
+    if (r.call) this.set({ call: r.call });
+    void this.connect(true);
+    return true;
   }
 
   // ---------- outgoing ----------
@@ -710,6 +741,7 @@ export class CallEngine {
     const session = new NativeMediaSession(this.socket, media, {
       callId: call.id,
       caller: this.s.role === "caller",
+      ...(call.link ? { link: true } : {}),
       onState: (st) => {
         if (this.native !== session) return;
         if (st === "connected") {
