@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android60: signed 0.3.43 (versionCode 60) from ol-b60 4b954c8 — moves signaling to the new default network on a settled Wi-Fi↔cellular flip (Android lingers the old one 30 s then kills its sockets), restarts the engine on mid-call Reconnecting/Failed and server media-lost, retries refused resets, 36 s resume window. Physical-device validation pending. */
+/** Android61: signed 0.3.44 (versionCode 61) from ol-v2-no-drop-android, tag ol-android-61 — relay-only (tgcalls enableP2P false, TURN-only servers) and link calls that join straight to Connecting. Unit tests 170 pass. Device test plan (iOS-Android, Android-iOS, Android-Android, iOS-iOS; ring and link, both directions) not yet run. */
 export const ANDROID_RELEASE = {
+  version: "0.3.44",
+  build: 61,
+  file: "/downloads/openlounge-0.3.44-61.apk",
+  size: "56.6 MB",
+  sha256: "e06c149a8e678efc4ecf5b6abdc925dc9f3f2b3f6f845b1d770729c661ef3835",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.43 (60) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.43",
   build: 60,
   file: "/downloads/openlounge-0.3.43-60.apk",
   size: "56.4 MB",
   sha256: "3066d9b065632b20a953b774af768db361e92ab896ef60a95b39c32d8bed037b",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.42 (59) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.42",
-  build: 59,
-  file: "/downloads/openlounge-0.3.42-59.apk",
-  size: "56.4 MB",
-  sha256: "3344b9c323143fd39e947df4b25f999138075747847ca8b105ac4ce41960673f",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -123,24 +123,24 @@ export const IOS_ARCHIVED_B113 = {
   size: "10.0 MB",
   sha256: "f32f740be2661219911f852592a5103d66b34c071334d63d68d93c1cb5fbcf0b",
 } as const;
-/** iOS128, iOS130, both iOS131 files, iOS131 call-integration, iOS132 and iOS135 remain in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (136) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
+/** iOS128, iOS130, both iOS131 files, iOS131 call-integration, iOS132, iOS135 and iOS136 remain in public/downloads and direct-hosted (unlinked). */
+/** Previous iOS build offered on /download: 0.4.0 (137) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 136,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b136.ipa",
-  size: "8.7 MB",
-  sha256: "a2fa157f9a2fdb1935f062e9361fbc4c90e1301cf99419ff32fe3092f5ddd54e",
-} as const;
-/** iOS137: signed ad-hoc 0.4.0 (build 137) from openlounge-ios ol-b137 43a4a98 — restart the call engine on a mid-call Wi-Fi↔cellular path change, or if media stays silent after signaling resume. CI 43652621526: 88 tests, 0 failures. Physical-device validation pending. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 137,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b137.ipa",
   size: "8.7 MB",
   sha256: "f4a0aaa2b78b7227635e7a8304e7f6ffd4356c045728d61ea14a69a757b596ac",
+} as const;
+/** iOS140: signed ad-hoc 0.4.0 (build 140) from openlounge-ios ol-b140 712372d, tag ol-ios-140 — relay-only (tgcalls allowP2P false). CI 44475729648: 94 tests, 0 failures. Device test plan (iOS-Android, Android-iOS, Android-Android, iOS-iOS; ring and link, both directions) not yet run. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 140,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b140.ipa",
+  size: "10.1 MB",
+  sha256: "ca756c09fb5c8279b415cfb84ae8829f6784cd4f668f404e12d62245bacc152f",
   qualifier: "test",
 } as const;
 
