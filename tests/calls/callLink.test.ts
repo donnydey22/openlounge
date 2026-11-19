@@ -123,3 +123,18 @@ test("rtcCall hands the link deadline to the token minter only until both have j
     assert.equal(s.rtcCall(r.call.id)?.linkExpiresAt, undefined); // active: normal short tokens for rejoin
   } finally { s.dispose?.(); }
 });
+
+test("link calls are excluded from the 15 s caller-left cleanup (creator offline, half-joined)", async () => {
+  const clock = { t: 1_000_000 };
+  const msgs: unknown[] = [];
+  const s = svc({ clock, msgs });
+  try {
+    const r = await s.createLink("a", "b"); assert.ok(r.ok); if (!r.ok) return;
+    const j = await s.joinLink(r.call.id, "b"); assert.ok(j.ok);
+    (s as unknown as { _sweep: () => void })._sweep();
+    clock.t += 60_000; (s as unknown as { _sweep: () => void })._sweep();
+    assert.deepEqual(msgs, []); // still open: the link's own ten-minute expiry ends it, not the caller-left cleanup
+    assert.equal(s.isBusy("b"), true); // b is actually inside
+    assert.equal(s.isBusy("a"), false); // a has not tapped: not busy
+  } finally { s.dispose?.(); }
+});

@@ -224,3 +224,13 @@
 
 /* Always layout-neutral, so the wrapper never changes AppShell sizing on web, Android or any other pairing. */
 .appShellSlot { display: contents; }
+
+/* BaoTime state colour (Step 2): tint under the shade, crossfades between states */
+.tint { position: absolute; inset: 0; opacity: 0.55; transition: background 600ms ease, opacity 600ms ease; }
+.tint_initiating { background: linear-gradient(160deg, #4338ca 0%, #7c3aed 100%); }
+.tint_connected { background: linear-gradient(160deg, #0284c7 0%, #059669 100%); }
+.tint_failed { background: linear-gradient(160deg, #7f1d1d 0%, #b91c1c 100%); }
+.tint_ended { background: linear-gradient(160deg, #1e293b 0%, #334155 100%); }
+/* Connecting: a brief, faster pulse on the avatar rings */
+.connectingPulse .ring { animation-duration: 1.1s; }
+@media (prefers-reduced-motion: reduce) { .tint { transition: none; } }

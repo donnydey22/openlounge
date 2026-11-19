@@ -21,6 +21,11 @@ import { swapVideoTrack } from "./frameHold";
 export type CallUi = "incoming" | "outgoing" | "connecting" | "active" | "ended";
 export type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
 
+/** Where a hang-up came from: the page's End button, a native End (CallKit / Telecom / call screen), or a failure path. */
+export type HangupSource = "button" | "native" | "failure";
+/** Connecting stalled this long: the End button comes back so nobody is stuck on a dead call screen. */
+export const CONNECTING_ESCAPE_MS = 20_000;
+
 export interface CallSnapshot {
   call: CallInfo | null;
   role: "caller" | "callee" | null;
@@ -180,6 +185,8 @@ export class CallEngine {
   private routeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private stopWebRouteWatch: (() => void) | null = null;
   private lastPeer: { id: string; video: boolean } | null = null;
+  /** when the FSM entered Connecting (hang-up gate escape clock); null outside Connecting */
+  private connectingSince: number | null = null;
 
   // ---------- store plumbing ----------
   subscribe = (l: () => void) => {
@@ -189,7 +196,9 @@ export class CallEngine {
   snapshot = () => this.s;
   private set(patch: Partial<CallSnapshot>) {
     const was = this.s.reconnecting;
+    const wasUi = this.s.ui;
     this.s = { ...this.s, ...patch, v: this.s.v + 1 };
+    if (this.s.ui !== wasUi) this.connectingSince = this.s.ui === "connecting" ? Date.now() : null;
     if (this.s.reconnecting !== was) this.armStuckGuard();
     if (typeof window !== "undefined") (window as unknown as { __olCallLive?: boolean }).__olCallLive = this.busy;
     for (const l of this.listeners) l();
@@ -545,9 +554,34 @@ export class CallEngine {
     this.set({ ...initial(), v: this.s.v + 1 });
   }
 
-  async hangup() {
+  /**
+   * Hang-up gate (Donny, Nov 19 2026): a person's hang-up (End button, native CallKit / Telecom / call-screen End) only
+   * ends the call in the FSM Active state, or as Cancel while the caller's ring is still going (outgoing). During
+   * Connecting the End button is disabled and stray taps / native lifecycle hang-ups are ignored (logged as
+   * hangup-blocked) so nothing kills the call between answer and media. ICE disconnected/failed never hang up: they
+   * enter NetworkRecovery (2.5 s relay-only restart ladder); only an exhausted ladder or a failed native connect ends
+   * the call, as a failure. If Connecting stalls past CONNECTING_ESCAPE_MS the End button comes back (the call server's
+   * own 20 s ceiling ends it before that in practice).
+   */
+  hangupAllowed(at: number = Date.now()): boolean {
+    const ui = this.s.ui;
+    if (ui === "active" || ui === "outgoing") return true;
+    if (ui === "connecting") return this.connectingSince !== null && at - this.connectingSince >= CONNECTING_ESCAPE_MS;
+    return false;
+  }
+
+  async hangup(source: HangupSource = "failure") {
     const call = this.s.call;
     if (!call) return;
+    const user = source !== "failure";
+    // iPhone: CallKit / the app's call screen have already ended the call and closed native media before telling the
+    // page, so the page must follow (logged with its source); the iOS screen gates its own End button natively.
+    const iosNative = source === "native" && nativePlatform() === "ios";
+    if (user && !iosNative && !this.hangupAllowed()) {
+      this.diag("hangup-blocked", { source });
+      return;
+    }
+    this.diag("hangup", { source, connectedMs: this.s.connectedAt ? Date.now() - this.s.connectedAt : -1 });
     buzz("light");
     if (call.id) void this.req("call:hangup", { callId: call.id }).catch(() => {});
     const dur = this.s.connectedAt ? Math.round((Date.now() - this.s.connectedAt) / 1000) : 0;

@@ -12,6 +12,7 @@ import { nativeMediaCmd } from "@/lib/calls/nativeMediaSession";
 import { holdFrames, mirrorBackdrop, seedHold } from "@/lib/calls/frameHold";
 import { cn } from "@/lib/utils";
 import { useCall } from "./useCall";
+import { baoTone } from "@/lib/calls/baoTone";
 import { AudioRouteButton, RouteNotice } from "./AudioRouteButton";
 import css from "./calls.module.css";
 
@@ -91,6 +92,7 @@ function Background({ s }: { s: CallSnapshot }) {
       <div className={css.blob + " " + css.blobA} style={{ background: p.color }} />
       <div className={css.blob + " " + css.blobB} style={{ background: "#6366f1" }} />
       {p.photoUrl && <div className={css.bgPhoto} style={{ backgroundImage: `url(${JSON.stringify(p.photoUrl).slice(1, -1)})` }} />}
+      <div className={cn(css.tint, css[`tint_${baoTone(s)}`])} data-testid="call-tone" data-tone={baoTone(s)} />
       <div className={css.shade} />
     </div>
   );
@@ -382,7 +384,7 @@ function Controls({ s }: { s: CallSnapshot }) {
       <RoundBtn label={s.muted ? "Unmute" : "Mute"} active={s.muted} onClick={() => void callEngine.toggleMute()} testId="call-mute">
         {s.muted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
       </RoundBtn>
-      <RoundBtn label="End call" danger onClick={() => void callEngine.hangup()} testId="call-end">
+      <RoundBtn label={s.ui === "outgoing" ? "Cancel" : "End call"} danger disabled={!callEngine.hangupAllowed()} onClick={() => void callEngine.hangup("button")} testId="call-end">
         <PhoneOff className="h-6 w-6" />
       </RoundBtn>
     </div>
@@ -606,8 +608,8 @@ export function CallOverlay() {
         {/* center: avatar, name, status */}
         <div className={cn("flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center", showStage && "justify-start pt-2", css.controls, ctlHidden && css.controlsHidden)}>
           {!showStage && (
-            <div className={cn(css.rings, "[@media(max-height:560px)]:scale-75")}>
-              {ringing && (
+            <div className={cn(css.rings, s.ui === "connecting" && css.connectingPulse, "[@media(max-height:560px)]:scale-75")} data-testid="call-rings">
+              {(ringing || s.ui === "connecting") && (
                 <>
                   <span className={css.ring} />
                   <span className={css.ring} />

@@ -60,6 +60,21 @@ export default function CallsPage() {
     return tab === "missed" ? all.filter((r) => r.missed) : all;
   }, [calls, meId, tab]);
 
+  // BaoTime Idle (Step 2): big tiles for the most recent people, one green call button each. Additive: the list below
+  // is unchanged.
+  const tiles = useMemo(() => {
+    if (!calls || !meId) return [] as { peerId: string; video: boolean }[];
+    const seen = new Set<string>();
+    const out: { peerId: string; video: boolean }[] = [];
+    for (const r of foldCalls(calls, meId)) {
+      if (seen.has(r.peerId) || !peers[r.peerId]) continue;
+      seen.add(r.peerId);
+      out.push({ peerId: r.peerId, video: r.video });
+      if (out.length === 4) break;
+    }
+    return out;
+  }, [calls, meId, peers]);
+
   return (
     <>
       <TopBar />
@@ -99,6 +114,32 @@ export default function CallsPage() {
             ))}
           </div>
         </div>
+
+        {tab === "all" && tiles.length > 0 && (
+          <div className="mb-4 grid grid-cols-2 gap-2 px-1 sm:grid-cols-4" data-testid="calls-tiles">
+            {tiles.map((t) => {
+              const p = displayUser(peers[t.peerId]);
+              if (!p) return null;
+              return (
+                <div key={t.peerId} data-testid="calls-tile" className="flex flex-col items-center gap-2 rounded-3xl bg-white/[0.04] p-4">
+                  <Link href={`/messages/${t.peerId}`} className="flex min-w-0 flex-col items-center gap-2">
+                    <Avatar name={p.name} color={p.color ?? "#64748B"} photo={p.photoUrl} size="lg" />
+                    <span className="max-w-full truncate text-[15px] font-semibold text-zinc-100">{p.name}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    data-testid="calls-tile-call"
+                    aria-label={`Call ${p.name}`}
+                    onClick={() => startCall({ id: p.id, name: p.name, color: p.color, photoUrl: p.photoUrl ?? null, username: p.username }, false)}
+                    className="grid h-11 w-11 place-items-center rounded-full bg-emerald-500 text-white transition active:scale-90"
+                  >
+                    <Phone className="h-5 w-5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {calls === null ? (
           <div className="grid place-items-center py-16 text-zinc-500">
