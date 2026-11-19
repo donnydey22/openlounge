@@ -125,23 +125,23 @@ export const IOS_ARCHIVED_B113 = {
 } as const;
 /** iOS128, iOS130, both iOS131 files, iOS131 call-integration, iOS132, iOS135 and iOS136 remain in public/downloads and direct-hosted (unlinked). */
 /** iOS137 also stays in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (140) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). */
+/** Previous iOS build offered on /download: 0.4.0 (141) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). 140 also stays. */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 140,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b140.ipa",
-  size: "10.1 MB",
-  sha256: "ca756c09fb5c8279b415cfb84ae8829f6784cd4f668f404e12d62245bacc152f",
-} as const;
-/** iOS141: signed ad-hoc 0.4.0 (build 141) from openlounge-ios ol-baotime-binding-ios 21cd974, tag ol-ios-141 — BaoTime seven-state binding on top of 140 (relay-only). CI 44561480984 green. Physical-device calls not yet run. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 141,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b141.ipa",
   size: "10.1 MB",
   sha256: "0fbe112350aeba61f82b6e024d774d0eb3e605df13e22dd3be4b22c4de9a65c2",
+} as const;
+/** iOS142: signed ad-hoc 0.4.0 (build 142) from openlounge-ios ol-alwaysalive-ios f66fffb, tag ol-ios-142 — always-alive call links (server/web lifecycle; app code same as 141). CI 44609577104 green (100 package tests, 28 app tests). Physical-device calls not yet run. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 142,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b142.ipa",
+  size: "10.1 MB",
+  sha256: "071a741412b31c4b15049721cc993a1e50d288fd0ebdfb124f0fc109e2bdfe5b",
   qualifier: "test",
 } as const;
 
