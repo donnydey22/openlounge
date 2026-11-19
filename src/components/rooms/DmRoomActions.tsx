@@ -20,12 +20,18 @@ export function DmRoomActions({
   peerName,
   disabled,
   onSent,
+  onCall,
+  onCreateLink,
 }: {
   peerId: string;
   peerName: string;
   disabled?: boolean;
   /** a card message was created (merged into the thread right away, before the echo) */
   onSent?: (m: DirectMessage) => void;
+  /** 1:1 only: ring this person (CallKit on iOS, Telecom on Android). Omitted where calling isn't allowed. */
+  onCall?: () => void;
+  /** 1:1 only: create a share link for a server-minted call; whoever taps it lands in Connecting, no ring. */
+  onCreateLink?: () => Promise<void> | void;
 }) {
   const { request, rooms, reportError, toast } = useApp();
   const router = useRouter();
@@ -80,6 +86,20 @@ export function DmRoomActions({
     [request, peerId, peerName, reportError, toast],
   );
 
+  const createLink = useCallback(async () => {
+    if (!onCreateLink) return;
+    setBusy("link");
+    try {
+      await onCreateLink();
+      setOpen(false);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  }, [onCreateLink, reportError]);
+
+  const one = !peerId.startsWith("g_");
   const live = rooms.filter((r) => r.id !== current?.roomId).slice(0, 5);
   return (
     <>
@@ -108,6 +128,39 @@ export function DmRoomActions({
               <span className="block text-xs font-normal opacity-80">{peerId.startsWith("g_") ? `Everyone in ${peerName} can join` : `Private: only you and ${firstName(peerName)} can join`}</span>
             </span>
           </button>
+          {one && onCall && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onCall();
+              }}
+              disabled={!!busy}
+              data-testid="dm-call-start"
+              className={cn(s.press, "flex w-full items-center gap-3 rounded-2xl bg-zinc-800 px-4 py-3.5 text-left font-semibold text-zinc-100 hover:bg-zinc-700 disabled:opacity-70")}
+            >
+              <AudioLines className="h-5 w-5" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Start an Open Lounge Audio call</span>
+                <span className="block text-xs font-normal opacity-80">Rings {firstName(peerName)} on their phone</span>
+              </span>
+            </button>
+          )}
+          {one && onCreateLink && (
+            <button
+              type="button"
+              onClick={createLink}
+              disabled={!!busy}
+              data-testid="dm-call-link"
+              className={cn(s.press, "flex w-full items-center gap-3 rounded-2xl bg-zinc-800 px-4 py-3.5 text-left font-semibold text-zinc-100 hover:bg-zinc-700 disabled:opacity-70")}
+            >
+              {busy === "link" ? <Loader2 className="h-5 w-5 animate-spin" /> : <AudioLines className="h-5 w-5" />}
+              <span className="min-w-0 flex-1">
+                <span className="block">Create Open Lounge Audio link</span>
+                <span className="block text-xs font-normal opacity-80">Share a link {firstName(peerName)} can tap to join</span>
+              </span>
+            </button>
+          )}
           {current && (
             <button
               type="button"
