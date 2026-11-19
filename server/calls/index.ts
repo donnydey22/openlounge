@@ -114,7 +114,7 @@ export function wireCalls(io: WsHub, isForeground: (userId: string) => boolean) 
       cancel: (calleeId, callId, reason) => { voipRang.delete(callId); return bg(push()?.callCancel(calleeId, callId, reason)); },
     },
     log: (msg, extra) => { log.info(`[calls] ${msg}`, extra); try { recordServerEvent(msg, extra); } catch { /* call log only */ } },
-    olcallEvent: (event, callId) => void olcallEvents(event, callId),
+    olcallEvent: (event, callId) => olcallEvents(event, callId),
   });
   const cur = svc;
   metrics.gauge("calls_live", () => cur.stats().live);
@@ -192,7 +192,7 @@ export function attachCallHandlers(socket: Conn, authed: (ack: AckFn | undefined
       if (ended && !endedResent.has(ended.id)) {
         endedResent.add(ended.id);
         log.info("[calls] call ended resent", { callId: ended.id, user: uid.slice(0, 12), ev: str(d?.ev, 40) });
-        socket.emit("call:state", { call: ended });
+        socket.emit("call:state", ended.payload);
       }
       ack({ ok: true });
     }),

@@ -45,10 +45,10 @@ test("#49 engine swaps the track inside the same MediaStream (never clears srcOb
 test("ring: deadline uses the server ring window, not the skewed device clock", async () => {
   const { ringUntil } = await import("../../src/lib/calls/engine");
   const now = 1_000_000;
-  // server clock 40 s behind the phone: old code rang for the 3 s floor; now the full 45 s + grace
-  const call = { createdAt: now - 40_000, expiresAt: now - 40_000 + 45_000 };
-  assert.equal(ringUntil(call, now) - now, 47_000);
-  assert.equal(ringUntil({ createdAt: 0, expiresAt: 0 }, now) - now, 47_000);
+  // server clock 40 s behind the phone: old code rang for the 3 s floor; now the full 30 s + grace
+  const call = { createdAt: now - 40_000, expiresAt: now - 40_000 + 30_000 };
+  assert.equal(ringUntil(call, now) - now, 32_000);
+  assert.equal(ringUntil({ createdAt: 0, expiresAt: 0 }, now) - now, 32_000);
   assert.doesNotMatch(engine, /untilMs: \w+(\.\w+)*\.expiresAt \+ 2000/);
 });
 test("ring: fallback watchdog runs for the whole ring and is cleared on stop", () => {

@@ -8,3 +8,4 @@ process.env.LIVEKIT_URL ||= "ws://127.0.0.1:9";
 process.env.LIVEKIT_API_KEY ||= "devkey";
 process.env.LIVEKIT_API_SECRET ||= "calls-test-secret-0123456789abcdef0";
 process.env.CALL_SWEEP_MS ||= "100";
+import "./olcallStub";

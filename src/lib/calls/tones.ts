@@ -10,7 +10,7 @@
 //  - iOS puts the context in "interrupted" after getUserMedia (mic/camera prompt at call start); only "suspended"
 //    was resumed. Now both are, and the ring is scheduled on the audio clock so it starts the moment it resumes.
 //  - Ring cycles were re-armed with setTimeout, which background tabs throttle (≥1 s, then 1/min). Now the whole ring
-//    (up to the 45 s deadline) is scheduled on the audio clock in one go.
+//    (up to the 30 s deadline) is scheduled on the audio clock in one go.
 //  - Volumes were very low (≈ -27 dBFS) and iOS routes WebRTC-era audio to the quiet earpiece. Louder now.
 //  - It could still stop early: (1) the deadline compared the server's expiresAt with the phone clock (skew → short
 //    ring, see ringUntil in engine.ts); (2) the <audio> fallback was only considered once, 400 ms in, so when iOS /

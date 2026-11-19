@@ -147,7 +147,7 @@ test("decline with a quick reply: Declined message + the reply as a normal DM", 
   await waitFor(() => inA.find((e) => e.ev === "dm:message" && e.data.fromId === id(B) && e.data.text === "Can't talk now, call you later"));
 });
 
-test("no answer for 45s (1.5s here) → missed: unread for the callee", async () => {
+test("no answer for 30 s (1.5 s here) → missed: unread for the callee", async () => {
   const r = await A.client.req("call:start", { peerId: id(B) });
   assert.ok(r.ok);
   const end = await waitFor(() => stateOf(inB, r.call.id, "ended"), 4000);

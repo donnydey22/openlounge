@@ -85,8 +85,28 @@ export function withOlcallMedia<T>(userId: string, payload: T, env: Env = proces
 // The call server stays the only writer of call state; this only asks it to transition (Idle -> Ringing -> Answering).
 // Fire-and-forget by design: a lost event never blocks or ends a call (the server's leg simply goes Idle -> JoiningUrl
 // on join, exactly as before this was wired).
-export type OlcallEvent = "call:start" | "call:accept" | "call:decline";
-const OLCALL_EVENTS: readonly OlcallEvent[] = ["call:start", "call:accept", "call:decline"];
+export type OlcallEvent = "call:start" | "call:accept" | "call:decline" | "call:hangup" | "call:timeout" | "call:end";
+const OLCALL_EVENTS: readonly OlcallEvent[] = ["call:start", "call:accept", "call:decline", "call:hangup", "call:timeout", "call:end"];
+
+/** One leg's snapshot as olcall/server/states.go CallSnapshot serializes it (the seven BaoTime states). */
+export interface OlcallLegSnapshot {
+  callId: string; leg: "caller" | "callee";
+  state: "idle" | "ringing" | "answering" | "joining_url" | "connecting" | "in_room" | "terminal";
+  reason?: string; seq: number; event?: string;
+}
+/** What the call server returned for one event: its status and the snapshots it now holds for each leg. */
+export interface OlcallFireResult { status: number; legs: { caller?: OlcallLegSnapshot; callee?: OlcallLegSnapshot } }
+const NO_RESULT = (status: number): OlcallFireResult => ({ status, legs: {} });
+
+/** The app's legacy call.phase, read off a leg snapshot (installed builds parse call.phase). */
+export function phaseOfLeg(s: OlcallLegSnapshot): "calling" | "ringing" | "active" | "ended" {
+  switch (s.state) {
+    case "idle": return "calling";
+    case "ringing": return "ringing";
+    case "terminal": return "ended";
+    default: return "active";
+  }
+}
 export const OLCALL_EVENT_TTL_S = 120;
 export const OLCALL_EVENT_TIMEOUT_MS = 3000;
 
@@ -111,20 +131,25 @@ export function olcallEventUrl(env: Env = process.env): string | null {
 }
 
 /**
- * Sends one event; resolves to the HTTP status (200 applied, 409 refused by the state machine, 401 bad token), or 0 when
- * not configured / unreachable / timed out. Never throws, never retried (a duplicate start/accept is a 409 at best and a
- * stale one could race a later event; dropping it only skips the Ringing/Answering observer states).
+ * Sends one event; resolves to the HTTP status (200 applied, 409 refused by the state machine, 404 unknown call, 401 bad
+ * token, 0 when not configured / unreachable / timed out) and the leg snapshots the call server returned. Never throws,
+ * never retried: the call server is the single writer of call:state, and only its returned snapshots are relayed.
  */
 export async function forwardOlcallEvent(event: OlcallEvent, callId: string, env: Env = process.env, now = Date.now(),
-  fetchImpl: typeof fetch = fetch): Promise<number> {
+  fetchImpl: typeof fetch = fetch): Promise<OlcallFireResult> {
   try {
     const url = olcallEventUrl(env); const secret = olcallSecret(env);
-    if (!url || !secret || !callId) return 0;
+    if (!url || !secret || !callId) return NO_RESULT(0);
     const token = signOlcallEventToken(secret, { callId, event, exp: Math.floor(now / 1000) + OLCALL_EVENT_TTL_S });
     const r = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
       signal: AbortSignal.timeout(OLCALL_EVENT_TIMEOUT_MS) });
-    return r.status;
-  } catch { return 0; }
+    const legs: OlcallFireResult["legs"] = {};
+    try {
+      const body = (await r.json()) as Record<string, OlcallLegSnapshot>;
+      for (const k of ["caller", "callee"] as const) if (body?.[k] && body[k].callId === callId && body[k].leg === k) legs[k] = body[k];
+    } catch { /* non-JSON body: status only */ }
+    return { status: r.status, legs };
+  } catch { return NO_RESULT(0); }
 }
 
 /**
@@ -132,12 +157,14 @@ export async function forwardOlcallEvent(event: OlcallEvent, callId: string, env
  * parallel HTTP requests can arrive out of order and the server's state machine would refuse accept-before-start.
  * Each send still has its own timeout, so a slow or dead call server delays only the observer events, never the call.
  */
-export function olcallEventQueue(send: (event: OlcallEvent, callId: string) => Promise<number> = forwardOlcallEvent,
+export function olcallEventQueue(send: (event: OlcallEvent, callId: string) => Promise<OlcallFireResult> = forwardOlcallEvent,
   onResult: (event: OlcallEvent, callId: string, status: number) => void = () => {}) {
-  const tails = new Map<string, Promise<void>>();
-  return (event: OlcallEvent, callId: string): Promise<void> => {
+  const tails = new Map<string, Promise<unknown>>();
+  return (event: OlcallEvent, callId: string): Promise<OlcallFireResult> => {
     const prev = tails.get(callId) ?? Promise.resolve();
-    const next = prev.then(() => send(event, callId)).then((st) => { try { onResult(event, callId, st); } catch { /* log only */ } }, () => {});
+    const next = prev.then(() => send(event, callId)).then(
+      (r) => { try { onResult(event, callId, r.status); } catch { /* log only */ } return r; },
+      () => NO_RESULT(0));
     tails.set(callId, next);
     void next.finally(() => { if (tails.get(callId) === next) tails.delete(callId); });
     return next;

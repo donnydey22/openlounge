@@ -377,7 +377,7 @@ export class CallEngine {
       answeredAt: null,
       endedAt: null,
       outcome: null,
-      expiresAt: now + 45_000,
+      expiresAt: now + 30_000, // server CALL_RING_TIMEOUT_MS (30 s) until call:state arrives
       caller: { id: this.meId ?? "", name: "You", color: "#10B981", photoUrl: null },
       callee: { id: peer.id, name: peer.name, color: peer.color, photoUrl: peer.photoUrl, username: peer.username },
     };
@@ -1187,7 +1187,7 @@ export class CallEngine {
  */
 export function ringUntil(call: Pick<CallInfo, "createdAt" | "expiresAt">, now = Date.now()): number {
   const windowMs = call.expiresAt - call.createdAt;
-  return now + (windowMs > 0 && windowMs < 120_000 ? windowMs : 45_000) + 2000;
+  return now + (windowMs > 0 && windowMs < 120_000 ? windowMs : 30_000) + 2000; // fallback = server ring timeout (30 s)
 }
 
 export const fmt = (s: number) => {

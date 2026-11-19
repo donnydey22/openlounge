@@ -3,8 +3,9 @@
 //
 //
 // Lifecycle: calling (caller sent call:start) → ringing (a callee device acked) → active (accepted) → ended.
-// Outcomes: completed | missed (45s timeout) | declined | cancelled (caller hung up first) | busy | failed.
+// Outcomes: completed | missed (30 s ring timeout) | declined | cancelled (caller hung up first) | busy | failed.
 // Every ended call leaves one service message in the DM (store.appendCallMessage).
+import { OLCALL_EVENT_TIMEOUT_MS, phaseOfLeg, type OlcallEvent, type OlcallFireResult, type OlcallLegSnapshot } from "./olcallToken";
 import { randomUUID } from "node:crypto";
 import type { CallInfo, CallMedia, CallMeta, CallOutcome, CallPeer, CallPhase, TurnIceServer } from "../../src/lib/types";
 import type { CallMediaBackend } from "./mediaBackend";
@@ -13,7 +14,7 @@ const num = (k: string, d: number) => {
   const v = Number(process.env[k]);
   return Number.isFinite(v) && v > 0 ? v : d;
 };
-export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 45_000);
+export const CALL_RING_TIMEOUT_MS = num("CALL_RING_TIMEOUT_MS", 30_000); // = olcall RingTimeout (states.go), BaoTime ring expiry
 /** No callee device acked call:incoming within this window → send the push anyway (unacked "foreground" socket). */
 export const CALL_ACK_FALLBACK_MS = num("CALL_ACK_FALLBACK_MS", 4_000);
 /** a call whose participants both lost every WebSocket for this long is over (LiveKit webhook usually ends it sooner) */
@@ -48,7 +49,7 @@ export const CALL_BG_RING_PUSH_MS = num("CALL_BG_RING_PUSH_MS", 1_500);
 export const CALL_MAX_PER_10MIN = num("CALL_MAX_PER_10MIN", 12);
 /**
  * Lifetime of a call's LiveKit join token (the call's media credential). Short on purpose: it only has to cover
- * ring → accept → connect (ring ≤ 45 s). Once connected, LiveKit keeps the client on server-refreshed tokens (sent right
+ * ring → accept → connect (ring ≤ 30 s). Once connected, LiveKit keeps the client on server-refreshed tokens (sent right
  * after join and every few minutes, ~10 min validity), so resume and LiveKit's own full reconnect work in calls of any
  * length (verified against livekit-server 1.13: /workspace/calls/token-ttl). Our own rejoin asks call:get, which re-mints
  * while the call is live. After the call ends nothing is re-minted, and a join with a still-valid refreshed token into an
@@ -68,8 +69,10 @@ const QUALITY_SILENT_KBPS = 2;
 const QUALITY_MAX_SAMPLES = 720; // 1 h of 5 s reports per participant
 
 export interface CallDeps {
-  /** Tell the olcall server (the only writer of call state) about an app-side event. Fire-and-forget; must never throw. */
-  olcallEvent?(event: "call:start" | "call:accept" | "call:decline", callId: string): void;
+  /** Ask the olcall server (the only writer of call state) to apply an app-side event. Must never throw. For call:start
+   *  the result gates the ring: the callee is rung (socket call:incoming, VoIP/FCM push) only after the call server's
+   *  callee leg reports Ringing; anything else ends the call as Failed with no ring (Donny, Nov 18 2026, strict). */
+  olcallEvent?(event: OlcallEvent, callId: string): Promise<OlcallFireResult> | void;
   /** Platform-owned generic audio occupancy, atomically excludes room/call races. DO serializes starts. */
   claimAudio?(callerId:string, calleeId:string, callId:string):Promise<{ok:boolean;error?:string;reason?:string}>;
   releaseAudio?(callerId:string,calleeId:string,callId:string):void;
@@ -122,6 +125,8 @@ interface CallRec {
   iosNativeVideo?: boolean;
   endedAt: number | null;
   outcome: CallOutcome | null;
+  /** The call server's latest leg snapshots (olcall/server/states.go). call:state relays only these. */
+  fsm: { caller?: OlcallLegSnapshot; callee?: OlcallLegSnapshot };
   /** per participant: the current backend credential (re-minted by media() once it's past half its lifetime) */
   tokens: Map<string, { p: Promise<CallMedia | null>; at: number }>;
   /** Captured once at call start (P2P/rcRelay only); never migrated mid-call. */
@@ -262,9 +267,44 @@ export class CallService {
     return false;
   }
 
-  private broadcast(c: CallRec, ev: string, extra: Record<string, unknown> = {}) {
-    const info = this.info(c);
-    for (const u of [c.callerId, c.calleeId]) this.d.emitUser(u, ev, { call: info, ...extra });
+  /**
+   * call:state is relay-only (Donny, Nov 18 2026): each participant gets the phase of THEIR leg as the call server's
+   * state machine last reported it, plus that snapshot as `state`. This record's own phase is internal (tokens, push
+   * cancel, history) and is never emitted. No snapshot for a leg -> nothing is sent to that participant.
+   * Without an olcallEvent hook there is no call server (unit tests only) and the internal view is sent as before.
+   */
+  private relayState(c: CallRec, users: string[], extra: Record<string, unknown> = {}) {
+    for (const u of users) {
+      if (!this.d.olcallEvent) { this.d.emitUser(u, "call:state", { call: this.info(c), ...extra }); continue; }
+      const p = this.statePayload(c, u);
+      if (!p) { this.d.log?.("call state not relayed: no call-server snapshot", { callId: c.id, leg: u === c.callerId ? "caller" : "callee" }); continue; }
+      this.d.emitUser(u, "call:state", { ...p, ...extra });
+    }
+  }
+
+  private statePayload(c: CallRec, userId: string): { call: CallInfo; state: OlcallLegSnapshot } | null {
+    const snap = c.fsm[userId === c.callerId ? "caller" : "callee"];
+    return snap ? { call: { ...this.info(c), phase: phaseOfLeg(snap) }, state: snap } : null;
+  }
+
+  /** Keeps the newest snapshot per leg (seq only grows on the call server). */
+  private absorb(c: CallRec, r: OlcallFireResult) {
+    for (const k of ["caller", "callee"] as const) {
+      const n = r.legs[k];
+      if (n && n.callId === c.id && (!c.fsm[k] || n.seq >= c.fsm[k]!.seq)) c.fsm[k] = n;
+    }
+  }
+
+  /** Ask the call server to apply one event, then relay what it returned to `users`. Never throws. */
+  private fireAndRelay(c: CallRec, event: OlcallEvent, users: string[], extra: Record<string, unknown> = {}) {
+    if (!this.d.olcallEvent) { this.relayState(c, users, extra); return; }
+    let p: Promise<OlcallFireResult> | void;
+    try { p = this.d.olcallEvent(event, c.id); } catch { p = undefined; }
+    void Promise.resolve(p).catch(() => undefined).then((r) => {
+      if (r) this.absorb(c, r);
+      if (!r || r.status !== 200) this.d.log?.("call event not applied by call server", { callId: c.id, event, status: r ? r.status : 0 });
+      this.relayState(c, users, extra);
+    });
   }
 
   private bind(c: CallRec, userId: string, connId?: string) {
@@ -329,6 +369,7 @@ export class CallService {
       answeredAt: null,
       endedAt: null,
       outcome: null,
+      fsm: {},
       tokens: new Map(),
       backend,
       timer: null,
@@ -357,19 +398,32 @@ export class CallService {
     this.mint(c, callerId);
     c.timer = setTimeout(() => this.timeout(c.id), CALL_RING_TIMEOUT_MS);
     c.timer.unref?.();
+    // The ring follows the call server's Ringing transition, never the other way round: no Ringing snapshot within
+    // OLCALL_EVENT_TIMEOUT_MS (3 s) means no ring anywhere and the call ends as Failed.
+    if (this.d.olcallEvent) {
+      const r = await this.ringGate(c.id);
+      this.absorb(c, r);
+      if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
+      if (r.status !== 200 || r.legs.callee?.state !== "ringing") {
+        this.d.log?.("call ring refused by call server", { callId: c.id, status: r.status, callee: r.legs.callee?.state ?? null });
+        // finish() sends call:end, which releases the server's pending legs and ring expiry if the start landed late
+        this.finish(c, "failed", { silentToCallee: true, reason: "call_server_unavailable" });
+        return { ok: false, error: "Couldn't place the call. Try again in a moment.", reason: "call_server_unavailable", call: this.info(c) };
+      }
+    }
     const info = this.info(c);
     const calleeMedia = await this.media(c, calleeId);
     if (c.phase === "ended") return { ok: false, error: "Call ended", reason: "ended", call: this.info(c) };
     this.d.emitUser(calleeId, "call:incoming", { call: info, media: calleeMedia });
     this.d.log?.("call ring emit", { callId: c.id, calleeSockets: this.d.connCount?.(calleeId) ?? null, foreground: this.d.isForeground(calleeId) });
-    this.d.emitUser(callerId, "call:state", { call: info }); // caller's other tabs show "Calling…"
+    this.relayState(c, [callerId]); // caller's other tabs: the caller leg as the call server reported it
     if (!this.d.isForeground(calleeId) && this.d.push) {
       c.pushed = true;
       this.d.push.incoming(calleeId, info);
       this.armRepush(c, info);
     } else if (this.d.push) {
       // A "foreground" socket that never acks (frozen/unattended tab, stale WebView) used to mean no ring anywhere
-      // for the full 45 s. If no callee device acks in time, fall back to push so their phone still rings.
+      // for the full 30 s. If no callee device acks in time, fall back to push so their phone still rings.
       const t = setTimeout(() => {
         if (c.phase !== "calling" || c.pushed || !this.d.push) return;
         c.pushed = true;
@@ -380,7 +434,6 @@ export class CallService {
       t.unref?.();
     }
     this.d.log?.("call start", { callId: c.id, video: c.video, callerId: c.callerId, calleeId: c.calleeId, callerPlatform: c.callerPlatform ?? null, backend: c.backend.provider });
-    this.fireOlcall("call:start", c.id);
     return { ok: true, call: info, media: await this.media(c, callerId) };
   }
 
@@ -419,9 +472,13 @@ export class CallService {
   }
 
   /** Ended-call view for a participant (null while live/unknown): lets a client stuck on a finished call clear itself. */
-  endedFor(callId: unknown, userId: string): CallInfo | null {
+  /** A participant still reporting on an ended call gets the ended call:state again: the call server's snapshot. */
+  endedFor(callId: unknown, userId: string): { id: string; payload: Record<string, unknown> } | null {
     const c = this.get(callId, userId);
-    return c && c.phase === "ended" ? this.info(c) : null;
+    if (!c || c.phase !== "ended") return null;
+    if (!this.d.olcallEvent) return { id: c.id, payload: { call: this.info(c) } };
+    const p = this.statePayload(c, userId);
+    return p ? { id: c.id, payload: p } : null;
   }
 
   private get(callId: unknown, userId: string) {
@@ -446,7 +503,7 @@ export class CallService {
       this.d.log?.("call ring ack", { callId: c.id, ms: c.ackAt - c.createdAt });
       this.metrics.ringMs.push(c.ackAt - c.createdAt);
       if (this.metrics.ringMs.length > METRIC_KEEP) this.metrics.ringMs.shift();
-      this.broadcast(c, "call:state");
+      this.relayState(c, [c.callerId, c.calleeId]);
     }
     return { ok: true as const, call: this.info(c) };
   }
@@ -468,10 +525,9 @@ export class CallService {
       c.answeredAt = this.now();
       if (c.timer) clearTimeout(c.timer);
       c.timer = null;
-      this.broadcast(c, "call:state");
       if (c.pushed) this.d.push?.cancel(c.calleeId, c.id, "answered");
       this.d.log?.("call accept", { callId: c.id, ringMs: c.answeredAt - c.createdAt, userId, calleePlatform: c.calleePlatform ?? null });
-      this.fireOlcall("call:accept", c.id);
+      this.fireAndRelay(c, "call:accept", [c.callerId, c.calleeId]);
     }
     return { ok: true as const, call: this.info(c), media: await this.media(c, userId) };
   }
@@ -481,12 +537,19 @@ export class CallService {
     const c = this.get(callId, userId);
     if (!c || c.calleeId !== userId) return { ok: false as const, error: "No such call" };
     if (c.phase === "active") return this.hangup(callId, userId);
-    if (c.phase !== "ended") { this.finish(c, "declined"); this.fireOlcall("call:decline", c.id); }
+    if (c.phase !== "ended") this.finish(c, "declined");
     return { ok: true as const, call: this.info(c) };
   }
 
-  private fireOlcall(event: "call:start" | "call:accept" | "call:decline", callId: string) {
-    try { this.d.olcallEvent?.(event, callId); } catch { /* observer channel only: never affects the call */ }
+  /** call:start to the call server, bounded by OLCALL_EVENT_TIMEOUT_MS even if the hook itself stalls. */
+  private async ringGate(callId: string): Promise<OlcallFireResult> {
+    const none: OlcallFireResult = { status: 0, legs: {} };
+    let t: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const p = this.d.olcallEvent?.("call:start", callId);
+      if (!p) return none;
+      return await Promise.race([p.catch(() => none), new Promise<OlcallFireResult>((res) => { t = setTimeout(() => res(none), OLCALL_EVENT_TIMEOUT_MS); })]);
+    } catch { return none; } finally { if (t) clearTimeout(t); }
   }
 
   /** Either side hangs up. Before answer: caller → cancelled (missed for callee), callee → declined. */
@@ -624,8 +687,11 @@ export class CallService {
     for (const u of [c.callerId, c.calleeId]) if (this.live.get(u) === c.id) this.live.delete(u);
     c.tokens.clear(); // the media credential dies with the call: nothing is handed out or re-minted after this
     const durationSec = c.answeredAt ? Math.max(0, Math.round((c.endedAt - c.answeredAt) / 1000)) : 0;
-    if (!opts.silentToCallee) this.broadcast(c, "call:state", { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
-    else this.d.emitUser(c.callerId, "call:state", { call: this.info(c) });
+    // the call server ends its legs first; what it returns is what both sides are told
+    const ev: OlcallEvent = outcome === "declined" && wasRinging ? "call:decline" : outcome === "missed" ? "call:timeout"
+      : outcome === "cancelled" || (outcome === "completed" && opts.by && !opts.reason) || outcome === "declined" ? "call:hangup" : "call:end";
+    if (!opts.silentToCallee) this.fireAndRelay(c, ev, [c.callerId, c.calleeId], { by: opts.by ?? null, ...(opts.reason ? { reason: opts.reason } : {}) });
+    else this.fireAndRelay(c, ev, [c.callerId]);
     if (wasRinging && c.pushed) this.d.push?.cancel(c.calleeId, c.id, outcome === "missed" ? "timeout" : "cancelled");
     c.backend.close(c.id);
     this.d.appendCallMessage({ id: c.id, callerId: c.callerId, video: c.everVideo, outcome, durationSec }, c.calleeId);
@@ -644,11 +710,11 @@ export class CallService {
         if (c.endedAt && now - c.endedAt > ENDED_KEEP_MS) this.calls.delete(c.id);
         continue;
       }
-      // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 45s
+      // ringing and the caller vanished (closed the tab / lost network): cancel instead of ringing on for 30 s
       if (c.phase !== "active") {
         // Half-open ring: the caller is still "online" (another tab / device / a lingering chat socket) but every
         // connection that was in this call has closed (call page closed, WebView killed) and none re-attached
-        // (a reloaded page re-binds via call:get within ~1 s). Cancel instead of ringing the callee for 45 s.
+        // (a reloaded page re-binds via call:get within ~1 s). Cancel instead of ringing the callee for 30 s.
         const callerSet = c.conns.get(c.callerId);
         const callerDetached = !!callerSet && callerSet.size === 0;
         if (!this.d.isConnected(c.callerId) || callerDetached) {

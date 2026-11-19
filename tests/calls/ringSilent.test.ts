@@ -20,10 +20,10 @@ test("priming WAV has real samples (non-empty data chunk, valid RIFF sizes)", ()
 test("ring fallback does not require a successfully primed element", () => {
   assert.match(readFileSync("src/lib/calls/tones.ts", "utf8"), /ringAudioElement as primedAudioElement/);
 });
-test("ring window is never already expired (missing / bad server fields → 45 s)", () => {
+test("ring window is never already expired (missing / bad server fields → 30 s)", () => {
   const now = 1_000_000;
-  for (const c of [{ createdAt: now, expiresAt: now + 45_000 }, { createdAt: undefined as unknown as number, expiresAt: now }, { createdAt: 0, expiresAt: 0 }, { createdAt: now + 9e9, expiresAt: now }])
-    assert.ok(ringUntil(c, now) - now >= 45_000, JSON.stringify(c));
+  for (const c of [{ createdAt: now, expiresAt: now + 30_000 }, { createdAt: undefined as unknown as number, expiresAt: now }, { createdAt: 0, expiresAt: 0 }, { createdAt: now + 9e9, expiresAt: now }])
+    assert.ok(ringUntil(c, now) - now >= 30_000, JSON.stringify(c));
 });
 test("iOS wrapper resume hook re-arms the ring", () => {
   assert.match(readFileSync("src/lib/calls/tones.ts", "utf8"), /__olRingResume = \(\) =>[\s\S]{0,200}resumeAudio\(\)[\s\S]{0,200}cur\.rearm\(\)/);
