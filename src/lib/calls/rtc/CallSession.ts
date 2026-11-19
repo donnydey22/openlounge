@@ -53,7 +53,7 @@ export class CallSession {
 
   constructor(private socket: RtcSocket, private o: CallSessionOpts) {
     this.recovery = new NetworkRecovery({
-      restart: (n) => this.iceRestart(n),
+      restart: (n, relayOnly) => this.iceRestart(n, relayOnly),
       giveUp: () => this.fail(new CallFailure("network", "recovery-exhausted")),
       log: o.log,
     });
@@ -110,10 +110,12 @@ export class CallSession {
         this.connectedResolve = null;
         this.connectedReject = null;
       } else if (st === "disconnected" || st === "failed") {
-        if (this.connectedResolve && st === "failed") return this.fail(new CallFailure("network", "ice-failed-first-connect"));
         this.setPhase("recovering");
       }
       this.recovery.onTransportState(st);
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") this.recovery.onConnected();
     };
     this.pc = pc;
     return pc;
@@ -165,7 +167,8 @@ export class CallSession {
         if (m.gen > 0) {
           const fresh = await this.socket.request<{ok:boolean;config?:{iceServers:RTCIceServer[]}}>("rtc:iceConfig",{callId:this.o.callId}).catch(()=>null);
           if (this.pc !== pc) return;
-          if (fresh?.ok && fresh.config) pc.setConfiguration({...pc.getConfiguration(),iceServers:fresh.config.iceServers});
+          const relayOnly = this.recovery.neverConnected;
+          pc.setConfiguration({ ...pc.getConfiguration(), ...(fresh?.ok && fresh.config ? { iceServers: fresh.config.iceServers } : {}), iceTransportPolicy: relayOnly ? "relay" : "all" });
         }
         await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
         this.remoteSet = true;
@@ -179,12 +182,14 @@ export class CallSession {
         await this.flushCands();
         await pc.setLocalDescription(await pc.createAnswer());
         await this.send("answer", { sdp: pc.localDescription?.sdp });
+        this.recovery.armFirstConnect();
         return;
       case "answer":
         if (this.o.role !== "caller" || !m.sdp || pc.signalingState !== "have-local-offer") return;
         await pc.setRemoteDescription({ type: "answer", sdp: m.sdp });
         this.remoteSet = true;
         await this.flushCands();
+        this.recovery.armFirstConnect();
         return;
       case "candidate":
         if (m.candidate === undefined) return;
@@ -192,7 +197,7 @@ export class CallSession {
         await pc.addIceCandidate(m.candidate ?? undefined).catch(() => {});
         return;
       case "restart":
-        if (this.o.role === "caller") await this.iceRestart(0);
+        if (this.o.role === "caller") await this.iceRestart(0, this.recovery.neverConnected);
         return;
       case "bye":
         this.close();
@@ -206,11 +211,14 @@ export class CallSession {
   }
 
   /** Network recovery only: refresh OL ICE creds, bump generation, ICE-restart (caller drives; callee asks). */
-  private async iceRestart(_attempt: number) {
+  private async iceRestart(_attempt: number, relayOnly = false) {
     const pc = this.pc;
     if (!pc || this.phase === "closed") return;
     const r = await this.socket.request<{ ok: boolean; config?: { iceServers: RTCIceServer[] } }>("rtc:iceConfig", { callId: this.o.callId }).catch(() => null);
-    if (r?.ok && r.config) pc.setConfiguration({ ...pc.getConfiguration(), iceServers: r.config.iceServers });
+    const cfg = pc.getConfiguration();
+    // Never-connected restarts gather OL TURN candidates only (W3C: iceTransportPolicy may change via setConfiguration
+    // and applies to the next gathering, which the ICE restart triggers). Once connected, policy stays "all".
+    pc.setConfiguration({ ...cfg, ...(r?.ok && r.config ? { iceServers: r.config.iceServers } : {}), iceTransportPolicy: relayOnly ? "relay" : "all" });
     this.gen++;
     this.seq = 0;
     this.remoteSet = false;
