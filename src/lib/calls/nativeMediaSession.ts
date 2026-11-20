@@ -1,7 +1,7 @@
 // Native app call media (iOS OLRtcCall / Android RtcCallSession): when the app advertises the rtcP2P capability it owns
 // the microphone, camera and the one WebRTC PeerConnection (RingRTC session model, OLX3DH-v1 keys held by the app).
 // This page is UI + transport only: it relays the app's rc:* / rtc:* requests over its authenticated realtime socket
-// and forwards server rc:msg / rtc:signal to the app. No getUserMedia, no WebView media. There is no other native lane.
+// (the old rc:msg / rtc:signal forwarding is removed, t6083u). No getUserMedia, no WebView media. There is no other native lane.
 import type { CallMedia } from "@/lib/types";
 import type { RealtimeClient } from "@/lib/realtime";
 
@@ -44,27 +44,13 @@ export function nativeMediaCmd(cmd: Record<string, unknown>): Promise<unknown> {
   return b.nativeMedia(cmd);
 }
 
-/** app→page requests the page may relay: the RingRTC session model (sealed rc:*) and OL ICE config. */
-const RELAY_EVENT = /^(rtc:signal|rtc:iceConfig|rc:msg|rc:keys:publish|rc:keys:fetch)$/i;
-
 /**
- * Page realtime socket (re)connected: give the app a standing relay for rc:keys:publish ONLY (no call needed) and
- * tell it to publish its OLX3DH-v1 bundle now. Fixes the Android race where keys were first published lazily on the
- * first call op, so a caller could rc:keys:fetch before the callee's bundle existed. A live call session's relay
- * (NativeMediaSession.connect) takes precedence; this one never relays call traffic.
+ * Page realtime socket (re)connected. The old peer-to-peer key exchange (OLX3DH rc:keys:publish / rc:keys:fetch,
+ * sealed rc:msg, rtc:* relays) is removed from the call flow (Donny t6083u): native media is olcall only (the app
+ * joins its leg with the CallMedia join token), so nothing is relayed or published here any more.
  */
-export function nativeSignalConnected(socket: RealtimeClient) {
-  if (!nativeRtcP2PAvailable()) return;
-  const w = window as unknown as { __olNativeMsReq?: (id: string, event: string, data: Record<string, unknown>) => void; __olNativeKeysRelay?: boolean };
-  if (!w.__olNativeMsReq || w.__olNativeKeysRelay) {
-    w.__olNativeKeysRelay = true;
-    w.__olNativeMsReq = (id, event, data) => {
-      const b = bridge();
-      if (event !== "rc:keys:publish") return b?.msReply?.(id, false, null, "relay refused");
-      socket.request(event, data, 8_000).then((r) => b?.msReply?.(id, true, r ?? null), (e: unknown) => b?.msReply?.(id, false, null, String((e as Error)?.message ?? e)));
-    };
-  }
-  void nativeMediaCmd({ op: "signalConnected" }).catch(() => {});
+export function nativeSignalConnected(_socket: RealtimeClient) {
+  void _socket;
 }
 
 export class NativeMediaSession {
@@ -87,14 +73,6 @@ export class NativeMediaSession {
     },
   ) {}
 
-  private forward(op: string) {
-    return (d: unknown) => {
-      if (this.closed || !d || (d as { callId?: unknown }).callId !== this.opts.callId) return;
-      void nativeMediaCmd({ op, data: d }).catch(() => {});
-    };
-  }
-  private readonly onRtcSignal = this.forward("rtcSignal");
-  private readonly onRcMsg = this.forward("rcMsg");
 
   private readonly onNativeEvent = (e: Event) => {
     if (this.closed) return;
@@ -106,18 +84,9 @@ export class NativeMediaSession {
     } else if (s === "connected" || s === "disconnected" || s === "failed") this.opts.onState(s);
   };
 
-  /** app → page: one rc:* / rtc:* request relayed over the page socket; the answer goes back via msReply */
-  private readonly relay = (id: string, event: string, data: Record<string, unknown>) => {
-    const b = bridge();
-    if (!b?.msReply) return;
-    if (this.closed || !RELAY_EVENT.test(event) || !data || (event !== "rc:keys:publish" && data.callId !== this.opts.callId)) {
-      b.msReply(id, false, null, "relay refused");
-      return;
-    }
-    this.socket.request(event, data, 8_000).then(
-      (r) => b.msReply?.(id, true, r ?? null),
-      (err: unknown) => b.msReply?.(id, false, null, String((err as Error)?.message ?? err)),
-    );
+  /** app → page relay requests: none remain (the rc:* / rtc:* peer-to-peer exchange is removed); always refused */
+  private readonly relay = (id: string) => {
+    bridge()?.msReply?.(id, false, null, "relay refused");
   };
 
   async connect(withVideo: boolean) {
@@ -125,8 +94,6 @@ export class NativeMediaSession {
     w.__olNativeMsReq = this.relay;
     w.__olNativeKeysRelay = false;
     window.addEventListener("openlounge:native-media", this.onNativeEvent);
-    this.socket.on("rtc:signal", this.onRtcSignal);
-    this.socket.on("rc:msg", this.onRcMsg);
     await nativeMediaCmd({ op: "connect", callId: this.opts.callId, iceServers: this.media.iceServers ?? [], media: this.media, caller: this.opts.caller, ...(this.opts.link ? { link: true } : {}), ...(withVideo ? { video: true } : {}) });
     if (this.closed) throw new Error("native media cancelled");
   }
@@ -142,8 +109,6 @@ export class NativeMediaSession {
   close() {
     if (this.closed) return;
     this.closed = true;
-    this.socket.off("rtc:signal", this.onRtcSignal);
-    this.socket.off("rc:msg", this.onRcMsg);
     window.removeEventListener("openlounge:native-media", this.onNativeEvent);
     const w = window as unknown as { __olNativeMsReq?: unknown };
     if (w.__olNativeMsReq === this.relay) delete w.__olNativeMsReq; // next signalConnected re-installs the keys relay

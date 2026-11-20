@@ -1,8 +1,9 @@
 // Client call engine: one per app. Owns the call state machine on this device and its one media session.
-// Media (RingRTC hard cut): a single 1:1 P2P WebRTC PeerConnection whose signaling is E2E-sealed (OLX3DH-v1, rc:msg).
+// Media: desktop web joins its own leg on the olcall Pion server (OlcallSignaling: TURN-only, relay; t6081u); the apps
+// run tgcalls against the same server. The old sealed peer-to-peer rc:* exchange is removed from the call flow (t6083u).
 //  - browsers / older app builds: CallSession (src/lib/calls/rtc) in this page, audio + optional camera on one PC;
-//  - apps with the rtcP2P capability: the app owns mic/camera/PC (iOS OLRtcCall, Android RtcCallSession); this page
-//    relays rc:* / rtc:* only (NativeMediaSession). There is no SFU, LiveKit or fallback lane for calls.
+//  - native apps: the app owns mic/camera and its tgcalls leg (NativeMediaSession hands it the CallMedia join token);
+//    nothing is relayed through this page. There is no SFU, LiveKit or fallback lane for calls.
 import { isHeadsetKind, routeAnnouncement, routeFromNative, routesFromNative, routesFromWebOutputs, sortRoutes, type AudioRoute, type NativeRouteDetail } from "./audioRoute";
 import { nextElsewhere } from "./elsewhere";
 import type { ElsewhereCall } from "./elsewhere";
