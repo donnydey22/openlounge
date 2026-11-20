@@ -104,3 +104,18 @@ test("load-time resume never joins (or drops) a link behind its join screen (t60
   assert.equal(e.s.ui, "prejoin");
   assert.equal(connects + joins, 0, "no leg opened before Join");
 });
+
+test("a tapped link's join screen is not replaced by a quiet resume of ANOTHER always-alive room the person is still listed in", async () => {
+  const OLD = { ...LINK, id: "L0", phase: "active" };
+  let connects = 0;
+  const e = engine((ev) => {
+    if (ev === "call:current") return Promise.resolve({ ok: true, call: OLD });
+    if (ev === "call:get") return new Promise((r) => setTimeout(() => r({ ok: true, call: LINK, media: { url: "wss://x", token: "t" } }), 5));
+    return Promise.resolve({ ok: true });
+  });
+  e.connect = async () => { connects++; };
+  await Promise.all([e.openFromLink("L1", false), e.resume()]);
+  assert.equal(e.s.ui, "prejoin");
+  assert.equal(e.s.call.id, "L1");
+  assert.equal(connects, 0);
+});
