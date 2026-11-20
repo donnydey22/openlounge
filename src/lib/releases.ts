@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android67: signed 0.3.50 (versionCode 67) from ol-stage-parity-67 d11b6c3 = Android 66 + stage parity with web (t6106u: their avatar tile while their camera is off, camera-off self tile, peer mute badge, no frozen remote frame) + camera kept alive (t6107u: call foreground service claims the camera type only while the camera is on and the app is visible). Unit tests 97 pass. Physical-device calls not yet run. */
+/** Android68: signed 0.3.51 (versionCode 68) from ol-camon-68 9ed57c2 = Android 67 + every link opens camera + mic on (t6111u; the page asks for video on every link join) and a refused camera joins with audio and the camera-off self tile instead of failing the call. Unit tests 98 pass. Physical-device calls not yet run. */
 export const ANDROID_RELEASE = {
+  version: "0.3.51",
+  build: 68,
+  file: "/downloads/openlounge-0.3.51-68.apk",
+  size: "56.6 MB",
+  sha256: "5189aff0279d2f2cbbeffea70253fd719d6a936625bcf9b0d6fe8f01669c2ba1",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.50 (67) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  66, 65, 64, 63, 62, 61, 60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.50",
   build: 67,
   file: "/downloads/openlounge-0.3.50-67.apk",
   size: "56.6 MB",
   sha256: "a7304449f08ca0ab2a7d851bcc69987e2839dd307ea4b231fc2f7ab03b7fe8f2",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.49 (66) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  65, 64, 63, 62, 61, 60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.49",
-  build: 66,
-  file: "/downloads/openlounge-0.3.49-66.apk",
-  size: "56.6 MB",
-  sha256: "384e390a0b8974d5c340bf0ba8053e055c502ee4c8578be5b873b997d6528595",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
