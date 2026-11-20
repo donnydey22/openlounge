@@ -300,6 +300,11 @@ export class CallEngine {
     return this.socket.request<T>(ev, data && typeof data === "object" ? {...data, protocol:nativePlatform() && !nativeCallingProtocolAvailable() ? "upgrade_required" : "ol-rc-v1"} : data, ms);
   }
 
+  /** a link join screen is up, or a tapped link is still opening: a quiet resume must leave it alone */
+  private linkScreenUp(): boolean {
+    return this.s.ui === "prejoin" || !!this.linkOpening;
+  }
+
   /** after (re)connect + auth: pick up a call that is still live (page reload, network switch) */
   // the call this answer can speak for: one the page already had when it asked. A call link tapped on a cold page
   // runs openFromLink and this resume together; "no call" for the asked-before state must never end the call the
@@ -318,7 +323,9 @@ export class CallEngine {
       const call = r.call;
       // Link join screen (t6094u rejoin): the person is choosing mic / camera, or the tapped link is still opening;
       // only their Join opens a leg (a load-time resume used to join or drop it behind the join screen).
-      if (call && (this.s.ui === "prejoin" || this.linkOpening)) return; // any tapped link wins over a quiet resume of another room
+      // Any answer, including "no call": a join screen has no leg yet, so call:current says nothing about it (a retried
+      // resume that read the prejoined link as askedFor used to end it as "Call ended · 0:00", live Chromium Nov 19).
+      if (this.linkScreenUp()) return; // any tapped link wins over a quiet resume of another room
       if (!call) {
         // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
         if (this.s.call && this.busy && askedFor && this.s.call.id === askedFor && this.linkJoining !== askedFor) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
@@ -334,7 +341,7 @@ export class CallEngine {
         return;
       }
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
-      if (this.s.ui === "prejoin" || this.linkOpening) return; // a link was tapped meanwhile (join screen)
+      if (this.linkScreenUp()) return; // a link was tapped meanwhile (join screen)
       if (!g.ok || !g.call) {
         if (!g.ok && attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
         return;

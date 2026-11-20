@@ -119,3 +119,19 @@ test("a tapped link's join screen is not replaced by a quiet resume of ANOTHER a
   assert.equal(e.s.call.id, "L1");
   assert.equal(connects, 0);
 });
+
+test("a retried resume answering 'no call' never ends the link join screen (Call ended · 0:00, live Chromium)", async () => {
+  let cur = 0;
+  const e = engine((ev) => {
+    if (ev === "call:current") return Promise.resolve(++cur === 1 ? { ok: false, error: "Not signed in" } : { ok: true, call: null });
+    if (ev === "call:get") return Promise.resolve({ ok: true, call: LINK });
+    return Promise.resolve({ ok: true });
+  });
+  e.teardownMedia = () => {};
+  await e.resume(); // first answer not ready: retry is scheduled
+  await e.openFromLink("L1", false);
+  assert.equal(e.s.ui, "prejoin");
+  await e.resume(1); // the retry, now asking for L1, hears "no call"
+  assert.equal(e.s.ui, "prejoin");
+  assert.equal(e.s.call.id, "L1");
+});
