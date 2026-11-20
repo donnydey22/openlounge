@@ -72,3 +72,19 @@ test("openFromLink: a real 'no such call' answer still ends at once (no retry)",
   assert.equal(gets, 1);
   assert.equal(r.ended, true);
 });
+
+test("link join screen and joined link survive the room's own state frames (someone joins/leaves = phase active), t6094u rejoin", async () => {
+  const e = engine((ev) => {
+    if (ev === "call:get") return Promise.resolve({ ok: true, call: LINK });
+    if (ev === "call:join") return Promise.resolve({ ok: true, call: LINK, media: { url: "wss://x", token: "t" } });
+    return Promise.resolve({ ok: true });
+  });
+  e.teardownMedia = () => {};
+  await e.openFromLink("L1", false);
+  assert.equal(e.s.ui, "prejoin");
+  e.onState({ call: { ...LINK, phase: "active" } });
+  assert.equal(e.s.ui, "prejoin", "room state never closes the join screen");
+  await e.joinFromPrejoin();
+  e.onState({ call: { ...LINK, phase: "active" } });
+  assert.notEqual(e.s.ui, null, "a joined link callee is not 'answered elsewhere'");
+});

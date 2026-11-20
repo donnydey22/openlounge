@@ -477,6 +477,7 @@ export class CallEngine {
     this.clearEnd();
     const role = c.callerId === this.meId ? "caller" : "callee";
     this.set({ ...initial(), call: c, role, ui: "connecting", muted: !!opts.muted, camOn: !!opts.camOn, v: this.s.v + 1 });
+    this.acceptedHere = true; // joined on this device: room state from the server is never "answered elsewhere"
     // App surfaces (t6093u): a link join opens the same native live-room screen as an answered call (metadata only;
     // the server's lifecycle frames still drive it). Older apps ignore the extra fields.
     const peer = role === "caller" ? c.callee : c.caller;
@@ -710,13 +711,16 @@ export class CallEngine {
     if (this.s.call.id && this.s.call.id !== call.id) return;
     if (!this.s.call.id && call.callerId !== this.meId) return;
     const role = this.s.role;
+    // Link join screen (t6094u): the always-alive room's state changes (someone joins / leaves) never close the join
+    // screen; only the person's own Join / Not now does.
+    if (this.s.ui === "prejoin") return;
     if (call.phase === "ringing" && role === "caller" && this.s.ui === "outgoing") {
       this.set({ call });
       if (ringing() !== "outgoing") playRingback({ video: call.video, untilMs: ringUntil(call) }); // already ringing since the tap
       return;
     }
     if (call.phase === "active") {
-      if (role === "callee" && !this.acceptedHere) {
+      if (role === "callee" && !this.acceptedHere && !call.link && !this.s.call.link) {
         // answered on another device (same account): stop EVERY local ring surface within one event —
         // in-page tone + ring element (stopTones → releaseRingAudio), the SW notification (CallProvider sync →
         // stopBackgroundRing on ui change) and the native ring UI (CallKit / full-screen notification) here.
