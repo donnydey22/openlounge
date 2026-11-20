@@ -14,6 +14,8 @@ export interface OlcallSignalingOpts {
   /** Fresh TURN logins for an ICE restart after the joined list's credentials aged (backend call:get media). */
   freshIce?(): Promise<TurnIceServer[] | null>;
   onPeer?(state: string): void;
+  /** the other side's mute / camera state, relayed by the call server ("media" frame) */
+  onPeerMedia?(state: { muted?: boolean; video?: string }): void;
   onBye?(detail: string): void;
   log?(ev: string, d?: Record<string, unknown>): void;
   /** test seam */
@@ -101,8 +103,11 @@ export class OlcallSignaling implements RtcSocket {
         this.o.log?.("olcall-error", { error: String(f.error ?? "") });
         if (!this.t.joined) { this.shut(); this.joinedReject(new Error(String(f.error ?? "join failed"))); }
         return;
+      case "media":
+        if (f.state && typeof f.state === "object") this.o.onPeerMedia?.(f.state as { muted?: boolean; video?: string });
+        return;
       default:
-        return; // stats, media (peer state), call:state (the backend relays state), pong
+        return; // stats, call:state (the backend relays state), pong
     }
   }
 

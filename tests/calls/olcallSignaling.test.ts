@@ -48,3 +48,21 @@ test("join as browser, TURN-only ICE from joined, offer/candidates out, answer/c
   assert.equal(socks[1].sent.at(-1)?.t === "hangup" || socks[1].sent.some((f) => f.t === "hangup"), true);
   sig.close();
 });
+
+test("the other side's media state (server 'media' frame) reaches onPeerMedia: Meet-style stage + mute badge (t6094u)", async () => {
+  const socks: FakeWS[] = [];
+  const seen: { muted?: boolean; video?: string }[] = [];
+  const sig = new OlcallSignaling({ provider: "olcall", url: "wss://turn.openlounge.app/v1/call", token: "tok" } as never, {
+    callId: "call-2", createSocket: (u) => { const w = new FakeWS(u); socks.push(w); return w as never; },
+    onPeerMedia: (st) => seen.push(st),
+  });
+  const p = sig.connect();
+  await new Promise((r) => setTimeout(r, 5));
+  socks[0].push({ t: "joined", callId: "call-2", leg: "callee", resume: "rk", iceServers: [{ urls: ["turns:y:443?transport=tcp"], username: "u", credential: "c" }] });
+  await p;
+  socks[0].push({ t: "media", state: { muted: false, video: "active", rotation: 0, screencast: "inactive", lowBattery: false } });
+  socks[0].push({ t: "media", state: { muted: true, video: "inactive" } });
+  socks[0].push({ t: "media" }); // no state: ignored
+  assert.deepEqual(seen.map((s) => [s.muted, s.video]), [[false, "active"], [true, "inactive"]]);
+  sig.close();
+});

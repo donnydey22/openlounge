@@ -915,6 +915,12 @@ export class CallEngine {
       callId: call.id,
       log: (ev, d) => this.netLog(ev, d ?? {}),
       onPeer: (st) => { if (this.olSig === sig) this.set({ peerReconnecting: st === "reconnecting" }); },
+      // Meet-style stage (t6094u): their video big only while their camera is on; their mute shows on the tile
+      onPeerMedia: (st) => {
+        if (this.olSig !== sig) return;
+        const remoteCam = st.video === "active", remoteMuted = !!st.muted;
+        if (remoteCam !== this.s.remoteCam || remoteMuted !== this.s.remoteMuted) this.set({ remoteCam, remoteMuted });
+      },
       onBye: (detail) => {
         if (this.olSig !== sig || !this.busy || this.s.call?.id !== call.id) return;
         // Our leg ended on the server but the call did not (e.g. a link leg dropped after a long outage): rejoin.
