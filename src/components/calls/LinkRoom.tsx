@@ -2,13 +2,10 @@
 
 // Link live room (Donny t6066u/t6067u/t6070u/t6071u): every call link is a pre-seeded, always-alive room, like a Google
 // Meet room. Shown on the call screen only for link calls (call.link): the room is live, who is in it (or "No one else
-// is here yet"), and Meet-style mute / camera toggles. Additive only: the toggles call the engine's existing
-// toggleMute / toggleCam (the same calls the call screen's own Mute / Video buttons make), which flip the existing
-// track (web: track mute / replaceTrack; native: tgcalls setMuted / setVideoEnabled). No new media path.
+// is here yet"). Mic / camera are the call screen's one control row (t6093u).
 import { useEffect, useState } from "react";
-import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { useApp } from "@/components/AppProvider";
-import { callEngine, type CallSnapshot } from "@/lib/calls/engine";
+import type { CallSnapshot } from "@/lib/calls/engine";
 import { cn } from "@/lib/utils";
 import css from "./calls.module.css";
 
@@ -18,8 +15,12 @@ const ROOM_POLL_MS = 3_000;
 export function linkRoomText(here: string[] | null, meId: string | null, names: Record<string, string>): string {
   if (!here) return "Joining the live room…";
   const others = here.filter((u) => u !== meId);
-  if (others.length === 0) return "You're in the live room · No one else is here yet";
-  return `You're in the live room with ${others.map((u) => (names[u] ?? "someone").split(" ")[0]).join(", ")}`;
+  // Same words as the app call screens (t6093u): alone in a link = "Waiting for <first name>…"
+  if (others.length === 0) {
+    const peer = Object.entries(names).find(([id]) => id !== meId)?.[1];
+    return `Waiting for ${(peer ?? "someone").split(" ")[0]}…`;
+  }
+  return `In the live room with ${others.map((u) => (names[u] ?? "someone").split(" ")[0]).join(", ")}`;
 }
 
 export function LinkRoom({ s }: { s: CallSnapshot }) {
@@ -42,23 +43,12 @@ export function LinkRoom({ s }: { s: CallSnapshot }) {
 
   if (!call?.link) return null;
   const names: Record<string, string> = { [call.callerId]: call.caller.name, [call.calleeId]: call.callee.name };
-  const showCam = !!call.video && !(s.nativeAudio && !s.nativeVideo);
-  const pill = (on: boolean) => cn("grid h-11 w-11 place-items-center rounded-full backdrop-blur-md", css.btn, on ? "bg-white text-zinc-900" : "bg-black/50 text-white");
+  // Mic / camera live in the one floating control row (Controls), the same on every door and surface (t6093u).
   return (
     <div className={cn("pointer-events-auto flex flex-col items-center gap-2", css.banner)} data-testid="link-room">
       <div className="flex items-center gap-2 rounded-full bg-black/50 px-3 py-1 text-xs font-semibold backdrop-blur-md" data-testid="link-room-status">
-        <span className="h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
+        <span className={cn("h-2 w-2 rounded-full", here && here.some((u) => u !== (me?.id ?? null)) ? "bg-emerald-400" : "bg-white/50")} aria-hidden />
         {linkRoomText(here, me?.id ?? null, names)}
-      </div>
-      <div className="flex items-center gap-3">
-        <button type="button" onClick={() => void callEngine.toggleMute()} aria-label={s.muted ? "Unmute" : "Mute"} aria-pressed={s.muted} className={pill(s.muted)} data-testid="link-room-mute">
-          {s.muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-        </button>
-        {showCam && (
-          <button type="button" onClick={() => void callEngine.toggleCam()} aria-label={s.camOn ? "Turn camera off" : "Turn camera on"} aria-pressed={!s.camOn} className={pill(!s.camOn)} data-testid="link-room-camera">
-            {s.camOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-          </button>
-        )}
       </div>
     </div>
   );

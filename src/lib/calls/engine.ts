@@ -19,7 +19,8 @@ import { NativeMediaSession, nativeMediaCmd, nativeSignalConnected, nativeCallin
 import { CallTelemetry } from "./callTelemetry";
 import { swapVideoTrack } from "./frameHold";
 
-export type CallUi = "incoming" | "outgoing" | "connecting" | "active" | "ended";
+/** "prejoin": the link join screen (Donny t6093u): preview + mic / camera toggles + Join. Nothing is joined yet. */
+export type CallUi = "prejoin" | "incoming" | "outgoing" | "connecting" | "active" | "ended";
 export type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
 
 /** Where a hang-up came from: the page's End button, a native End (CallKit / Telecom / call screen), or a failure path. */
@@ -364,8 +365,12 @@ export class CallEngine {
       const c = g.call;
       const peerId = c.callerId === this.meId ? c.calleeId : c.callerId;
       if (c.phase === "ended") return { peerId, ended: true };
-      // A call link: no ring screen and no Accept. Tapping the link is the join, straight to Connecting.
-      if (c.link) return { peerId, ended: !(await this.joinLink(c)) };
+      // A call link (one always-alive A/V room, t6093u): no ring and no Accept. A tap opens the join screen (preview,
+      // mic / camera toggles, Join); already in this room (or a native Accept) joins at once, as before.
+      if (c.link) {
+        if (accept || (this.s.call?.id === c.id && this.s.ui !== null && this.s.ui !== "ended")) return { peerId, ended: !(await this.joinLink(c)) };
+        return { peerId, ended: !this.prejoinLink(c) };
+      }
       if (c.calleeId === this.meId && c.phase !== "active") {
         if (this.s.call?.id !== c.id) this.onIncoming({ call: c, media: g.media ?? null });
         if (accept) await this.accept(c.video);
@@ -402,8 +407,59 @@ export class CallEngine {
     return this.joinLink(c);
   }
 
+  /** Link join screen (t6093u): shows the room with mic / camera toggles; nothing joins until Join. */
+  prejoinLink(c: CallInfo): boolean {
+    if (this.busy && this.s.call?.id !== c.id) {
+      this.set({ error: "You're already in a call" });
+      return false;
+    }
+    if (this.s.call?.id === c.id && this.s.ui === "prejoin") return true;
+    this.clearEnd();
+    const role = c.callerId === this.meId ? "caller" : "callee";
+    this.set({ ...initial(), call: c, role, ui: "prejoin", v: this.s.v + 1 });
+    return true;
+  }
+
+  /** Join screen mic toggle: local choice only, applied when Join opens the leg. */
+  prejoinMute() {
+    if (this.s.ui !== "prejoin") return;
+    buzz("light");
+    this.set({ muted: !this.s.muted });
+  }
+
+  /** Join screen camera toggle. Browser: live preview from the same track the call then sends. App: the app opens its
+   *  camera on Join (connect with video), so the page only records the choice. */
+  async prejoinCam() {
+    if (this.s.ui !== "prejoin") return;
+    buzz("light");
+    if (this.s.camOn) {
+      this.camTrack?.stop();
+      this.camTrack = null;
+      this.attachRawVideo(this.videoEls.local, null);
+      return this.set({ camOn: false });
+    }
+    if (useNativeMedia()) return this.set({ camOn: true });
+    await this.ensureCamPreview();
+  }
+
+  /** Join from the join screen with the chosen mic / camera state. */
+  async joinFromPrejoin(): Promise<boolean> {
+    const c = this.s.call;
+    if (this.s.ui !== "prejoin" || !c) return false;
+    return this.joinLink(c, { muted: this.s.muted, camOn: this.s.camOn });
+  }
+
+  /** Leave the join screen without joining. */
+  cancelPrejoin() {
+    if (this.s.ui !== "prejoin") return;
+    this.camTrack?.stop();
+    this.camTrack = null;
+    this.attachRawVideo(this.videoEls.local, null);
+    this.set({ ...initial(), v: this.s.v + 1 });
+  }
+
   /** Join a call link (Donny, Nov 18 2026): the server mints the call; the joiner goes straight to Connecting. */
-  private async joinLink(c: CallInfo): Promise<boolean> {
+  private async joinLink(c: CallInfo, opts: { muted?: boolean; camOn?: boolean } = {}): Promise<boolean> {
     if (this.s.call?.id === c.id && (this.rtc || this.native || this.roomPromise)) return true; // already joining or in it
     if (this.busy && this.s.call?.id !== c.id) {
       this.set({ error: "You're already in a call" });
@@ -412,7 +468,11 @@ export class CallEngine {
     unlockAudio();
     this.clearEnd();
     const role = c.callerId === this.meId ? "caller" : "callee";
-    this.set({ ...initial(), call: c, role, ui: "connecting", v: this.s.v + 1 });
+    this.set({ ...initial(), call: c, role, ui: "connecting", muted: !!opts.muted, camOn: !!opts.camOn, v: this.s.v + 1 });
+    // App surfaces (t6093u): a link join opens the same native live-room screen as an answered call (metadata only;
+    // the server's lifecycle frames still drive it). Older apps ignore the extra fields.
+    const peer = role === "caller" ? c.callee : c.caller;
+    postNative({ type: "call:answering", callId: c.id, name: peer?.name ?? "", photo: peer?.photoUrl ?? "", video: !!opts.camOn, link: true });
     this.linkJoining = c.id;
     const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const)
       .finally(() => { if (this.linkJoining === c.id) this.linkJoining = null; });

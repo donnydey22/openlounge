@@ -15,6 +15,7 @@ import { useCall } from "./useCall";
 import { baoTone } from "@/lib/calls/baoTone";
 import { AudioRouteButton, RouteNotice } from "./AudioRouteButton";
 import { LinkRoom } from "./LinkRoom";
+import { LinkJoin } from "./LinkJoin";
 import css from "./calls.module.css";
 
 /** iPhone app video: show the local self-view this long after connect when the other side has no camera. */
@@ -367,21 +368,25 @@ function Incoming({ s }: { s: CallSnapshot }) {
   );
 }
 
+/** Phones / tablets: Flip (front / back camera) only where there is a second lens. */
+function touchDevice(): boolean {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+}
+
 function Controls({ s }: { s: CallSnapshot }) {
   return (
     <div className="flex w-full max-w-md items-start justify-center gap-2 px-4 max-[340px]:gap-1 max-[340px]:px-2 [&>*]:flex-1 [&>*]:max-w-[calc((100%-1.5rem)/4)] max-[340px]:[&>*]:max-w-[calc((100%-0.75rem)/4)]">
       {s.speakerSupported ? <AudioRouteButton s={s} Btn={RoundBtn} /> : null}
-      {s.camOn ? (
+      {s.camOn && touchDevice() ? (
         <RoundBtn label="Flip" onClick={() => void callEngine.flip()} testId="call-flip">
           <RefreshCw className="h-6 w-6" />
         </RoundBtn>
       ) : null}
-      {/* Native voice calls retain their audio-only policy; the separately granted iPhone video path keeps normal camera controls. */}
-      {s.nativeAudio && !s.nativeVideo ? null : (
-        <RoundBtn label={s.camOn ? "Stop video" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
-          {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
-        </RoundBtn>
-      )}
+      {/* One path (t6093u): every call and link is the same audio + video room, so the camera toggle is always here.
+          Same words on every surface: Camera (on) / Video (off), Mute / Unmute, Flip, Speaker, End call. */}
+      <RoundBtn label={s.camOn ? "Camera" : "Video"} active={s.camOn} onClick={() => void callEngine.toggleCam()} testId="call-video">
+        {s.camOn ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
+      </RoundBtn>
       <RoundBtn label={s.muted ? "Unmute" : "Mute"} active={s.muted} onClick={() => void callEngine.toggleMute()} testId="call-mute">
         {s.muted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
       </RoundBtn>
@@ -428,7 +433,10 @@ export function CallOverlay() {
     const t = setTimeout(() => setNativeGrace(true), NATIVE_LOCAL_GRACE_MS);
     return () => clearTimeout(t);
   }, [waitNative]);
-  const video = active && (s.remoteCam || s.camOn) && (!s.nativeVideo || s.remoteCam || nativeGrace);
+  // Meet-style (t6093u): the big tile is the other person's video; with their camera off it is their avatar (the
+  // pre-video screen) and your camera stays a PiP. iPhone app-owned video keeps its layout record contract.
+  const video = s.nativeVideo ? active && (s.remoteCam || s.camOn) && (s.remoteCam || nativeGrace) : active && s.remoteCam;
+  const selfPip = !s.nativeVideo && active && s.camOn && !s.remoteCam;
   // Ringing → video crossfade: "on" (curtain over the stage) → "fading" (first frame painted) → "off".
   const [curtain, setCurtain] = useState<"on" | "fading" | "off">("on");
   // the big tile has a feed attached: the curtain fallback timer only runs from here (see BigVideo onAttached)
@@ -533,6 +541,7 @@ export function CallOverlay() {
 
   if (!s.ui && s.elsewhere) return <ElsewherePill e={s.elsewhere} />;
   if (!s.ui || !s.call) return null;
+  if (s.ui === "prejoin") return <LinkJoin s={s} />;
   if (s.minimized && s.ui !== "incoming" && (s.ui !== "ended" || s.endedVideo)) return <MiniBar s={s} />;
   const p = peerOf(s);
   const ringing = s.ui === "outgoing" || s.ui === "incoming";
@@ -542,6 +551,7 @@ export function CallOverlay() {
     <div className={cn(css.screen, nativeFullscreen && css.nativeVideoScreen, endedVideo && (s.nativeVideo ? cn(css.endFadeNow, css.endNative) : css.endFade))} role="dialog" aria-modal="true" aria-label={`Call with ${p.name}`} data-testid="call-screen" data-ui={s.ui} data-ended-video={endedVideo ? "1" : undefined} onPointerDown={video ? poke : undefined}>
       {showStage ? <BigVideo which={stageWhich} mirrored={stageWhich === "local" && s.facing === "user"} tileRef={bigTile} onFirstFrame={revealStage} onAttached={onStageAttached} /> : <Background s={s} />}
       {stagePip && <Pip which={stageWhich === "local" ? "remote" : "local"} mirrored={stageWhich === "remote" && s.facing === "user"} onSwap={() => setSwap((x) => !x)} tileRef={pipTile} onTileChanged={reportNativeLayout} />}
+      {selfPip && <Pip which="local" mirrored={s.facing === "user"} onSwap={() => {}} />}
       {video && curtain !== "off" && <Curtain s={s} fading={curtain === "fading"} onGone={() => setCurtain("off")} />}
 
       <div className="relative z-[6] flex h-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">

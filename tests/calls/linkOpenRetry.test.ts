@@ -27,6 +27,41 @@ test("openFromLink: call:get lost on a recycled socket is retried, then the link
   const r = await e.openFromLink("L1", false);
   assert.equal(gets, 3);
   assert.deepEqual(r, { peerId: "u_a", ended: false });
+  // t6093u: a tapped link opens the join screen first; Join opens the leg
+  assert.equal(e.s.ui, "prejoin");
+  assert.equal(await e.joinFromPrejoin(), true);
+  assert.equal(e.s.ui, "connecting");
+});
+
+test("link join screen: mic / camera choices carry into the join; Not now joins nothing", async () => {
+  const joins: unknown[] = [];
+  const e = engine((ev) => {
+    if (ev === "call:get") return Promise.resolve({ ok: true, call: LINK });
+    if (ev === "call:join") return (joins.push(ev), Promise.resolve({ ok: true, call: LINK, media: { url: "wss://x", token: "t" } }));
+    return Promise.resolve({ ok: true });
+  });
+  await e.openFromLink("L1", false);
+  assert.equal(e.s.ui, "prejoin");
+  e.prejoinMute();
+  assert.equal(e.s.muted, true);
+  e.cancelPrejoin();
+  assert.equal(e.s.ui, null);
+  assert.equal(joins.length, 0);
+  await e.openFromLink("L1", false);
+  e.prejoinMute();
+  await e.joinFromPrejoin();
+  assert.equal(joins.length, 1);
+  assert.equal(e.s.ui, "connecting");
+  assert.equal(e.s.muted, true);
+});
+
+test("link tapped while already in that room rejoins at once (no join screen)", async () => {
+  const e = engine((ev) => (ev === "call:get" ? Promise.resolve({ ok: true, call: LINK }) : Promise.resolve({ ok: true, call: LINK, media: { url: "wss://x", token: "t" } })));
+  await e.openFromLink("L1", false);
+  await e.joinFromPrejoin();
+  e.roomPromise = Promise.resolve(null);
+  const r = await e.openFromLink("L1", false);
+  assert.equal(r.ended, false);
   assert.equal(e.s.ui, "connecting");
 });
 

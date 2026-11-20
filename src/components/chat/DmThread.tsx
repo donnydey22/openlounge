@@ -1496,7 +1496,7 @@ export function DmThread({
       const r = await request<{ url: string; call?: CallInfo }>("call:link", { peerId: peer.id });
       if (r.call?.link) void callEngine.joinCreatedLink(r.call);
       const clientId = newClientId();
-      const res = await request<{ message: DirectMessage }>("dm:send", { to: peer.id, text: `Join my Open Lounge Audio call: ${r.url}`, clientId });
+      const res = await request<{ message: DirectMessage }>("dm:send", { to: peer.id, text: `Join my Open Lounge call: ${r.url}`, clientId });
       if (res?.message) setMessages((list) => mergeMessages(list ?? [], [{ ...res.message, clientId }]));
     } catch {
       toast("Couldn't start the call");
