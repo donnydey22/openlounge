@@ -60,3 +60,14 @@ test("camera denied on the join screen: camera off (avatar tile), audio join sti
   assert.equal(e.s.ui, "connecting");
   assert.equal(e.s.camOn, false);
 });
+
+test("browser camera opens once: the join's early open and connect() share one getUserMedia", async () => {
+  const e = new CallEngine() as any;
+  let opens = 0;
+  e.openCam = () => { opens++; return new Promise((r) => setTimeout(() => { e.camTrack = { id: "t" }; r(e.camTrack); }, 20)); };
+  const [t1, t2] = await Promise.all([e.ensureCamPreview(), e.ensureCamPreview()]);
+  assert.equal(opens, 1);
+  assert.equal(t1, t2);
+  assert.equal(await e.ensureCamPreview(), t1);
+  assert.equal(opens, 1);
+});

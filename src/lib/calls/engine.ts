@@ -497,6 +497,8 @@ export class CallEngine {
     const role = c.callerId === this.meId ? "caller" : "callee";
     this.set({ ...initial(), call: c, role, ui: "connecting", muted: !!opts.muted, camOn: opts.camOn ?? true, v: this.s.v + 1 });
     this.acceptedHere = true; // joined on this device: room state from the server is never "answered elsewhere"
+    // t6111u: camera opens at the tap, in parallel with call:join (as a ring's start() does), so the leg starts with it
+    if (!useNativeMedia() && (opts.camOn ?? true)) void this.ensureCamPreview();
     // App surfaces (t6093u): a link join opens the same native live-room screen as an answered call (metadata only;
     // the server's lifecycle frames still drive it). Older apps ignore the extra fields.
     const peer = role === "caller" ? c.callee : c.caller;
@@ -857,9 +859,15 @@ export class CallEngine {
     return this.rtc?.state === "media-running" || this.rtc?.state === "recovering" || this.nativeConnected;
   }
 
-  private async ensureCamPreview(): Promise<MediaStreamTrack | null> {
-    if (useNativeMedia()) return null; // the app owns the camera
-    if (this.camTrack) return this.camTrack;
+  /** one camera open at a time: a join that starts the camera early and connect() share the same getUserMedia */
+  private camPending: Promise<MediaStreamTrack | null> | null = null;
+  private ensureCamPreview(): Promise<MediaStreamTrack | null> {
+    if (useNativeMedia()) return Promise.resolve(null); // the app owns the camera
+    if (this.camTrack) return Promise.resolve(this.camTrack);
+    return (this.camPending ??= this.openCam().finally(() => { this.camPending = null; }));
+  }
+
+  private async openCam(): Promise<MediaStreamTrack | null> {
     try {
       const st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: this.s.facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } });
       const t = st.getVideoTracks()[0] ?? null;
