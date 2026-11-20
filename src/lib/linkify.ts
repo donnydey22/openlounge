@@ -108,7 +108,7 @@ export const APP_HOSTS = new Set(["openlounge.app", "www.openlounge.app"]);
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 
 // in-app pages a chat link may open without leaving the app (everything else on our host still gets the sheet)
-const INTERNAL_PATH = /^\/(?:$|room\/[\w-]{1,64}\/?$|messages(?:\/[\w-]{1,80})?\/?$|profile\/[\w-]{1,80}\/?$|u\/[\w.-]{1,40}\/?$|@[\w.]{1,40}\/?$|explore\/?$|invite\/?$|download\/?$|settings\/?$|terms\/?$|privacy\/?$)/;
+const INTERNAL_PATH = /^\/(?:$|room\/[\w-]{1,64}\/?$|call\/[\w-]{1,80}\/?$|messages(?:\/[\w-]{1,80})?\/?$|profile\/[\w-]{1,80}\/?$|u\/[\w.-]{1,40}\/?$|@[\w.]{1,40}\/?$|explore\/?$|invite\/?$|download\/?$|settings\/?$|terms\/?$|privacy\/?$)/;
 
 // common TLDs for scheme-less links ("example.com", "openlounge.app"); www.* always counts
 const TLDS =

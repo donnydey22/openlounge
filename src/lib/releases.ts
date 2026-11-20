@@ -1,22 +1,22 @@
 // ONE source for the native builds offered on /download: the page labels AND the iOS install manifest
 // (/downloads/openlounge-ios.plist route) both read this, so a version label can never drift from the file.
-/** Android63: signed 0.3.46 (versionCode 63) from ol-alwaysalive-android ed11130, tag ol-android-63 — always-alive call links (server/web lifecycle; app code same as 62). Unit tests 86 pass. Physical-device calls not yet run. */
+/** Android64: signed 0.3.47 (versionCode 64) from ol-alwaysalive-android-64 bf47286, tag ol-android-64 — fresh build for the web media path / tray link / durable links (t6081u–t6084u; app code same as 63). Unit tests 86 pass. Physical-device calls not yet run. */
 export const ANDROID_RELEASE = {
+  version: "0.3.47",
+  build: 64,
+  file: "/downloads/openlounge-0.3.47-64.apk",
+  size: "56.6 MB",
+  sha256: "da69bcb831a5d022e6a0c9db091b7116f4b2c333e465485bbb9ac805f01fe793",
+  qualifier: "test",
+} as const;
+/** Previous Android build offered on /download: 0.3.46 (63) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
+ *  62, 61, 60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
+export const ANDROID_FALLBACK = {
   version: "0.3.46",
   build: 63,
   file: "/downloads/openlounge-0.3.46-63.apk",
   size: "56.6 MB",
   sha256: "f5e15fb1524f6cb644c09dc7f74c47db5bdef779a6bdda44a99c2ace020a89e4",
-  qualifier: "test",
-} as const;
-/** Previous Android build offered on /download: 0.3.45 (62) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects).
- *  61, 60, 59, 58 test-logs, 57, 55, 54 call-integration, 54 call-log (openlounge-0.3.37-54.apk), 53 (0.3.36) and 52 (0.3.35) also stay in public/downloads and direct-hosted. */
-export const ANDROID_FALLBACK = {
-  version: "0.3.45",
-  build: 62,
-  file: "/downloads/openlounge-0.3.45-62.apk",
-  size: "56.6 MB",
-  sha256: "b648a305414f16f7261364b2fd3c406dc71c315cd7b5fc8ce1d58bd637ce88e3",
 } as const;
 export const ANDROID_SIGNER_SHA256 = "62e043661294c5e6c449f01c1cac09b5feadd916e4993dd4bc391af32a04be05";
 
@@ -125,23 +125,23 @@ export const IOS_ARCHIVED_B113 = {
 } as const;
 /** iOS128, iOS130, both iOS131 files, iOS131 call-integration, iOS132, iOS135 and iOS136 remain in public/downloads and direct-hosted (unlinked). */
 /** iOS137 also stays in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (141) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). 140 also stays. */
+/** Previous iOS build offered on /download: 0.4.0 (142) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). 141 and 140 also stay. */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 141,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b141.ipa",
-  size: "10.1 MB",
-  sha256: "0fbe112350aeba61f82b6e024d774d0eb3e605df13e22dd3be4b22c4de9a65c2",
-} as const;
-/** iOS142: signed ad-hoc 0.4.0 (build 142) from openlounge-ios ol-alwaysalive-ios f66fffb, tag ol-ios-142 — always-alive call links (server/web lifecycle; app code same as 141). CI 44609577104 green (100 package tests, 28 app tests). Physical-device calls not yet run. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 142,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b142.ipa",
   size: "10.1 MB",
   sha256: "071a741412b31c4b15049721cc993a1e50d288fd0ebdfb124f0fc109e2bdfe5b",
+} as const;
+/** iOS143: signed ad-hoc 0.4.0 (build 143) from openlounge-ios ol-alwaysalive-ios-143 db69790, tag ol-ios-143 — caller early connect (web engine no longer defers), tray Start = link (t6081u; app code same as 142). CI 44638921718 green (28 app tests, 0 failures). Physical-device calls not yet run. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 143,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b143.ipa",
+  size: "10.1 MB",
+  sha256: "c2c35a6800e42744fcb7b47e4325fe2b03350f64a930626ff5a13e47b7ad20dc",
   qualifier: "test",
 } as const;
 
