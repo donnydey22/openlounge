@@ -356,7 +356,8 @@ export class CallEngine {
         // a link call this user already joined (the server only hands media to joined participants): rejoin quietly
         if (!g.media) return;
         this.media = g.media;
-        this.set({ call: g.call, role, ui: "connecting" });
+        // t6111u: every link is live with camera + mic on (a reload keeps this page's own toggle choice)
+        this.set({ call: g.call, role, ui: "connecting", camOn: this.s.call?.id === g.call.id ? this.s.camOn : true });
         await this.connect(true);
       } else if (role === "callee" && g.call.phase !== "active" && g.call.phase !== "ended") {
         this.onIncoming({ call: g.call, media: g.media ?? null });
@@ -432,7 +433,9 @@ export class CallEngine {
     if (this.s.call?.id === c.id && this.s.ui === "prejoin") return true;
     this.clearEnd();
     const role = c.callerId === this.meId ? "caller" : "callee";
-    this.set({ ...initial(), call: c, role, ui: "prejoin", v: this.s.v + 1 });
+    // t6111u: the join screen opens with camera + mic already on (preview live); the toggles turn them off
+    this.set({ ...initial(), call: c, role, ui: "prejoin", camOn: true, v: this.s.v + 1 });
+    if (!useNativeMedia()) void this.ensureCamPreview(); // denied / no camera -> camOn false, avatar tile
     return true;
   }
 
@@ -492,12 +495,12 @@ export class CallEngine {
     unlockAudio();
     this.clearEnd();
     const role = c.callerId === this.meId ? "caller" : "callee";
-    this.set({ ...initial(), call: c, role, ui: "connecting", muted: !!opts.muted, camOn: !!opts.camOn, v: this.s.v + 1 });
+    this.set({ ...initial(), call: c, role, ui: "connecting", muted: !!opts.muted, camOn: opts.camOn ?? true, v: this.s.v + 1 });
     this.acceptedHere = true; // joined on this device: room state from the server is never "answered elsewhere"
     // App surfaces (t6093u): a link join opens the same native live-room screen as an answered call (metadata only;
     // the server's lifecycle frames still drive it). Older apps ignore the extra fields.
     const peer = role === "caller" ? c.callee : c.caller;
-    postNative({ type: "call:answering", callId: c.id, name: peer?.name ?? "", photo: peer?.photoUrl ?? "", video: !!opts.camOn, link: true });
+    postNative({ type: "call:answering", callId: c.id, name: peer?.name ?? "", photo: peer?.photoUrl ?? "", video: opts.camOn ?? true, link: true });
     this.linkJoining = c.id;
     const r = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }>("call:join", { callId: c.id, platform: nativePlatform() ?? "web" }).catch(() => ({ ok: false, error: "No connection" }) as const)
       .finally(() => { if (this.linkJoining === c.id) this.linkJoining = null; });
