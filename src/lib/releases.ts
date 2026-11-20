@@ -125,23 +125,23 @@ export const IOS_ARCHIVED_B113 = {
 } as const;
 /** iOS128, iOS130, both iOS131 files, iOS131 call-integration, iOS132, iOS135 and iOS136 remain in public/downloads and direct-hosted (unlinked). */
 /** iOS137 also stays in public/downloads and direct-hosted (unlinked). */
-/** Previous iOS build offered on /download: 0.4.0 (143) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). 142, 141 and 140 also stay. */
+/** Previous iOS build offered on /download: 0.4.0 (144) test. Kept as an unlinked rollback file (stays in public/downloads and direct-hosted; restore = swap these two objects). 143, 142, 141 and 140 also stay. */
 export const IOS_FALLBACK = {
-  version: "0.4.0",
-  build: 143,
-  bundleId: "com.donnydey.openlounge",
-  file: "/downloads/openlounge-ios-0.4.0-b143.ipa",
-  size: "10.1 MB",
-  sha256: "c2c35a6800e42744fcb7b47e4325fe2b03350f64a930626ff5a13e47b7ad20dc",
-} as const;
-/** iOS144: signed ad-hoc 0.4.0 (build 144) from openlounge-ios ol-alwaysalive-ios-144 a8e9d6a — one A/V live room (t6093u/t6094u): link joins open the native live room, camera toggle always present, their video big only while their camera is on; CallKit rings are always video. CI 44669712781 green (100 tests, 0 failures). Physical-device calls not yet run. */
-export const IOS_RELEASE = {
   version: "0.4.0",
   build: 144,
   bundleId: "com.donnydey.openlounge",
   file: "/downloads/openlounge-ios-0.4.0-b144.ipa",
   size: "10.1 MB",
   sha256: "0290069ddcdcf662b74c8f7d6fb91768450189626bc84e4d8c341617d45c07af",
+} as const;
+/** iOS145: signed ad-hoc 0.4.0 (build 145) from openlounge-ios ol-stage-parity-145 b34a6f6 = 144 + stage parity with web (t6106u): one display rule (OLStageLayout), camera-off self tile instead of a black PiP, peer mute badge. CI 44689505935 green (107 package tests incl. 7 OLStageLayoutTests + 28 app tests, 0 failures). Physical-device calls not yet run. */
+export const IOS_RELEASE = {
+  version: "0.4.0",
+  build: 145,
+  bundleId: "com.donnydey.openlounge",
+  file: "/downloads/openlounge-ios-0.4.0-b145.ipa",
+  size: "10.1 MB",
+  sha256: "240d795e3943492e08ef4849bf1b079f1749efcd650f674fde88de80057f9739",
   qualifier: "test",
 } as const;
 
