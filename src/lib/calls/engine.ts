@@ -359,7 +359,7 @@ export class CallEngine {
   /** /call/<id>[?accept=1] (push tap / native Accept): ring or join that call. Returns the other person's id. */
   async openFromLink(callId: string, accept: boolean): Promise<{ peerId: string | null; ended: boolean }> {
     try {
-      const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId });
+      const g = await this.getWhenConnected(callId);
       if (!g.ok || !g.call) return { peerId: null, ended: true };
       const c = g.call;
       const peerId = c.callerId === this.meId ? c.calleeId : c.callerId;
@@ -373,6 +373,26 @@ export class CallEngine {
       return { peerId, ended: false };
     } catch {
       return { peerId: null, ended: true };
+    }
+  }
+
+  /** call:get for a tapped /call/<id>, retried while the connection is (re)establishing (t6085 rejoin flake): on a cold
+   *  page the first request can go out on a socket that is replaced before it answers (no reply, "Not connected", or a
+   *  not-signed-in reply). That must not read as "Call ended". Same deadline as call:start; a real answer returns at once. */
+  private async getWhenConnected(callId: string): Promise<{ ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string }> {
+    const until = Date.now() + CallEngine.START_WAIT_MS;
+    let attempt = 0;
+    for (;;) {
+      let r: { ok: boolean; call?: CallInfo; media?: CallMedia | null; error?: string } | null = null;
+      try {
+        r = await this.req("call:get", { callId }, Math.max(1_000, Math.min(10_000, until - Date.now())));
+      } catch {
+        r = null;
+      }
+      if (r && !CallEngine.isNotReady(r)) return r;
+      if (Date.now() >= until) return r ?? { ok: false, error: "No connection" };
+      this.netLog("get-retry", { attempt: ++attempt });
+      await new Promise((res) => setTimeout(res, Math.min(250 * attempt, 1_000)));
     }
   }
 

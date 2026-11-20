@@ -81,6 +81,11 @@ test("csp: production policy covers LiveKit (self-hosted + cloud), Firebase, /ws
   assert.ok(buildCsp({}, true).includes("'unsafe-eval'"));
 });
 
+test("csp: connect-src allows olcall signaling and TURN on turn.openlounge.app (t6085)", () => {
+  const cs = buildCsp({}, false).split("; ").find((d) => d.startsWith("connect-src "))!;
+  for (const s of ["wss://turn.openlounge.app", "https://turn.openlounge.app", "turn:turn.openlounge.app", "turns:turn.openlounge.app"]) assert.ok(cs.split(" ").includes(s), s);
+});
+
 test("headers: HSTS 1y includeSubDomains no preload; CSP_REPORT_ONLY toggles header name; dev has no HSTS", () => {
   const h = securityHeaders({ NODE_ENV: "production" }, false);
   assert.equal(h["Strict-Transport-Security"], "max-age=31536000; includeSubDomains");
