@@ -449,6 +449,14 @@ export class CallEngine {
     return this.joinLink(c, { muted: this.s.muted, camOn: this.s.camOn });
   }
 
+  /** Link live room poll (call:room): nobody else is in the room, so their tile is their avatar again, not a frozen
+   *  last frame (the call server only relays media state while their leg is up). */
+  noteLinkRoom(here: string[]) {
+    if (!this.s.call?.link || this.s.ui === "prejoin") return;
+    if (here.some((u) => u !== this.meId)) return;
+    if (this.s.remoteCam || this.s.remoteMuted) this.set({ remoteCam: false, remoteMuted: false });
+  }
+
   /** Leave the join screen without joining. */
   cancelPrejoin() {
     if (this.s.ui !== "prejoin") return;

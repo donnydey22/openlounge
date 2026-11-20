@@ -5,7 +5,7 @@
 // is here yet"). Mic / camera are the call screen's one control row (t6093u).
 import { useEffect, useState } from "react";
 import { useApp } from "@/components/AppProvider";
-import type { CallSnapshot } from "@/lib/calls/engine";
+import { callEngine, type CallSnapshot } from "@/lib/calls/engine";
 import { cn } from "@/lib/utils";
 import css from "./calls.module.css";
 
@@ -34,7 +34,7 @@ export function LinkRoom({ s }: { s: CallSnapshot }) {
     let stop = false;
     const tick = () =>
       request<{ ok: boolean; here?: string[] }>("call:room", { callId })
-        .then((r) => { if (!stop && r?.ok && Array.isArray(r.here)) setHere(r.here); })
+        .then((r) => { if (!stop && r?.ok && Array.isArray(r.here)) { setHere(r.here); callEngine.noteLinkRoom(r.here); } })
         .catch(() => undefined);
     void tick();
     const iv = setInterval(tick, ROOM_POLL_MS);
