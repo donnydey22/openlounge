@@ -4,7 +4,7 @@
 // Ringing…), in-call audio + video (draggable self-view PiP that snaps to corners, tap to swap), weak connection +
 // reconnecting banners, call timer, and the minimized green bar.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, Mic, MicOff, MessageCircle, Phone, PhoneOff, RefreshCw, Video, VideoOff, X } from "lucide-react";
+import { ChevronDown, Mic, MicOff, MessageCircle, PhoneOff, RefreshCw, Video, VideoOff, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useApp } from "@/components/AppProvider";
 import { callEngine, fmt, type CallSnapshot } from "@/lib/calls/engine";
@@ -52,8 +52,9 @@ function statusText(s: CallSnapshot) {
   if (s.ui === "ended") return s.endedText ?? "Call ended";
   // reconnecting mid-call: the timer keeps running (banner says "Reconnecting…"); before connect, say it here
   if (s.reconnecting && !s.connectedAt) return "Reconnecting…";
-  if (s.ui === "incoming") return `Open Lounge ${c.video ? "video" : "audio"} call`;
-  if (s.ui === "outgoing") return c.phase === "ringing" ? "Ringing…" : c.id ? "Calling…" : "Requesting…";
+  if (s.ui === "incoming") return "Open Lounge video call";
+  // the caller is already in the live room with their camera (t6093u): "Ringing <first name>…" until they answer
+  if (s.ui === "outgoing") return `Ringing ${(peerOf(s).name || "").split(" ")[0]}…`;
   if (s.ui === "connecting") return "Connecting…";
   return s.connectedAt ? fmt(Math.max(0, Math.round((Date.now() - s.connectedAt) / 1000))) : "Connecting…";
 }
@@ -344,7 +345,7 @@ function Incoming({ s }: { s: CallSnapshot }) {
             style={{ transform: dragY ? `translateY(${Math.max(-120, dragY)}px)` : undefined, touchAction: "none" }}
             className={cn("isolate grid h-[72px] w-[72px] place-items-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-900/40 disabled:opacity-90", !dragY && !pending && css.accept, pending === "accept" && css.pressed)}
           >
-            {c.video ? <Video className="h-8 w-8" /> : <Phone className="h-8 w-8" />}
+            <Video className="h-8 w-8" />
           </button>
           <span className="text-[13px] font-medium text-white/85" data-testid="call-accept-label">{pending === "accept" ? "Connecting…" : "Accept"}</span>
         </div>
@@ -436,7 +437,8 @@ export function CallOverlay() {
   // Meet-style (t6093u): the big tile is the other person's video; with their camera off it is their avatar (the
   // pre-video screen) and your camera stays a PiP. iPhone app-owned video keeps its layout record contract.
   const video = s.nativeVideo ? active && (s.remoteCam || s.camOn) && (s.remoteCam || nativeGrace) : active && s.remoteCam;
-  const selfPip = !s.nativeVideo && active && s.camOn && !s.remoteCam;
+  // your own camera as a PiP from the first tap of a video ring (Ringing <name>…) and whenever their camera is off
+  const selfPip = !s.nativeVideo && (active || s.ui === "outgoing") && s.camOn && !s.remoteCam;
   // Ringing → video crossfade: "on" (curtain over the stage) → "fading" (first frame painted) → "off".
   const [curtain, setCurtain] = useState<"on" | "fading" | "off">("on");
   // the big tile has a feed attached: the curtain fallback timer only runs from here (see BigVideo onAttached)
@@ -653,7 +655,7 @@ export function CallOverlay() {
                   <X className="h-6 w-6" />
                 </RoundBtn>
                 <RoundBtn label="Call again" onClick={() => callEngine.retry()} testId="call-retry">
-                  <Phone className="h-6 w-6 text-emerald-300" />
+                  <Video className="h-6 w-6 text-emerald-300" />
                 </RoundBtn>
               </div>
             ) : (

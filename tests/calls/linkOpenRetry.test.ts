@@ -88,3 +88,19 @@ test("link join screen and joined link survive the room's own state frames (some
   e.onState({ call: { ...LINK, phase: "active" } });
   assert.notEqual(e.s.ui, null, "a joined link callee is not 'answered elsewhere'");
 });
+
+test("load-time resume never joins (or drops) a link behind its join screen (t6094u WebKit rejoin)", async () => {
+  let joins = 0;
+  const e = engine((ev) => {
+    if (ev === "call:get") return Promise.resolve({ ok: true, call: { ...LINK, phase: "active" }, media: { url: "wss://x", token: "t" } });
+    if (ev === "call:current") return Promise.resolve({ ok: true, call: { ...LINK, phase: "active" } });
+    if (ev === "call:join") return (joins++, Promise.resolve({ ok: true, call: LINK, media: { url: "wss://x", token: "t" } }));
+    return Promise.resolve({ ok: true });
+  });
+  let connects = 0; e.connect = async () => { connects++; };
+  await Promise.all([e.openFromLink("L1", false), e.resume()]);
+  assert.equal(e.s.ui, "prejoin");
+  await e.resume();
+  assert.equal(e.s.ui, "prejoin");
+  assert.equal(connects + joins, 0, "no leg opened before Join");
+});

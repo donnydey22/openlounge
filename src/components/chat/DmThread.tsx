@@ -4,7 +4,7 @@ import { DELETED_COMPOSER_TEXT, displayUser, useDeletedIds } from "@/lib/userDis
 import { friendlyMessage, isTransient } from "@/lib/errors";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Ban, CheckCircle2, ChevronLeft, Copy, CornerUpLeft, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Phone, Pin, Smile, Trash2, Video, X } from "lucide-react";
+import { Ban, CheckCircle2, ChevronLeft, Copy, CornerUpLeft, Flag, Forward, Loader2, Maximize2, MoreHorizontal, Pencil, Pin, Smile, Trash2, Video, X } from "lucide-react";
 import { Sheet } from "../Sheet";
 import { ReportSheet } from "../safety/ReportSheet";
 import { BlockConfirm } from "../safety/BlockConfirm";
@@ -1511,7 +1511,7 @@ export function DmThread({
     autoCalled.current = true;
     u.searchParams.delete("call");
     window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash);
-    callPeer(want === "video");
+    callPeer(true); // ?call=audio from an old missed-call push rings the one door too (t6093u)
   }, [canCall, connected, callPeer]);
   const onCardSent = useCallback((m: DirectMessage) => {
     stickToBottom.current = true;
@@ -1619,11 +1619,9 @@ export function DmThread({
         )}
         {canCall && (
           <>
-            <button onClick={() => callPeer(true)} disabled={offline} className="hidden rounded-full p-2 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 disabled:opacity-40 min-[360px]:block" aria-label={`Video call ${peer.name}`} data-testid="dm-video-call">
+            {/* One ringing door (t6093u): the video button. The separate audio call button is gone. */}
+            <button onClick={() => callPeer(true)} disabled={offline} className="rounded-full p-2 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 disabled:opacity-40" aria-label={`Video call ${peer.name}`} data-testid="dm-video-call">
               <Video className="h-5 w-5" />
-            </button>
-            <button onClick={() => callPeer(false)} disabled={offline} className="rounded-full p-2 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 disabled:opacity-40" aria-label={`Call ${peer.name}`} data-testid="dm-call">
-              <Phone className="h-5 w-5" />
             </button>
           </>
         )}

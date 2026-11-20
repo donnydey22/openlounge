@@ -206,6 +206,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 }
 
 /** Start a call from anywhere (DM header, call history, missed-call "Call back"). */
-export function startCall(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, video = false) {
+/** The one ringing door (t6093u): every ring is a video ring into the always-alive A/V room. `video` is kept for old
+ *  callers' signatures and ignored. */
+export function startCall(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, _video = true) { const video = true;
   return callEngine?.start(peer, video);
 }

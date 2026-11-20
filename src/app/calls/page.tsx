@@ -9,7 +9,6 @@ import {
   ArrowUpRight,
   ChevronLeft,
   Loader2,
-  Phone,
   Video,
 } from "lucide-react";
 import type { DirectMessage, PublicUser } from "@/lib/types";
@@ -129,11 +128,11 @@ export default function CallsPage() {
                   <button
                     type="button"
                     data-testid="calls-tile-call"
-                    aria-label={`Call ${p.name}`}
-                    onClick={() => startCall({ id: p.id, name: p.name, color: p.color, photoUrl: p.photoUrl ?? null, username: p.username }, false)}
+                    aria-label={`Video call ${p.name}`}
+                    onClick={() => startCall({ id: p.id, name: p.name, color: p.color, photoUrl: p.photoUrl ?? null, username: p.username }, true)}
                     className="grid h-11 w-11 place-items-center rounded-full bg-emerald-500 text-white transition active:scale-90"
                   >
-                    <Phone className="h-5 w-5" />
+                    <Video className="h-5 w-5" />
                   </button>
                 </div>
               );
@@ -154,7 +153,6 @@ export default function CallsPage() {
             {tab === "missed" ? "No missed calls." : "No calls yet."}
             <br />
             Open a chat and tap{" "}
-            <Phone className="inline h-4 w-4 align-[-2px]" /> or{" "}
             <Video className="inline h-4 w-4 align-[-2px]" /> to call.
           </div>
         ) : (
@@ -221,7 +219,7 @@ export default function CallsPage() {
                     type="button"
                     disabled={!p}
                     data-testid="calls-row-call"
-                    aria-label={r.video ? `Video call ${name}` : `Call ${name}`}
+                    aria-label={`Video call ${name}`}
                     onClick={() =>
                       p &&
                       startCall(
@@ -232,16 +230,12 @@ export default function CallsPage() {
                           photoUrl: p.photoUrl ?? null,
                           username: p.username,
                         },
-                        r.video,
+                        true,
                       )
                     }
                     className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-emerald-400 transition hover:bg-emerald-500/10 active:scale-90 disabled:opacity-40"
                   >
-                    {r.video ? (
-                      <Video className="h-5 w-5" />
-                    ) : (
-                      <Phone className="h-5 w-5" />
-                    )}
+                    <Video className="h-5 w-5" />
                   </button>
                 </li>
               );

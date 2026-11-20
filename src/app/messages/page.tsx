@@ -6,7 +6,7 @@ import { TypingLabel } from "@/components/chat/TypingDots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, PenSquare, Phone, Pin, Search, Users } from "lucide-react";
+import { Loader2, PenSquare, Pin, Search, Users, Video } from "lucide-react";
 import type { ChatStateEvent, ConversationSummary, DirectMessage, DmReadStateEvent, PublicUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatListTime, useClockTick } from "@/lib/time";
@@ -136,7 +136,7 @@ export default function MessagesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Messages</h1>
           <div className="flex items-center gap-1.5">
             <Link href="/calls" aria-label="Calls" data-testid="open-calls" className="grid h-10 w-10 place-items-center rounded-full text-zinc-300 hover:bg-white/5 hover:text-white">
-              <Phone className="h-5 w-5" />
+              <Video className="h-5 w-5" />
             </Link>
             <button
               onClick={() => setComposing(true)}

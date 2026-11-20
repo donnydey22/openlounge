@@ -167,6 +167,8 @@ function buzz(kind: "light" | "medium" | "success" | "warning") {
 export class CallEngine {
   /** a call link whose call:join is in flight: a concurrent resume's "no call" is stale for it */
   private linkJoining: string | null = null;
+  /** a tapped /call/<id> link is being opened (join screen next): the load-time resume must not join it behind it */
+  private linkOpening: string | null = null;
   private s: CallSnapshot = initial();
   private listeners = new Set<() => void>();
   private socket: RealtimeClient | null = null;
@@ -314,6 +316,9 @@ export class CallEngine {
         return;
       }
       const call = r.call;
+      // Link join screen (t6094u rejoin): the person is choosing mic / camera, or the tapped link is still opening;
+      // only their Join opens a leg (a load-time resume used to join or drop it behind the join screen).
+      if (call && (this.s.ui === "prejoin" || this.linkOpening === call.id)) return;
       if (!call) {
         // our call ended while we were offline (e.g. the 45 s grace ran out): say so instead of vanishing
         if (this.s.call && this.busy && askedFor && this.s.call.id === askedFor && this.linkJoining !== askedFor) this.finishLocal(this.s.call.outcome ?? "completed", this.s.ui === "incoming", this.s.call, this.s.ui === "active" || this.s.reconnecting ? "connection_lost" : undefined);
@@ -329,6 +334,7 @@ export class CallEngine {
         return;
       }
       const g = await this.req<{ ok: boolean; call?: CallInfo; media?: CallMedia | null }>("call:get", { callId: call.id });
+      if (this.s.ui === "prejoin" || this.linkOpening === call.id) return; // a link was tapped meanwhile (join screen)
       if (!g.ok || !g.call) {
         if (!g.ok && attempt < 8) setTimeout(() => void this.resume(attempt + 1), 500 + attempt * 250);
         return;
@@ -359,6 +365,7 @@ export class CallEngine {
 
   /** /call/<id>[?accept=1] (push tap / native Accept): ring or join that call. Returns the other person's id. */
   async openFromLink(callId: string, accept: boolean): Promise<{ peerId: string | null; ended: boolean }> {
+    if (!accept) this.linkOpening = callId;
     try {
       const g = await this.getWhenConnected(callId);
       if (!g.ok || !g.call) return { peerId: null, ended: true };
@@ -378,6 +385,8 @@ export class CallEngine {
       return { peerId, ended: false };
     } catch {
       return { peerId: null, ended: true };
+    } finally {
+      if (this.linkOpening === callId) this.linkOpening = null;
     }
   }
 
@@ -497,7 +506,9 @@ export class CallEngine {
   }
 
   // ---------- outgoing ----------
-  async start(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, video: boolean) {
+  async start(peer: { id: string; name: string; color: string; photoUrl: string | null; username?: string }, _video: boolean) {
+    // One ringing door (t6093u): every ring is a video ring into the same always-alive audio + video room.
+    const video = true;
     // Glare, other order: their call reached us first. Tapping Call on the same person answers it.
     if (this.s.ui === "incoming" && this.s.call?.callerId === peer.id) {
       await this.accept(video || this.s.call.video);
